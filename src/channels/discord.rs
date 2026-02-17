@@ -1,0 +1,280 @@
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use anyhow::Result;
+use serenity::async_trait;
+use serenity::model::channel::Message;
+use serenity::model::gateway::Ready;
+use serenity::model::id::ChannelId;
+use serenity::prelude::*;
+use tokio::sync::mpsc;
+
+use crate::bus::{InboundMessage, OutboundMessage};
+use crate::config::DiscordConfig;
+
+/// Discord channel — bot via serenity.
+///
+/// Access control: only users in `allow_from` can interact.
+/// Empty allow_from = allow everyone (not recommended in production).
+pub struct DiscordChannel {
+    config: DiscordConfig,
+}
+
+impl DiscordChannel {
+    pub fn new(config: DiscordConfig) -> Self {
+        Self { config }
+    }
+
+    /// Start the Discord bot: listen for messages and route responses.
+    pub async fn start(
+        &self,
+        inbound_tx: mpsc::Sender<InboundMessage>,
+        outbound_rx: mpsc::Receiver<OutboundMessage>,
+    ) -> Result<()> {
+        let allow_from: HashSet<String> = self.config.allow_from.iter().cloned().collect();
+        let allow_all = allow_from.is_empty();
+
+        tracing::info!(
+            allow_from = ?self.config.allow_from,
+            allow_all,
+            "Discord channel starting"
+        );
+
+        let handler = Handler {
+            inbound_tx,
+            allow_from,
+            allow_all,
+        };
+
+        let intents = GatewayIntents::GUILD_MESSAGES
+            | GatewayIntents::DIRECT_MESSAGES
+            | GatewayIntents::MESSAGE_CONTENT;
+
+        let mut client = Client::builder(&self.config.token, intents)
+            .event_handler(handler)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create Discord client: {e}"))?;
+
+        // Store outbound_rx in TypeMap so the ready handler can spawn the outbound loop
+        {
+            let mut data = client.data.write().await;
+            data.insert::<OutboundRxKey>(Arc::new(tokio::sync::Mutex::new(Some(outbound_rx))));
+        }
+
+        if let Err(e) = client.start().await {
+            tracing::error!(error = %e, "Discord client error");
+        }
+
+        Ok(())
+    }
+}
+
+// --- TypeMap key for passing outbound_rx through serenity's data store ---
+
+struct OutboundRxKey;
+impl TypeMapKey for OutboundRxKey {
+    type Value = Arc<tokio::sync::Mutex<Option<mpsc::Receiver<OutboundMessage>>>>;
+}
+
+/// Serenity event handler — receives Discord events and routes messages to the agent.
+struct Handler {
+    inbound_tx: mpsc::Sender<InboundMessage>,
+    allow_from: HashSet<String>,
+    allow_all: bool,
+}
+
+#[async_trait]
+impl EventHandler for Handler {
+    async fn message(&self, ctx: Context, msg: Message) {
+        // Ignore messages from bots (including ourselves)
+        if msg.author.bot {
+            return;
+        }
+
+        let sender_id = msg.author.id.to_string();
+        let chat_id = msg.channel_id.to_string();
+
+        // Access control
+        if !self.allow_all && !self.allow_from.contains(&sender_id) {
+            tracing::warn!(
+                sender_id = %sender_id,
+                chat_id = %chat_id,
+                "Discord: unauthorized user, ignoring"
+            );
+            return;
+        }
+
+        let text = msg.content.clone();
+        if text.is_empty() {
+            return;
+        }
+
+        // Handle commands
+        if text == "!start" {
+            if let Err(e) = msg
+                .channel_id
+                .say(&ctx.http, "HomunBot is ready! Send me a message.")
+                .await
+            {
+                tracing::error!(error = %e, "Failed to send start message");
+            }
+            return;
+        }
+
+        if text == "!new" || text == "!reset" {
+            if let Err(e) = msg
+                .channel_id
+                .say(&ctx.http, "Session cleared. Starting fresh.")
+                .await
+            {
+                tracing::error!(error = %e, "Failed to send reset message");
+            }
+        }
+
+        tracing::info!(
+            sender = %sender_id,
+            chat = %chat_id,
+            len = text.len(),
+            "Discord: received message"
+        );
+
+        let inbound = InboundMessage {
+            channel: "discord".to_string(),
+            sender_id,
+            chat_id: chat_id.clone(),
+            content: text,
+            timestamp: chrono::Utc::now(),
+        };
+
+        if let Err(e) = self.inbound_tx.send(inbound).await {
+            tracing::error!(error = %e, "Failed to send to inbound bus");
+            if let Err(e2) = msg
+                .channel_id
+                .say(
+                    &ctx.http,
+                    "Sorry, I'm having trouble processing messages right now.",
+                )
+                .await
+            {
+                tracing::error!(error = %e2, "Failed to send error message");
+            }
+        }
+    }
+
+    async fn ready(&self, ctx: Context, ready: Ready) {
+        tracing::info!(
+            user = %ready.user.name,
+            "Discord bot connected"
+        );
+
+        // Take the outbound_rx from the data store and spawn the outbound loop.
+        // We take it (Option::take) so this only happens once, even if ready fires again.
+        let http = ctx.http.clone();
+        let rx_opt = {
+            let data = ctx.data.read().await;
+            data.get::<OutboundRxKey>().cloned()
+        };
+
+        if let Some(rx_lock) = rx_opt {
+            let mut guard = rx_lock.lock().await;
+            if let Some(rx) = guard.take() {
+                tokio::spawn(outbound_loop(http, rx));
+            }
+        }
+    }
+}
+
+/// Outbound loop: receive agent responses and send to Discord.
+async fn outbound_loop(http: Arc<serenity::http::Http>, mut rx: mpsc::Receiver<OutboundMessage>) {
+    while let Some(msg) = rx.recv().await {
+        if msg.channel != "discord" {
+            continue;
+        }
+
+        let channel_id: u64 = match msg.chat_id.parse() {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::error!(
+                    chat_id = %msg.chat_id,
+                    error = %e,
+                    "Invalid Discord channel_id"
+                );
+                continue;
+            }
+        };
+
+        // Discord message limit is 2000 chars
+        let chunks = split_message(&msg.content, 1900);
+
+        for chunk in chunks {
+            if let Err(e) = ChannelId::new(channel_id).say(&http, &chunk).await {
+                tracing::error!(error = %e, "Failed to send Discord message");
+            }
+        }
+    }
+}
+
+/// Split a message into chunks that fit within Discord's 2000 character limit.
+fn split_message(text: &str, max_len: usize) -> Vec<String> {
+    if text.len() <= max_len {
+        return vec![text.to_string()];
+    }
+
+    let mut chunks = Vec::new();
+    let mut remaining = text;
+
+    while !remaining.is_empty() {
+        if remaining.len() <= max_len {
+            chunks.push(remaining.to_string());
+            break;
+        }
+
+        // Try to split at a newline before the limit
+        let split_at = remaining[..max_len].rfind('\n').unwrap_or(max_len);
+
+        let (chunk, rest) = remaining.split_at(split_at);
+        chunks.push(chunk.to_string());
+
+        remaining = rest.strip_prefix('\n').unwrap_or(rest);
+    }
+
+    chunks
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_split_short_message() {
+        let chunks = split_message("hello", 100);
+        assert_eq!(chunks, vec!["hello"]);
+    }
+
+    #[test]
+    fn test_split_long_message() {
+        let msg = "line1\nline2\nline3\nline4";
+        let chunks = split_message(msg, 12);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0], "line1\nline2");
+        assert_eq!(chunks[1], "line3\nline4");
+    }
+
+    #[test]
+    fn test_split_no_newline() {
+        let msg = "a".repeat(100);
+        let chunks = split_message(&msg, 30);
+        assert!(chunks.len() > 1);
+        for chunk in &chunks {
+            assert!(chunk.len() <= 30);
+        }
+    }
+
+    #[test]
+    fn test_split_exact_limit() {
+        let msg = "a".repeat(50);
+        let chunks = split_message(&msg, 50);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].len(), 50);
+    }
+}

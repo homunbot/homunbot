@@ -1,0 +1,30 @@
+# Rust build artifacts
+/target/
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Node.js bridge
+bridge/node_modules/
+bridge/dist/
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Vendored dependencies (local git repos)
+vendor/
+
+# Runtime data
+*.db
+*.db-shm
+*.db-wal
+*.log

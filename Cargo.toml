@@ -2,7 +2,7 @@
 name = "homunbot"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.85"
 description = "Ultra-lightweight personal AI assistant — a digital homunculus in your computer"
 license = "MIT"
 repository = "https://github.com/homunbot/homunbot"
@@ -44,8 +44,15 @@ thiserror = "2"
 # Skill frontmatter parsing
 gray_matter = "0.2"
 
+# Regex (shell safety filters)
+regex = "1"
+
 # Directories
 dirs = "6"
+
+# Archive extraction (skill installer)
+flate2 = "1"
+tar = "0.4"
 
 # UUID for session/message IDs
 uuid = { version = "1", features = ["v4"] }
@@ -53,10 +60,32 @@ uuid = { version = "1", features = ["v4"] }
 # Time
 chrono = { version = "0.4", features = ["serde"] }
 
+# Telegram bot
+teloxide = { version = "0.13", features = ["macros"] }
+
+# Discord bot
+serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "cache", "rustls_backend"] }
+
+# WhatsApp native client (Rust, no Node.js bridge)
+whatsapp-rust = { path = "vendor/whatsapp-rust" }
+whatsapp-rust-sqlite-storage = { path = "vendor/whatsapp-rust/storages/sqlite-storage" }
+whatsapp-rust-tokio-transport = { path = "vendor/whatsapp-rust/transports/tokio-transport" }
+whatsapp-rust-ureq-http-client = { path = "vendor/whatsapp-rust/http_clients/ureq-client" }
+wacore = { path = "vendor/whatsapp-rust/wacore" }
+waproto = { path = "vendor/whatsapp-rust/waproto" }
+futures-util = "0.3"
+
 # Streaming support
 tokio-stream = "0.1"
 eventsource-stream = "0.2"
 pin-project-lite = "0.2"
+
+# TUI (terminal user interface)
+ratatui = "0.29"
+crossterm = "0.28"
+
+# MCP (Model Context Protocol) client
+rmcp = { version = "0.15", features = ["client", "transport-child-process"] }
 
 [dev-dependencies]
 tempfile = "3"
