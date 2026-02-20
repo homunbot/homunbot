@@ -24,7 +24,7 @@ pub struct McpServerInfo {
     pub connected: bool,
 }
 
-/// A single MCP tool exposed as a HomunBot Tool.
+/// A single MCP tool exposed as a Homun Tool.
 ///
 /// Each tool discovered from an MCP server becomes one of these.
 /// The tool name is prefixed with the server name to avoid collisions:

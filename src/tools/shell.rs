@@ -75,6 +75,17 @@ const DENY_REGEX_PATTERNS: &[&str] = &[
     r"(cat|cp|scp|curl).*\.ssh/(id_|authorized_keys)",
     // History theft
     r"(cat|cp|curl).*\.(bash_|zsh_)?history",
+    // Config / secrets file reads — prevent exfiltration of Homun config
+    r"(cat|less|head|tail|more|bat|strings|xxd|hexdump)\s+.*\.homun/",
+    r"(cat|less|head|tail|more|bat)\s+.*config\.toml",
+    r"(cat|less|head|tail|more|bat)\s+.*secrets\.enc",
+    r"(cat|less|head|tail|more|bat)\s+.*/\.env(\b|$)",
+    r"(cat|less|head|tail|more|bat)\s+.*\.aws/",
+    r"(cat|less|head|tail|more|bat)\s+.*\.gnupg/",
+    // Full environment dumps — blocked to prevent secret leakage
+    r"^printenv(\s|$)",
+    r"^env(\s|$)",
+    r"^set(\s|$)",
 ];
 
 /// Layer 3: Commands that are "risky" — blocked unless explicitly allowed in config.
@@ -277,23 +288,33 @@ impl Tool for ShellTool {
 
         tracing::info!(command = %command, cwd = %working_dir, "Executing shell command");
 
-        // Spawn subprocess — strip sensitive env vars to prevent exfiltration
+        // Spawn subprocess with clean environment — allowlist approach.
+        // Using env_clear() + explicit safe vars prevents ALL secret leakage,
+        // instead of trying to enumerate every possible sensitive env var.
+        let safe_env_keys: &[&str] = &[
+            "PATH", "HOME", "USER", "SHELL", "LANG", "LC_ALL", "TERM", "TMPDIR",
+        ];
+
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(&command)
+            .current_dir(&working_dir)
+            .env_clear();
+
+        // Inject only safe env vars from the current process
+        for key in safe_env_keys {
+            if let Ok(val) = std::env::var(key) {
+                cmd.env(key, &val);
+            }
+        }
+        // Ensure PATH always has a sensible value
+        if std::env::var("PATH").is_err() {
+            cmd.env("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
+        }
+
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(self.timeout_secs),
-            Command::new("sh")
-                .arg("-c")
-                .arg(&command)
-                .current_dir(&working_dir)
-                .env_remove("ANTHROPIC_API_KEY")
-                .env_remove("OPENAI_API_KEY")
-                .env_remove("OPENROUTER_API_KEY")
-                .env_remove("BRAVE_API_KEY")
-                .env_remove("AWS_SECRET_ACCESS_KEY")
-                .env_remove("AWS_SESSION_TOKEN")
-                .env_remove("GITHUB_TOKEN")
-                .env_remove("GH_TOKEN")
-                .env_remove("TELEGRAM_BOT_TOKEN")
-                .output(),
+            cmd.output(),
         )
         .await;
 

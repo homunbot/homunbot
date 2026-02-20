@@ -1,3 +1,9 @@
+// Allow dead code: this binary exposes a public API design for future lib.rs extraction.
+// Many types/functions are pub but only used in specific subcommands.
+#![allow(dead_code, unused_imports)]
+
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
@@ -13,6 +19,7 @@ mod skills;
 mod storage;
 mod tools;
 mod tui;
+mod web;
 
 use crate::channels::CliChannel;
 use crate::config::Config;
@@ -25,7 +32,7 @@ use crate::tools::{
 };
 
 #[derive(Parser)]
-#[command(name = "homunbot", version, about = "🧪 The digital homunculus that lives in your computer")]
+#[command(name = "homun", version, about = "🧪 The digital homunculus that lives in your computer")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -188,7 +195,7 @@ fn create_provider(config: &Config) -> Result<Box<dyn provider::Provider>> {
     let model = &config.agent.model;
     let (provider_name, provider_config) = config
         .resolve_provider(model)
-        .context("No provider configured. Add an API key to ~/.homunbot/config.toml")?;
+        .context("No provider configured. Add an API key to ~/.homun/config.toml")?;
 
     tracing::info!(
         provider = provider_name,
@@ -196,10 +203,49 @@ fn create_provider(config: &Config) -> Result<Box<dyn provider::Provider>> {
         "Using LLM provider"
     );
 
+    // Get API key from secure storage (encrypted)
+    let api_key = if provider_config.api_key == "***ENCRYPTED***" {
+        // Retrieve from secure storage
+        let secrets = storage::global_secrets()
+            .context("Failed to access secure storage")?;
+        let secret_key = storage::SecretKey::provider_api_key(provider_name);
+        secrets.get(&secret_key)?
+            .unwrap_or_default()
+    } else if provider_config.api_key.is_empty() {
+        String::new()
+    } else {
+        // Legacy: key stored in plaintext config — auto-migrate to encrypted storage
+        tracing::warn!(
+            provider = provider_name,
+            "API key for '{}' is in plaintext config.toml — auto-migrating to encrypted storage",
+            provider_name
+        );
+        let plaintext_key = provider_config.api_key.clone();
+        if let Ok(secrets) = storage::global_secrets() {
+            let secret_key = storage::SecretKey::provider_api_key(provider_name);
+            if secrets.set(&secret_key, &plaintext_key).is_ok() {
+                // Update config file to replace plaintext with marker
+                let mut migrated = config.clone();
+                if let Some(pc) = migrated.providers.get_mut(provider_name) {
+                    pc.api_key = "***ENCRYPTED***".to_string();
+                    if let Err(e) = migrated.save() {
+                        tracing::warn!(error = %e, "Failed to save migrated config");
+                    } else {
+                        tracing::info!(
+                            provider = provider_name,
+                            "Auto-migrated API key to encrypted storage"
+                        );
+                    }
+                }
+            }
+        }
+        plaintext_key
+    };
+
     if provider_name == "anthropic" {
         // Native Anthropic provider (Claude API with tool_use blocks)
         let provider = AnthropicProvider::new(
-            &provider_config.api_key,
+            &api_key,
             provider_config.api_base.as_deref(),
             provider_config.extra_headers.clone(),
         );
@@ -209,7 +255,7 @@ fn create_provider(config: &Config) -> Result<Box<dyn provider::Provider>> {
         // Groq, Gemini, Minimax, AiHubMix, DashScope, Moonshot, Zhipu, vLLM, custom)
         let provider = OpenAICompatProvider::from_config(
             provider_name,
-            &provider_config.api_key,
+            &api_key,
             provider_config.api_base.as_deref(),
             provider_config.extra_headers.clone(),
         );
@@ -269,7 +315,7 @@ async fn main() -> Result<()> {
     let is_tui_command = matches!(&command, Commands::Config { command: None });
 
     if is_tui_command {
-        // During TUI: log to ~/.homunbot/tui.log so stderr stays clean
+        // During TUI: log to ~/.homun/tui.log so stderr stays clean
         let log_dir = Config::data_dir();
         std::fs::create_dir_all(&log_dir).ok();
         let log_file = std::fs::File::create(log_dir.join("tui.log")).ok();
@@ -320,9 +366,12 @@ async fn main() -> Result<()> {
                 tracing::warn!(error = %e, "Failed to load skills");
             }
             if !skill_registry.is_empty() {
-                agent.set_skills_summary(skill_registry.build_prompt_summary());
+                agent.set_skills_summary(skill_registry.build_prompt_summary()).await;
                 tracing::info!(skills = skill_registry.len(), "Skills loaded into agent context");
             }
+            // Share the skill registry so skills can be activated on-demand
+            let skill_registry = Arc::new(tokio::sync::RwLock::new(skill_registry));
+            agent.set_skill_registry(skill_registry);
 
             let cli_channel = CliChannel::new(agent, session_manager);
 
@@ -344,7 +393,22 @@ async fn main() -> Result<()> {
 
             let config = Config::load()?;
             let db = Database::open(&config.storage.resolved_path()).await?;
-            let provider = create_provider(&config)?;
+
+            // Try to create provider, but allow gateway to start without one
+            // This enables configuration via Web UI
+            let provider = match create_provider(&config) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "No provider configured. Gateway starting in setup mode. \
+                        Configure a provider at http://localhost:{}/setup",
+                        config.channels.web.port
+                    );
+                    None
+                }
+            };
+
             let session_manager = SessionManager::new(db.clone());
 
             // Create CronScheduler before the tool registry so CronTool can use it
@@ -365,31 +429,80 @@ async fn main() -> Result<()> {
             // Create tool message channel for proactive messaging (MessageTool → Gateway → Channel)
             let (tool_msg_tx, tool_msg_rx) = tokio::sync::mpsc::channel(100);
 
-            // Create agent and wire up the message sender
-            let mut agent = agent::AgentLoop::new(
-                provider,
-                config.clone(),
-                session_manager.clone(),
-                tool_registry,
-                db,
-            );
-            agent.set_message_tx(tool_msg_tx);
+            // Create agent only if provider is available
+            let mut agent = if let Some(p) = provider {
+                let mut a = agent::AgentLoop::new(
+                    p,
+                    config.clone(),
+                    session_manager.clone(),
+                    tool_registry,
+                    db,
+                );
+                a.set_message_tx(tool_msg_tx);
+                Some(a)
+            } else {
+                None
+            };
 
             // Load installed skills and inject into the agent's system prompt
             let mut skill_registry = skills::SkillRegistry::new();
             if let Err(e) = skill_registry.scan_and_load().await {
                 tracing::warn!(error = %e, "Failed to load skills");
             }
-            if !skill_registry.is_empty() {
-                agent.set_skills_summary(skill_registry.build_prompt_summary());
-                tracing::info!(skills = skill_registry.len(), "Skills loaded into agent context (gateway)");
+
+            // Wrap in Arc<RwLock<>> so the agent can activate skills on-demand
+            let skill_registry = Arc::new(tokio::sync::RwLock::new(skill_registry));
+
+            if let Some(ref mut a) = agent {
+                {
+                    let reg = skill_registry.read().await;
+                    if !reg.is_empty() {
+                        a.set_skills_summary(reg.build_prompt_summary()).await;
+                        tracing::info!(skills = reg.len(), "Skills loaded into agent context (gateway)");
+                    }
+                }
+                a.set_skill_registry(skill_registry.clone());
+
+                // Inject available channels info for cross-channel messaging
+                let active_channels = config.channels.active_channels_with_chat_ids();
+                if !active_channels.is_empty() {
+                    let channel_refs: Vec<(&str, &str)> = active_channels
+                        .iter()
+                        .map(|(name, id)| (name.as_str(), id.as_str()))
+                        .collect();
+                    a.set_channels_info(&channel_refs);
+                    tracing::info!(
+                        channels = ?active_channels.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+                        "Cross-channel routing info injected into agent context"
+                    );
+                }
             }
+
+            // If no provider, start a setup-only Web UI and wait
+            let Some(agent) = agent else {
+                let web_config = config.clone();
+                let web_port = config.channels.web.port;
+                let web_server = crate::web::server::WebServer::setup_only(web_config);
+                tokio::spawn(async move {
+                    if let Err(e) = web_server.start().await {
+                        tracing::error!(error = %e, "Web UI server failed");
+                    }
+                });
+                tracing::info!(port = web_port, "Web UI available at http://localhost:{web_port}/");
+                tracing::info!("Gateway running in setup mode. Configure a provider via Web UI.");
+                // Wait forever (or until Ctrl+C)
+                tokio::signal::ctrl_c().await?;
+                return Ok(());
+            };
+
+            // Get the shared skills summary handle before wrapping agent in Arc
+            let skills_summary_handle = agent.skills_summary_handle();
 
             let agent = Arc::new(agent);
 
             // Create SubagentManager and register SpawnTool
             let (subagent_result_tx, _subagent_result_rx) = tokio::sync::mpsc::channel(50);
-            let subagent_manager = Arc::new(agent::SubagentManager::new(
+            let _subagent_manager = Arc::new(agent::SubagentManager::new(
                 agent.clone(),
                 subagent_result_tx,
             ));
@@ -398,6 +511,14 @@ async fn main() -> Result<()> {
             // TODO: register SpawnTool in the tool_registry (requires registry to accept post-creation tools)
 
             tracing::info!("Subagent manager initialized");
+
+            // Start skill hot-reload watcher (watches ~/.homun/skills/ for changes)
+            let skills_dir = config::Config::data_dir().join("skills");
+            let skill_watcher = skills::SkillWatcher::new(
+                skills_summary_handle,
+                skills_dir,
+            );
+            let _watcher_handle = skill_watcher.start();
 
             let mut gateway = agent::Gateway::new(
                 agent, config, session_manager, cron_scheduler, cron_event_rx,
@@ -528,7 +649,7 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Status => {
-            println!("🧪 HomunBot v{}", env!("CARGO_PKG_VERSION"));
+            println!("🧪 Homun v{}", env!("CARGO_PKG_VERSION"));
             let config = Config::load()?;
             println!("Model: {}", config.agent.model);
             if let Some((name, _)) = config.resolve_provider(&config.agent.model) {
@@ -546,7 +667,7 @@ async fn main() -> Result<()> {
                     Ok(skills) => {
                         if skills.is_empty() {
                             println!("No skills installed.");
-                            println!("Install one with: homunbot skills add owner/repo");
+                            println!("Install one with: homun skills add owner/repo");
                         } else {
                             println!("Installed skills:\n");
                             for skill in &skills {
@@ -577,7 +698,7 @@ async fn main() -> Result<()> {
                                     r.stars, r.full_name, r.description
                                 );
                             }
-                            println!("\nInstall with: homunbot skills add owner/repo");
+                            println!("\nInstall with: homun skills add owner/repo");
                         }
                     }
                     Err(e) => {
@@ -600,7 +721,7 @@ async fn main() -> Result<()> {
                                 println!("Scripts: {}", scripts.join(", "));
                             }
                         } else {
-                            eprintln!("Skill '{name}' not found. Use 'homunbot skills list' to see installed skills.");
+                            eprintln!("Skill '{name}' not found. Use 'homun skills list' to see installed skills.");
                             std::process::exit(1);
                         }
                     }
@@ -624,7 +745,7 @@ async fn main() -> Result<()> {
                             for r in &results {
                                 println!("  {} — {}", r.slug, r.description);
                             }
-                            println!("\n{} result(s). Install with: homunbot skills add clawhub:owner/skill", results.len());
+                            println!("\n{} result(s). Install with: homun skills add clawhub:owner/skill", results.len());
                         }
                     }
                     Err(e) => {
@@ -643,7 +764,7 @@ async fn main() -> Result<()> {
                         Ok(result) => {
                             if result.already_existed {
                                 println!("Skill '{}' is already installed at {}", result.name, result.path.display());
-                                println!("Remove it first with: homunbot skills remove {}", result.name);
+                                println!("Remove it first with: homun skills remove {}", result.name);
                             } else {
                                 println!("\u{2705} Installed '{}' from ClawHub — {}", result.name, result.description);
                                 println!("  Source: clawhub:{clawhub_slug}");
@@ -664,7 +785,7 @@ async fn main() -> Result<()> {
                         Ok(result) => {
                             if result.already_existed {
                                 println!("Skill '{}' is already installed at {}", result.name, result.path.display());
-                                println!("Remove it first with: homunbot skills remove {}", result.name);
+                                println!("Remove it first with: homun skills remove {}", result.name);
                             } else {
                                 println!("\u{2705} Installed '{}' from GitHub — {}", result.name, result.description);
                                 println!("  Path: {}", result.path.display());
@@ -699,7 +820,7 @@ async fn main() -> Result<()> {
                 McpCommands::List => {
                     if config.mcp.servers.is_empty() {
                         println!("No MCP servers configured.");
-                        println!("Add one with: homunbot mcp add <name> --command npx --args -y @modelcontextprotocol/server-xxx");
+                        println!("Add one with: homun mcp add <name> --command npx --args -y @modelcontextprotocol/server-xxx");
                     } else {
                         println!("MCP Servers:\n");
                         for (name, server) in &config.mcp.servers {
@@ -768,7 +889,7 @@ async fn main() -> Result<()> {
                     let jobs = db.load_cron_jobs().await?;
                     if jobs.is_empty() {
                         println!("No cron jobs scheduled.");
-                        println!("Add one with: homunbot cron add --name \"my-job\" --message \"task\" --cron \"0 9 * * *\"");
+                        println!("Add one with: homun cron add --name \"my-job\" --message \"task\" --cron \"0 9 * * *\"");
                     } else {
                         println!("Scheduled jobs:\n");
                         for job in &jobs {
@@ -801,7 +922,7 @@ async fn main() -> Result<()> {
                     let id = uuid::Uuid::new_v4().to_string()[..8].to_string();
                     db.insert_cron_job(&id, &name, &message, &schedule, None).await?;
                     println!("Job created: id={id}, name={name}, schedule={schedule}");
-                    println!("Note: Jobs run when the gateway is active (homunbot gateway)");
+                    println!("Note: Jobs run when the gateway is active (homun gateway)");
                 }
                 CronCommands::Remove { id } => {
                     let removed = db.delete_cron_job(&id).await?;

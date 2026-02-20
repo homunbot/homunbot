@@ -29,9 +29,10 @@ impl Tool for MessageTool {
     }
 
     fn description(&self) -> &str {
-        "Send a message to the user. Use this to proactively communicate with the user, \
-         send progress updates, or deliver notifications. The message is delivered to the \
-         same channel the user is communicating from."
+        "Send a message to the user on any channel. By default delivers to the same channel \
+         the user wrote from, but you can override 'channel' and 'chat_id' to send cross-channel \
+         (e.g. receive on Telegram, reply on WhatsApp). Check the system prompt for available \
+         channels and their chat_ids."
     }
 
     fn parameters(&self) -> Value {

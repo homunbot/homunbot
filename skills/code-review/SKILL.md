@@ -4,7 +4,7 @@ description: Review code files for bugs, style issues, security vulnerabilities,
 license: MIT
 allowed-tools: "Bash(git:*) read_file list_dir"
 metadata:
-  author: homunbot
+  author: homun
   version: "1.0"
   category: development
 ---

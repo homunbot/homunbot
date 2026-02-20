@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use tokio::sync::mpsc;
@@ -8,6 +9,7 @@ use crate::channels::{DiscordChannel, TelegramChannel, WhatsAppChannel};
 use crate::config::Config;
 use crate::scheduler::{CronEvent, CronScheduler};
 use crate::session::SessionManager;
+use crate::web::WebServer;
 
 use super::AgentLoop;
 
@@ -68,7 +70,19 @@ impl Gateway {
 
         // --- Start Telegram channel ---
         if self.config.channels.telegram.enabled {
-            let tg_config = self.config.channels.telegram.clone();
+            let mut tg_config = self.config.channels.telegram.clone();
+            // Resolve token from encrypted storage if marker is present
+            if tg_config.token == "***ENCRYPTED***" || tg_config.token.is_empty() {
+                if let Ok(secrets) = crate::storage::global_secrets() {
+                    let key = crate::storage::SecretKey::channel_token("telegram");
+                    if let Ok(Some(real_token)) = secrets.get(&key) {
+                        tg_config.token = real_token;
+                    }
+                }
+            }
+            if tg_config.token.is_empty() || tg_config.token == "***ENCRYPTED***" {
+                tracing::error!("Telegram enabled but no token found (check encrypted storage)");
+            }
             let tg_inbound_tx = inbound_tx.clone();
             let (tg_outbound_tx, tg_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
 
@@ -89,7 +103,19 @@ impl Gateway {
 
         // --- Start Discord channel ---
         if self.config.channels.discord.enabled {
-            let dc_config = self.config.channels.discord.clone();
+            let mut dc_config = self.config.channels.discord.clone();
+            // Resolve token from encrypted storage if marker is present
+            if dc_config.token == "***ENCRYPTED***" || dc_config.token.is_empty() {
+                if let Ok(secrets) = crate::storage::global_secrets() {
+                    let key = crate::storage::SecretKey::channel_token("discord");
+                    if let Ok(Some(real_token)) = secrets.get(&key) {
+                        dc_config.token = real_token;
+                    }
+                }
+            }
+            if dc_config.token.is_empty() || dc_config.token == "***ENCRYPTED***" {
+                tracing::error!("Discord enabled but no token found (check encrypted storage)");
+            }
             let dc_inbound_tx = inbound_tx.clone();
             let (dc_outbound_tx, dc_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
 
@@ -129,13 +155,35 @@ impl Gateway {
             tracing::info!("WhatsApp channel started");
         }
 
+        // --- Start Web UI server ---
+        if self.config.channels.web.enabled {
+            let web_config = self.config.clone();
+            let web_inbound_tx = inbound_tx.clone();
+            let port = web_config.channels.web.port;
+            let (web_outbound_tx, web_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
+
+            let handle = tokio::spawn(async move {
+                let server = WebServer::new(web_config, web_inbound_tx, web_outbound_rx);
+                if let Err(e) = server.start().await {
+                    tracing::error!(error = %e, "Web UI server error");
+                }
+            });
+
+            channels.push(ChannelHandle {
+                name: "web".to_string(),
+                handle,
+                outbound_tx: web_outbound_tx,
+            });
+            tracing::info!(port = port, "Web UI started at http://localhost:{}", port);
+        }
+
         // --- Start Cron scheduler (created externally, started here) ---
         let _cron_handle = self.cron_scheduler.clone().start().await?;
         let mut cron_event_rx = self.cron_event_rx;
         tracing::info!("Cron scheduler started");
 
         if channels.is_empty() {
-            println!("No channels enabled. Set [channels.telegram] enabled = true in ~/.homunbot/config.toml");
+            println!("No channels enabled. Set [channels.telegram] enabled = true or [channels.web] enabled = true in ~/.homun/config.toml");
             return Ok(());
         }
 
@@ -143,8 +191,14 @@ impl Gateway {
         drop(inbound_tx);
 
         let active = channels.len();
+        let web_url = if self.config.channels.web.enabled {
+            format!(" Web UI: http://localhost:{}", self.config.channels.web.port)
+        } else {
+            String::new()
+        };
         tracing::info!(channels = active, "Gateway running");
-        println!("🧪 HomunBot gateway running ({active} channel(s) + cron). Press Ctrl+C to stop.");
+        println!("🧪 Homun gateway running ({active} channel(s) + cron).{web_url}");
+        println!("Press Ctrl+C to stop.");
 
         // Build outbound routing table: channel_name → sender
         let outbound_senders: Vec<(String, mpsc::Sender<OutboundMessage>)> = channels
@@ -272,20 +326,47 @@ impl Gateway {
             None
         };
 
-        // Wait for Ctrl+C
+        // Wait for Ctrl+C — first signal triggers graceful shutdown,
+        // second signal forces immediate exit.
         tokio::signal::ctrl_c().await?;
-        tracing::info!("Shutdown signal received");
-        println!("\nShutting down...");
+        tracing::info!("Shutdown signal received — stopping gracefully...");
+        println!("\n🧪 Shutting down gracefully (press Ctrl+C again to force)...");
 
+        // Stop accepting new messages
         routing_loop.abort();
         cron_loop.abort();
         if let Some(handle) = tool_msg_loop {
             handle.abort();
         }
+
+        // Give in-flight tasks a grace period to complete
+        let force_shutdown = Arc::new(AtomicBool::new(false));
+        let force_flag = force_shutdown.clone();
+
+        tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                force_flag.store(true, Ordering::SeqCst);
+                println!("Forcing shutdown...");
+            }
+        });
+
+        // Wait up to 5 seconds for in-flight work, unless force-quit
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+        while tokio::time::Instant::now() < deadline {
+            if force_shutdown.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+
+        // Stop all channels
         for ch in channels {
             ch.handle.abort();
             tracing::info!(channel = %ch.name, "Channel stopped");
         }
+
+        tracing::info!("Gateway shutdown complete");
+        println!("Goodbye! 🧪");
 
         Ok(())
     }

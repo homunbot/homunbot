@@ -1,15 +1,17 @@
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use tokio::sync::{mpsc, Mutex};
-use wacore::proto_helpers::MessageExt;
-use wacore::types::events::Event;
-use waproto::whatsapp as wa;
-use whatsapp_rust::bot::Bot;
-use whatsapp_rust::store::SqliteStore;
-use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
-use whatsapp_rust_ureq_http_client::UreqHttpClient;
+use wa_rs_core::proto_helpers::MessageExt;
+use wa_rs_core::types::events::Event;
+use wa_rs_proto::whatsapp as wa;
+use wa_rs::bot::Bot;
+use wa_rs::store::SqliteStore;
+use wa_rs_tokio_transport::TokioWebSocketTransportFactory;
+use wa_rs_ureq_http::UreqHttpClient;
 
 use crate::bus::{InboundMessage, OutboundMessage};
 use crate::config::WhatsAppConfig;
@@ -17,14 +19,18 @@ use crate::config::WhatsAppConfig;
 /// Max number of sent message IDs to track (prevents unbounded growth)
 const SENT_IDS_MAX: usize = 500;
 
+/// Grace period (seconds) after connection during which incoming messages are ignored.
+/// This prevents the bot from replying to queued/offline messages received during reconnect.
+const CONNECT_GRACE_PERIOD_SECS: u64 = 10;
+
 /// WhatsApp channel — native Rust client using whatsapp-rust library.
 ///
 /// Architecture:
-///   homunbot (Rust) <--whatsapp-rust--> WhatsApp Web (direct)
+///   homun (Rust) <--whatsapp-rust--> WhatsApp Web (direct)
 ///
 /// No Node.js bridge needed. Session state is stored in a local SQLite database.
 ///
-/// **Pairing flow**: Pairing is ONLY done from the TUI (`homunbot config` → WhatsApp tab).
+/// **Pairing flow**: Pairing is ONLY done from the TUI (`homun config` → WhatsApp tab).
 /// The gateway only reconnects using an existing session. If no session exists,
 /// it logs a warning and exits gracefully.
 pub struct WhatsAppChannel {
@@ -40,14 +46,23 @@ impl WhatsAppChannel {
     ///
     /// This does NOT initiate pairing. If the device has not been paired yet
     /// (no session in the SQLite store), it logs a warning and returns Ok.
-    /// Use `homunbot config` (TUI) to pair the device first.
+    /// Use `homun config` (TUI) to pair the device first.
     pub async fn start(
         &self,
         inbound_tx: mpsc::Sender<InboundMessage>,
         outbound_rx: mpsc::Receiver<OutboundMessage>,
     ) -> Result<()> {
         let allow_from: HashSet<String> = self.config.allow_from.iter().cloned().collect();
-        let allow_all = allow_from.is_empty();
+
+        // SAFETY: if allow_from is empty, reject ALL messages (fail-closed).
+        // The user must explicitly configure allow_from in config.toml.
+        if allow_from.is_empty() {
+            tracing::error!(
+                "WhatsApp allow_from is empty! For safety, the bot will NOT respond to anyone. \
+                 Set [channels.whatsapp] allow_from = [\"your_phone_number\"] in config.toml"
+            );
+        }
+        let allow_all = false; // NEVER allow all — always require explicit allow_from
 
         // Resolve DB path
         let db_path = self.config.resolved_db_path();
@@ -55,7 +70,7 @@ impl WhatsAppChannel {
         // Check if session database exists — if not, the device hasn't been paired
         if !db_path.exists() {
             tracing::warn!(
-                "WhatsApp not paired yet. Run 'homunbot config' and use the WhatsApp tab to pair."
+                "WhatsApp not paired yet. Run 'homun config' and use the WhatsApp tab to pair."
             );
             return Ok(());
         }
@@ -98,6 +113,12 @@ impl WhatsAppChannel {
         let allow_from_clone = allow_from.clone();
         let sent_ids_for_handler = sent_ids.clone();
 
+        // Track when the bot connects to apply grace period
+        let is_ready = Arc::new(AtomicBool::new(false));
+        let is_ready_for_handler = is_ready.clone();
+        let connect_time: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+        let connect_time_for_handler = connect_time.clone();
+
         let mut builder = Bot::builder()
             .with_backend(backend)
             .with_transport_factory(transport_factory)
@@ -111,18 +132,42 @@ impl WhatsAppChannel {
                 let inbound_tx = inbound_tx_clone.clone();
                 let allow_from = allow_from_clone.clone();
                 let sent_ids = sent_ids_for_handler.clone();
+                let is_ready = is_ready_for_handler.clone();
+                let connect_time = connect_time_for_handler.clone();
 
                 async move {
                     match event {
                         Event::Connected(_) => {
-                            tracing::info!("✅ WhatsApp connected");
+                            tracing::info!("WhatsApp connected — grace period {CONNECT_GRACE_PERIOD_SECS}s (ignoring queued messages)");
+                            // Record connection time — messages during grace period will be dropped
+                            {
+                                let mut ct = connect_time.lock().await;
+                                *ct = Some(Instant::now());
+                            }
+                            // Spawn a delayed task to enable message processing after grace period
+                            let is_ready_delayed = is_ready.clone();
+                            tokio::spawn(async move {
+                                tokio::time::sleep(tokio::time::Duration::from_secs(CONNECT_GRACE_PERIOD_SECS)).await;
+                                is_ready_delayed.store(true, Ordering::SeqCst);
+                                tracing::info!("WhatsApp grace period ended — now processing messages");
+                            });
                         }
                         Event::LoggedOut(_) => {
+                            is_ready.store(false, Ordering::SeqCst);
                             tracing::error!(
-                                "❌ WhatsApp logged out! Re-pair with: homunbot config → WhatsApp tab"
+                                "WhatsApp logged out! Re-pair with: homun config -> WhatsApp tab"
                             );
                         }
                         Event::Message(msg, info) => {
+                            // Drop messages received during grace period (queued offline messages)
+                            if !is_ready.load(Ordering::SeqCst) {
+                                tracing::debug!(
+                                    msg_id = %info.id,
+                                    "Dropping message received during grace period"
+                                );
+                                return;
+                            }
+
                             handle_message(
                                 msg,
                                 info,
@@ -226,16 +271,42 @@ impl WhatsAppChannel {
     }
 }
 
+/// Max age (seconds) for a message to be processed. Messages older than this are dropped.
+/// This prevents the bot from replying to old queued messages on reconnect.
+const MAX_MESSAGE_AGE_SECS: i64 = 120;
+
 /// Handle an incoming WhatsApp message
 async fn handle_message(
     msg: Box<wa::Message>,
-    info: wacore::types::message::MessageInfo,
-    _client: Arc<whatsapp_rust::Client>,
+    info: wa_rs_core::types::message::MessageInfo,
+    _client: Arc<wa_rs::Client>,
     inbound_tx: &mpsc::Sender<InboundMessage>,
     allow_from: &HashSet<String>,
     allow_all: bool,
     sent_ids: &Mutex<HashSet<String>>,
 ) {
+    // --- SAFETY CHECK 1: Message age ---
+    // Reject messages older than MAX_MESSAGE_AGE_SECS to prevent replying to
+    // queued/offline messages on reconnect.
+    let now = chrono::Utc::now();
+    let age = now.signed_duration_since(info.timestamp);
+    let age_secs = age.num_seconds();
+    if age_secs > MAX_MESSAGE_AGE_SECS {
+        tracing::debug!(
+            msg_id = %info.id,
+            age_secs,
+            "Dropping old message (age > {}s)",
+            MAX_MESSAGE_AGE_SECS,
+        );
+        return;
+    }
+    if age_secs < -60 {
+        // Message from the future (clock skew > 1 min) — drop
+        tracing::debug!(msg_id = %info.id, age_secs, "Dropping message with future timestamp");
+        return;
+    }
+
+    // --- SAFETY CHECK 2: Bot echo ---
     // Skip bot-sent messages (echo of our own replies).
     // We check the message ID against the set of IDs we sent.
     // This allows "self-messages" (user writing to their own chat) to pass through,
@@ -258,6 +329,12 @@ async fn handle_message(
         Some(t) if !t.is_empty() => t.to_string(),
         _ => return, // Skip non-text messages
     };
+
+    // --- SAFETY CHECK 3: Skip group messages ---
+    if info.source.is_group {
+        tracing::debug!(msg_id = %info.id, "Skipping group message");
+        return;
+    }
 
     // Get sender info — the sender JID may be a LID (Linked Identity) or a phone number (PN).
     // When using LID addressing, `sender_alt` contains the phone-number JID.
@@ -287,7 +364,8 @@ async fn handle_message(
         None
     };
 
-    // Access control — match against sender, sender_alt, or chat user.
+    // --- SAFETY CHECK 4: Access control ---
+    // Match against sender, sender_alt, or chat user.
     // Self-messages (is_from_me && not bot-echo) always pass — the user is the account owner.
     if !allow_all && !is_self_message {
         let authorized = allow_from.contains(&sender_id)
@@ -303,16 +381,10 @@ async fn handle_message(
                 sender_id = %sender_id,
                 sender_alt = ?sender_alt_id,
                 chat = %chat_jid,
-                "WhatsApp: unauthorized user, ignoring"
+                "WhatsApp: unauthorized sender, ignoring"
             );
             return;
         }
-    }
-
-    // Skip group messages for now (personal assistant)
-    if info.source.is_group {
-        tracing::debug!(sender = %sender_id, "Skipping group message");
-        return;
     }
 
     // Prefer phone number over LID for the sender_id used in InboundMessage
@@ -338,8 +410,8 @@ async fn handle_message(
     }
 }
 
-/// Parse a JID string into a whatsapp_rust Jid type
-fn parse_jid(jid_str: &str) -> Option<whatsapp_rust::Jid> {
+/// Parse a JID string into a wa_rs Jid type
+fn parse_jid(jid_str: &str) -> Option<wa_rs::Jid> {
     // JID format: "user@server" or "user@server/device"
     let full = if jid_str.contains('@') {
         jid_str.to_string()

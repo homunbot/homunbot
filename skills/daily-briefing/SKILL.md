@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires internet access for weather and news
 allowed-tools: "Web Bash(curl:*)"
 metadata:
-  author: homunbot
+  author: homun
   version: "1.0"
   category: productivity
 ---

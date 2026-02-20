@@ -1,12 +1,12 @@
-# HomunBot — Project Vision & Context
+# Homun — Project Vision & Context
 
 ## The Idea
 
-HomunBot is a personal AI assistant that **lives in your computer** and works for you 24/7. You interact with it remotely via Telegram, WhatsApp, or locally via CLI. It's your digital homunculus — a small, loyal, intelligent creature that executes tasks, learns from interactions, and grows more capable over time through skills.
+Homun is a personal AI assistant that **lives in your computer** and works for you 24/7. You interact with it remotely via Telegram, WhatsApp, or locally via CLI. It's your digital homunculus — a small, loyal, intelligent creature that executes tasks, learns from interactions, and grows more capable over time through skills.
 
-The name comes from alchemy: a **homunculus** is a small artificial being created to serve its maker. HomunBot is exactly that, but digital.
+The name comes from alchemy: a **homunculus** is a small artificial being created to serve its maker. Homun is exactly that, but digital.
 
-## Why HomunBot Exists
+## Why Homun Exists
 
 ### The Problem
 
@@ -29,7 +29,7 @@ There is no **single-binary, privacy-first, skill-powered personal agent** that:
 
 ### Our Solution
 
-HomunBot fills this gap. Written in Rust, it compiles to a single binary. Install it, configure your LLM API key, start the gateway, and you have a personal AI assistant accessible from anywhere.
+Homun fills this gap. Written in Rust, it compiles to a single binary. Install it, configure your LLM API key, start the gateway, and you have a personal AI assistant accessible from anywhere.
 
 ## Positioning & Differentiation
 
@@ -40,7 +40,7 @@ HomunBot fills this gap. Written in Rust, it compiles to a single binary. Instal
 | nanobot | Python | Custom format | TG/WA/Discord/Slack | No | Via provider |
 | tinyclaw | JS/Bun | No | TG/WA/Discord | No | Via provider |
 | meltbot | Python | No | TG/WA | No | No |
-| **HomunBot** | **Rust** | **Agent Skills (open standard)** | **CLI/TG/WA** | **Yes** | **Ollama native** |
+| **Homun** | **Rust** | **Agent Skills (open standard)** | **CLI/TG/WA** | **Yes** | **Ollama native** |
 
 ### Key Differentiators
 
@@ -58,7 +58,7 @@ HomunBot fills this gap. Written in Rust, it compiles to a single binary. Instal
 
 ## Reference Implementation: nanobot
 
-HomunBot is a **Rust rewrite** of [nanobot](https://github.com/HKUDS/nanobot), an ultra-lightweight Python AI assistant (~4,000 lines). Claude Code should **clone the nanobot repository and study its source code** to understand the patterns we're replicating in Rust.
+Homun is a **Rust rewrite** of [nanobot](https://github.com/HKUDS/nanobot), an ultra-lightweight Python AI assistant (~4,000 lines). Claude Code should **clone the nanobot repository and study its source code** to understand the patterns we're replicating in Rust.
 
 ```bash
 git clone https://github.com/HKUDS/nanobot.git /tmp/nanobot-reference
@@ -66,7 +66,7 @@ git clone https://github.com/HKUDS/nanobot.git /tmp/nanobot-reference
 
 ### Key files to study in nanobot
 
-| nanobot file | What it does | HomunBot equivalent |
+| nanobot file | What it does | Homun equivalent |
 |---|---|---|
 | `nanobot/agent/loop.py` | Core agent loop — ReAct pattern, LLM ↔ tool execution, max 20 iterations | `src/agent/loop.rs` |
 | `nanobot/agent/context.py` | Builds the system prompt: persona + skills + tools + memory + history | `src/agent/context.rs` |
@@ -105,7 +105,7 @@ git clone https://github.com/HKUDS/nanobot.git /tmp/nanobot-reference
 
 ## Agent Skills Ecosystem
 
-HomunBot is compatible with the **open Agent Skills standard** maintained by Anthropic. The skills directory and discovery platform is at [skills.sh](https://skills.sh/).
+Homun is compatible with the **open Agent Skills standard** maintained by Anthropic. The skills directory and discovery platform is at [skills.sh](https://skills.sh/).
 
 ### What are Agent Skills
 
@@ -126,7 +126,7 @@ name: market-monitor
 description: Monitor cryptocurrency and stock prices, alert on significant movements. Use when the user asks about market data, price tracking, or financial alerts.
 license: MIT
 metadata:
-  author: homunbot
+  author: homun
   version: "1.0"
 ---
 
@@ -140,11 +140,11 @@ When activated, use the following workflow...
 
 - Browse available skills at https://skills.sh/ (leaderboard sorted by installs)
 - Skills are hosted as GitHub repositories
-- Install with: `npx skills add owner/repo` (original CLI) or `homunbot skills add owner/repo` (our implementation)
+- Install with: `npx skills add owner/repo` (original CLI) or `homun skills add owner/repo` (our implementation)
 - The specification is at https://github.com/agentskills/agentskills
 - Currently **200+ skills** available, but almost all are coding-oriented (React, Next.js, testing, etc.)
 
-### HomunBot's skill strategy
+### Homun's skill strategy
 
 1. **Consume existing skills**: install any skill from skills.sh that's useful (debugging, writing, etc.)
 2. **Create personal productivity skills**: we'll build skills that don't exist yet because no personal assistant supports the standard:
@@ -156,22 +156,22 @@ When activated, use the following workflow...
    - `reading-list` — manage and summarize saved articles/links
 3. **Publish to skills.sh**: our skills will be installable by any agent that supports the standard
 
-### Skill integration in HomunBot
+### Skill integration in Homun
 
-- **Scan**: on startup, scan `~/.homunbot/skills/` and `./skills/` for `SKILL.md` files
+- **Scan**: on startup, scan `~/.homun/skills/` and `./skills/` for `SKILL.md` files
 - **Parse**: extract YAML frontmatter with `gray_matter` crate → `SkillMetadata { name, description }`
 - **Register**: store metadata in `SkillRegistry` (HashMap)
 - **Inject**: context builder includes all skill names + descriptions in system prompt
 - **Activate**: when LLM references a skill, load full SKILL.md body into context
 - **Execute**: if skill has scripts, run them via `tokio::process::Command`
-- **Install**: `homunbot skills add owner/repo` clones from GitHub, extracts skill dirs
+- **Install**: `homun skills add owner/repo` clones from GitHub, extracts skill dirs
 
 ## Architecture Philosophy
 
 ### Core Principles
 
 1. **Local-first**: everything runs on your machine. Cloud APIs are optional (you can use Ollama).
-2. **Single binary**: `cargo install homunbot` and you're done. No Docker, no Python, no Node.js (except for WhatsApp bridge).
+2. **Single binary**: `cargo install homun` and you're done. No Docker, no Python, no Node.js (except for WhatsApp bridge).
 3. **Skill-powered**: capabilities come from the open Agent Skills standard, not hardcoded features.
 4. **Channel-agnostic**: the agent doesn't care if the message comes from CLI, Telegram, or WhatsApp.
 5. **Provider-agnostic**: swap LLMs freely — Claude, GPT, Llama, Mistral, DeepSeek — same agent, different brain.
@@ -218,10 +218,10 @@ CLI ───────┘
 
 ### Skills Integration
 
-HomunBot implements the [Agent Skills specification](https://github.com/agentskills/agentskills):
+Homun implements the [Agent Skills specification](https://github.com/agentskills/agentskills):
 
 ```
-~/.homunbot/skills/
+~/.homun/skills/
 ├── market-monitor/
 │   ├── SKILL.md          # YAML frontmatter + instructions
 │   ├── scripts/
@@ -239,11 +239,11 @@ HomunBot implements the [Agent Skills specification](https://github.com/agentski
 2. **Activation**: when LLM decides a skill is relevant, full SKILL.md body is loaded
 3. **Deep dive**: referenced files in `references/` and `scripts/` loaded on demand
 
-This is the same pattern used by Claude Code, Cursor, and 20+ other agents — but HomunBot is the first **personal assistant** (not coding agent) to support it.
+This is the same pattern used by Claude Code, Cursor, and 20+ other agents — but Homun is the first **personal assistant** (not coding agent) to support it.
 
 ### Novel Skill Ideas (not coding-oriented)
 
-Since existing skills are all coding-focused, HomunBot can pioneer personal/productivity skills:
+Since existing skills are all coding-focused, Homun can pioneer personal/productivity skills:
 
 - **daily-briefing**: compile weather, calendar, news, market data into a morning summary
 - **market-monitor**: track crypto/stock prices, alert on thresholds
@@ -255,20 +255,20 @@ Since existing skills are all coding-focused, HomunBot can pioneer personal/prod
 
 ## Data Model
 
-### Config (`~/.homunbot/config.toml`)
+### Config (`~/.homun/config.toml`)
 Human-readable, hand-editable. Contains API keys, channel tokens, agent settings.
 
-### Database (`~/.homunbot/homunbot.db` — SQLite)
+### Database (`~/.homun/homun.db` — SQLite)
 - **sessions**: conversation state per channel/user
 - **messages**: conversation history
 - **memories**: long-term memory (consolidated by LLM)
 - **cron_jobs**: scheduled tasks
 - **skill_state**: per-skill persistent key-value store
 
-### Skills (`~/.homunbot/skills/`)
-Standard Agent Skills directories, installed via `homunbot skills add` or manually.
+### Skills (`~/.homun/skills/`)
+Standard Agent Skills directories, installed via `homun skills add` or manually.
 
-### Workspace (`~/.homunbot/workspace/`)
+### Workspace (`~/.homun/workspace/`)
 Scratch space for the agent to read/write files during task execution.
 
 ## Development Phases
@@ -290,7 +290,7 @@ Scratch space for the agent to read/write files during task execution.
 - [x] Tool calling integration in agent loop (ReAct iterations, max 20)
 - [x] Skill loader (scan directories, parse YAML frontmatter)
 - [x] Skill activation in context builder
-- [x] `homunbot skills add/remove/list` CLI commands
+- [x] `homun skills add/remove/list` CLI commands
 
 ### Phase 3: Channels & Communication ← DONE
 - [x] Channel trait + message bus (tokio mpsc)
@@ -304,7 +304,7 @@ Scratch space for the agent to read/write files during task execution.
 - [x] Long-term memory retrieval in context builder
 - [x] Cron scheduler (custom implementation, no external crate)
 - [x] Cron tool (LLM can create/list/remove jobs via tool_use)
-- [x] Cron CLI commands (`homunbot cron list/add/remove`)
+- [x] Cron CLI commands (`homun cron list/add/remove`)
 - [x] Auto deliver_to (cron jobs route responses to originating channel)
 - [x] Heartbeat system (periodic proactive wake-up)
 - [x] Subagent system (background task spawning via spawn_subagent tool)
@@ -313,32 +313,46 @@ Scratch space for the agent to read/write files during task execution.
 - [x] Anthropic native provider (Claude API with tool_use, content blocks, system extraction)
 - [x] 14 LLM providers (anthropic, openai, openrouter, ollama, deepseek, groq, gemini, minimax, aihubmix, dashscope, moonshot, zhipu, vllm, custom)
 - [x] Keyword-based provider resolution with gateway/local fallback
-- [x] Skill installer (`homunbot skills add owner/repo` — GitHub fetch + tarball extraction)
+- [x] Skill installer (`homun skills add owner/repo` — GitHub fetch + tarball extraction)
 - [x] Skill executor (run Python/Bash/JS/TS scripts from skill directories)
 - [x] Bundled skills (daily-briefing, code-review)
 
-### Phase 6: Polish & Release ← NEXT
-- [ ] Skill hot-reload (file watcher)
-- [ ] Config wizard (`homunbot config` interactive setup)
-- [ ] Error recovery and graceful shutdown
-- [ ] WhatsApp bridge (Node.js process)
-- [ ] Documentation site (homunbot.github.io)
-- [ ] Publish to crates.io
-- [ ] Release binaries (GitHub Actions: Linux, macOS, ARM)
+### Phase 6: UX & Web UI ← CURRENT
+> See TASKS.md for detailed task breakdown
+
+- [ ] Web server embedded (axum, port 18080, embedded assets)
+- [ ] Dashboard home (agent status, channels, sessions, resources)
+- [ ] Config wizard (guided setup, zero TOML editing)
+- [ ] Skill manager UI (browse ClawHub, install one-click, security badges)
+- [ ] Chat UI (WebSocket, markdown, tool execution display)
+- [ ] Log viewer (real-time SSE, filters)
+- [ ] REST API (`/api/v1/chat`, `/api/v1/skills`, `/api/v1/config`)
+- [ ] Browser control tool (CDP via chromiumoxide)
+- [ ] 10 skill bundled (daily-briefing, market-monitor, email-digest, etc.)
+- [ ] Skill security (SHA256 hash, script sandboxing, trust levels)
+
+### Phase 7: Channels & Distribution
+- [ ] Slack channel (Socket Mode)
+- [ ] Email channel (IMAP + SMTP)
+- [ ] Voice transcription (Groq Whisper)
+- [ ] Webhook tool (inbound + outbound)
+- [ ] Dockerfile (FROM scratch, <15MB)
+- [ ] GitHub Actions CI/CD (multi-arch builds)
+- [ ] Installer script (`curl | sh`)
+- [ ] Homebrew formula + crates.io
+- [ ] Documentation site
 
 ## Open Questions & Future Ideas
 
-- **MCP integration**: should HomunBot be an MCP client (consume tools from MCP servers) or also an MCP server (expose its capabilities)?
-- **Voice**: Whisper integration for voice messages via Telegram/WhatsApp
-- **Multi-agent**: should skills be able to spawn sub-agents?
-- **Skill marketplace**: could HomunBot host its own skill discovery beyond skills.sh?
-- **Mobile app**: a minimal Flutter app for direct communication (leveraging your Flutter experience)?
-- **Plugin system**: beyond skills, should there be compiled Rust plugins (dynamic loading)?
+- **MCP Server mode**: expose Homun capabilities to other agents (not just client)
+- **Mobile app**: a minimal Flutter app for direct communication
+- **Plugin system**: compiled Rust plugins via dynamic loading
+- **Multi-agent routing**: session-based agent isolation (like OpenClaw)
 
 ## Links
 
-- **GitHub**: https://github.com/homunbot/homunbot
-- **Email**: homunbot@gmail.com
+- **GitHub**: https://github.com/homun/homun
+- **Email**: homun@gmail.com
 - **Agent Skills spec**: https://github.com/agentskills/agentskills
 - **Skills directory**: https://skills.sh
 - **Inspiration**: https://github.com/HKUDS/nanobot

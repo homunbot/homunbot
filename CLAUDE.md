@@ -1,11 +1,11 @@
-# HomunBot — Claude Code Instructions
+# Homun — Claude Code Instructions
 
 > **Read `PROJECT.md` first** for the full vision, positioning, architecture philosophy, and development phases.
 > This file contains the technical implementation guidelines for writing code.
 
-## What is HomunBot
+## What is Homun
 
-HomunBot is an ultra-lightweight personal AI assistant written in Rust — a digital homunculus that lives in your computer and works for you 24/7. You manage it remotely via Telegram, WhatsApp, or CLI. It supports the open **Agent Skills** standard (skills.sh / agentskills spec) for extensible capabilities.
+Homun is an ultra-lightweight personal AI assistant written in Rust — a digital homunculus that lives in your computer and works for you 24/7. You manage it remotely via Telegram, WhatsApp, or CLI. It supports the open **Agent Skills** standard (skills.sh / agentskills spec) for extensible capabilities.
 
 **Core philosophy**: single binary, local-first, privacy-focused, skill-powered.
 
@@ -14,7 +14,7 @@ Inspired by [nanobot](https://github.com/HKUDS/nanobot) (~4k lines Python) but r
 ## Architecture Overview
 
 ```
-homunbot/
+homun/
 ├── src/
 │   ├── main.rs                 # Entry point, CLI setup
 │   ├── lib.rs                  # Public API re-exports
@@ -42,14 +42,15 @@ homunbot/
 │   │   ├── mod.rs
 │   │   ├── loader.rs           # Scan dirs, parse SKILL.md YAML frontmatter
 │   │   ├── registry.rs         # In-memory skill registry
-│   │   ├── installer.rs        # `homunbot skills add owner/repo` (GitHub fetch)
+│   │   ├── installer.rs        # `homun skills add owner/repo` (GitHub fetch)
 │   │   └── executor.rs         # Run skill scripts (Python/Bash/JS)
 │   ├── channels/
 │   │   ├── mod.rs
 │   │   ├── traits.rs           # Channel trait (send/receive)
 │   │   ├── cli.rs              # Interactive CLI / one-shot mode
 │   │   ├── telegram.rs         # Telegram bot (teloxide)
-│   │   └── whatsapp.rs         # WhatsApp bridge client (connects to Node.js bridge)
+│   │   ├── discord.rs          # Discord bot (serenity)
+│   │   └── whatsapp.rs         # WhatsApp native client (wa-rs crate)
 │   ├── bus/
 │   │   ├── mod.rs
 │   │   └── queue.rs            # Message bus (mpsc channels) for routing
@@ -62,14 +63,15 @@ homunbot/
 │   ├── storage/
 │   │   ├── mod.rs
 │   │   └── db.rs               # SQLite via sqlx (memory, sessions, cron jobs)
+│   ├── tui/
+│   │   ├── mod.rs
+│   │   ├── app.rs              # TUI application state + input handling
+│   │   ├── ui.rs               # TUI rendering (ratatui)
+│   │   └── event.rs            # Terminal event handler (crossterm)
 │   └── config/
 │       ├── mod.rs
-│       └── schema.rs           # Config structs, deserialized from TOML
-├── bridge/                     # WhatsApp Node.js bridge (separate process)
-│   ├── src/
-│   │   └── whatsapp.ts
-│   ├── package.json
-│   └── tsconfig.json
+│       ├── schema.rs           # Config structs, deserialized from TOML
+│       └── dotpath.rs          # Dot-path config get/set
 ├── skills/                     # Bundled default skills
 │   └── README.md
 ├── Cargo.toml
@@ -102,9 +104,9 @@ homunbot/
 
 ### Storage
 - **SQLite via sqlx** for all persistent data: memory, sessions, cron jobs, skill state.
-- Single database file at `~/.homunbot/homunbot.db`.
+- Single database file at `~/.homun/homun.db`.
 - Use sqlx migrations embedded in binary (`sqlx::migrate!`).
-- **TOML** for configuration at `~/.homunbot/config.toml`.
+- **TOML** for configuration at `~/.homun/config.toml`.
 - Never use serde_json for config files; TOML is the standard.
 
 ### Tool System
@@ -126,10 +128,10 @@ homunbot/
 - Skills are directories containing a `SKILL.md` with YAML frontmatter.
 - **Progressive disclosure**: only name + description loaded at startup; full SKILL.md body loaded when the LLM decides to activate a skill.
 - Skills are scanned from:
-  1. `~/.homunbot/skills/` (user-installed)
+  1. `~/.homun/skills/` (user-installed)
   2. `./skills/` (project-local)
   3. Bundled skills in binary
-- `homunbot skills add owner/repo` fetches from GitHub and installs to `~/.homunbot/skills/`.
+- `homun skills add owner/repo` fetches from GitHub and installs to `~/.homun/skills/`.
 - Skill scripts in `scripts/` are executed via `tokio::process::Command`.
 
 ### Channel System
@@ -143,9 +145,9 @@ homunbot/
   }
   ```
 - Messages flow: Channel → InboundMessage → MessageBus → AgentLoop → OutboundMessage → Channel.
-- **CLI**: interactive REPL or one-shot (`homunbot chat -m "..."`).
+- **CLI**: interactive REPL or one-shot (`homun chat -m "..."`).
 - **Telegram**: via `teloxide` crate (long polling, no webhook needed).
-- **WhatsApp**: via Node.js bridge process communicating over local HTTP/WebSocket.
+- **WhatsApp**: via `wa-rs` crate (native Rust WhatsApp Web client, fork of jlucaso1/whatsapp-rust). No Node.js bridge needed.
 
 ### Memory System
 - Short-term: conversation messages in current session (in-memory + SQLite).
@@ -154,7 +156,7 @@ homunbot/
 - Stored in SQLite `memories` table with timestamps and relevance metadata.
 
 ### Config
-- Config file: `~/.homunbot/config.toml`
+- Config file: `~/.homun/config.toml`
 - Example:
   ```toml
   [agent]
@@ -183,7 +185,7 @@ homunbot/
   api_key = "BSA-xxx"
 
   [storage]
-  path = "~/.homunbot/homunbot.db"
+  path = "~/.homun/homun.db"
   ```
 
 ## Rust Conventions
@@ -234,18 +236,18 @@ Do NOT add unnecessary dependencies. Keep the binary lean.
 ## CLI Commands
 
 ```
-homunbot                        # Interactive chat (default)
-homunbot chat                   # Interactive chat
-homunbot chat -m "message"      # One-shot message
-homunbot gateway                # Start gateway (all channels + cron + heartbeat)
-homunbot config                 # Initialize config
-homunbot status                 # Show status
-homunbot skills list            # List installed skills
-homunbot skills add owner/repo  # Install skill from GitHub
-homunbot skills remove name     # Remove skill
-homunbot cron list              # List scheduled jobs
-homunbot cron add ...           # Add cron job
-homunbot cron remove <id>       # Remove cron job
+homun                        # Interactive chat (default)
+homun chat                   # Interactive chat
+homun chat -m "message"      # One-shot message
+homun gateway                # Start gateway (all channels + cron + heartbeat)
+homun config                 # Initialize config
+homun status                 # Show status
+homun skills list            # List installed skills
+homun skills add owner/repo  # Install skill from GitHub
+homun skills remove name     # Remove skill
+homun cron list              # List scheduled jobs
+homun cron add ...           # Add cron job
+homun cron remove <id>       # Remove cron job
 ```
 
 ## Development Workflow
@@ -262,7 +264,7 @@ homunbot cron remove <id>       # Remove cron job
 - Do NOT block the async runtime — no `std::thread::sleep`, no sync I/O in async context.
 - Do NOT hardcode API URLs — they come from config/provider.
 - Do NOT store secrets in code — they go in `config.toml`.
-- Do NOT add Python/Node.js dependencies to the core — the Rust binary must be self-contained (except for the WhatsApp bridge which is a separate process).
+- Do NOT add Python/Node.js dependencies to the core — the Rust binary must be self-contained.
 - Do NOT use `clone()` excessively — prefer references and borrows.
 - Do NOT panic in library code — return `Result` instead.
 

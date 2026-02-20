@@ -32,7 +32,7 @@ impl CliChannel {
 
     /// Interactive REPL mode
     pub async fn interactive(&self) -> Result<()> {
-        println!("🧪 HomunBot — interactive mode");
+        println!("🧪 Homun — interactive mode");
         println!("Type your message. Commands: /new (reset), /quit (exit)\n");
 
         let stdin = io::stdin();
@@ -79,7 +79,7 @@ impl CliChannel {
             // Process message
             match self.agent.process_message(input, &self.session_key, "cli", "local").await {
                 Ok(response) => {
-                    println!("\nhomunbot> {}\n", response);
+                    println!("\nhomun> {}\n", response);
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to process message");

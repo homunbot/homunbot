@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::installer::InstallResult;
 use super::loader::parse_skill_md_public;
@@ -17,7 +17,7 @@ use super::loader::parse_skill_md_public;
 /// - `clawhub:search <query>` — search available skills
 ///
 /// Since ClawHub skills follow the same Agent Skills specification,
-/// they're fully compatible with HomunBot's skill system.
+/// they're fully compatible with Homun's skill system.
 pub struct ClawHubInstaller {
     client: Client,
     skills_dir: PathBuf,
@@ -28,6 +28,30 @@ const CLAWHUB_REPO_OWNER: &str = "openclaw";
 const CLAWHUB_REPO_NAME: &str = "skills";
 const CLAWHUB_SKILLS_PATH: &str = "skills";
 const CLAWHUB_BRANCH: &str = "main";
+
+/// Path to the local catalog cache file
+const CATALOG_CACHE_FILENAME: &str = "clawhub-catalog.json";
+/// Cache is valid for 6 hours
+const CATALOG_CACHE_MAX_AGE_SECS: u64 = 6 * 3600;
+
+/// A cached entry in the local catalog
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct CatalogEntry {
+    slug: String,
+    owner: String,
+    name: String,
+    description: String,
+    downloads: u64,
+    stars: u64,
+}
+
+/// The full catalog cache file format
+#[derive(Serialize, Deserialize, Debug)]
+struct CatalogCache {
+    /// Unix timestamp when this cache was created
+    fetched_at: u64,
+    entries: Vec<CatalogEntry>,
+}
 
 /// GitHub API: directory listing entry (Contents API)
 #[derive(Deserialize, Debug)]
@@ -57,24 +81,70 @@ struct GitHubCodeSearchItem {
     path: String,
 }
 
+/// ClawHub native API: skills list response
+#[derive(Deserialize, Debug)]
+struct ClawHubApiResponse {
+    items: Vec<ClawHubApiSkill>,
+    #[serde(rename = "nextCursor")]
+    next_cursor: Option<String>,
+}
+
+/// ClawHub native API: skill item
+#[derive(Deserialize, Debug)]
+struct ClawHubApiSkill {
+    slug: String,
+    #[serde(rename = "displayName")]
+    display_name: String,
+    summary: String,
+    stats: ClawHubApiStats,
+}
+
+/// ClawHub native API: skill stats
+#[derive(Deserialize, Debug)]
+struct ClawHubApiStats {
+    downloads: u64,
+    #[serde(rename = "installsAllTime")]
+    installs_all_time: u64,
+    stars: u64,
+}
+
+/// ClawHub native API: single skill detail response
+#[derive(Deserialize, Debug)]
+struct ClawHubApiSkillDetail {
+    #[allow(dead_code)]
+    skill: ClawHubApiSkill,
+    owner: ClawHubApiOwner,
+}
+
+/// ClawHub native API: skill owner
+#[derive(Deserialize, Debug)]
+struct ClawHubApiOwner {
+    handle: String,
+}
+
 /// Search result from ClawHub
 pub struct ClawHubSearchResult {
     pub owner: String,
     pub skill_name: String,
     pub description: String,
     pub slug: String,
+    pub downloads: u64,
+    pub stars: u64,
 }
+
+/// Base URL for the ClawHub API
+const CLAWHUB_API_BASE: &str = "https://clawhub.ai/api/v1";
 
 impl ClawHubInstaller {
     pub fn new() -> Self {
         let skills_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".homunbot")
+            .join(".homun")
             .join("skills");
 
         Self {
             client: Client::builder()
-                .user_agent("homunbot")
+                .user_agent("homun")
                 .build()
                 .expect("Failed to create HTTP client"),
             skills_dir,
@@ -147,12 +217,284 @@ impl ClawHubInstaller {
         })
     }
 
-    /// Search for skills on ClawHub using GitHub Code Search API.
+    /// Search for skills on ClawHub.
     ///
-    /// Searches for SKILL.md files in the openclaw/skills repo that contain
-    /// the query terms in their filename path or content.
+    /// Uses a local cache of the full skill catalog if available (instant).
+    /// Falls back to paginated ClawHub API (slow) and caches the result.
     pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<ClawHubSearchResult>> {
-        // Use GitHub Code Search: find SKILL.md files matching the query
+        // Try local cache first (instant)
+        if let Some(results) = self.search_cached(query, limit).await {
+            return Ok(results);
+        }
+
+        // Cache miss or stale — fetch from ClawHub API and rebuild cache
+        tracing::info!("ClawHub catalog cache miss, fetching from API (this may take a moment)");
+        match self.refresh_catalog_cache().await {
+            Ok(()) => {
+                // Retry with fresh cache
+                if let Some(results) = self.search_cached(query, limit).await {
+                    return Ok(results);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to refresh ClawHub catalog cache");
+            }
+        }
+
+        // Last resort: try GitHub Code Search
+        self.search_github(query, limit).await
+    }
+
+    /// Search the local catalog cache. Returns None if cache doesn't exist or is stale.
+    async fn search_cached(&self, query: &str, limit: usize) -> Option<Vec<ClawHubSearchResult>> {
+        let cache_path = self.catalog_cache_path();
+        let content = tokio::fs::read_to_string(&cache_path).await.ok()?;
+        let cache: CatalogCache = serde_json::from_str(&content).ok()?;
+
+        // Check if cache is still fresh
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if now - cache.fetched_at > CATALOG_CACHE_MAX_AGE_SECS {
+            return None;
+        }
+
+        let query_lower = query.to_lowercase();
+        let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
+
+        let results: Vec<ClawHubSearchResult> = cache
+            .entries
+            .iter()
+            .filter(|e| {
+                let slug = e.slug.to_lowercase();
+                let name = e.name.to_lowercase();
+                let desc = e.description.to_lowercase();
+                query_terms
+                    .iter()
+                    .all(|term| slug.contains(term) || name.contains(term) || desc.contains(term))
+            })
+            .take(limit)
+            .map(|e| ClawHubSearchResult {
+                slug: e.slug.clone(),
+                owner: e.owner.clone(),
+                skill_name: e.name.clone(),
+                description: e.description.clone(),
+                downloads: e.downloads,
+                stars: e.stars,
+            })
+            .collect();
+
+        if results.is_empty() {
+            return Some(Vec::new()); // Cache is valid, just no matches
+        }
+
+        // Fetch owner handles for matched results (parallel, fast for small result sets)
+        let mut enriched = Vec::with_capacity(results.len());
+        let mut futures = Vec::new();
+        for r in &results {
+            let client = self.client.clone();
+            let slug = r.skill_name.clone();
+            futures.push(tokio::spawn(async move {
+                let url = format!("{}/skills/{}", CLAWHUB_API_BASE, urlencoded(&slug));
+                match client.get(&url).send().await {
+                    Ok(resp) => match resp.json::<ClawHubApiSkillDetail>().await {
+                        Ok(detail) => detail.owner.handle,
+                        Err(_) => "unknown".to_string(),
+                    },
+                    Err(_) => "unknown".to_string(),
+                }
+            }));
+        }
+        for (mut r, fut) in results.into_iter().zip(futures) {
+            let owner = fut.await.unwrap_or_else(|_| "unknown".to_string());
+            r.slug = format!("{}/{}", owner, r.skill_name);
+            r.owner = owner;
+            enriched.push(r);
+        }
+
+        Some(enriched)
+    }
+
+    /// Refresh the local catalog cache by paginating through the entire ClawHub API.
+    /// This is slow (~30-80s) but only happens once every 6 hours.
+    pub async fn refresh_catalog_cache(&self) -> Result<()> {
+        let mut entries: Vec<CatalogEntry> = Vec::new();
+        let mut cursor: Option<String> = None;
+        let max_pages = 60;
+
+        for page in 0..max_pages {
+            let mut url = format!("{}/skills?sort=downloads&limit=200", CLAWHUB_API_BASE);
+            if let Some(ref c) = cursor {
+                url.push_str(&format!("&cursor={}", c));
+            }
+
+            let response = self.client.get(&url).send().await?;
+            if !response.status().is_success() {
+                break;
+            }
+
+            let api_resp: ClawHubApiResponse = response.json().await?;
+            if api_resp.items.is_empty() {
+                break;
+            }
+
+            for skill in &api_resp.items {
+                entries.push(CatalogEntry {
+                    slug: skill.slug.clone(),
+                    owner: String::new(), // filled later for matched results
+                    name: skill.slug.clone(),
+                    description: skill.summary.clone(),
+                    downloads: skill.stats.downloads,
+                    stars: skill.stats.stars,
+                });
+            }
+
+            if api_resp.next_cursor.is_none() {
+                break;
+            }
+            cursor = api_resp.next_cursor;
+
+            if page % 10 == 9 {
+                tracing::debug!(entries = entries.len(), "ClawHub catalog fetch progress");
+            }
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let cache = CatalogCache {
+            fetched_at: now,
+            entries,
+        };
+
+        let cache_path = self.catalog_cache_path();
+        let json = serde_json::to_string(&cache)?;
+        tokio::fs::write(&cache_path, json).await?;
+
+        tracing::info!(
+            skills = cache.entries.len(),
+            path = %cache_path.display(),
+            "ClawHub catalog cache refreshed"
+        );
+
+        Ok(())
+    }
+
+    /// Path to the catalog cache file
+    fn catalog_cache_path(&self) -> PathBuf {
+        self.skills_dir
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(CATALOG_CACHE_FILENAME)
+    }
+
+    /// Search using the native ClawHub REST API with cursor-based pagination.
+    ///
+    /// The ClawHub API doesn't support server-side text search — the `q=` parameter
+    /// is ignored. We paginate through all skills and filter locally by matching
+    /// query terms against slug, displayName, and summary.
+    async fn search_native_api(&self, query: &str, limit: usize) -> Result<Vec<ClawHubSearchResult>> {
+        let query_lower = query.to_lowercase();
+        let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
+
+        let mut matching_skills: Vec<ClawHubApiSkill> = Vec::new();
+        let mut cursor: Option<String> = None;
+        let max_pages = 60; // ~9k skills at 200/page
+
+        for _ in 0..max_pages {
+            let mut url = format!("{}/skills?sort=downloads&limit=200", CLAWHUB_API_BASE);
+            if let Some(ref c) = cursor {
+                url.push_str(&format!("&cursor={}", c));
+            }
+
+            let response = self
+                .client
+                .get(&url)
+                .send()
+                .await
+                .context("Failed to reach ClawHub API")?;
+
+            if !response.status().is_success() {
+                break;
+            }
+
+            let api_resp: ClawHubApiResponse = response
+                .json()
+                .await
+                .context("Failed to parse ClawHub API response")?;
+
+            if api_resp.items.is_empty() {
+                break;
+            }
+
+            // Filter this page locally
+            for skill in api_resp.items {
+                let slug_lower = skill.slug.to_lowercase();
+                let name_lower = skill.display_name.to_lowercase();
+                let summary_lower = skill.summary.to_lowercase();
+
+                if query_terms.iter().all(|term| {
+                    slug_lower.contains(term)
+                        || name_lower.contains(term)
+                        || summary_lower.contains(term)
+                }) {
+                    matching_skills.push(skill);
+                    if matching_skills.len() >= limit {
+                        break;
+                    }
+                }
+            }
+
+            // Stop if we have enough results or no more pages
+            if matching_skills.len() >= limit || api_resp.next_cursor.is_none() {
+                break;
+            }
+            cursor = api_resp.next_cursor;
+        }
+
+        if matching_skills.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Fetch owner handles in parallel for matched skills
+        let mut owner_futures = Vec::with_capacity(matching_skills.len());
+        for skill in &matching_skills {
+            let client = self.client.clone();
+            let slug = skill.slug.clone();
+            owner_futures.push(tokio::spawn(async move {
+                let url = format!("{}/skills/{}", CLAWHUB_API_BASE, urlencoded(&slug));
+                match client.get(&url).send().await {
+                    Ok(resp) => match resp.json::<ClawHubApiSkillDetail>().await {
+                        Ok(detail) => detail.owner.handle,
+                        Err(_) => "unknown".to_string(),
+                    },
+                    Err(_) => "unknown".to_string(),
+                }
+            }));
+        }
+
+        // Collect results with owner handles
+        let mut results = Vec::with_capacity(matching_skills.len());
+        for (skill, owner_handle) in matching_skills.into_iter().zip(owner_futures) {
+            let owner = owner_handle.await.unwrap_or_else(|_| "unknown".to_string());
+            results.push(ClawHubSearchResult {
+                slug: format!("{}/{}", owner, skill.slug),
+                owner,
+                skill_name: skill.slug,
+                description: skill.summary,
+                downloads: skill.stats.downloads,
+                stars: skill.stats.stars,
+            });
+        }
+
+        Ok(results)
+    }
+
+    /// Fallback search using GitHub Code Search API
+    async fn search_github(&self, query: &str, limit: usize) -> Result<Vec<ClawHubSearchResult>> {
         let search_query = format!(
             "{} repo:{}/{} filename:SKILL.md",
             query, CLAWHUB_REPO_OWNER, CLAWHUB_REPO_NAME
@@ -170,23 +512,21 @@ impl ClawHubInstaller {
             .header("Accept", "application/vnd.github.v3+json")
             .send()
             .await
-            .context("Failed to search ClawHub")?;
+            .context("Failed to search ClawHub via GitHub")?;
 
         if !response.status().is_success() {
-            // Fallback: try direct path matching
             return self.search_by_path(query, limit).await;
         }
 
         let search_resp: GitHubCodeSearchResponse = response
             .json()
             .await
-            .context("Failed to parse ClawHub search response")?;
+            .context("Failed to parse GitHub search response")?;
 
         let mut results = Vec::new();
         let prefix = format!("{}/", CLAWHUB_SKILLS_PATH);
 
         for item in search_resp.items {
-            // Parse path: skills/<owner>/<skill-name>/SKILL.md
             if !item.path.starts_with(&prefix) || !item.path.ends_with("/SKILL.md") {
                 continue;
             }
@@ -201,7 +541,6 @@ impl ClawHubInstaller {
             let skill_name = parts[1].to_string();
             let slug = format!("{}/{}", owner, skill_name);
 
-            // Fetch SKILL.md for description
             if let Ok(content) = self.fetch_file_from_monorepo(&item.path).await {
                 if let Ok((meta, _)) = parse_skill_md_public(&content) {
                     results.push(ClawHubSearchResult {
@@ -209,6 +548,8 @@ impl ClawHubInstaller {
                         skill_name,
                         description: meta.description,
                         slug,
+                        downloads: 0,
+                        stars: 0,
                     });
                 }
             }
@@ -274,6 +615,8 @@ impl ClawHubInstaller {
                                     skill_name: skill_name.clone(),
                                     description: meta.description,
                                     slug: format!("{}/{}", parts[0], skill_name),
+                                    downloads: 0,
+                                    stars: 0,
                                 });
                             }
                         }
@@ -350,6 +693,8 @@ impl ClawHubInstaller {
                                     skill_name: skill_entry.name.clone(),
                                     description: meta.description,
                                     slug: format!("{}/{}", owner, skill_entry.name),
+                                    downloads: 0,
+                                    stars: 0,
                                 });
                             }
                         }
@@ -404,6 +749,8 @@ impl ClawHubInstaller {
                         skill_name: entry.name.clone(),
                         description: meta.description,
                         slug: format!("{}/{}", owner, entry.name),
+                        downloads: 0,
+                        stars: 0,
                     });
                 }
             }

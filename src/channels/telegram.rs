@@ -116,7 +116,7 @@ impl TelegramChannel {
 
         // Handle commands
         if text == "/start" {
-            bot.send_message(msg.chat.id, "🧪 HomunBot is ready! Send me a message.")
+            bot.send_message(msg.chat.id, "🧪 Homun is ready! Send me a message.")
                 .await?;
             return Ok(());
         }
@@ -294,9 +294,7 @@ fn convert_inline_markdown(line: &str) -> String {
     let line = replace_paired_marker(&line, '*', "<i>", "</i>");
 
     // Strikethrough: ~~text~~ → <s>text</s>
-    let line = replace_paired_double(&line, "~~", "<s>", "</s>");
-
-    line
+    replace_paired_double(&line, "~~", "<s>", "</s>")
 }
 
 /// Replace paired single-char markers: `x` → <tag>x</tag>

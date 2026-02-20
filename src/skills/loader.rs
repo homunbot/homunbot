@@ -72,14 +72,14 @@ impl SkillRegistry {
 
     /// Scan directories for skills and load their metadata.
     /// Scans in priority order:
-    /// 1. ~/.homunbot/skills/ (user-installed)
+    /// 1. ~/.homun/skills/ (user-installed)
     /// 2. ./skills/ (project-local)
     pub async fn scan_and_load(&mut self) -> Result<()> {
         let scan_dirs = vec![
             // User-installed skills
             dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join(".homunbot")
+                .join(".homun")
                 .join("skills"),
             // Project-local skills
             PathBuf::from("skills"),
@@ -204,6 +204,11 @@ impl SkillRegistry {
         summary
     }
 
+    /// Public version of scan_directory for use by the skill watcher.
+    pub async fn scan_directory_public(&mut self, dir: &Path) -> Result<()> {
+        self.scan_directory(dir).await
+    }
+
     /// Number of loaded skills
     pub fn len(&self) -> usize {
         self.skills.len()
@@ -288,7 +293,7 @@ license: MIT
 compatibility: Requires internet access
 allowed-tools: "Web Bash(curl:*)"
 metadata:
-  author: homunbot
+  author: homun
   version: "1.0"
 ---
 
@@ -393,6 +398,34 @@ Instructions here.
         let skill = registry.get("my-skill").unwrap();
         assert_eq!(skill.meta.name, "my-skill");
         assert!(skill.body.is_none()); // Not loaded yet (progressive)
+    }
+
+    #[test]
+    fn test_parse_skill_md_inline_json_metadata() {
+        // This is how ClawHub skills store metadata — inline JSON in YAML frontmatter
+        let content = r#"---
+name: gog
+description: Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.
+homepage: https://gogcli.sh
+metadata: {"clawdbot":{"emoji":"🎮","requires":{"bins":["gog"]},"install":[{"id":"brew"}]}}
+---
+
+# gog
+"#;
+        let (meta, _body) = parse_skill_md(content).unwrap();
+        assert_eq!(meta.name, "gog");
+
+        // Check that metadata is parsed as an object, not a string
+        let metadata = meta.metadata.expect("metadata should be Some");
+        println!("metadata: {}", serde_json::to_string_pretty(&metadata).unwrap());
+        println!("metadata type is_object: {}", metadata.is_object());
+        println!("metadata type is_string: {}", metadata.is_string());
+
+        let clawdbot = metadata.get("clawdbot").expect("clawdbot should exist");
+        let requires = clawdbot.get("requires").expect("requires should exist");
+        let bins = requires.get("bins").expect("bins should exist");
+        assert!(bins.is_array());
+        assert_eq!(bins.as_array().unwrap()[0], "gog");
     }
 
     #[tokio::test]

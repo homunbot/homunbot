@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-/// Root configuration — loaded from ~/.homunbot/config.toml
+/// Root configuration — loaded from ~/.homun/config.toml
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -17,7 +17,7 @@ pub struct Config {
 }
 
 impl Config {
-    /// Load config from the default path (~/.homunbot/config.toml)
+    /// Load config from the default path (~/.homun/config.toml)
     pub fn load() -> Result<Self> {
         let path = Self::default_path();
         if path.exists() {
@@ -56,24 +56,75 @@ impl Config {
         Ok(())
     }
 
-    /// Default config file path: ~/.homunbot/config.toml
+    /// Default config file path: ~/.homun/config.toml
     pub fn default_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".homunbot")
+            .join(".homun")
             .join("config.toml")
     }
 
-    /// Data directory: ~/.homunbot/
+    /// Data directory: ~/.homun/
     pub fn data_dir() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".homunbot")
+            .join(".homun")
     }
 
-    /// Workspace directory: ~/.homunbot/workspace/
+    /// Workspace directory: ~/.homun/workspace/
     pub fn workspace_dir() -> PathBuf {
         Self::data_dir().join("workspace")
+    }
+
+    /// Check if provider has credentials (API key in secure storage, in config, or base URL)
+    pub fn is_provider_configured(&self, name: &str) -> bool {
+        // Check secure storage for encrypted API key
+        if let Ok(secrets) = crate::storage::global_secrets() {
+            let key = crate::storage::SecretKey::provider_api_key(name);
+            let result: std::result::Result<Option<String>, anyhow::Error> = secrets.get(&key);
+            if matches!(result, Ok(Some(_))) {
+                return true;
+            }
+        }
+
+        // Check if provider has api_key in config (legacy plaintext or marker) or base URL
+        if let Some(provider) = self.providers.get(name) {
+            return !provider.api_key.is_empty() || provider.api_base.is_some();
+        }
+
+        false
+    }
+
+    /// Check if a channel is configured and ready to use.
+    pub fn is_channel_configured(&self, name: &str) -> bool {
+        match name {
+            "telegram" => {
+                // Check encrypted storage first, then config
+                if let Ok(secrets) = crate::storage::global_secrets() {
+                    let key = crate::storage::SecretKey::channel_token("telegram");
+                    if matches!(secrets.get(&key), Ok(Some(_))) {
+                        return true;
+                    }
+                }
+                !self.channels.telegram.token.is_empty()
+            }
+            "discord" => {
+                if let Ok(secrets) = crate::storage::global_secrets() {
+                    let key = crate::storage::SecretKey::channel_token("discord");
+                    if matches!(secrets.get(&key), Ok(Some(_))) {
+                        return true;
+                    }
+                }
+                !self.channels.discord.token.is_empty()
+            }
+            "whatsapp" => {
+                // WhatsApp is "configured" if it has a phone number and the session DB exists
+                !self.channels.whatsapp.phone_number.is_empty()
+                    && self.channels.whatsapp.resolved_db_path().exists()
+            }
+            "web" => true, // Always configured
+            _ => false,
+        }
     }
 
     /// Resolve the provider config for a given model string.
@@ -82,7 +133,7 @@ impl Config {
     /// 1. Direct keyword match (model name contains provider keyword)
     /// 2. Gateway providers (OpenRouter, AiHubMix — route any model)
     /// 3. Local providers (Ollama, vLLM — no api_key needed)
-    /// 4. Fallback: first provider with an api_key
+    /// 4. Fallback: first provider with credentials
     pub fn resolve_provider(&self, model: &str) -> Option<(&str, &ProviderConfig)> {
         let m = model.to_lowercase();
 
@@ -100,30 +151,34 @@ impl Config {
         ];
 
         for (keywords, name, config) in keyword_providers {
-            if keywords.iter().any(|kw| m.contains(kw)) && !config.api_key.is_empty() {
+            if keywords.iter().any(|kw| m.contains(kw)) && self.is_provider_configured(name) {
                 return Some((name, config));
             }
         }
 
-        // --- 2. Gateways (route any model) ---
-        if !self.providers.openrouter.api_key.is_empty() {
-            return Some(("openrouter", &self.providers.openrouter));
-        }
-        if !self.providers.aihubmix.api_key.is_empty() {
-            return Some(("aihubmix", &self.providers.aihubmix));
-        }
-
-        // --- 3. Local providers (no api_key required) ---
-        if self.providers.ollama.api_base.is_some() {
+        // --- 2. Local providers — explicit prefix always wins ---
+        // These have unambiguous prefixes so they must match before gateways
+        if m.starts_with("ollama/") {
             return Some(("ollama", &self.providers.ollama));
         }
-        if self.providers.vllm.api_base.is_some() {
+        if m.starts_with("vllm/") {
             return Some(("vllm", &self.providers.vllm));
+        }
+        if m.starts_with("custom/") {
+            return Some(("custom", &self.providers.custom));
+        }
+
+        // --- 3. Gateways (route any model) ---
+        if self.is_provider_configured("openrouter") {
+            return Some(("openrouter", &self.providers.openrouter));
+        }
+        if self.is_provider_configured("aihubmix") {
+            return Some(("aihubmix", &self.providers.aihubmix));
         }
 
         // --- 4. Fallback: first provider with credentials ---
         for (name, provider) in self.providers.iter() {
-            if !provider.api_key.is_empty() || provider.api_base.is_some() {
+            if self.is_provider_configured(name) {
                 return Some((name, provider));
             }
         }
@@ -208,6 +263,27 @@ impl ProvidersConfig {
         .into_iter()
     }
 
+    /// Get a reference to a provider config by name
+    pub fn get(&self, name: &str) -> Option<&ProviderConfig> {
+        match name {
+            "anthropic" => Some(&self.anthropic),
+            "openai" => Some(&self.openai),
+            "openrouter" => Some(&self.openrouter),
+            "ollama" => Some(&self.ollama),
+            "deepseek" => Some(&self.deepseek),
+            "groq" => Some(&self.groq),
+            "gemini" => Some(&self.gemini),
+            "minimax" => Some(&self.minimax),
+            "aihubmix" => Some(&self.aihubmix),
+            "dashscope" => Some(&self.dashscope),
+            "moonshot" => Some(&self.moonshot),
+            "zhipu" => Some(&self.zhipu),
+            "vllm" => Some(&self.vllm),
+            "custom" => Some(&self.custom),
+            _ => None,
+        }
+    }
+
     /// Get a mutable reference to a provider config by name
     pub fn get_mut(&mut self, name: &str) -> Option<&mut ProviderConfig> {
         match name {
@@ -258,7 +334,7 @@ pub struct WhatsAppConfig {
     /// If empty, QR code pairing is used instead.
     pub phone_number: String,
     /// Path to the WhatsApp session SQLite database.
-    /// Defaults to ~/.homunbot/whatsapp.db
+    /// Defaults to ~/.homun/whatsapp.db
     pub db_path: String,
     /// Skip processing history sync from phone (recommended for bots).
     pub skip_history_sync: bool,
@@ -271,7 +347,7 @@ impl Default for WhatsAppConfig {
         Self {
             enabled: false,
             phone_number: String::new(),
-            db_path: "~/.homunbot/whatsapp.db".to_string(),
+            db_path: "~/.homun/whatsapp.db".to_string(),
             skip_history_sync: true,
             allow_from: Vec::new(),
         }
@@ -298,6 +374,31 @@ pub struct DiscordConfig {
     pub token: String,
     #[serde(default)]
     pub allow_from: Vec<String>,
+    /// Default channel ID for proactive/cross-channel messaging.
+    /// Without this, Discord can only reply to incoming messages.
+    #[serde(default)]
+    pub default_channel_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebConfig {
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    /// Optional auth token for remote access. Empty = no auth (localhost only).
+    pub auth_token: String,
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            host: "127.0.0.1".to_string(),
+            port: 18080,
+            auth_token: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -306,6 +407,36 @@ pub struct ChannelsConfig {
     pub telegram: TelegramConfig,
     pub whatsapp: WhatsAppConfig,
     pub discord: DiscordConfig,
+    pub web: WebConfig,
+}
+
+impl ChannelsConfig {
+    /// Return a list of enabled channels with their default chat IDs.
+    /// Used to inject cross-channel routing info into the agent's system prompt.
+    pub fn active_channels_with_chat_ids(&self) -> Vec<(String, String)> {
+        let mut channels = Vec::new();
+
+        if self.telegram.enabled && !self.telegram.token.is_empty() {
+            // Use the first allow_from user as the default chat_id
+            if let Some(user_id) = self.telegram.allow_from.first() {
+                channels.push(("telegram".to_string(), user_id.clone()));
+            }
+        }
+
+        if self.whatsapp.enabled && !self.whatsapp.phone_number.is_empty() {
+            // WhatsApp JID format: phone@s.whatsapp.net
+            let jid = format!("{}@s.whatsapp.net", self.whatsapp.phone_number);
+            channels.push(("whatsapp".to_string(), jid));
+        }
+
+        if self.discord.enabled && !self.discord.token.is_empty()
+            && !self.discord.default_channel_id.is_empty()
+        {
+            channels.push(("discord".to_string(), self.discord.default_channel_id.clone()));
+        }
+
+        channels
+    }
 }
 
 // --- Tools Config ---
@@ -407,7 +538,7 @@ pub struct StorageConfig {
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
-            path: "~/.homunbot/homunbot.db".to_string(),
+            path: "~/.homun/homun.db".to_string(),
         }
     }
 }
@@ -481,7 +612,7 @@ api_key = "sk-or-test"
     fn test_storage_path_expansion() {
         let storage = StorageConfig::default();
         let resolved = storage.resolved_path();
-        assert!(resolved.to_string_lossy().contains(".homunbot/homunbot.db"));
+        assert!(resolved.to_string_lossy().contains(".homun/homun.db"));
         assert!(!resolved.to_string_lossy().starts_with("~"));
     }
 

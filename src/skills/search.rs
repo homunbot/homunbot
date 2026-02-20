@@ -18,7 +18,7 @@ pub struct SkillSearcher {
 impl SkillSearcher {
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
-            .user_agent("homunbot")
+            .user_agent("homun")
             .build()
             .expect("Failed to create HTTP client");
         Self { client }

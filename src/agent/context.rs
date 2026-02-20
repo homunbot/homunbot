@@ -1,9 +1,12 @@
 use std::path::Path;
+use std::sync::Arc;
+
+use tokio::sync::RwLock;
 
 use crate::config::Config;
 use crate::provider::ChatMessage;
 
-/// Bootstrap file names, loaded from ~/.homunbot/ if they exist.
+/// Bootstrap file names, loaded from ~/.homun/ if they exist.
 ///
 /// Inspired by OpenClaw's SOUL.md pattern:
 /// - SOUL.md:   personality, values, communication style
@@ -24,9 +27,12 @@ const BOOTSTRAP_FILES: &[(&str, &str)] = &[
 /// 4. Skills summary
 pub struct ContextBuilder {
     workspace: String,
-    skills_summary: String,
+    /// Shared skills summary — can be updated at runtime by the hot-reload watcher.
+    skills_summary: Arc<RwLock<String>>,
     bootstrap_content: String,
     memory_content: String,
+    /// Known channels and their default chat IDs for cross-channel messaging
+    channels_info: String,
 }
 
 impl ContextBuilder {
@@ -38,9 +44,10 @@ impl ContextBuilder {
             workspace: Config::workspace_dir()
                 .to_string_lossy()
                 .to_string(),
-            skills_summary: String::new(),
+            skills_summary: Arc::new(RwLock::new(String::new())),
             bootstrap_content,
             memory_content: String::new(),
+            channels_info: String::new(),
         }
     }
 
@@ -75,8 +82,16 @@ impl ContextBuilder {
     }
 
     /// Set the skills summary (called after skills are loaded)
-    pub fn set_skills_summary(&mut self, summary: String) {
-        self.skills_summary = summary;
+    pub async fn set_skills_summary(&self, summary: String) {
+        let mut guard = self.skills_summary.write().await;
+        *guard = summary;
+    }
+
+    /// Get a shared handle to the skills summary for hot-reload updates.
+    /// The watcher can update this `Arc<RwLock<String>>` and the context
+    /// will pick up changes on the next `build_system_prompt()` call.
+    pub fn skills_summary_handle(&self) -> Arc<RwLock<String>> {
+        self.skills_summary.clone()
     }
 
     /// Set long-term memory content (loaded from MEMORY.md)
@@ -84,18 +99,34 @@ impl ContextBuilder {
         self.memory_content = memory;
     }
 
+    /// Set available channels info for cross-channel messaging.
+    /// Format: list of (channel_name, default_chat_id) pairs.
+    pub fn set_channels_info(&mut self, channels: &[(&str, &str)]) {
+        if channels.is_empty() {
+            return;
+        }
+        let mut info = String::from("\n\n## Available Channels\n");
+        info.push_str("You can send messages to the user on any of these channels using the `send_message` tool ");
+        info.push_str("with the `channel` and `chat_id` parameters:\n");
+        for (name, chat_id) in channels {
+            info.push_str(&format!("- **{name}**: chat_id = `{chat_id}`\n"));
+        }
+        info.push_str("\nWhen the user asks you to reply on a different channel (e.g. \"rispondimi su WhatsApp\"), ");
+        info.push_str("use `send_message` with the appropriate channel and chat_id from above.\n");
+        self.channels_info = info;
+    }
+
     /// Build the system prompt
-    pub fn build_system_prompt(&self) -> String {
+    pub async fn build_system_prompt(&self) -> String {
         let now = chrono::Local::now();
 
         // Layer 1: Core identity
         let mut prompt = format!(
-            "You are HomunBot, a personal AI assistant — a digital homunculus that helps your user with tasks.\n\
+            "You are Homun, a personal AI assistant — a digital homunculus that helps your user with tasks.\n\
             \n\
             Current Time: {}\n\
-            Workspace: {}",
+            Workspace: ~/workspace",
             now.format("%Y-%m-%d %H:%M (%A) %Z"),
-            self.workspace,
         );
 
         // Layer 2: Bootstrap files (SOUL.md, AGENTS.md, USER.md)
@@ -119,16 +150,23 @@ impl ContextBuilder {
             - Reply in the same language as the user's message",
         );
 
-        // Layer 5: Skills summary
-        if !self.skills_summary.is_empty() {
-            prompt.push_str(&self.skills_summary);
+        // Layer 5: Skills summary (read from shared RwLock — may be hot-reloaded)
+        let skills = self.skills_summary.read().await;
+        if !skills.is_empty() {
+            prompt.push_str(&skills);
+        }
+        drop(skills);
+
+        // Layer 6: Available channels for cross-channel messaging
+        if !self.channels_info.is_empty() {
+            prompt.push_str(&self.channels_info);
         }
 
         prompt
     }
 
     /// Build the full message list for the LLM: system prompt + history + current user message
-    pub fn build_messages(
+    pub async fn build_messages(
         &self,
         history: &[ChatMessage],
         user_message: &str,
@@ -136,7 +174,7 @@ impl ContextBuilder {
         let mut messages = Vec::with_capacity(history.len() + 2);
 
         // System prompt
-        messages.push(ChatMessage::system(&self.build_system_prompt()));
+        messages.push(ChatMessage::system(&self.build_system_prompt().await));
 
         // Conversation history
         messages.extend_from_slice(history);
@@ -152,30 +190,30 @@ impl ContextBuilder {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_build_system_prompt_default() {
+    #[tokio::test]
+    async fn test_build_system_prompt_default() {
         let config = Config::default();
         let ctx = ContextBuilder::new(&config);
-        let prompt = ctx.build_system_prompt();
+        let prompt = ctx.build_system_prompt().await;
 
-        assert!(prompt.contains("HomunBot"));
+        assert!(prompt.contains("Homun"));
         assert!(prompt.contains("Guidelines"));
         assert!(prompt.contains("Workspace"));
     }
 
-    #[test]
-    fn test_build_system_prompt_with_skills() {
+    #[tokio::test]
+    async fn test_build_system_prompt_with_skills() {
         let config = Config::default();
-        let mut ctx = ContextBuilder::new(&config);
-        ctx.set_skills_summary("\n\nAvailable Skills:\n- test: A test skill\n".to_string());
-        let prompt = ctx.build_system_prompt();
+        let ctx = ContextBuilder::new(&config);
+        ctx.set_skills_summary("\n\nAvailable Skills:\n- test: A test skill\n".to_string()).await;
+        let prompt = ctx.build_system_prompt().await;
 
         assert!(prompt.contains("Available Skills"));
         assert!(prompt.contains("test: A test skill"));
     }
 
-    #[test]
-    fn test_build_messages() {
+    #[tokio::test]
+    async fn test_build_messages() {
         let config = Config::default();
         let ctx = ContextBuilder::new(&config);
         let history = vec![
@@ -188,7 +226,7 @@ mod tests {
                 name: None,
             },
         ];
-        let messages = ctx.build_messages(&history, "How are you?");
+        let messages = ctx.build_messages(&history, "How are you?").await;
 
         assert_eq!(messages.len(), 4); // system + 2 history + user
         assert_eq!(messages[0].role, "system");

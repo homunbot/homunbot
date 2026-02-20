@@ -9,6 +9,60 @@ use super::registry::{get_string_param, Tool, ToolContext, ToolResult};
 /// Maximum file size to read (chars)
 const MAX_READ_SIZE: usize = 50_000;
 
+/// Check if a resolved path points to a sensitive location.
+///
+/// This is a hardcoded, unconditional blocklist that protects critical files
+/// regardless of the `allowed_dir` setting. Even if `restrict_to_workspace`
+/// is disabled, these paths can never be accessed by the agent.
+fn check_sensitive_path(resolved: &Path) -> Result<(), String> {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/nonexistent"));
+
+    // Blocked directory prefixes — any path under these is denied
+    let blocked_dirs: &[PathBuf] = &[
+        home.join(".ssh"),
+        home.join(".aws"),
+        home.join(".gnupg"),
+        home.join(".config/gcloud"),
+    ];
+
+    // Blocked files inside ~/.homun/ (allow ~/.homun/workspace/ subtree)
+    let homun_dir = home.join(".homun");
+    let workspace_dir = homun_dir.join("workspace");
+
+    // If path is under ~/.homun/ but NOT under ~/.homun/workspace/, block it
+    if resolved.starts_with(&homun_dir) && !resolved.starts_with(&workspace_dir) {
+        return Err(format!(
+            "Access denied: '{}' is in the protected Homun config directory",
+            resolved.display()
+        ));
+    }
+
+    // Check blocked directory prefixes
+    for blocked in blocked_dirs {
+        if resolved.starts_with(blocked) {
+            return Err(format!(
+                "Access denied: '{}' is in a sensitive directory",
+                resolved.display()
+            ));
+        }
+    }
+
+    // Check blocked filenames regardless of location
+    if let Some(filename) = resolved.file_name().and_then(|f| f.to_str()) {
+        let blocked_names = [".env", "secrets.enc"];
+        for blocked in &blocked_names {
+            if filename == *blocked {
+                return Err(format!(
+                    "Access denied: '{}' is a sensitive file",
+                    filename
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Resolve and validate a path, optionally restricting to an allowed directory.
 fn resolve_path(path: &str, allowed_dir: Option<&Path>) -> Result<PathBuf, String> {
     let expanded = if let Some(stripped) = path.strip_prefix("~/") {
@@ -96,6 +150,11 @@ impl Tool for ReadFileTool {
             Err(e) => return Ok(ToolResult::error(e)),
         };
 
+        // Sensitive path blocklist — unconditional
+        if let Err(reason) = check_sensitive_path(&path) {
+            return Ok(ToolResult::error(reason));
+        }
+
         if !path.exists() {
             return Ok(ToolResult::error(format!("File not found: {path_str}")));
         }
@@ -170,6 +229,11 @@ impl Tool for WriteFileTool {
             Ok(p) => p,
             Err(e) => return Ok(ToolResult::error(e)),
         };
+
+        // Sensitive path blocklist — unconditional
+        if let Err(reason) = check_sensitive_path(&path) {
+            return Ok(ToolResult::error(reason));
+        }
 
         // Create parent directories
         if let Some(parent) = path.parent() {
@@ -247,6 +311,11 @@ impl Tool for EditFileTool {
             Ok(p) => p,
             Err(e) => return Ok(ToolResult::error(e)),
         };
+
+        // Sensitive path blocklist — unconditional
+        if let Err(reason) = check_sensitive_path(&path) {
+            return Ok(ToolResult::error(reason));
+        }
 
         if !path.exists() {
             return Ok(ToolResult::error(format!("File not found: {path_str}")));
@@ -330,6 +399,11 @@ impl Tool for ListDirTool {
             Err(e) => return Ok(ToolResult::error(e)),
         };
 
+        // Sensitive path blocklist — unconditional
+        if let Err(reason) = check_sensitive_path(&path) {
+            return Ok(ToolResult::error(reason));
+        }
+
         if !path.exists() {
             return Ok(ToolResult::error(format!("Directory not found: {path_str}")));
         }
@@ -405,7 +479,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_not_found() {
         let read_tool = ReadFileTool::new(None);
-        let args = serde_json::json!({"path": "/tmp/nonexistent_homunbot_test_file.txt"});
+        let args = serde_json::json!({"path": "/tmp/nonexistent_homun_test_file.txt"});
         let result = read_tool.execute(args, &test_ctx()).await.unwrap();
         assert!(result.is_error);
         assert!(result.output.contains("not found") || result.output.contains("Invalid path"));

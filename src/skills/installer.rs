@@ -12,7 +12,7 @@ use super::loader::parse_skill_md_public;
 /// 1. Resolve `owner/repo` → GitHub API
 /// 2. Check for SKILL.md in repo root (validate it's a real skill)
 /// 3. Download repo as tarball
-/// 4. Extract to `~/.homunbot/skills/<skill-name>/`
+/// 4. Extract to `~/.homun/skills/<skill-name>/`
 ///
 /// Supports:
 /// - `owner/repo` — latest default branch
@@ -39,7 +39,7 @@ impl SkillInstaller {
     pub fn new() -> Self {
         let skills_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".homunbot")
+            .join(".homun")
             .join("skills");
 
         Self {
@@ -108,7 +108,7 @@ impl SkillInstaller {
     pub async fn remove(name: &str) -> Result<()> {
         let skills_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".homunbot")
+            .join(".homun")
             .join("skills");
 
         let skill_dir = skills_dir.join(name);
@@ -124,11 +124,11 @@ impl SkillInstaller {
         Ok(())
     }
 
-    /// List installed skills (reads from ~/.homunbot/skills/)
+    /// List installed skills (reads from ~/.homun/skills/)
     pub async fn list_installed() -> Result<Vec<InstalledSkillInfo>> {
         let skills_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".homunbot")
+            .join(".homun")
             .join("skills");
 
         if !skills_dir.exists() {
@@ -185,7 +185,7 @@ impl SkillInstaller {
         let url = format!("https://api.github.com/repos/{}/{}", owner, repo);
         let resp: GitHubRepo = self.client
             .get(&url)
-            .header("User-Agent", "homunbot")
+            .header("User-Agent", "homun")
             .header("Accept", "application/vnd.github.v3+json")
             .send()
             .await
@@ -208,7 +208,7 @@ impl SkillInstaller {
 
         let resp: GitHubContent = self.client
             .get(&url)
-            .header("User-Agent", "homunbot")
+            .header("User-Agent", "homun")
             .header("Accept", "application/vnd.github.v3+json")
             .send()
             .await
@@ -250,7 +250,7 @@ impl SkillInstaller {
 
         let response = self.client
             .get(&url)
-            .header("User-Agent", "homunbot")
+            .header("User-Agent", "homun")
             .header("Accept", "application/vnd.github.v3+json")
             .send()
             .await

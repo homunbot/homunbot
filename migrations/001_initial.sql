@@ -1,4 +1,4 @@
--- Initial schema for HomunBot
+-- Initial schema for Homun
 
 -- Conversation sessions
 CREATE TABLE IF NOT EXISTS sessions (

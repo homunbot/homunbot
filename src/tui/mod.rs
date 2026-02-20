@@ -30,6 +30,9 @@ pub async fn run_dashboard(config: Config) -> Result<()> {
     let mut app = app::App::new(config);
     app.set_event_tx(events.tx());
 
+    // Load installed skills at startup
+    app.refresh_installed_skills();
+
     // Main loop
     loop {
         // Draw

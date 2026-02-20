@@ -24,6 +24,20 @@ pub enum Event {
     WhatsAppLoggedOut,
     /// WhatsApp QR code data (fallback)
     WhatsAppQrCode { data: String },
+    /// Skills: installed skills loaded
+    SkillsLoaded(Vec<super::app::SkillEntry>),
+    /// Skills: search results received
+    SkillSearchResults(Vec<super::app::SkillEntry>),
+    /// Skills: skill installed, auto-setup starting (message, skill_name)
+    SkillInstalled(String, String),
+    /// Skills: auto-setup step update (step_index, updated step)
+    SkillSetupStep(usize, super::app::SetupStep),
+    /// Skills: auto-setup finished
+    SkillSetupDone,
+    /// Skills: skill removed successfully
+    SkillRemoved(String),
+    /// Skills: error occurred
+    SkillsError(String),
 }
 
 /// Async event handler using crossterm + tokio.
@@ -57,17 +71,17 @@ impl EventHandler {
 
                 if has_event {
                     // Read the event (blocking but should be immediate since poll said true)
-                    let evt = tokio::task::spawn_blocking(|| event::read())
+                    let evt = tokio::task::spawn_blocking(event::read)
                         .await
                         .ok()
                         .and_then(|r| r.ok());
 
                     if let Some(CrosstermEvent::Key(key)) = evt {
                         // Only handle key press events (not release/repeat)
-                        if key.kind == KeyEventKind::Press {
-                            if poll_tx.send(Event::Key(key)).is_err() {
-                                break; // Channel closed
-                            }
+                        if key.kind == KeyEventKind::Press
+                            && poll_tx.send(Event::Key(key)).is_err()
+                        {
+                            break; // Channel closed
                         }
                     }
                 } else {

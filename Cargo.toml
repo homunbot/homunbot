@@ -1,16 +1,16 @@
 [package]
-name = "homunbot"
+name = "homun"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Ultra-lightweight personal AI assistant — a digital homunculus in your computer"
 license = "MIT"
-repository = "https://github.com/homunbot/homunbot"
+repository = "https://github.com/homunbot/homun"
 keywords = ["ai", "agent", "assistant", "bot", "skills"]
 categories = ["command-line-utilities"]
 
 [[bin]]
-name = "homunbot"
+name = "homun"
 path = "src/main.rs"
 
 [dependencies]
@@ -66,13 +66,13 @@ teloxide = { version = "0.13", features = ["macros"] }
 # Discord bot
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "cache", "rustls_backend"] }
 
-# WhatsApp native client (Rust, no Node.js bridge)
-whatsapp-rust = { path = "vendor/whatsapp-rust" }
-whatsapp-rust-sqlite-storage = { path = "vendor/whatsapp-rust/storages/sqlite-storage" }
-whatsapp-rust-tokio-transport = { path = "vendor/whatsapp-rust/transports/tokio-transport" }
-whatsapp-rust-ureq-http-client = { path = "vendor/whatsapp-rust/http_clients/ureq-client" }
-wacore = { path = "vendor/whatsapp-rust/wacore" }
-waproto = { path = "vendor/whatsapp-rust/waproto" }
+# WhatsApp native client (wa-rs — fork of jlucaso1/whatsapp-rust)
+wa-rs = { git = "https://github.com/homunbot/wa-rs", rev = "d369582" }
+wa-rs-sqlite-storage = { git = "https://github.com/homunbot/wa-rs", rev = "d369582" }
+wa-rs-tokio-transport = { git = "https://github.com/homunbot/wa-rs", rev = "d369582" }
+wa-rs-ureq-http = { git = "https://github.com/homunbot/wa-rs", rev = "d369582" }
+wa-rs-core = { git = "https://github.com/homunbot/wa-rs", rev = "d369582" }
+wa-rs-proto = { git = "https://github.com/homunbot/wa-rs", rev = "d369582" }
 futures-util = "0.3"
 
 # Streaming support
@@ -84,8 +84,24 @@ pin-project-lite = "0.2"
 ratatui = "0.29"
 crossterm = "0.28"
 
+# File watcher (skill hot-reload)
+notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
+
 # MCP (Model Context Protocol) client
 rmcp = { version = "0.15", features = ["client", "transport-child-process"] }
+
+# Web UI (embedded dashboard)
+axum = { version = "0.8", features = ["ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+rust-embed = { version = "8", features = ["compression"] }
+mime_guess = "2"
+
+# Security - Encrypted secrets storage
+ring = "0.17"           # AES-256-GCM, HKDF
+base64 = "0.22"         # Encoding
+keyring = { version = "3", features = ["apple-native", "linux-native", "windows-native"] }  # OS keychain (macOS/Linux/Windows)
+zeroize = "1"           # Secure memory zeroing
 
 [dev-dependencies]
 tempfile = "3"

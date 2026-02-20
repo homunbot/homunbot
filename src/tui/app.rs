@@ -5,7 +5,7 @@ use ratatui::widgets::ListState;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::config::{self, Config, ProvidersConfig};
+use crate::config::Config;
 use crate::config::dotpath;
 
 use super::event::Event;
@@ -251,18 +251,132 @@ impl ProvidersState {
     }
 }
 
-/// State for the Skills tab (placeholder, populated in Phase 3)
+/// View mode for Skills tab
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillsView {
+    Installed,
+    Search,
+}
+
+/// Focus area within the Skills tab
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillsFocus {
+    /// Cursor is in the search bar (typing a query)
+    SearchBar,
+    /// Cursor is in the results list (navigating)
+    List,
+    /// Typing a value for a manual setup step (env var)
+    SetupInput,
+}
+
+/// Info about a skill for display
+#[derive(Debug, Clone)]
+pub struct SkillEntry {
+    pub name: String,
+    pub description: String,
+    pub source: String, // "installed", "github", "clawhub"
+    pub downloads: u64,
+    pub stars: u64,
+}
+
+/// Status of a single auto-setup step
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SetupStepStatus {
+    /// Waiting to run
+    Pending,
+    /// Currently running
+    Running,
+    /// Completed successfully
+    Done,
+    /// Skipped (e.g. binary already present)
+    Skipped,
+    /// Failed with error message
+    Failed(String),
+    /// Requires manual action (e.g. API key, OAuth)
+    Manual,
+}
+
+/// A single step in the auto-setup process
+#[derive(Debug, Clone)]
+pub struct SetupStep {
+    pub label: String,
+    pub detail: String, // e.g. the command being run, or "already installed"
+    pub status: SetupStepStatus,
+}
+
+/// Live auto-setup state shown after skill installation
+#[derive(Debug, Clone)]
+pub struct SkillSetupProgress {
+    pub skill_name: String,
+    pub steps: Vec<SetupStep>,
+    /// Whether the entire setup process is finished
+    pub finished: bool,
+}
+
+/// State for the Skills tab
 pub struct SkillsState {
     pub list_state: ListState,
-    pub message: String,
+    pub installed: Vec<SkillEntry>,
+    pub search_results: Vec<SkillEntry>,
+    pub view: SkillsView,
+    pub focus: SkillsFocus,
+    pub search_buffer: String,
+    pub status_message: String,
+    pub loading: bool,
+    /// Live auto-setup progress (shown after installing a skill)
+    pub setup_progress: Option<SkillSetupProgress>,
+    /// Buffer for inline setup input (env var value)
+    pub setup_input_buffer: String,
+    /// Index of the setup step currently being edited
+    pub setup_input_step_idx: Option<usize>,
 }
 
 impl SkillsState {
     pub fn new() -> Self {
         Self {
             list_state: ListState::default(),
-            message: "Skills tab — coming soon. Use CLI: homunbot skills list".to_string(),
+            installed: Vec::new(),
+            search_results: Vec::new(),
+            view: SkillsView::Installed,
+            focus: SkillsFocus::SearchBar,
+            search_buffer: String::new(),
+            status_message: String::new(),
+            loading: false,
+            setup_progress: None,
+            setup_input_buffer: String::new(),
+            setup_input_step_idx: None,
         }
+    }
+
+    /// Current list being displayed
+    pub fn current_list(&self) -> &[SkillEntry] {
+        match self.view {
+            SkillsView::Installed => &self.installed,
+            SkillsView::Search => &self.search_results,
+        }
+    }
+
+    pub fn move_up(&mut self) {
+        if let Some(i) = self.list_state.selected() {
+            if i > 0 {
+                self.list_state.select(Some(i - 1));
+            }
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        let len = self.current_list().len();
+        if let Some(i) = self.list_state.selected() {
+            if i < len.saturating_sub(1) {
+                self.list_state.select(Some(i + 1));
+            }
+        }
+    }
+
+    pub fn selected_skill(&self) -> Option<&SkillEntry> {
+        self.list_state
+            .selected()
+            .and_then(|i| self.current_list().get(i))
     }
 }
 
@@ -496,6 +610,77 @@ impl App {
             Event::WhatsAppQrCode { .. } => {
                 // QR codes are shown as text fallback; pair code is preferred
             }
+            Event::SkillsLoaded(entries) => {
+                self.skills_state.installed = entries;
+                self.skills_state.loading = false;
+                self.skills_state.status_message.clear();
+                if self.skills_state.view == SkillsView::Installed && !self.skills_state.installed.is_empty() {
+                    self.skills_state.list_state.select(Some(0));
+                }
+            }
+            Event::SkillSearchResults(entries) => {
+                self.skills_state.search_results = entries;
+                self.skills_state.loading = false;
+                let count = self.skills_state.search_results.len();
+                self.skills_state.status_message = format!("{count} results found");
+                self.skills_state.view = SkillsView::Search;
+                if !self.skills_state.search_results.is_empty() {
+                    self.skills_state.list_state.select(Some(0));
+                } else {
+                    self.skills_state.list_state.select(None);
+                }
+            }
+            Event::SkillInstalled(msg, skill_name) => {
+                self.skills_state.loading = false;
+                self.skills_state.status_message = msg;
+                // Initialize setup progress with the skill name
+                self.skills_state.setup_progress = Some(SkillSetupProgress {
+                    skill_name,
+                    steps: Vec::new(),
+                    finished: false,
+                });
+                // Refresh installed skills
+                self.refresh_installed_skills();
+            }
+            Event::SkillSetupStep(idx, step) => {
+                let progress = match &mut self.skills_state.setup_progress {
+                    Some(p) => p,
+                    None => return, // No active setup
+                };
+                if idx < progress.steps.len() {
+                    progress.steps[idx] = step;
+                } else {
+                    // Pad if needed, then push
+                    while progress.steps.len() < idx {
+                        progress.steps.push(SetupStep {
+                            label: String::new(),
+                            detail: String::new(),
+                            status: SetupStepStatus::Pending,
+                        });
+                    }
+                    progress.steps.push(step);
+                }
+            }
+            Event::SkillSetupDone => {
+                if let Some(progress) = &mut self.skills_state.setup_progress {
+                    if progress.steps.is_empty() {
+                        // No setup was needed — just clear the popup
+                        self.skills_state.setup_progress = None;
+                    } else {
+                        progress.finished = true;
+                    }
+                }
+            }
+            Event::SkillRemoved(name) => {
+                self.skills_state.loading = false;
+                self.skills_state.status_message = format!("'{name}' removed");
+                // Refresh
+                self.refresh_installed_skills();
+            }
+            Event::SkillsError(err) => {
+                self.skills_state.loading = false;
+                self.skills_state.status_message = format!("Error: {err}");
+            }
         }
     }
 
@@ -510,7 +695,7 @@ impl App {
             Tab::Settings => self.handle_settings_key(key),
             Tab::Providers => self.handle_providers_key(key),
             Tab::WhatsApp => self.handle_whatsapp_key(key),
-            Tab::Skills => self.handle_placeholder_key(key),
+            Tab::Skills => self.handle_skills_key(key),
             Tab::Mcp => self.handle_mcp_key(key),
         }
     }
@@ -546,12 +731,12 @@ impl App {
         let key = self.settings_state.edit_key.clone();
         let value = self.settings_state.edit_buffer.clone();
 
-        if !value.is_empty() {
-            if dotpath::config_set(&mut self.config, &key, &value).is_ok() {
-                self.config_modified = true;
-                self.settings_state.refresh(&self.config);
-                self.providers_state.refresh(&self.config);
-            }
+        if !value.is_empty()
+            && dotpath::config_set(&mut self.config, &key, &value).is_ok()
+        {
+            self.config_modified = true;
+            self.settings_state.refresh(&self.config);
+            self.providers_state.refresh(&self.config);
         }
 
         self.settings_state.cancel_edit();
@@ -885,14 +1070,711 @@ impl App {
         }
     }
 
-    /// Handle keys for placeholder tabs (Skills)
-    fn handle_placeholder_key(&mut self, key: KeyEvent) {
+    /// Handle keys in Skills tab
+    fn handle_skills_key(&mut self, key: KeyEvent) {
+        // If in setup input mode (typing an env var value), handle that first
+        if self.skills_state.focus == SkillsFocus::SetupInput {
+            self.handle_skills_setup_input_key(key);
+            return;
+        }
+
+        // If auto-setup progress is visible and finished, handle dismissal or env var input
+        if let Some(progress) = &self.skills_state.setup_progress {
+            if progress.finished {
+                // Check if user pressed Enter on a Manual step to provide value
+                let has_manual = progress.steps.iter().any(|s| matches!(s.status, SetupStepStatus::Manual));
+                if has_manual && key.code == KeyCode::Enter {
+                    // Find the first Manual step and start editing it
+                    if let Some(idx) = progress.steps.iter().position(|s| matches!(s.status, SetupStepStatus::Manual)) {
+                        self.skills_state.setup_input_step_idx = Some(idx);
+                        self.skills_state.setup_input_buffer.clear();
+                        self.skills_state.focus = SkillsFocus::SetupInput;
+                        return;
+                    }
+                }
+                // Any other key dismisses the popup
+                self.skills_state.setup_progress = None;
+                return;
+            }
+            // Setup still running — ignore keys except Esc to force-dismiss
+            if key.code == KeyCode::Esc {
+                self.skills_state.setup_progress = None;
+            }
+            return;
+        }
+
+        match &self.skills_state.focus {
+            SkillsFocus::SearchBar => self.handle_skills_search_bar_key(key),
+            SkillsFocus::List => self.handle_skills_list_key(key),
+            SkillsFocus::SetupInput => {} // handled above
+        }
+    }
+
+    /// Handle keys when the search bar is focused
+    fn handle_skills_search_bar_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('q') if self.skills_state.search_buffer.is_empty() => {
+                self.should_quit = true;
+            }
+            KeyCode::Tab if self.skills_state.search_buffer.is_empty() => {
+                self.current_tab = self.current_tab.next();
+            }
+            KeyCode::BackTab if self.skills_state.search_buffer.is_empty() => {
+                self.current_tab = self.current_tab.prev();
+            }
+            KeyCode::Esc => {
+                if !self.skills_state.search_buffer.is_empty() {
+                    self.skills_state.search_buffer.clear();
+                } else {
+                    // Move focus to list
+                    self.skills_state.focus = SkillsFocus::List;
+                }
+            }
+            KeyCode::Enter => {
+                let query = self.skills_state.search_buffer.clone();
+                if !query.is_empty() {
+                    // Check if it looks like a repo slug (contains '/')
+                    if query.contains('/') || query.starts_with("clawhub:") {
+                        // Direct install
+                        self.start_skill_install(query);
+                    } else {
+                        // Search
+                        self.start_skill_search(query);
+                    }
+                }
+            }
+            KeyCode::Down => {
+                // Move focus to the list if there are items
+                if !self.skills_state.current_list().is_empty() {
+                    self.skills_state.focus = SkillsFocus::List;
+                    if self.skills_state.list_state.selected().is_none() {
+                        self.skills_state.list_state.select(Some(0));
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                self.skills_state.search_buffer.pop();
+            }
+            KeyCode::Char(c) => {
+                self.skills_state.search_buffer.push(c);
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle keys when the list is focused
+    fn handle_skills_list_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Tab => self.current_tab = self.current_tab.next(),
             KeyCode::BackTab => self.current_tab = self.current_tab.prev(),
+            KeyCode::Up | KeyCode::Char('k') => {
+                // If at the top of the list, jump back to search bar
+                if self.skills_state.list_state.selected() == Some(0) {
+                    self.skills_state.focus = SkillsFocus::SearchBar;
+                } else {
+                    self.skills_state.move_up();
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => self.skills_state.move_down(),
+            // Enter: install selected skill from search results
+            KeyCode::Enter => {
+                if let Some(skill) = self.skills_state.selected_skill() {
+                    if skill.source != "installed" {
+                        let slug = skill.name.clone();
+                        self.start_skill_install(slug);
+                    }
+                }
+            }
+            // '/' to jump to search bar
+            KeyCode::Char('/') => {
+                self.skills_state.search_buffer.clear();
+                self.skills_state.focus = SkillsFocus::SearchBar;
+            }
+            // 'd' to remove selected installed skill
+            KeyCode::Char('d') => {
+                if self.skills_state.view == SkillsView::Installed {
+                    self.remove_selected_skill();
+                }
+            }
+            // '1'/'2' to switch views
+            KeyCode::Char('1') => {
+                self.skills_state.view = SkillsView::Installed;
+                self.skills_state.list_state.select(
+                    if self.skills_state.installed.is_empty() { None } else { Some(0) }
+                );
+            }
+            KeyCode::Char('2') => {
+                self.skills_state.view = SkillsView::Search;
+                self.skills_state.list_state.select(
+                    if self.skills_state.search_results.is_empty() { None } else { Some(0) }
+                );
+            }
+            // 'r' to refresh installed skills
+            KeyCode::Char('r') => {
+                self.refresh_installed_skills();
+            }
+            // Esc to go back to search bar
+            KeyCode::Esc => {
+                self.skills_state.focus = SkillsFocus::SearchBar;
+            }
             _ => {}
         }
+    }
+
+    /// Handle keys when typing an env var value in the setup wizard
+    fn handle_skills_setup_input_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.skills_state.setup_input_buffer.clear();
+                self.skills_state.setup_input_step_idx = None;
+                self.skills_state.focus = SkillsFocus::SearchBar;
+            }
+            KeyCode::Enter => {
+                // Apply the env var value
+                let value = self.skills_state.setup_input_buffer.clone();
+                if let Some(idx) = self.skills_state.setup_input_step_idx {
+                    if let Some(progress) = &mut self.skills_state.setup_progress {
+                        if let Some(step) = progress.steps.get_mut(idx) {
+                            if !value.is_empty() {
+                                // Extract the env var name from the detail (format: "export VAR=<value>")
+                                let var_name = step.detail
+                                    .strip_prefix("export ")
+                                    .and_then(|s| s.split('=').next())
+                                    .unwrap_or(&step.detail)
+                                    .to_string();
+                                // Set the env var for the current process
+                                std::env::set_var(&var_name, &value);
+                                // Update the step status
+                                step.label = format!("${var_name}");
+                                step.detail = "set ✓".to_string();
+                                step.status = SetupStepStatus::Done;
+                                // Save to config as well
+                                self.save_env_var_to_config(&var_name, &value);
+                            }
+                        }
+                    }
+                }
+                self.skills_state.setup_input_buffer.clear();
+                self.skills_state.setup_input_step_idx = None;
+                // Check if there are more manual steps
+                let more_manual = self.skills_state.setup_progress
+                    .as_ref()
+                    .map(|p| p.steps.iter().any(|s| matches!(s.status, SetupStepStatus::Manual)))
+                    .unwrap_or(false);
+                if more_manual {
+                    // Find next manual step
+                    if let Some(progress) = &self.skills_state.setup_progress {
+                        if let Some(next_idx) = progress.steps.iter().position(|s| matches!(s.status, SetupStepStatus::Manual)) {
+                            self.skills_state.setup_input_step_idx = Some(next_idx);
+                            self.skills_state.focus = SkillsFocus::SetupInput;
+                            return;
+                        }
+                    }
+                }
+                self.skills_state.focus = SkillsFocus::SearchBar;
+            }
+            KeyCode::Backspace => {
+                self.skills_state.setup_input_buffer.pop();
+            }
+            KeyCode::Char(c) => {
+                self.skills_state.setup_input_buffer.push(c);
+            }
+            _ => {}
+        }
+    }
+
+    /// Save an env var to config.toml (in [env] section) so gateway picks it up
+    fn save_env_var_to_config(&mut self, _var_name: &str, _value: &str) {
+        // For now, env vars are set in the process only.
+        // TODO: optionally persist to config.toml [env] section
+    }
+
+    /// Refresh the installed skills list (async)
+    pub fn refresh_installed_skills(&mut self) {
+        let event_tx = match &self.event_tx {
+            Some(tx) => tx.clone(),
+            None => return,
+        };
+        self.skills_state.loading = true;
+        self.skills_state.status_message = "Loading...".to_string();
+
+        tokio::spawn(async move {
+            match crate::skills::SkillInstaller::list_installed().await {
+                Ok(skills) => {
+                    let entries: Vec<SkillEntry> = skills
+                        .into_iter()
+                        .map(|s| SkillEntry {
+                            name: s.name,
+                            description: s.description,
+                            source: "installed".to_string(),
+                            downloads: 0,
+                            stars: 0,
+                        })
+                        .collect();
+                    let _ = event_tx.send(Event::SkillsLoaded(entries));
+                }
+                Err(e) => {
+                    let _ = event_tx.send(Event::SkillsError(e.to_string()));
+                }
+            }
+        });
+    }
+
+    /// Start searching for skills on GitHub + ClawHub in parallel (async)
+    fn start_skill_search(&mut self, query: String) {
+        let event_tx = match &self.event_tx {
+            Some(tx) => tx.clone(),
+            None => return,
+        };
+        self.skills_state.loading = true;
+        self.skills_state.status_message = format!("Searching '{query}' on GitHub + ClawHub...");
+
+        tokio::spawn(async move {
+            let query_gh = query.clone();
+            let query_ch = query.clone();
+
+            // Search GitHub and ClawHub in parallel
+            let (gh_result, ch_result) = tokio::join!(
+                async {
+                    let searcher = crate::skills::search::SkillSearcher::new();
+                    searcher.search(&query_gh, 10).await
+                },
+                async {
+                    let installer = crate::skills::ClawHubInstaller::new();
+                    installer.search(&query_ch, 10).await
+                }
+            );
+
+            let mut entries: Vec<SkillEntry> = Vec::new();
+
+            // Add ClawHub results first (curated registry)
+            match ch_result {
+                Ok(results) => {
+                    entries.extend(results.into_iter().map(|r| SkillEntry {
+                        name: format!("clawhub:{}", r.slug),
+                        description: r.description,
+                        source: "clawhub".to_string(),
+                        downloads: r.downloads,
+                        stars: r.stars,
+                    }));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "ClawHub search failed, skipping");
+                }
+            }
+
+            // Add GitHub results
+            match gh_result {
+                Ok(results) => {
+                    entries.extend(results.into_iter().map(|r| SkillEntry {
+                        name: r.full_name.clone(),
+                        description: r.description,
+                        source: "github".to_string(),
+                        downloads: 0,
+                        stars: r.stars as u64,
+                    }));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "GitHub search failed, skipping");
+                }
+            }
+
+            if entries.is_empty() {
+                let _ = event_tx.send(Event::SkillsError(format!("No results for '{query}'")));
+            } else {
+                let _ = event_tx.send(Event::SkillSearchResults(entries));
+            }
+        });
+    }
+
+    /// Install a skill from GitHub/ClawHub and auto-setup dependencies (async)
+    fn start_skill_install(&mut self, slug: String) {
+        let event_tx = match &self.event_tx {
+            Some(tx) => tx.clone(),
+            None => return,
+        };
+        self.skills_state.loading = true;
+        self.skills_state.status_message = format!("Installing '{slug}'...");
+
+        // Check if it's a clawhub: prefix
+        let is_clawhub = slug.starts_with("clawhub:");
+        tokio::spawn(async move {
+            let result = if is_clawhub {
+                let clawhub_slug = &slug["clawhub:".len()..];
+                let installer = crate::skills::ClawHubInstaller::new();
+                installer.install(clawhub_slug).await
+            } else {
+                let installer = crate::skills::SkillInstaller::new();
+                installer.install(&slug).await
+            };
+
+            match result {
+                Ok(info) => {
+                    let msg = if info.already_existed {
+                        format!("'{}' already installed", info.name)
+                    } else {
+                        format!("'{}' installed!", info.name)
+                    };
+                    let skill_name = info.name.clone();
+                    let _ = event_tx.send(Event::SkillInstalled(msg, skill_name.clone()));
+
+                    // Run auto-setup in background
+                    run_auto_setup(&info.path, &skill_name, event_tx).await;
+                }
+                Err(e) => {
+                    let _ = event_tx.send(Event::SkillsError(e.to_string()));
+                }
+            }
+        });
+    }
+
+    /// Remove the selected installed skill
+    fn remove_selected_skill(&mut self) {
+        if self.skills_state.view != SkillsView::Installed {
+            return;
+        }
+        let name = match self.skills_state.selected_skill() {
+            Some(s) => s.name.clone(),
+            None => return,
+        };
+
+        let event_tx = match &self.event_tx {
+            Some(tx) => tx.clone(),
+            None => return,
+        };
+
+        self.skills_state.status_message = format!("Removing '{name}'...");
+        tokio::spawn(async move {
+            match crate::skills::SkillInstaller::remove(&name).await {
+                Ok(()) => {
+                    let _ = event_tx.send(Event::SkillRemoved(name));
+                }
+                Err(e) => {
+                    let _ = event_tx.send(Event::SkillsError(e.to_string()));
+                }
+            }
+        });
+    }
+}
+
+/// Parsed skill requirements from SKILL.md metadata
+struct SkillRequirements {
+    /// Required binaries (e.g. ["gog", "curl"])
+    bins: Vec<String>,
+    /// Required environment variables (e.g. ["OPENAI_API_KEY"])
+    env_vars: Vec<String>,
+    /// Install commands from metadata (kind → command)
+    install_commands: Vec<(String, String)>, // (label, shell command)
+}
+
+/// Parse skill requirements from a SKILL.md file
+fn parse_skill_requirements(
+    skill_path: &std::path::Path,
+    content: &str,
+) -> Option<SkillRequirements> {
+    let (meta, _body) = crate::skills::loader::parse_skill_md_public(content).ok()?;
+
+    let mut bins = Vec::new();
+    let mut env_vars = Vec::new();
+    let mut install_commands = Vec::new();
+
+    if let Some(metadata) = &meta.metadata {
+        if let Some(clawdbot) = metadata.get("clawdbot") {
+            if let Some(requires) = clawdbot.get("requires") {
+                bins = requires
+                    .get("bins")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                env_vars = requires
+                    .get("env")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+            }
+
+            // Parse install commands
+            if let Some(install_arr) = clawdbot.get("install").and_then(|v| v.as_array()) {
+                for step in install_arr {
+                    let label = step
+                        .get("label")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Install")
+                        .to_string();
+                    let kind = step.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+                    let command = match kind {
+                        "brew" => step
+                            .get("formula")
+                            .and_then(|v| v.as_str())
+                            .map(|f| format!("brew install {f}")),
+                        "npm" => step
+                            .get("package")
+                            .or_else(|| step.get("formula"))
+                            .and_then(|v| v.as_str())
+                            .map(|p| format!("npm install -g {p}")),
+                        "pip" => step
+                            .get("package")
+                            .or_else(|| step.get("formula"))
+                            .and_then(|v| v.as_str())
+                            .map(|p| format!("pip install {p}")),
+                        _ => step.get("command").and_then(|v| v.as_str()).map(String::from),
+                    };
+                    if let Some(cmd) = command {
+                        install_commands.push((label, cmd));
+                    }
+                }
+            }
+        }
+    }
+
+    let _ = skill_path; // may be used later for script detection
+
+    Some(SkillRequirements {
+        bins,
+        env_vars,
+        install_commands,
+    })
+}
+
+/// Run automatic post-install setup for a skill.
+///
+/// Steps:
+/// 1. Check required binaries (which <bin>)
+/// 2. If missing, run install commands from metadata (brew/npm/pip)
+/// 3. Re-check binaries after install
+/// 4. Check required env vars
+/// 5. Report anything that needs manual setup
+async fn run_auto_setup(
+    skill_path: &std::path::Path,
+    _skill_name: &str,
+    event_tx: mpsc::UnboundedSender<Event>,
+) {
+    let skill_md_path = skill_path.join("SKILL.md");
+    let content = match tokio::fs::read_to_string(&skill_md_path).await {
+        Ok(c) => c,
+        Err(_) => {
+            let _ = event_tx.send(Event::SkillSetupDone);
+            return;
+        }
+    };
+
+    let reqs = match parse_skill_requirements(skill_path, &content) {
+        Some(r) => r,
+        None => {
+            let _ = event_tx.send(Event::SkillSetupDone);
+            return;
+        }
+    };
+
+    // If there's nothing to check, skip auto-setup entirely
+    if reqs.bins.is_empty() && reqs.env_vars.is_empty() {
+        let _ = event_tx.send(Event::SkillSetupDone);
+        return;
+    }
+
+    // Build the initial list of setup steps
+    let mut steps: Vec<SetupStep> = Vec::new();
+
+    // Step for each required binary
+    for bin in &reqs.bins {
+        steps.push(SetupStep {
+            label: format!("Check {bin}"),
+            detail: format!("which {bin}"),
+            status: SetupStepStatus::Pending,
+        });
+    }
+
+    // Step for each env var
+    for var in &reqs.env_vars {
+        steps.push(SetupStep {
+            label: format!("Check ${var}"),
+            detail: var.clone(),
+            status: SetupStepStatus::Pending,
+        });
+    }
+
+    // Send initial steps to build the progress popup
+    for (i, step) in steps.iter().enumerate() {
+        let _ = event_tx.send(Event::SkillSetupStep(i, step.clone()));
+    }
+
+    // Now process each binary check
+    let bin_count = reqs.bins.len();
+    for (i, bin) in reqs.bins.iter().enumerate() {
+        // Mark as running
+        let _ = event_tx.send(Event::SkillSetupStep(
+            i,
+            SetupStep {
+                label: format!("Check {bin}"),
+                detail: format!("which {bin}"),
+                status: SetupStepStatus::Running,
+            },
+        ));
+
+        // Check if binary exists
+        let found = check_binary_exists(bin).await;
+
+        if found {
+            let _ = event_tx.send(Event::SkillSetupStep(
+                i,
+                SetupStep {
+                    label: format!("Check {bin}"),
+                    detail: "already installed".to_string(),
+                    status: SetupStepStatus::Skipped,
+                },
+            ));
+        } else {
+            // Try to find an install command for this binary
+            let install_cmd = reqs.install_commands.iter().find(|(_, cmd)| {
+                // Match: the command installs something that provides this binary
+                // Heuristic: check if the binary name appears in the command
+                cmd.contains(bin)
+                    || reqs
+                        .install_commands
+                        .iter()
+                        .any(|(_, c)| c.contains(bin))
+            });
+
+            if let Some((_label, cmd)) = install_cmd.or_else(|| reqs.install_commands.first()) {
+                // Run the install command
+                let _ = event_tx.send(Event::SkillSetupStep(
+                    i,
+                    SetupStep {
+                        label: format!("Installing {bin}"),
+                        detail: cmd.clone(),
+                        status: SetupStepStatus::Running,
+                    },
+                ));
+
+                match run_shell_command(cmd).await {
+                    Ok(output) => {
+                        // Re-check if binary is now available
+                        if check_binary_exists(bin).await {
+                            let _ = event_tx.send(Event::SkillSetupStep(
+                                i,
+                                SetupStep {
+                                    label: format!("Installed {bin}"),
+                                    detail: cmd.clone(),
+                                    status: SetupStepStatus::Done,
+                                },
+                            ));
+                        } else {
+                            let _ = event_tx.send(Event::SkillSetupStep(
+                                i,
+                                SetupStep {
+                                    label: format!("Install {bin}"),
+                                    detail: format!("installed but '{bin}' not found in PATH"),
+                                    status: SetupStepStatus::Failed(output),
+                                },
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        let _ = event_tx.send(Event::SkillSetupStep(
+                            i,
+                            SetupStep {
+                                label: format!("Install {bin}"),
+                                detail: cmd.clone(),
+                                status: SetupStepStatus::Failed(e),
+                            },
+                        ));
+                    }
+                }
+            } else {
+                // No install command — can't auto-install
+                let _ = event_tx.send(Event::SkillSetupStep(
+                    i,
+                    SetupStep {
+                        label: format!("{bin} missing"),
+                        detail: "no auto-install available".to_string(),
+                        status: SetupStepStatus::Manual,
+                    },
+                ));
+            }
+        }
+    }
+
+    // Check environment variables
+    for (j, var) in reqs.env_vars.iter().enumerate() {
+        let idx = bin_count + j;
+        let _ = event_tx.send(Event::SkillSetupStep(
+            idx,
+            SetupStep {
+                label: format!("Check ${var}"),
+                detail: var.clone(),
+                status: SetupStepStatus::Running,
+            },
+        ));
+
+        let is_set = std::env::var(var).is_ok_and(|v| !v.is_empty());
+
+        if is_set {
+            let _ = event_tx.send(Event::SkillSetupStep(
+                idx,
+                SetupStep {
+                    label: format!("${var}"),
+                    detail: "set".to_string(),
+                    status: SetupStepStatus::Skipped,
+                },
+            ));
+        } else {
+            let _ = event_tx.send(Event::SkillSetupStep(
+                idx,
+                SetupStep {
+                    label: format!("${var} not set"),
+                    detail: format!("export {var}=<value>"),
+                    status: SetupStepStatus::Manual,
+                },
+            ));
+        }
+    }
+
+    let _ = event_tx.send(Event::SkillSetupDone);
+}
+
+/// Check if a binary exists in PATH
+async fn check_binary_exists(bin: &str) -> bool {
+    tokio::process::Command::new("which")
+        .arg(bin)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Run a shell command and return stdout or error
+async fn run_shell_command(cmd: &str) -> Result<String, String> {
+    let output = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| format!("failed to run: {e}"))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            format!("exit code {}", output.status.code().unwrap_or(-1))
+        } else {
+            // Keep just the last line of stderr for display
+            stderr.lines().last().unwrap_or(&stderr).to_string()
+        })
     }
 }
 
@@ -905,12 +1787,12 @@ async fn run_whatsapp_pairing(
     db_path: std::path::PathBuf,
     event_tx: mpsc::UnboundedSender<Event>,
 ) -> anyhow::Result<()> {
-    use whatsapp_rust::bot::Bot;
-    use whatsapp_rust::store::SqliteStore;
-    use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
-    use whatsapp_rust_ureq_http_client::UreqHttpClient;
-    use wacore::types::events::Event as WaEvent;
-    use waproto::whatsapp as wa;
+    use wa_rs::bot::Bot;
+    use wa_rs::store::SqliteStore;
+    use wa_rs_tokio_transport::TokioWebSocketTransportFactory;
+    use wa_rs_ureq_http::UreqHttpClient;
+    use wa_rs_core::types::events::Event as WaEvent;
+    use wa_rs_proto::whatsapp as wa;
 
     // Ensure parent directory exists
     if let Some(parent) = db_path.parent() {
@@ -936,7 +1818,7 @@ async fn run_whatsapp_pairing(
             None,
             Some(wa::device_props::PlatformType::Chrome),
         )
-        .with_pair_code(whatsapp_rust::pair_code::PairCodeOptions {
+        .with_pair_code(wa_rs::pair_code::PairCodeOptions {
             phone_number: phone,
             ..Default::default()
         })

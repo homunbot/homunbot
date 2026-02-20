@@ -113,7 +113,7 @@ impl EventHandler for Handler {
         if text == "!start" {
             if let Err(e) = msg
                 .channel_id
-                .say(&ctx.http, "HomunBot is ready! Send me a message.")
+                .say(&ctx.http, "Homun is ready! Send me a message.")
                 .await
             {
                 tracing::error!(error = %e, "Failed to send start message");
