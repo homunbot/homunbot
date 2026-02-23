@@ -837,6 +837,29 @@ async fn vault_page() -> Html<String> {
                     </div>
                 </div>
 
+                <!-- 2FA Section -->
+                <section class="section">
+                    <div class="section-header">
+                        <h2>Two-Factor Authentication</h2>
+                        <span class="badge" id="twofa-status-badge">Checking…</span>
+                    </div>
+                    <div id="twofa-disabled-view">
+                        <p style="color:var(--muted);margin-bottom:1rem">Require authenticator code to reveal secrets. Recommended for enhanced security.</p>
+                        <button class="btn btn-primary btn-sm" id="btn-enable-2fa">Enable 2FA</button>
+                    </div>
+                    <div id="twofa-enabled-view" style="display:none">
+                        <p style="margin-bottom:0.5rem">2FA is <strong>enabled</strong>. You'll need your authenticator app to reveal secrets.</p>
+                        <p style="color:var(--muted);font-size:0.875rem;margin-bottom:1rem">
+                            Session timeout: <span id="twofa-timeout">5 minutes</span> ·
+                            Recovery codes: <span id="twofa-recovery-count">0</span> remaining
+                        </p>
+                        <div class="actions">
+                            <button class="btn btn-secondary btn-sm" id="btn-view-recovery">View Recovery Codes</button>
+                            <button class="btn btn-danger btn-sm" id="btn-disable-2fa">Disable 2FA</button>
+                        </div>
+                    </div>
+                </section>
+
                 <section class="section">
                     <h2>Store Secret</h2>
                     <form id="vault-form" class="form">
@@ -863,6 +886,83 @@ async fn vault_page() -> Html<String> {
                         </div>
                     </div>
                 </section>
+
+                <!-- 2FA Setup Modal -->
+                <div id="twofa-setup-modal" class="modal">
+                    <div class="modal-backdrop"></div>
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h3 class="modal-title">Setup Authenticator</h3>
+                            <button class="modal-close" type="button">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <p style="margin-bottom:1rem">Scan this QR code with your authenticator app (Google Authenticator, Authy, 1Password, etc.)</p>
+                            <div style="text-align:center;margin-bottom:1rem">
+                                <img id="twofa-qr-image" src="" alt="QR Code" style="max-width:200px;border-radius:8px">
+                            </div>
+                            <div class="form-group">
+                                <label>Or enter this code manually:</label>
+                                <code id="twofa-secret" style="display:block;padding:0.5rem;background:var(--surface);border-radius:4px;font-size:0.875rem;word-break:break-all"></code>
+                            </div>
+                            <div class="form-group">
+                                <label>Enter the 6-digit code from your app:</label>
+                                <input type="text" id="twofa-setup-code" class="input" placeholder="000000" maxlength="6" pattern="[0-9]{6}" style="text-align:center;font-size:1.25rem;letter-spacing:0.5em">
+                            </div>
+                            <div class="modal-actions">
+                                <button class="btn btn-secondary" id="btn-cancel-twofa-setup">Cancel</button>
+                                <button class="btn btn-primary" id="btn-confirm-twofa-setup">Verify & Enable</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2FA Code Modal (for reveal) -->
+                <div id="twofa-code-modal" class="modal">
+                    <div class="modal-backdrop"></div>
+                    <div class="modal-content" style="max-width:360px">
+                        <div class="modal-header">
+                            <h3 class="modal-title">Authentication Required</h3>
+                            <button class="modal-close" type="button">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <p style="margin-bottom:1rem;color:var(--muted)">Enter the code from your authenticator app to reveal this secret.</p>
+                            <div class="form-group">
+                                <input type="text" id="twofa-verify-code" class="input" placeholder="000000" maxlength="6" pattern="[0-9]{6}" style="text-align:center;font-size:1.25rem;letter-spacing:0.5em" autofocus>
+                            </div>
+                            <div class="modal-actions">
+                                <button class="btn btn-secondary" id="btn-cancel-twofa-verify">Cancel</button>
+                                <button class="btn btn-primary" id="btn-submit-twofa-verify">Verify</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recovery Codes Modal -->
+                <div id="recovery-modal" class="modal">
+                    <div class="modal-backdrop"></div>
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h3 class="modal-title">Recovery Codes</h3>
+                            <button class="modal-close" type="button">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <p style="margin-bottom:1rem;color:var(--muted)">Enter your authenticator code to view recovery codes.</p>
+                            <div id="recovery-codes-list" style="display:none">
+                                <p style="margin-bottom:0.5rem"><strong>Store these codes securely. Each can only be used once.</strong></p>
+                                <div id="recovery-codes-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;font-family:monospace"></div>
+                            </div>
+                            <div id="recovery-auth-section">
+                                <div class="form-group">
+                                    <input type="text" id="recovery-auth-code" class="input" placeholder="000000" maxlength="6" pattern="[0-9]{6}" style="text-align:center;font-size:1.25rem;letter-spacing:0.5em">
+                                </div>
+                            </div>
+                            <div class="modal-actions">
+                                <button class="btn btn-secondary" id="btn-close-recovery">Close</button>
+                                <button class="btn btn-primary" id="btn-show-recovery" style="display:none">Copy All</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
                 <!-- Reveal Modal -->
                 <div id="reveal-modal" class="modal">

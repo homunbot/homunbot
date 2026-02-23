@@ -51,6 +51,7 @@ regex = "1"
 
 # Hostname for runtime info
 hostname = "0.4"
+whoami = "1.5"
 
 # Directories
 dirs = "6"
@@ -108,6 +109,10 @@ ring = "0.17"           # AES-256-GCM, HKDF
 base64 = "0.22"         # Encoding
 keyring = { version = "3", features = ["apple-native", "linux-native", "windows-native"] }  # OS keychain (macOS/Linux/Windows)
 zeroize = "1"           # Secure memory zeroing
+
+# Security - TOTP 2FA
+totp-rs = { version = "5", features = ["qr"] }  # TOTP with QR code generation
+rand = "0.8"            # Random generation for recovery codes
 
 # Memory - Embedding + Vector search
 fastembed = "5"         # Local ONNX embedding (multilingual, 384-dim)

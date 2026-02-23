@@ -1,13 +1,26 @@
 //! Vault tool — encrypted secret storage accessible by the LLM.
 //!
-//! Provides 4 actions: store, retrieve, list, delete.
+//! Provides 5 actions: store, retrieve, list, delete, confirm.
 //! Secrets are encrypted with AES-256-GCM and stored in the OS keychain-backed vault.
 //! In memory/context, only `vault://key_name` references appear — never plaintext values.
+//!
+//! # Two-Factor Authentication
+//!
+//! When 2FA is enabled, the `retrieve` action requires authentication:
+//! 1. First call to `retrieve` returns "2FA_REQUIRED"
+//! 2. LLM asks user for authenticator code
+//! 3. Call `confirm` with the code to get a session_id
+//! 4. Call `retrieve` with session_id to get the secret
+//!
+//! Alternatively, pass `code` directly to `retrieve` for one-shot authentication.
 
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::security::{
+    global_session_manager, TotpManager, TwoFactorConfig, TwoFactorStorage,
+};
 use crate::storage::{global_secrets, SecretKey};
 
 use super::registry::{Tool, ToolContext, ToolResult, get_string_param, get_optional_string};
@@ -30,7 +43,72 @@ impl VaultTool {
     fn vault_key(name: &str) -> SecretKey {
         SecretKey::custom(&format!("{VAULT_PREFIX}{name}"))
     }
+
+    /// Check if 2FA is enabled
+    fn is_2fa_enabled() -> bool {
+        let result = TwoFactorStorage::new()
+            .ok()
+            .and_then(|s| s.load().ok())
+            .map(|c| c.enabled)
+            .unwrap_or(false);
+
+        tracing::debug!(twofa_enabled = result, "Checked 2FA status");
+        result
+    }
+
+    /// Load 2FA config
+    fn load_2fa_config() -> Result<TwoFactorConfig> {
+        let storage = TwoFactorStorage::new()?;
+        storage.load()
+    }
+
+    /// Verify a TOTP code and optionally create a session
+    async fn verify_and_create_session(code: &str) -> Result<Result<String, String>> {
+        let config = Self::load_2fa_config()?;
+
+        if !config.enabled {
+            return Ok(Ok("2fa_disabled".to_string()));
+        }
+
+        // Check lockout
+        if config.is_locked_out() {
+            return Ok(Err("Too many failed attempts. Please wait a few minutes.".to_string()));
+        }
+
+        // Verify code
+        let manager = TotpManager::new(&config.totp_secret, &config.account)?;
+        if manager.verify(code) {
+            // Success - create session
+            let session_manager = global_session_manager();
+            let session_id = session_manager.create_session().await;
+
+            // Reset failed attempts
+            let mut config = config;
+            config.reset_failed_attempts();
+            TwoFactorStorage::new()?.save(&config)?;
+
+            tracing::info!("2FA verification successful, session created");
+            Ok(Ok(session_id))
+        } else {
+            // Failed - record attempt
+            let mut config = config;
+            config.record_failed_attempt();
+            TwoFactorStorage::new()?.save(&config)?;
+
+            tracing::warn!(
+                attempts = config.failed_attempts,
+                "2FA verification failed"
+            );
+            Ok(Err(format!(
+                "Invalid code. {} attempts remaining.",
+                MAX_FAILED_ATTEMPTS.saturating_sub(config.failed_attempts)
+            )))
+        }
+    }
 }
+
+/// Maximum failed attempts before lockout
+const MAX_FAILED_ATTEMPTS: u32 = 5;
 
 #[async_trait]
 impl Tool for VaultTool {
@@ -42,7 +120,7 @@ impl Tool for VaultTool {
         "Encrypted secret vault. Store and retrieve sensitive data (passwords, tokens, API keys). \
          Data is encrypted with AES-256-GCM and protected by the OS keychain. \
          In memory and context, only vault://key_name references appear — never plaintext values. \
-         Actions: store (save a secret), retrieve (get a secret), list (show stored keys), delete (remove a secret)."
+         Actions: store (save a secret), retrieve (get a secret), list (show stored keys), delete (remove a secret), confirm (verify 2FA code)."
     }
 
     fn parameters(&self) -> Value {
@@ -51,7 +129,7 @@ impl Tool for VaultTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["store", "retrieve", "list", "delete"],
+                    "enum": ["store", "retrieve", "list", "delete", "confirm"],
                     "description": "The vault action to perform"
                 },
                 "key": {
@@ -61,6 +139,14 @@ impl Tool for VaultTool {
                 "value": {
                     "type": "string",
                     "description": "The secret value to store. Required for store action only. NEVER include this value in memory or conversation summaries."
+                },
+                "code": {
+                    "type": "string",
+                    "description": "6-digit authenticator code for 2FA. Can be passed to 'confirm' or directly to 'retrieve' for one-shot auth."
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID from a previous 'confirm' call. Use this to retrieve secrets without re-entering the code."
                 }
             },
             "required": ["action"]
@@ -87,6 +173,41 @@ impl Tool for VaultTool {
             }
             "retrieve" => {
                 let key = get_string_param(&args, "key")?;
+                let session_id = get_optional_string(&args, "session_id");
+                let code = get_optional_string(&args, "code");
+
+                tracing::debug!(
+                    key = %key,
+                    has_session = session_id.is_some(),
+                    has_code = code.is_some(),
+                    "Vault retrieve request"
+                );
+
+                // Check if 2FA is enabled
+                if Self::is_2fa_enabled() {
+                    // Check if we have a valid session
+                    if let Some(sid) = session_id {
+                        let session_manager = global_session_manager();
+                        if !session_manager.verify_session(&sid).await {
+                            return Ok(ToolResult::error(
+                                "Session expired or invalid. Please authenticate again with 'confirm' action."
+                            ));
+                        }
+                    } else if let Some(c) = code {
+                        // One-shot authentication with code
+                        match Self::verify_and_create_session(&c).await? {
+                            Ok(_) => { /* Success, proceed */ }
+                            Err(e) => return Ok(ToolResult::error(e)),
+                        }
+                    } else {
+                        // No session, no code - require 2FA
+                        return Ok(ToolResult::success(
+                            "2FA_REQUIRED: Two-factor authentication is enabled. \
+                             Please provide your authenticator code using the 'code' parameter, \
+                             or first call 'confirm' with the code to get a session_id."
+                        ));
+                    }
+                }
 
                 let secrets = global_secrets()
                     .map_err(|e| anyhow::anyhow!("Failed to access vault: {e}"))?;
@@ -103,6 +224,25 @@ impl Tool for VaultTool {
                     None => Ok(ToolResult::error(format!(
                         "Secret '{key}' not found in vault."
                     ))),
+                }
+            }
+            "confirm" => {
+                let code = get_string_param(&args, "code")?;
+
+                if !Self::is_2fa_enabled() {
+                    return Ok(ToolResult::error(
+                        "Two-factor authentication is not enabled. Enable it in Settings first."
+                    ));
+                }
+
+                match Self::verify_and_create_session(&code).await? {
+                    Ok(session_id) => Ok(ToolResult::success(format!(
+                        "2FA verified successfully. Session ID: {}\n\
+                         Use this session_id with 'retrieve' to access secrets. \
+                         Session expires in 5 minutes.",
+                        session_id
+                    ))),
+                    Err(e) => Ok(ToolResult::error(e)),
                 }
             }
             "list" => {
@@ -149,7 +289,7 @@ impl Tool for VaultTool {
                 )))
             }
             other => Ok(ToolResult::error(format!(
-                "Unknown vault action: '{other}'. Valid actions: store, retrieve, list, delete"
+                "Unknown vault action: '{other}'. Valid actions: store, retrieve, list, delete, confirm"
             ))),
         }
     }
@@ -175,5 +315,7 @@ mod tests {
         assert!(params["properties"]["action"].is_object());
         assert!(params["properties"]["key"].is_object());
         assert!(params["properties"]["value"].is_object());
+        assert!(params["properties"]["code"].is_object());
+        assert!(params["properties"]["session_id"].is_object());
     }
 }

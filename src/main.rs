@@ -14,6 +14,7 @@ mod channels;
 mod config;
 mod provider;
 mod scheduler;
+mod security;
 mod session;
 mod skills;
 mod storage;
