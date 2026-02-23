@@ -548,8 +548,53 @@ async fn main() -> Result<()> {
             use std::sync::Arc;
             use crate::scheduler::CronScheduler;
 
-            // Write PID file so `homun stop` / `homun restart` can find us
+            // PID file management: kill existing instance if running
             let pid_file = Config::data_dir().join("homun.pid");
+
+            // Check if PID file exists and try to kill existing process
+            if pid_file.exists() {
+                if let Ok(pid_str) = std::fs::read_to_string(&pid_file) {
+                    if let Ok(old_pid) = pid_str.trim().parse::<u32>() {
+                        // Check if process is still running
+                        #[cfg(unix)]
+                        {
+                            use std::process::Command;
+                            // Send SIGTERM to the old process
+                            let _ = Command::new("kill")
+                                .arg("-TERM")
+                                .arg(old_pid.to_string())
+                                .output();
+
+                            tracing::info!("Sent TERM signal to existing instance (PID {})", old_pid);
+
+                            // Wait for process to die (up to 5 seconds)
+                            for i in 1..=10 {
+                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                // Check if process still exists
+                                let check = Command::new("kill")
+                                    .arg("-0")
+                                    .arg(old_pid.to_string())
+                                    .output();
+                                if check.is_err() || check.map(|o| !o.status.success()).unwrap_or(true) {
+                                    tracing::info!("Previous instance terminated after {}ms", i * 500);
+                                    break;
+                                }
+                            }
+                        }
+                        #[cfg(windows)]
+                        {
+                            use std::process::Command;
+                            let _ = Command::new("taskkill")
+                                .args(["/PID", &old_pid.to_string(), "/F"])
+                                .output();
+                            tracing::info!("Killed existing instance (PID {})", old_pid);
+                            std::thread::sleep(std::time::Duration::from_secs(1));
+                        }
+                    }
+                }
+            }
+
+            // Write new PID file
             std::fs::write(&pid_file, std::process::id().to_string())?;
 
             let config = Config::load()?;
@@ -704,7 +749,14 @@ async fn main() -> Result<()> {
                 agent, config, session_manager, cron_scheduler, cron_event_rx, db_for_web,
             );
             gateway.set_tool_message_rx(tool_msg_rx);
-            gateway.run().await?;
+
+            // Run gateway and clean up PID file on exit
+            let result = gateway.run().await;
+
+            // Clean up PID file
+            let _ = std::fs::remove_file(&pid_file);
+
+            result?;
         }
         Commands::Config { command } => {
             use crate::config::dotpath;

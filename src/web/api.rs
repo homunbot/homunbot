@@ -904,13 +904,10 @@ async fn deactivate_provider(
 
     let mut config = state.config.read().await.clone();
 
-    // Clear the provider config
+    // Clear the provider config completely
     if let Some(pc) = config.providers.get_mut(&req.name) {
         pc.api_key = String::new();
-        // For local providers (ollama/vllm/custom), also clear base URL
-        if matches!(req.name.as_str(), "ollama" | "vllm" | "custom") {
-            pc.api_base = None;
-        }
+        pc.api_base = None;  // Clear base URL for ALL providers
     }
 
     // If this was the active provider, clear the model to force re-selection
@@ -1087,7 +1084,15 @@ async fn list_all_models(State(state): State<Arc<AppState>>) -> Json<AllModelsRe
     let mut ollama_cloud_configured = false;
 
     for (name, pc) in config.providers.iter() {
-        // Check if configured
+        // Special handling for providers that don't require API keys
+        if name == "ollama" {
+            // Ollama local is always potentially available (runs at localhost:11434)
+            // Mark as configured so JS can try to fetch models
+            ollama_configured = true;
+            continue;
+        }
+
+        // Check if configured (has API key or base URL)
         let has_key = match &secrets {
             Some(s) => {
                 let key = crate::storage::SecretKey::provider_api_key(name);
@@ -1102,10 +1107,6 @@ async fn list_all_models(State(state): State<Arc<AppState>>) -> Json<AllModelsRe
         }
 
         // Local/cloud providers with dynamic model lists: skip hardcoded, JS fetches live
-        if name == "ollama" {
-            ollama_configured = true;
-            continue;
-        }
         if name == "ollama_cloud" {
             ollama_cloud_configured = true;
             continue;

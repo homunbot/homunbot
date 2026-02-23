@@ -49,145 +49,13 @@ if (agentForm) {
 }
 
 
-// ═══ Model Dropdown ═══
+// ═══ Model Dropdown (Native Select with Optgroups) ═══
 
 const modelSelect = document.getElementById('model-select');
-const modelCustom = document.getElementById('model-custom');
 const modelValue = document.getElementById('model-value');
-const modelWrap = document.getElementById('model-select-wrap');
-
-/** Helper: remove all children from a DOM node */
-function clearChildren(el) {
-    while (el.firstChild) el.removeChild(el.firstChild);
-}
-
-/** Helper: create an <option> element */
-function makeOption(value, text, selected) {
-    const opt = document.createElement('option');
-    opt.value = value;
-    opt.textContent = text;
-    if (selected) opt.selected = true;
-    return opt;
-}
-
-/** Sync the actual form value from whichever input is active */
-function syncModelValue() {
-    if (!modelValue) return;
-    if (modelWrap && modelWrap.classList.contains('show-custom')) {
-        modelValue.value = modelCustom ? modelCustom.value : '';
-    } else {
-        modelValue.value = modelSelect ? modelSelect.value : '';
-    }
-}
-
-/** Populate the model <select> from /api/v1/providers/models */
-async function loadModelDropdown() {
-    if (!modelSelect) return;
-
-    try {
-        const resp = await fetch('/api/v1/providers/models');
-        const data = await resp.json();
-
-        clearChildren(modelSelect);
-
-        // Group cloud models by provider
-        const groups = {};
-        if (data.ok && data.models.length > 0) {
-            data.models.forEach(m => {
-                const key = m.provider;
-                if (!groups[key]) groups[key] = [];
-                groups[key].push(m);
-            });
-        }
-
-        // If Ollama is configured, fetch live models
-        if (data.ollama_configured) {
-            try {
-                const ollamaResp = await fetch('/api/v1/providers/ollama/models');
-                const ollamaData = await ollamaResp.json();
-                if (ollamaData.ok && ollamaData.models.length > 0) {
-                    groups['ollama'] = ollamaData.models.map(m => ({
-                        provider: 'ollama',
-                        model: 'ollama/' + m.name,
-                        label: 'Ollama (local) / ' + m.name + ' (' + m.size + ')',
-                    }));
-                }
-            } catch (_) { /* Ollama might not be running */ }
-        }
-
-        // If Ollama Cloud is configured, fetch live models
-        if (data.ollama_cloud_configured) {
-            try {
-                const cloudResp = await fetch('/api/v1/providers/ollama-cloud/models');
-                const cloudData = await cloudResp.json();
-                if (cloudData.ok && cloudData.models.length > 0) {
-                    groups['ollama_cloud'] = cloudData.models.map(m => ({
-                        provider: 'ollama_cloud',
-                        model: 'ollama_cloud/' + m.id,
-                        label: 'Ollama Cloud / ' + m.id,
-                    }));
-                }
-            } catch (_) { /* Ollama Cloud might not be reachable */ }
-        }
-
-        // If no models from any source, show placeholder
-        if (Object.keys(groups).length === 0) {
-            modelSelect.appendChild(makeOption('', 'No models available \u2014 configure a provider first'));
-            return;
-        }
-
-        // Track whether current model was found in the list
-        let currentFound = false;
-
-        // Build optgroups
-        for (const [provider, models] of Object.entries(groups)) {
-            const optgroup = document.createElement('optgroup');
-            optgroup.label = providerDisplayName(provider);
-            models.forEach(m => {
-                const isSelected = m.model === data.current;
-                if (isSelected) currentFound = true;
-                optgroup.appendChild(makeOption(m.model, m.label, isSelected));
-            });
-            modelSelect.appendChild(optgroup);
-        }
-
-        // Add "Custom model…" option at the end
-        modelSelect.appendChild(makeOption('__custom__', '\u270F Custom model…'));
-
-        // If current model is not in the list, switch to custom mode
-        if (data.current && !currentFound) {
-            modelWrap.classList.add('show-custom');
-            modelCustom.value = data.current;
-            modelValue.value = data.current;
-        } else {
-            modelValue.value = modelSelect.value;
-        }
-
-    } catch (err) {
-        clearChildren(modelSelect);
-        modelSelect.appendChild(makeOption('', 'Error loading models'));
-    }
-}
-
-/** Handle select change — switch to custom input if needed */
-if (modelSelect) {
-    modelSelect.addEventListener('change', () => {
-        if (modelSelect.value === '__custom__') {
-            modelWrap.classList.add('show-custom');
-            modelCustom.focus();
-        } else {
-            modelWrap.classList.remove('show-custom');
-            syncModelValue();
-        }
-    });
-}
-
-if (modelCustom) {
-    modelCustom.addEventListener('input', syncModelValue);
-}
 
 function providerDisplayName(name) {
-    const map = {
+    var map = {
         anthropic: 'Anthropic', openai: 'OpenAI', openrouter: 'OpenRouter',
         gemini: 'Gemini', deepseek: 'DeepSeek', groq: 'Groq',
         ollama: 'Ollama (local)', ollama_cloud: 'Ollama Cloud',
@@ -199,6 +67,141 @@ function providerDisplayName(name) {
         minimax: 'MiniMax', vllm: 'vLLM', custom: 'Custom',
     };
     return map[name] || name;
+}
+
+/** Populate the model dropdown using native select with optgroups */
+async function loadModelDropdown() {
+    if (!modelSelect) return;
+
+    try {
+        var resp = await fetch('/api/v1/providers/models');
+        var data = await resp.json();
+
+        var currentModel = data.current || '';
+
+        // Group models by provider
+        var groups = {};
+
+        // Add static cloud models
+        if (data.ok && data.models.length > 0) {
+            data.models.forEach(function(m) {
+                if (!groups[m.provider]) groups[m.provider] = [];
+                groups[m.provider].push({ value: m.model, label: m.label });
+            });
+        }
+
+        // If Ollama is configured, fetch live models
+        if (data.ollama_configured) {
+            try {
+                var ollamaResp = await fetch('/api/v1/providers/ollama/models');
+                var ollamaData = await ollamaResp.json();
+                if (ollamaData.ok && ollamaData.models.length > 0) {
+                    groups['ollama'] = ollamaData.models.map(function(m) {
+                        return { value: 'ollama/' + m.name, label: m.name + ' (' + m.size + ')' };
+                    });
+                }
+            } catch (_) { /* Ollama might not be running */ }
+        }
+
+        // If Ollama Cloud is configured, fetch live models
+        if (data.ollama_cloud_configured) {
+            try {
+                var cloudResp = await fetch('/api/v1/providers/ollama-cloud/models');
+                var cloudData = await cloudResp.json();
+                if (cloudData.ok && cloudData.models.length > 0) {
+                    groups['ollama_cloud'] = cloudData.models.map(function(m) {
+                        return { value: 'ollama_cloud/' + m.id, label: m.id };
+                    });
+                }
+            } catch (_) { /* Ollama Cloud might not be reachable */ }
+        }
+
+        // Clear existing options
+        while (modelSelect.firstChild) {
+            modelSelect.removeChild(modelSelect.firstChild);
+        }
+
+        var foundCurrent = false;
+
+        // Build native select options with optgroups using safe DOM methods
+        Object.keys(groups).forEach(function(provider) {
+            var optgroup = document.createElement('optgroup');
+            optgroup.label = providerDisplayName(provider);
+
+            groups[provider].forEach(function(m) {
+                var option = document.createElement('option');
+                option.value = m.value;
+                option.textContent = m.label;
+                if (m.value === currentModel) {
+                    option.selected = true;
+                    foundCurrent = true;
+                }
+                optgroup.appendChild(option);
+            });
+
+            modelSelect.appendChild(optgroup);
+        });
+
+        // Add custom option group
+        var customGroup = document.createElement('optgroup');
+        customGroup.label = 'Custom';
+        var customOption = document.createElement('option');
+        customOption.value = '__custom__';
+        customOption.textContent = '✏ Custom model…';
+        customGroup.appendChild(customOption);
+        modelSelect.appendChild(customGroup);
+
+        // If current model wasn't found in options, add it at the top
+        if (currentModel && !foundCurrent) {
+            var currentOpt = document.createElement('option');
+            currentOpt.value = currentModel;
+            currentOpt.textContent = currentModel + ' (current)';
+            currentOpt.selected = true;
+            modelSelect.insertBefore(currentOpt, modelSelect.firstChild);
+        }
+
+        // Update hidden value with current model
+        if (modelValue && currentModel) {
+            modelValue.value = currentModel;
+        }
+
+    } catch (err) {
+        console.error('Failed to load models:', err);
+        // Clear and show error using safe DOM methods
+        while (modelSelect.firstChild) {
+            modelSelect.removeChild(modelSelect.firstChild);
+        }
+        var errorOpt = document.createElement('option');
+        errorOpt.value = '';
+        errorOpt.textContent = 'Error loading models';
+        modelSelect.appendChild(errorOpt);
+    }
+}
+
+// Handle selection change
+if (modelSelect) {
+    modelSelect.addEventListener('change', function() {
+        if (modelSelect.value === '__custom__') {
+            var customModel = prompt('Enter custom model (e.g., ollama/my-model:latest):');
+            if (customModel && customModel.trim()) {
+                modelValue.value = customModel.trim();
+            } else {
+                // Reset selection
+                loadModelDropdown();
+                return;
+            }
+        } else if (modelSelect.value) {
+            modelValue.value = modelSelect.value;
+        }
+    });
+}
+
+// Sync model value from select to hidden input
+function syncModelValue() {
+    if (!modelValue || !modelSelect) return;
+    if (modelSelect.value && modelSelect.value !== '__custom__') {
+        modelValue.value = modelSelect.value;
+    }
 }
 
 // Initial load
@@ -217,12 +220,6 @@ if (modal && providerCards.length > 0) {
     const providerForm = document.getElementById('provider-config-form');
     const apiKeyGroup = document.getElementById('api-key-group');
     const apiBaseGroup = document.getElementById('api-base-group');
-    const ollamaModelsGroup = document.getElementById('ollama-models-group');
-    const ollamaModelSelect = document.getElementById('ollama-model-select');
-    const ollamaLoading = document.getElementById('ollama-models-loading');
-    const ollamaError = document.getElementById('ollama-models-error');
-    const refreshOllamaBtn = document.getElementById('refresh-ollama-models');
-    const btnActivate = document.getElementById('btn-activate');
 
     let currentProvider = null;
 
@@ -230,29 +227,13 @@ if (modal && providerCards.length > 0) {
     providerCards.forEach(card => {
         const toggle = card.querySelector('.toggle-input');
         const toggleLabel = card.querySelector('.toggle-label');
-        const setDefaultLink = card.querySelector('.provider-set-default');
 
-        // Click anywhere on card (except toggle / set-default) → open config modal
+        // Click anywhere on card (except toggle) → open config modal
         card.style.cursor = 'pointer';
         card.addEventListener('click', (e) => {
             if (e.target === toggle || e.target === toggleLabel) return;
-            if (e.target === setDefaultLink) return;
             openProviderModal(card);
         });
-
-        // "Set default" link — quick-activate without opening modal
-        if (setDefaultLink) {
-            setDefaultLink.addEventListener('click', (e) => {
-                e.preventDefault();
-                const providerName = card.dataset.provider;
-                // For providers that show models (Ollama, Ollama Cloud), need to pick a model → open modal instead
-                if (card.dataset.showsModels === 'true') {
-                    openProviderModal(card);
-                    return;
-                }
-                setProviderAsDefault(providerName);
-            });
-        }
 
         // Toggle switch logic
         if (toggle) {
@@ -288,40 +269,53 @@ if (modal && providerCards.length > 0) {
             });
             const data = await resp.json();
             if (data.ok) {
-                card.classList.remove('is-configured', 'is-default');
+                // Update card UI
+                card.classList.remove('is-configured');
                 card.dataset.configured = 'false';
-                const badge = card.querySelector('.provider-default-badge');
-                if (badge) badge.textContent = '';
+                card.dataset.apiKeyMask = '';
+                card.dataset.apiBase = '';
+
+                // Remove active badge if present
+                const badge = card.querySelector('.provider-active-badge');
+                if (badge) badge.remove();
+
+                // Ensure toggle is unchecked
+                const toggle = card.querySelector('.toggle-input');
+                if (toggle) toggle.checked = false;
+
+                showToast('Provider deactivated', 'success');
                 loadModelDropdown();
             } else {
                 const toggle = card.querySelector('.toggle-input');
                 if (toggle) toggle.checked = true;
-                alert(data.message || 'Failed to deactivate');
+                showToast(data.message || 'Failed to deactivate', 'error');
             }
         } catch (err) {
             const toggle = card.querySelector('.toggle-input');
             if (toggle) toggle.checked = true;
-            alert('Failed to deactivate provider');
+            showToast('Failed to deactivate provider', 'error');
         }
     }
 
-    // --- Set provider as default (quick, no modal) ---
-    async function setProviderAsDefault(name) {
-        try {
-            const resp = await fetch('/api/v1/providers/activate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: name, model: null }),
-            });
-            const data = await resp.json();
-            if (data.ok) {
-                window.location.reload();
-            } else {
-                alert(data.message || 'Failed to set as default');
-            }
-        } catch (err) {
-            alert('Failed to set as default');
-        }
+    // Simple toast notification
+    function showToast(message, type) {
+        // Remove existing toast
+        const existing = document.querySelector('.toast-notification');
+        if (existing) existing.remove();
+
+        const toast = document.createElement('div');
+        toast.className = 'toast-notification toast-' + (type || 'info');
+        toast.textContent = message;
+        document.body.appendChild(toast);
+
+        // Trigger animation
+        setTimeout(() => toast.classList.add('show'), 10);
+
+        // Auto-remove after 4 seconds
+        setTimeout(() => {
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 300);
+        }, 4000);
     }
 
     // --- Close modal handlers ---
@@ -342,7 +336,6 @@ if (modal && providerCards.length > 0) {
         const hasKey = card.dataset.hasKey === 'true';
         const hasUrl = card.dataset.hasUrl === 'true';
         const isOllama = card.dataset.isOllama === 'true';
-        const showsModels = card.dataset.showsModels === 'true';
         const apiKeyMask = card.dataset.apiKeyMask || '';
         const apiBase = card.dataset.apiBase || '';
 
@@ -362,23 +355,13 @@ if (modal && providerCards.length > 0) {
             baseHint.textContent = 'Ollama server URL (default: http://localhost:11434/v1)';
             document.getElementById('api-base').placeholder = 'http://localhost:11434/v1';
         } else if (currentProvider === 'ollama_cloud') {
-            baseHint.textContent = 'Ollama Cloud API endpoint (default: https://api.ollama.ai/v1)';
-            document.getElementById('api-base').placeholder = 'https://api.ollama.ai/v1';
+            baseHint.textContent = 'Ollama Cloud API endpoint (default: https://ollama.com)';
+            document.getElementById('api-base').placeholder = 'https://ollama.com';
         } else if (currentProvider === 'vllm' || currentProvider === 'custom') {
             baseHint.textContent = 'API endpoint URL (required)';
         } else {
             baseHint.textContent = 'Custom API endpoint (optional)';
         }
-
-        ollamaModelsGroup.style.display = showsModels ? 'block' : 'none';
-        if (showsModels) {
-            loadOllamaModels(currentProvider);
-        }
-
-        const noConfigNeeded = isOllama || currentProvider === 'vllm' || currentProvider === 'custom';
-        const isDefault = card.classList.contains('is-default');
-        btnActivate.style.display = (isDefault && !noConfigNeeded) ? 'none' : 'block';
-        btnActivate.dataset.provider = currentProvider;
 
         modal.classList.add('open');
         document.body.style.overflow = 'hidden';
@@ -388,75 +371,6 @@ if (modal && providerCards.length > 0) {
         modal.classList.remove('open');
         document.body.style.overflow = '';
         currentProvider = null;
-        if (ollamaModelSelect) {
-            clearChildren(ollamaModelSelect);
-            ollamaModelSelect.appendChild(makeOption('', 'Select a model...'));
-            ollamaModelSelect.style.display = 'none';
-        }
-        if (ollamaLoading) ollamaLoading.style.display = 'block';
-        if (ollamaError) ollamaError.style.display = 'none';
-    }
-
-    // --- Load Ollama models ---
-    async function loadOllamaModels(provider) {
-        ollamaLoading.style.display = 'block';
-        ollamaLoading.textContent = 'Loading models...';
-        ollamaError.style.display = 'none';
-        ollamaModelSelect.style.display = 'none';
-
-        // Choose endpoint based on provider
-        const endpoint = provider === 'ollama_cloud'
-            ? '/api/v1/providers/ollama-cloud/models'
-            : '/api/v1/providers/ollama/models';
-
-        try {
-            const resp = await fetch(endpoint);
-            const data = await resp.json();
-
-            if (data.ok && data.models.length > 0) {
-                clearChildren(ollamaModelSelect);
-                ollamaModelSelect.appendChild(makeOption('', 'Select a model...'));
-
-                if (provider === 'ollama_cloud') {
-                    // Ollama Cloud response format
-                    data.models.forEach(model => {
-                        ollamaModelSelect.appendChild(
-                            makeOption(model.id, model.id + ' (' + model.owned_by + ')')
-                        );
-                    });
-                } else {
-                    // Local Ollama response format
-                    data.models.forEach(model => {
-                        ollamaModelSelect.appendChild(
-                            makeOption(model.name, model.name + ' (' + model.size + ')')
-                        );
-                    });
-                }
-                ollamaModelSelect.style.display = 'block';
-                ollamaLoading.style.display = 'none';
-            } else {
-                ollamaLoading.style.display = 'none';
-                const errorMsg = provider === 'ollama_cloud'
-                    ? (data.error || 'No models found. Check your API key.')
-                    : (data.error || 'No models found. Run `ollama pull llama3` to download a model.');
-                ollamaError.textContent = errorMsg;
-                ollamaError.style.display = 'block';
-            }
-        } catch (err) {
-            ollamaLoading.style.display = 'none';
-            ollamaError.textContent = provider === 'ollama_cloud'
-                ? 'Failed to load models. Check your API key and connection.'
-                : 'Failed to load models. Is Ollama running?';
-            ollamaError.style.display = 'block';
-        }
-    }
-
-    if (refreshOllamaBtn) {
-        refreshOllamaBtn.addEventListener('click', () => {
-            if (currentProvider) {
-                loadOllamaModels(currentProvider);
-            }
-        });
     }
 
     // --- Save provider configuration ---
@@ -466,20 +380,35 @@ if (modal && providerCards.length > 0) {
             const formData = new FormData(providerForm);
             const btn = providerForm.querySelector('button[type="submit"]');
             const originalText = btn.textContent;
+
+            const providerName = formData.get('provider');
+            const apiKey = (formData.get('api_key') || '').trim();
+            const apiBaseVal = (formData.get('api_base') || '').trim();
+
+            // Validation: check required fields
+            const needsApiKey = apiKeyGroup.style.display !== 'none';
+            const needsBaseUrl = apiBaseGroup.style.display !== 'none' &&
+                (providerName === 'vllm' || providerName === 'custom');
+
+            if (needsApiKey && !apiKey) {
+                showToast('API key is required', 'error');
+                return;
+            }
+            if (needsBaseUrl && !apiBaseVal) {
+                showToast('Base URL is required for this provider', 'error');
+                return;
+            }
+
             btn.textContent = 'Saving…';
             btn.disabled = true;
 
-            const providerName = formData.get('provider');
-            const apiKey = formData.get('api_key');
-            const apiBaseVal = formData.get('api_base');
-
             const payload = { name: providerName };
 
-            if (apiKeyGroup.style.display !== 'none') {
-                payload.api_key = apiKey ? apiKey.trim() : '';
+            if (needsApiKey) {
+                payload.api_key = apiKey;
             }
             if (apiBaseGroup.style.display !== 'none') {
-                payload.api_base = apiBaseVal ? apiBaseVal.trim() : '';
+                payload.api_base = apiBaseVal;
             }
 
             try {
@@ -491,71 +420,30 @@ if (modal && providerCards.length > 0) {
                 const data = await resp.json();
 
                 if (data.ok) {
-                    btn.textContent = 'Saved ✓';
-                    btnActivate.style.display = 'block';
-
+                    // Update card UI
                     const card = document.querySelector('.provider-card[data-provider="' + providerName + '"]');
                     if (card) {
                         card.classList.add('is-configured');
                         card.dataset.configured = 'true';
                         const toggle = card.querySelector('.toggle-input');
                         if (toggle) toggle.checked = true;
-                        if (payload.api_key) card.dataset.apiKeyMask = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
+                        if (payload.api_key) card.dataset.apiKeyMask = '••••••••';
                         if (payload.api_base) card.dataset.apiBase = payload.api_base;
                     }
 
+                    // Close modal, show toast, reload models
+                    closeModal();
+                    showToast('Provider configured!', 'success');
                     loadModelDropdown();
                 } else {
-                    btn.textContent = 'Error';
+                    showToast(data.message || 'Failed to save configuration', 'error');
+                    btn.textContent = originalText;
+                    btn.disabled = false;
                 }
             } catch (err) {
-                btn.textContent = 'Error';
-            }
-
-            setTimeout(() => {
+                showToast('Failed to save configuration', 'error');
                 btn.textContent = originalText;
                 btn.disabled = false;
-            }, 2000);
-        });
-    }
-
-    // --- Activate provider (make default) ---
-    if (btnActivate) {
-        btnActivate.addEventListener('click', async () => {
-            const provider = btnActivate.dataset.provider;
-            let selectedModel = null;
-
-            if (provider === 'ollama') {
-                selectedModel = ollamaModelSelect.value;
-                if (!selectedModel) {
-                    alert('Please select a model first.');
-                    return;
-                }
-            }
-
-            btnActivate.textContent = 'Activating…';
-            btnActivate.disabled = true;
-
-            try {
-                const resp = await fetch('/api/v1/providers/activate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: provider, model: selectedModel }),
-                });
-                const data = await resp.json();
-
-                if (data.ok) {
-                    closeModal();
-                    window.location.reload();
-                } else {
-                    alert(data.message || 'Failed to activate provider');
-                    btnActivate.textContent = 'Activate Provider';
-                    btnActivate.disabled = false;
-                }
-            } catch (err) {
-                alert('Failed to activate provider');
-                btnActivate.textContent = 'Activate Provider';
-                btnActivate.disabled = false;
             }
         });
     }

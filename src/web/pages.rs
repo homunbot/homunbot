@@ -127,10 +127,6 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .map(|(n, _)| n)
         .unwrap_or("none");
 
-    if provider == "none" {
-        return axum::response::Redirect::to("/setup").into_response();
-    }
-
     let skills_count = crate::skills::SkillInstaller::list_installed()
         .await
         .map(|s| s.len())
@@ -139,6 +135,19 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let channels_html = build_channels_html(&config);
     let uptime_display = format_uptime(uptime);
     let channel_count = count_active_channels(&config);
+
+    // Show warning if no model is configured
+    let no_model_warning = if provider == "none" || config.agent.model.is_empty() {
+        r#"<div class="no-model-warning">
+            <span class="no-model-warning-icon">⚠️</span>
+            <div class="no-model-warning-text">
+                <strong>No model configured</strong>
+                <p>Select a model in <a href="/setup">Settings → Agent Configuration</a> to enable the assistant.</p>
+            </div>
+        </div>"#
+    } else {
+        ""
+    };
 
     let body = format!(
         r#"<main class="content">
@@ -150,19 +159,14 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                     </div>
                 </div>
 
+                {no_model_warning}
+
                 <div class="stats-grid">
-                    <div class="stat-card" data-editable data-key="agent.model">
+                    <a href="/setup" class="stat-card stat-card-link">
                         <div class="stat-label">Model</div>
                         <div class="stat-value">{model}</div>
-                        <div class="stat-sub">via {provider}</div>
-                        <div class="inline-edit">
-                            <input type="text" class="inline-input" value="{model}">
-                            <div class="inline-actions">
-                                <button class="btn btn-save btn-sm">Save</button>
-                                <button class="btn btn-cancel btn-sm">Cancel</button>
-                            </div>
-                        </div>
-                    </div>
+                        <div class="stat-sub">via {provider} → Settings</div>
+                    </a>
                     <div class="stat-card">
                         <div class="stat-label">Uptime</div>
                         <div class="stat-value" data-live-uptime="{uptime_secs}">{uptime_display}</div>
@@ -212,6 +216,7 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         skills_count = skills_count,
         channel_count = channel_count,
         channels_html = channels_html,
+        no_model_warning = no_model_warning,
     );
 
     Html(page_html("Dashboard", "dashboard", &body, &["dashboard.js"])).into_response()
@@ -223,6 +228,19 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
     let config = state.config.read().await;
     let providers_html = build_providers_html(&config);
 
+    // Show warning if no model is configured
+    let no_model_warning = if config.agent.model.is_empty() {
+        r#"<div class="no-model-warning">
+            <span class="no-model-warning-icon">⚠️</span>
+            <div class="no-model-warning-text">
+                <strong>No model configured</strong>
+                <p>Select a model below to enable the assistant.</p>
+            </div>
+        </div>"#
+    } else {
+        ""
+    };
+
     let body = format!(
         r#"<main class="content">
             <div class="content-inner">
@@ -232,19 +250,18 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     </div>
                 </div>
 
+                {no_model_warning}
+
                 <section class="section">
                     <h2>Agent Configuration</h2>
-                    <form class="form" id="agent-form">
+                    <form class="form form--full" id="agent-form">
                         <div class="form-group model-selector-section">
                             <label class="model-selector-label">Model</label>
-                            <div class="model-select-wrap" id="model-select-wrap">
-                                <select id="model-select" class="input">
-                                    <option value="">Loading models…</option>
-                                </select>
-                                <input type="text" id="model-custom" class="input model-custom-input" placeholder="e.g. ollama/my-model:latest">
-                            </div>
+                            <select id="model-select" class="input">
+                                <option value="">Loading models…</option>
+                            </select>
                             <input type="hidden" name="model" id="model-value" value="{model}">
-                            <div class="form-hint">Select a model from configured providers, or choose "Custom model…" to type one.</div>
+                            <div class="form-hint">Select a model from configured providers, or type to search.</div>
                         </div>
                         <div class="form-row">
                             <div class="form-group">
@@ -341,21 +358,9 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <div class="form-hint" id="api-base-hint">Custom API endpoint (optional)</div>
                         </div>
 
-                        <!-- Ollama Models Selector -->
-                        <div class="form-group" id="ollama-models-group" style="display:none;">
-                            <label>Available Models</label>
-                            <div id="ollama-models-loading" class="form-hint">Loading models...</div>
-                            <div id="ollama-models-error" class="form-hint" style="color: var(--err);"></div>
-                            <select id="ollama-model-select" name="model" class="input" style="display:none;">
-                                <option value="">Select a model...</option>
-                            </select>
-                            <button type="button" id="refresh-ollama-models" class="btn btn-secondary btn-sm" style="margin-top:8px;">Refresh Models</button>
-                        </div>
-
                         <div class="modal-actions">
                             <button type="button" class="btn btn-secondary modal-cancel">Cancel</button>
-                            <button type="submit" class="btn btn-primary">Save Configuration</button>
-                            <button type="button" id="btn-activate" class="btn btn-success" style="display:none;">Activate Provider</button>
+                            <button type="submit" class="btn btn-primary">Save</button>
                         </div>
                     </form>
                 </div>
@@ -436,6 +441,7 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
         auto_cleanup_checked = if config.memory.auto_cleanup { "checked" } else { "" },
         providers_html = providers_html,
         channels_html = build_channels_cards_html(&config),
+        no_model_warning = no_model_warning,
     );
 
     Html(page_html("Settings", "settings", &body, &["setup.js"]))
@@ -1218,10 +1224,6 @@ fn build_channels_html(config: &crate::config::Config) -> String {
 }
 
 fn build_providers_html(config: &crate::config::Config) -> String {
-    let active = config
-        .resolve_provider(&config.agent.model)
-        .map(|(n, _)| n.to_string());
-
     /// Provider display metadata: (display_name, description, needs_api_key, needs_base_url)
     /// needs_base_url is true only for providers that REQUIRE a custom URL (vllm, custom)
     /// All cloud providers have fixed URLs and don't need user input
@@ -1267,21 +1269,14 @@ fn build_providers_html(config: &crate::config::Config) -> String {
         .iter()
         .map(|(name, pc)| {
             let configured = config.is_provider_configured(name);
-            let is_active = active.as_deref() == Some(name);
-            let is_default = is_active;
 
             let (display_name, description, has_key, has_url) = get_provider_meta(name);
             let is_ollama = name == "ollama";
-            let is_ollama_cloud = name == "ollama_cloud";
-            let shows_models = is_ollama || is_ollama_cloud;
 
             // Build CSS class list for the card
             let mut card_classes = String::from("provider-card");
             if configured {
                 card_classes.push_str(" is-configured");
-            }
-            if is_default {
-                card_classes.push_str(" is-default");
             }
 
             // API key mask — check encrypted storage first, then plaintext
@@ -1292,26 +1287,16 @@ fn build_providers_html(config: &crate::config::Config) -> String {
                 String::new()
             };
 
-            // Default badge OR "set default" link
-            let default_badge = if is_default {
-                r#"<span class="provider-default-badge">Default</span>"#
-            } else if configured {
-                r#"<a class="provider-set-default" href="javascript:void(0)">Set default</a>"#
-            } else {
-                ""
-            };
-
             // Toggle is checked when provider is configured
             let toggle_checked = if configured { "checked" } else { "" };
 
             format!(
-                r#"<div class="{card_classes}" data-provider="{name}" data-display="{display_name}" data-description="{description}" data-has-key="{has_key}" data-has-url="{has_url}" data-is-ollama="{is_ollama}" data-shows-models="{shows_models}" data-configured="{configured}" data-api-key-mask="{api_key_mask}" data-api-base="{api_base}">
+                r#"<div class="{card_classes}" data-provider="{name}" data-display="{display_name}" data-description="{description}" data-has-key="{has_key}" data-has-url="{has_url}" data-is-ollama="{is_ollama}" data-configured="{configured}" data-api-key-mask="{api_key_mask}" data-api-base="{api_base}">
                     <div class="provider-card-header">
                         <div class="provider-card-info">
                             <span class="provider-card-name">{display_name}</span>
                         </div>
                         <div class="provider-card-actions">
-                            {default_badge}
                             <div class="toggle-wrap">
                                 <input type="checkbox" class="toggle-input" id="toggle-{name}" {toggle_checked}>
                                 <label class="toggle-label" for="toggle-{name}"></label>
