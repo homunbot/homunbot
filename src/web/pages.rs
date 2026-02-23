@@ -13,6 +13,9 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/setup", get(setup_page))
         .route("/chat", get(chat_page))
         .route("/skills", get(skills_page))
+        .route("/memory", get(memory_page))
+        .route("/vault", get(vault_page))
+        .route("/permissions", get(permissions_page))
         .route("/logs", get(logs_page))
 }
 
@@ -24,6 +27,9 @@ const ICON_CHAT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentC
 const ICON_SKILLS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1L11.5 6.5 17 7.5 13 11.5 14 17 9 14.5 4 17 5 11.5 1 7.5 6.5 6.5z"/></svg>"#;
 const ICON_SETTINGS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="2.5"/><path d="M14.7 11.1a1.2 1.2 0 0 0 .24 1.32l.04.04a1.44 1.44 0 1 1-2.04 2.04l-.04-.04a1.2 1.2 0 0 0-1.32-.24 1.2 1.2 0 0 0-.72 1.08v.12a1.44 1.44 0 0 1-2.88 0v-.06a1.2 1.2 0 0 0-.78-1.08 1.2 1.2 0 0 0-1.32.24l-.04.04a1.44 1.44 0 1 1-2.04-2.04l.04-.04a1.2 1.2 0 0 0 .24-1.32 1.2 1.2 0 0 0-1.08-.72h-.12a1.44 1.44 0 0 1 0-2.88h.06a1.2 1.2 0 0 0 1.08-.78 1.2 1.2 0 0 0-.24-1.32l-.04-.04a1.44 1.44 0 1 1 2.04-2.04l.04.04a1.2 1.2 0 0 0 1.32.24h.06a1.2 1.2 0 0 0 .72-1.08V2.88a1.44 1.44 0 0 1 2.88 0v.06a1.2 1.2 0 0 0 .72 1.08 1.2 1.2 0 0 0 1.32-.24l.04-.04a1.44 1.44 0 1 1 2.04 2.04l-.04.04a1.2 1.2 0 0 0-.24 1.32v.06a1.2 1.2 0 0 0 1.08.72h.12a1.44 1.44 0 0 1 0 2.88h-.06a1.2 1.2 0 0 0-1.08.72z"/></svg>"#;
 const ICON_LOGS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v12"/><line x1="6" y1="6" x2="12" y2="6"/><line x1="6" y1="9" x2="12" y2="9"/><line x1="6" y1="12" x2="9" y2="12"/></svg>"#;
+const ICON_MEMORY: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v14"/><path d="M3 9h12"/><circle cx="9" cy="9" r="3"/><circle cx="9" cy="9" r="7"/></svg>"#;
+const ICON_VAULT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="14" height="11" rx="1.5"/><path d="M5 5V4a4 4 0 0 1 8 0v1"/><circle cx="9" cy="11" r="1.5"/><path d="M9 12.5V14"/></svg>"#;
+const ICON_PERMISSIONS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="16" height="12" rx="1.5"/><circle cx="9" cy="10" r="2"/><path d="M5 4V3a4 4 0 0 1 8 0v1"/></svg>"#;
 
 /// Channel icons — minimal stroke SVGs for dashboard/settings
 const ICON_WEB: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="7.5"/><path d="M1.5 9h15"/><path d="M9 1.5a11.5 11.5 0 0 1 3 7.5 11.5 11.5 0 0 1-3 7.5"/><path d="M9 1.5a11.5 11.5 0 0 0-3 7.5 11.5 11.5 0 0 0 3 7.5"/></svg>"#;
@@ -31,8 +37,8 @@ const ICON_TELEGRAM: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="curr
 const ICON_DISCORD: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3C5 3 3 3.5 2 5c-1.5 3-.5 7.5 1 9.5.5.5 1.5 1.5 3 1.5s2-1 3-1 1.5 1 3 1 2.5-1 3-1.5c1.5-2 2.5-6.5 1-9.5-1-1.5-3-2-4.5-2"/><circle cx="6.5" cy="10" r="1"/><circle cx="11.5" cy="10" r="1"/></svg>"#;
 const ICON_PHONE: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="1" width="10" height="16" rx="2"/><line x1="9" y1="14" x2="9" y2="14"/></svg>"#;
 
-/// Logo icon — references the homun brand PNG (includes name + mascot).
-const LOGO_ICON: &str = r#"<img class="logo-icon" src="/static/img/logo.png" alt="HOMUN">"#;
+/// Logo icon — serves the SVG logotype via <img> tag.
+const LOGO_ICON: &str = r#"<img class="logo-icon" src="/static/img/logo.svg" alt="HOMUN">"#;
 
 
 /// Build the sidebar navigation HTML
@@ -41,6 +47,9 @@ fn sidebar(active: &str) -> String {
         ("dashboard", "/", "Dashboard", ICON_DASHBOARD),
         ("chat", "/chat", "Chat", ICON_CHAT),
         ("skills", "/skills", "Skills", ICON_SKILLS),
+        ("memory", "/memory", "Memory", ICON_MEMORY),
+        ("vault", "/vault", "Vault", ICON_VAULT),
+        ("permissions", "/permissions", "Permissions", ICON_PERMISSIONS),
         ("settings", "/setup", "Settings", ICON_SETTINGS),
         ("logs", "/logs", "Logs", ICON_LOGS),
     ];
@@ -403,14 +412,27 @@ async fn chat_page() -> Html<String> {
                         <h1 class="page-title">Chat</h1>
                         <span class="badge badge-neutral" id="ws-status">Connecting…</span>
                     </div>
+                    <div class="chat-actions">
+                        <button class="btn btn-ghost btn-sm" id="btn-new-chat" title="New conversation">
+                            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="3" x2="9" y2="15"/><line x1="3" y1="9" x2="15" y2="9"/></svg>
+                        </button>
+                        <button class="btn btn-ghost btn-sm" id="btn-compact-chat" title="Compact conversation">
+                            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 9 12 15 6"/></svg>
+                        </button>
+                        <button class="btn btn-ghost btn-sm" id="btn-clear-chat" title="Clear screen">
+                            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 4 9 9 14 4"/><polyline points="4 14 9 9 14 14"/></svg>
+                        </button>
+                    </div>
                 </div>
                 <div class="chat-messages" id="messages"></div>
                 <form class="chat-input" id="chat-form">
-                    <input type="text" id="chat-text" placeholder="Send a message…" autocomplete="off" class="input">
+                    <textarea id="chat-text" placeholder="Send a message… (Shift+Enter for new line)" autocomplete="off" class="input chat-textarea" rows="1"></textarea>
                     <button type="submit" class="btn btn-primary">Send</button>
                 </form>
             </div>
-        </main>"#;
+        </main>
+        <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>"#;
 
     Html(page_html("Chat", "chat", body, &["chat.js"]))
 }
@@ -435,11 +457,18 @@ async fn skills_page() -> Html<String> {
             .map(|s| {
                 let source = if s.path.join(".clawhub-source").exists() {
                     "clawhub"
+                } else if s.path.join(".openskills-source").exists() {
+                    "openskills"
                 } else {
                     "github"
                 };
+                let source_label = match source {
+                    "clawhub" => "ClawHub",
+                    "openskills" => "Open Skills",
+                    _ => "GitHub",
+                };
                 format!(
-                    r#"<div class="skill-card" data-skill-name="{name}">
+                    r#"<div class="skill-card" data-skill-name="{name}" data-skill-source="{source}">
                         <div class="skill-card-header">
                             <div class="skill-name">{name}</div>
                             <span class="skill-source-badge skill-source-badge--{source}">{source_label}</span>
@@ -454,10 +483,50 @@ async fn skills_page() -> Html<String> {
                     desc = s.description,
                     path = s.path.display(),
                     source = source,
-                    source_label = if source == "clawhub" { "ClawHub" } else { "GitHub" },
+                    source_label = source_label,
                 )
             })
             .collect()
+    };
+
+    // Count skills by source for the source indicators
+    let mut count_clawhub = 0usize;
+    let mut count_openskills = 0usize;
+    let mut count_github = 0usize;
+    for s in &installed {
+        if s.path.join(".clawhub-source").exists() {
+            count_clawhub += 1;
+        } else if s.path.join(".openskills-source").exists() {
+            count_openskills += 1;
+        } else {
+            count_github += 1;
+        }
+    }
+
+    // Build source counter chips (only show non-zero)
+    let mut source_chips = Vec::new();
+    if count_clawhub > 0 {
+        source_chips.push(format!(
+            r#"<span class="skill-source-chip skill-source-chip--clawhub">{} ClawHub</span>"#,
+            count_clawhub
+        ));
+    }
+    if count_github > 0 {
+        source_chips.push(format!(
+            r#"<span class="skill-source-chip skill-source-chip--github">{} GitHub</span>"#,
+            count_github
+        ));
+    }
+    if count_openskills > 0 {
+        source_chips.push(format!(
+            r#"<span class="skill-source-chip skill-source-chip--openskills">{} Open Skills</span>"#,
+            count_openskills
+        ));
+    }
+    let source_chips_html = if source_chips.is_empty() {
+        String::new()
+    } else {
+        format!(r#"<div class="skill-source-chips" id="source-chips">{}</div>"#, source_chips.join(""))
     };
 
     let body = format!(
@@ -467,13 +536,31 @@ async fn skills_page() -> Html<String> {
                     <div class="page-title-group">
                         <h1 class="page-title">Skills</h1>
                         <span class="badge badge-info" id="installed-count">{count} installed</span>
+                        {source_chips_html}
                     </div>
                 </div>
 
                 <div class="skills-search">
                     <svg class="skills-search-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7.5" cy="7.5" r="5.5"/><path d="M12 12l4.5 4.5"/></svg>
-                    <input type="text" id="skill-search-input" class="input skills-search-input" placeholder="Search ClawHub &amp; GitHub, or enter owner/repo to install..." autocomplete="off">
+                    <input type="text" id="skill-search-input" class="input skills-search-input" placeholder="Search ClawHub, GitHub &amp; Open Skills, or enter owner/repo to install..." autocomplete="off">
                     <div class="skills-search-spinner" id="search-spinner" style="display:none"></div>
+                </div>
+
+                <div class="catalog-stats" id="catalog-stats"></div>
+
+                <div class="catalog-banner" id="catalog-banner" style="display:none">
+                    <div class="catalog-banner-content">
+                        <div class="catalog-banner-icon">
+                            <div class="skills-search-spinner" style="display:inline-block"></div>
+                        </div>
+                        <div class="catalog-banner-text">
+                            <strong id="catalog-banner-title">Downloading skill catalog...</strong>
+                            <span id="catalog-banner-detail">This only happens once, search will be instant after.</span>
+                        </div>
+                    </div>
+                    <div class="catalog-banner-progress">
+                        <div class="catalog-banner-bar" id="catalog-bar"></div>
+                    </div>
                 </div>
 
                 <section class="section" id="installed-section">
@@ -492,10 +579,28 @@ async fn skills_page() -> Html<String> {
                 </section>
 
                 <div id="skill-toast" class="skill-toast" style="display:none"></div>
+
+                <div class="skill-modal-overlay" id="skill-modal-overlay">
+                    <div class="skill-modal" id="skill-modal">
+                        <div class="skill-modal-header">
+                            <div>
+                                <div class="skill-modal-title" id="modal-title"></div>
+                                <div class="skill-modal-subtitle" id="modal-subtitle"></div>
+                            </div>
+                            <button class="skill-modal-close" id="modal-close">&times;</button>
+                        </div>
+                        <div class="skill-modal-meta" id="modal-meta"></div>
+                        <div class="skill-modal-body">
+                            <div class="skill-modal-content" id="modal-content"></div>
+                        </div>
+                        <div class="skill-modal-footer" id="modal-footer"></div>
+                    </div>
+                </div>
             </div>
         </main>"#,
         count = installed.len(),
         installed_html = installed_html,
+        source_chips_html = source_chips_html,
     );
 
     Html(page_html("Skills", "skills", &body, &["skills.js"]))
@@ -522,6 +627,492 @@ async fn logs_page() -> Html<String> {
         </main>"#;
 
     Html(page_html("Logs", "logs", body, &[]))
+}
+
+// ─── Memory ──────────────────────────────────────────────────────
+
+async fn memory_page(State(state): State<Arc<AppState>>) -> Html<String> {
+    // Gather stats for server-render
+    let data_dir = crate::config::Config::data_dir();
+    let chunk_count = match state.db.as_ref() {
+        Some(db) => db.count_memory_chunks().await.unwrap_or(0),
+        None => 0,
+    };
+    let daily_count = std::fs::read_dir(data_dir.join("memory"))
+        .map(|e| e.filter_map(|f| f.ok()).filter(|f| {
+            f.path().extension().map_or(false, |ext| ext == "md")
+        }).count())
+        .unwrap_or(0);
+    let has_memory = data_dir.join("MEMORY.md").exists();
+    let has_instructions = data_dir.join("brain").join("INSTRUCTIONS.md").exists()
+        || data_dir.join("INSTRUCTIONS.md").exists();
+
+    let body = format!(
+        r#"<main class="content">
+            <div class="content-inner">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">Memory</h1>
+                        <span class="badge badge-info">{chunk_count} chunks</span>
+                    </div>
+                </div>
+
+                <div class="stats-grid stats-grid--3">
+                    <div class="stat-card">
+                        <div class="stat-label">Memory Chunks</div>
+                        <div class="stat-value">{chunk_count}</div>
+                        <div class="stat-sub">in vector store</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Daily Logs</div>
+                        <div class="stat-value">{daily_count}</div>
+                        <div class="stat-sub">conversation logs</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Files</div>
+                        <div class="stat-value">{file_count}</div>
+                        <div class="stat-sub">{file_detail}</div>
+                    </div>
+                </div>
+
+                <section class="section">
+                    <h2>Search Memory</h2>
+                    <div class="memory-search">
+                        <input type="text" id="memory-search-input" class="input" placeholder="Search memory chunks (FTS5)…" autocomplete="off">
+                    </div>
+                    <div class="item-list" id="search-results" style="display:none"></div>
+                </section>
+
+                <section class="section">
+                    <h2>Long-term Memory</h2>
+                    <div class="memory-editor">
+                        <textarea id="memory-textarea" class="input memory-textarea" placeholder="MEMORY.md content…" spellcheck="false"></textarea>
+                        <div class="memory-editor-actions">
+                            <button class="btn btn-primary btn-sm" id="btn-save-memory">Save</button>
+                            <button class="btn btn-secondary btn-sm" id="btn-reload-memory">Reload</button>
+                            <span class="form-hint" id="memory-status"></span>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="section">
+                    <div class="section-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px">
+                        <h2 style="margin: 0; cursor: pointer" id="instructions-header">
+                            <span class="collapse-icon" id="instructions-collapse-icon">▼</span>
+                            Instructions
+                            <span class="badge badge-neutral" id="instructions-count"></span>
+                        </h2>
+                        <div>
+                            <button class="btn btn-secondary btn-sm" id="btn-deduplicate-instructions" title="Remove duplicate/similar instructions">Deduplicate</button>
+                        </div>
+                    </div>
+                    <div id="instructions-wrapper">
+                        <div id="instructions-list" class="item-list"></div>
+                        <div class="inline-form" style="margin-top: 12px">
+                            <input type="text" id="instruction-input" class="input flex-grow" placeholder="Add a new instruction…">
+                            <button class="btn btn-primary btn-sm" id="btn-add-instruction">Add</button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="section">
+                    <div class="section-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px">
+                        <h2 style="margin: 0; cursor: pointer" id="history-header">
+                            <span class="collapse-icon" id="history-collapse-icon">▼</span>
+                            Conversation History
+                            <span class="badge badge-neutral" id="history-count"></span>
+                        </h2>
+                    </div>
+                    <div id="history-wrapper">
+                        <div class="item-list" id="history-list"></div>
+                        <button class="btn btn-secondary btn-sm" id="btn-load-more" style="margin-top: 12px; display: none">Load more</button>
+                    </div>
+                </section>
+
+                <section class="section">
+                    <div class="section-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px">
+                        <h2 style="margin: 0; cursor: pointer" id="daily-header">
+                            <span class="collapse-icon" id="daily-collapse-icon">▼</span>
+                            Daily Logs
+                            <span class="badge badge-neutral" id="daily-count"></span>
+                        </h2>
+                    </div>
+                    <div id="daily-wrapper">
+                        <div id="daily-list" class="daily-list"></div>
+                        <div id="daily-content" style="display:none">
+                            <div class="daily-header">
+                                <button class="btn btn-ghost btn-sm" id="btn-daily-back">← Back</button>
+                                <span class="badge badge-neutral" id="daily-date-badge"></span>
+                            </div>
+                            <pre class="daily-viewer" id="daily-viewer"></pre>
+                        </div>
+                    </div>
+                </section>
+
+                <div id="memory-toast" class="skill-toast" style="display:none"></div>
+            </div>
+        </main>"#,
+        chunk_count = chunk_count,
+        daily_count = daily_count,
+        file_count = [has_memory, has_instructions].iter().filter(|&&v| v).count(),
+        file_detail = {
+            let mut parts = Vec::new();
+            if has_memory { parts.push("MEMORY.md"); }
+            if has_instructions { parts.push("INSTRUCTIONS.md"); }
+            if parts.is_empty() { "no files yet".to_string() } else { parts.join(" + ") }
+        },
+    );
+
+    Html(page_html("Memory", "memory", &body, &["memory.js"]))
+}
+
+// ─── Vault ───────────────────────────────────────────────────────
+
+async fn vault_page() -> Html<String> {
+    let body = r#"<main class="content">
+            <div class="content-inner">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">Vault</h1>
+                        <span class="badge badge-neutral" id="vault-count">Loading…</span>
+                    </div>
+                </div>
+
+                <div class="vault-notice">
+                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" style="width:20px;height:20px;flex-shrink:0">
+                        <rect x="2" y="5" width="14" height="11" rx="1.5"/>
+                        <path d="M5 5V4a4 4 0 0 1 8 0v1"/>
+                        <circle cx="9" cy="11" r="1.5"/>
+                        <path d="M9 12.5V14"/>
+                    </svg>
+                    <div>
+                        <strong>Encrypted Storage</strong><br>
+                        Secrets are encrypted with AES-256-GCM using a master key stored in your OS keychain.
+                        Values are never included in server-rendered pages — they are decrypted on-demand via POST requests.
+                    </div>
+                </div>
+
+                <section class="section">
+                    <h2>Store Secret</h2>
+                    <form id="vault-form" class="form">
+                        <div class="form-row form-row--2">
+                            <div class="form-group">
+                                <label>Key</label>
+                                <input type="text" id="vault-key" class="input" placeholder="my_api_key" pattern="[a-z0-9_]+">
+                                <div class="form-hint">Lowercase letters, numbers, underscores only</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Value</label>
+                                <input type="password" id="vault-value" class="input" placeholder="secret value…">
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-sm">Store Secret</button>
+                    </form>
+                </section>
+
+                <section class="section">
+                    <h2>Stored Secrets</h2>
+                    <div class="item-list" id="vault-list">
+                        <div class="empty-state" id="vault-empty">
+                            <p>Loading secrets…</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Reveal Modal -->
+                <div id="reveal-modal" class="modal">
+                    <div class="modal-backdrop"></div>
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h3 class="modal-title">Reveal Secret</h3>
+                            <button class="modal-close" type="button">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="form-group">
+                                <label id="reveal-key-label">Key</label>
+                                <div class="vault-reveal-value" id="reveal-value">Decrypting…</div>
+                            </div>
+                            <div class="vault-reveal-timer" id="reveal-timer">Auto-hide in 10s</div>
+                            <div class="modal-actions">
+                                <button class="btn btn-secondary" id="btn-copy-secret">Copy</button>
+                                <button class="btn btn-primary" id="btn-close-reveal">Close</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="vault-toast" class="skill-toast" style="display:none"></div>
+            </div>
+        </main>"#;
+
+    Html(page_html("Vault", "vault", body, &["vault.js"]))
+}
+
+// ─── Permissions ─────────────────────────────────────────────────
+
+async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
+    let config = state.config.read().await;
+    let mode = match config.permissions.mode {
+        crate::config::PermissionMode::Open => "open",
+        crate::config::PermissionMode::Workspace => "workspace",
+        crate::config::PermissionMode::Acl => "acl",
+    };
+    let acl_count = config.permissions.acl.len();
+
+    let body = format!(r#"<main class="content">
+            <div class="content-inner">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">Permissions</h1>
+                        <span class="badge badge-info">{acl_count} ACL rules</span>
+                    </div>
+                </div>
+
+                <div class="permissions-notice">
+                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" style="width:20px;height:20px;flex-shrink:0">
+                        <rect x="1" y="4" width="16" height="12" rx="1.5"/>
+                        <circle cx="9" cy="10" r="2"/>
+                        <path d="M5 4V3a4 4 0 0 1 8 0v1"/>
+                    </svg>
+                    <div>
+                        <strong>Permission Mode</strong><br>
+                        Control what files and directories the agent can access. Changes take effect immediately.
+                    </div>
+                </div>
+
+                <section class="section">
+                    <h2>Permission Mode</h2>
+                    <div class="permission-mode-grid">
+                        <div class="permission-mode-card" data-mode="open">
+                            <div class="permission-mode-header">
+                                <span class="permission-mode-name">Open</span>
+                                <span class="badge badge-neutral">Not Recommended</span>
+                            </div>
+                            <div class="permission-mode-desc">Agent can access any file (except hardcoded blocks like ~/.ssh)</div>
+                        </div>
+                        <div class="permission-mode-card" data-mode="workspace">
+                            <div class="permission-mode-header">
+                                <span class="permission-mode-name">Workspace</span>
+                                <span class="badge badge-success">Default</span>
+                            </div>
+                            <div class="permission-mode-desc">Agent can access workspace + brain + memory directories</div>
+                        </div>
+                        <div class="permission-mode-card" data-mode="acl">
+                            <div class="permission-mode-header">
+                                <span class="permission-mode-name">ACL</span>
+                                <span class="badge badge-info">Advanced</span>
+                            </div>
+                            <div class="permission-mode-desc">Full ACL-based control with per-path permissions</div>
+                        </div>
+                    </div>
+                    <input type="hidden" id="current-mode" value="{mode}">
+                </section>
+
+                <section class="section">
+                    <h2>Default Permissions</h2>
+                    <p class="form-hint">These apply when no ACL rule matches a path.</p>
+                    <div class="permission-defaults" id="permission-defaults">
+                        <div class="perm-checkbox-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="default-read" {default_read_checked}>
+                                <span>Read</span>
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="default-write" {default_write_checked}>
+                                <span>Write</span>
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="default-delete" {default_delete_checked}>
+                                <span>Delete</span>
+                            </label>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="section">
+                    <h2>ACL Rules</h2>
+                    <p class="form-hint">Rules are evaluated in order. First match wins. Built-in rules protect sensitive paths.</p>
+                    
+                    <div class="acl-actions">
+                        <button class="btn btn-primary btn-sm" id="btn-add-acl">Add Rule</button>
+                    </div>
+
+                    <div class="acl-list" id="acl-list">
+                        <div class="acl-loading">Loading ACL rules...</div>
+                    </div>
+                </section>
+
+                <section class="section">
+                    <h2>Shell Permissions</h2>
+                    <p class="form-hint">OS-specific command restrictions for the shell tool.</p>
+                    
+                    <div class="shell-tabs">
+                        <button class="shell-tab active" data-os="macos">macOS</button>
+                        <button class="shell-tab" data-os="linux">Linux</button>
+                        <button class="shell-tab" data-os="windows">Windows</button>
+                    </div>
+
+                    <div class="shell-profile-content" id="shell-profile-content">
+                        <div class="form-group">
+                            <label>Shell</label>
+                            <select id="shell-select" class="input">
+                                <option value="">Default (sh)</option>
+                                <option value="bash">bash</option>
+                                <option value="zsh">zsh</option>
+                                <option value="powershell">PowerShell</option>
+                                <option value="cmd">cmd</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="allow-risky">
+                                <span>Allow Risky Commands</span>
+                            </label>
+                            <div class="form-hint">Package removal, process killing, etc.</div>
+                        </div>
+                        <div class="form-group">
+                            <label>Blocked Commands (one per line)</label>
+                            <textarea id="blocked-commands" class="input" rows="3" placeholder="launchctl load&#10;defaults delete"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>Allowed Commands Whitelist (optional, one per line)</label>
+                            <textarea id="allowed-commands" class="input" rows="3" placeholder="git&#10;npm&#10;cargo"></textarea>
+                            <div class="form-hint">If non-empty, only these commands are allowed.</div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="section">
+                    <h2>Quick Presets</h2>
+                    <div class="preset-buttons">
+                        <button class="btn btn-secondary" data-preset="developer">Developer</button>
+                        <button class="btn btn-secondary" data-preset="restricted">Restricted</button>
+                        <button class="btn btn-danger" data-preset="paranoid">Paranoid</button>
+                    </div>
+                </section>
+
+                <section class="section">
+                    <h2>Test Path</h2>
+                    <p class="form-hint">Check if a path would be allowed for a specific operation.</p>
+                    <div class="test-path-form">
+                        <input type="text" id="test-path" class="input" placeholder="~/Projects/myfile.txt">
+                        <select id="test-operation" class="input">
+                            <option value="read">Read</option>
+                            <option value="write">Write</option>
+                            <option value="delete">Delete</option>
+                        </select>
+                        <button class="btn btn-primary" id="btn-test-path">Test</button>
+                    </div>
+                    <div id="test-result" class="test-result" style="display:none"></div>
+                </section>
+
+                <div id="permissions-toast" class="skill-toast" style="display:none"></div>
+            </div>
+        </main>
+
+        <!-- ACL Edit Modal -->
+        <div id="acl-modal" class="modal">
+            <div class="modal-backdrop"></div>
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 class="modal-title" id="acl-modal-title">Add ACL Rule</h3>
+                    <button class="modal-close acl-modal-close" type="button">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <form id="acl-form">
+                        <div class="form-group">
+                            <label>Path Pattern</label>
+                            <div class="path-input-group">
+                                <input type="text" id="acl-path" class="input" placeholder="~/Projects/**">
+                                <button type="button" class="btn btn-secondary btn-sm" id="btn-browse-path">Browse</button>
+                            </div>
+                            <div class="form-hint">Glob patterns supported: ** (any depth), * (single segment), ? (single char)</div>
+                        </div>
+                        <div class="form-group">
+                            <label>Type</label>
+                            <select id="acl-type" class="input">
+                                <option value="allow">Allow</option>
+                                <option value="deny">Deny</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Permissions</label>
+                            <div class="perm-checkbox-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="acl-read" checked>
+                                    <span>Read</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="acl-write">
+                                    <span>Write</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="acl-delete">
+                                    <span>Delete</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Confirmation Required</label>
+                            <select id="acl-confirm" class="input">
+                                <option value="none">None</option>
+                                <option value="read">On Read</option>
+                                <option value="write">On Write</option>
+                                <option value="delete">On Delete</option>
+                            </select>
+                            <div class="form-hint">Agent will ask for confirmation before the operation.</div>
+                        </div>
+                        <div class="modal-actions">
+                            <button type="button" class="btn btn-secondary acl-modal-cancel">Cancel</button>
+                            <button type="submit" class="btn btn-primary">Save Rule</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Path Browser Modal -->
+        <div id="path-browser-modal" class="modal">
+            <div class="modal-backdrop"></div>
+            <div class="modal-content modal-content--wide">
+                <div class="modal-header">
+                    <h3 class="modal-title">Browse Folders</h3>
+                    <button class="modal-close path-browser-close" type="button">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="path-browser-current">
+                        <span id="browser-current-path">~</span>
+                    </div>
+                    <div class="path-browser-nav">
+                        <button class="btn btn-sm btn-secondary" id="btn-browser-up">↑ Up</button>
+                        <button class="btn btn-sm btn-secondary" id="btn-browser-home">🏠 Home</button>
+                    </div>
+                    <div class="path-browser-list" id="browser-list">
+                        <div class="browser-loading">Loading...</div>
+                    </div>
+                    <div class="path-browser-selected">
+                        <label>Selected Path:</label>
+                        <input type="text" id="browser-selected-path" class="input" readonly>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="browser-recursive" checked>
+                            <span>Include subdirectories (**)</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary path-browser-cancel">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="btn-select-path">Select Folder</button>
+                </div>
+            </div>
+        </div>"#,
+        mode = mode,
+        acl_count = acl_count,
+        default_read_checked = if config.permissions.default.read { "checked" } else { "" },
+        default_write_checked = if config.permissions.default.write { "checked" } else { "" },
+        default_delete_checked = if config.permissions.default.delete { "checked" } else { "" },
+    );
+
+    Html(page_html("Permissions", "permissions", &body, &["permissions.js"]))
 }
 
 // ─── Helpers ────────────────────────────────────────────────────

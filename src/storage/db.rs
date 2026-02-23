@@ -105,6 +105,71 @@ impl Database {
             tracing::info!(migration = migration_name, "Applied database migration");
         }
 
+        // Migration 002 — memory_chunks + FTS5
+        Self::apply_migration(
+            pool,
+            "002_memory_chunks",
+            include_str!("../../migrations/002_memory_chunks.sql"),
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// Apply a named migration if not already applied.
+    async fn apply_migration(pool: &Pool<Sqlite>, name: &str, sql: &str) -> Result<()> {
+        let already_applied: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM _migrations WHERE name = ?)",
+        )
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(false);
+
+        if already_applied {
+            return Ok(());
+        }
+
+        // Strip SQL comments, then split into statements.
+        // Handles BEGIN...END blocks (e.g. triggers) where inner semicolons
+        // are part of the block, not statement separators.
+        let clean_sql: String = sql
+            .lines()
+            .map(|line| {
+                if let Some(pos) = line.find("--") {
+                    &line[..pos]
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let statements = split_sql_statements(&clean_sql);
+
+        for statement in &statements {
+            let statement = statement.trim();
+            if statement.is_empty() {
+                continue;
+            }
+            sqlx::query(statement)
+                .execute(pool)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Migration {name} failed: {}",
+                        &statement[..statement.len().min(80)]
+                    )
+                })?;
+        }
+
+        sqlx::query("INSERT INTO _migrations (name) VALUES (?)")
+            .bind(name)
+            .execute(pool)
+            .await
+            .context("Failed to record migration")?;
+
+        tracing::info!(migration = name, "Applied database migration");
         Ok(())
     }
 
@@ -370,6 +435,111 @@ impl Database {
         Ok(result.rows_affected() > 0)
     }
 
+    // --- Memory chunk operations (for vector + FTS5 search) ---
+
+    /// Insert a memory chunk and return its row ID (for vector indexing).
+    pub async fn insert_memory_chunk(
+        &self,
+        date: &str,
+        source: &str,
+        heading: &str,
+        content: &str,
+        memory_type: &str,
+    ) -> Result<i64> {
+        let result = sqlx::query(
+            "INSERT INTO memory_chunks (date, source, heading, content, memory_type)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(date)
+        .bind(source)
+        .bind(heading)
+        .bind(content)
+        .bind(memory_type)
+        .execute(&self.pool)
+        .await
+        .context("Failed to insert memory chunk")?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    /// Load memory chunks by their IDs (after vector search returns matching IDs).
+    pub async fn load_chunks_by_ids(&self, ids: &[i64]) -> Result<Vec<MemoryChunkRow>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build a parameterized IN clause
+        let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
+        let query = format!(
+            "SELECT id, date, source, heading, content, memory_type, created_at
+             FROM memory_chunks WHERE id IN ({})
+             ORDER BY created_at DESC",
+            placeholders.join(",")
+        );
+
+        let mut q = sqlx::query_as::<_, MemoryChunkRow>(&query);
+        for id in ids {
+            q = q.bind(id);
+        }
+
+        let rows = q
+            .fetch_all(&self.pool)
+            .await
+            .context("Failed to load memory chunks by IDs")?;
+
+        Ok(rows)
+    }
+
+    /// Full-text search on memory chunks using FTS5 BM25 ranking.
+    /// Returns `(chunk_id, bm25_score)` pairs, best matches first.
+    pub async fn fts5_search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<(i64, f64)>> {
+        let rows: Vec<(i64, f64)> = sqlx::query_as(
+            "SELECT rowid, rank
+             FROM memory_fts
+             WHERE memory_fts MATCH ?
+             ORDER BY rank
+             LIMIT ?",
+        )
+        .bind(query)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .context("FTS5 search failed")?;
+
+        Ok(rows)
+    }
+
+    /// Count total memory chunks.
+    pub async fn count_memory_chunks(&self) -> Result<i64> {
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM memory_chunks")
+                .fetch_one(&self.pool)
+                .await
+                .context("Failed to count memory chunks")?;
+        Ok(count)
+    }
+
+    /// Delete all memory data from the database (memory_chunks, memories, messages).
+    pub async fn reset_all_memory(&self) -> Result<()> {
+        sqlx::query("DELETE FROM memory_chunks")
+            .execute(&self.pool)
+            .await
+            .context("Failed to clear memory_chunks")?;
+        sqlx::query("DELETE FROM memories")
+            .execute(&self.pool)
+            .await
+            .context("Failed to clear memories")?;
+        sqlx::query("DELETE FROM messages")
+            .execute(&self.pool)
+            .await
+            .context("Failed to clear messages")?;
+        Ok(())
+    }
+
     /// Toggle a cron job's enabled state
     pub async fn toggle_cron_job(&self, id: &str, enabled: bool) -> Result<bool> {
         let result = sqlx::query(
@@ -383,6 +553,132 @@ impl Database {
 
         Ok(result.rows_affected() > 0)
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // MEMORY RETENTION - Prune old data based on retention policies
+    // ═══════════════════════════════════════════════════════════════
+
+    /// Prune old conversation messages based on retention policy.
+    /// Returns the number of messages deleted.
+    pub async fn prune_old_messages(&self, retention_days: u32) -> Result<u64> {
+        if retention_days == 0 {
+            return Ok(0); // Never prune
+        }
+
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
+        let cutoff_str = cutoff.to_rfc3339();
+
+        let result = sqlx::query(
+            "DELETE FROM messages WHERE timestamp < ?"
+        )
+        .bind(&cutoff_str)
+        .execute(&self.pool)
+        .await
+        .context("Failed to prune old messages")?;
+
+        let deleted = result.rows_affected();
+        if deleted > 0 {
+            tracing::info!(
+                deleted,
+                retention_days,
+                cutoff = %cutoff_str,
+                "Pruned old conversation messages"
+            );
+        }
+        Ok(deleted)
+    }
+
+    /// Prune old memory chunks (history entries) based on retention policy.
+    /// Returns the number of chunks deleted.
+    pub async fn prune_old_memory_chunks(&self, retention_days: u32) -> Result<u64> {
+        if retention_days == 0 {
+            return Ok(0); // Never prune
+        }
+
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
+        let cutoff_date = cutoff.format("%Y-%m-%d").to_string();
+
+        // Only prune history-type chunks, keep facts and instructions
+        let result = sqlx::query(
+            "DELETE FROM memory_chunks WHERE date < ? AND memory_type = 'history'"
+        )
+        .bind(&cutoff_date)
+        .execute(&self.pool)
+        .await
+        .context("Failed to prune old memory chunks")?;
+
+        let deleted = result.rows_affected();
+        if deleted > 0 {
+            tracing::info!(
+                deleted,
+                retention_days,
+                cutoff = %cutoff_date,
+                "Pruned old history chunks"
+            );
+        }
+        Ok(deleted)
+    }
+
+    /// Get list of daily memory files that are older than the archive threshold.
+    /// Returns list of dates (YYYY-MM-DD format) that can be archived.
+    pub fn get_old_daily_files(&self, archive_months: u32) -> Result<Vec<String>> {
+        if archive_months == 0 {
+            return Ok(Vec::new()); // Never archive
+        }
+
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(archive_months as i64 * 30);
+        let cutoff_date = cutoff.format("%Y-%m-%d").to_string();
+
+        let data_dir = crate::config::Config::data_dir();
+        let memory_dir = data_dir.join("memory");
+
+        if !memory_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut old_files = Vec::new();
+        for entry in std::fs::read_dir(&memory_dir)
+            .with_context(|| format!("Failed to read memory directory {}", memory_dir.display()))?
+        {
+            let entry = entry.context("Failed to read directory entry")?;
+            let filename = entry.file_name();
+            let name = filename.to_string_lossy();
+
+            // Check if it's a daily file (YYYY-MM-DD.md)
+            if name.len() == 14 && name.ends_with(".md") {
+                let date = &name[..10]; // YYYY-MM-DD
+                if date < cutoff_date.as_str() {
+                    old_files.push(date.to_string());
+                }
+            }
+        }
+
+        old_files.sort();
+        Ok(old_files)
+    }
+
+    /// Run full memory cleanup based on retention policies.
+    /// Returns summary of what was cleaned up.
+    pub async fn run_memory_cleanup(
+        &self,
+        conversation_retention_days: u32,
+        history_retention_days: u32,
+    ) -> Result<MemoryCleanupResult> {
+        let messages_deleted = self.prune_old_messages(conversation_retention_days).await?;
+        let chunks_deleted = self.prune_old_memory_chunks(history_retention_days).await?;
+
+        Ok(MemoryCleanupResult {
+            messages_deleted,
+            chunks_deleted,
+        })
+    }
+}
+
+/// Result of memory cleanup operation.
+#[derive(Debug, Default)]
+pub struct MemoryCleanupResult {
+    pub messages_deleted: u64,
+    pub chunks_deleted: u64,
 }
 
 // --- Row types for sqlx ---
@@ -416,6 +712,17 @@ pub struct MemoryRow {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
+pub struct MemoryChunkRow {
+    pub id: i64,
+    pub date: String,
+    pub source: String,
+    pub heading: String,
+    pub content: String,
+    pub memory_type: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct CronJobRow {
     pub id: String,
     pub name: String,
@@ -425,6 +732,68 @@ pub struct CronJobRow {
     pub deliver_to: Option<String>,
     pub last_run: Option<String>,
     pub created_at: String,
+}
+
+/// Split SQL into individual statements, respecting BEGIN...END blocks.
+///
+/// Standard `split(';')` breaks triggers and other compound statements
+/// that contain semicolons inside `BEGIN...END` blocks. This parser
+/// tracks nesting depth to correctly handle `CREATE TRIGGER ... BEGIN ... END;`.
+fn split_sql_statements(sql: &str) -> Vec<String> {
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0_usize; // BEGIN/END nesting depth
+
+    for line in sql.lines() {
+        let upper = line.trim().to_uppercase();
+
+        // Track BEGIN/END nesting
+        if upper.ends_with("BEGIN") || upper == "BEGIN" {
+            depth += 1;
+        }
+
+        current.push_str(line);
+        current.push('\n');
+
+        if depth > 0 {
+            // Inside a BEGIN block — check for END
+            if upper.starts_with("END;") || upper == "END;" {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    let stmt = current.trim().trim_end_matches(';').to_string();
+                    if !stmt.is_empty() {
+                        statements.push(stmt);
+                    }
+                    current.clear();
+                }
+            }
+        } else if line.contains(';') {
+            // Outside BEGIN block and line has semicolons — split
+            let accumulated = std::mem::take(&mut current);
+            let parts: Vec<&str> = accumulated.split(';').collect();
+            for (i, part) in parts.iter().enumerate() {
+                let trimmed = part.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if i < parts.len() - 1 {
+                    // Complete statement (before a ';')
+                    statements.push(trimmed.to_string());
+                } else {
+                    // Last fragment — carry over to next line
+                    current = format!("{trimmed}\n");
+                }
+            }
+        }
+    }
+
+    // Any remaining content
+    let remaining = current.trim().to_string();
+    if !remaining.is_empty() {
+        statements.push(remaining);
+    }
+
+    statements
 }
 
 #[cfg(test)]
@@ -437,6 +806,28 @@ mod tests {
         let db_path = dir.path().join("test.db");
         let db = Database::open(&db_path).await.unwrap();
         (db, dir)
+    }
+
+    #[test]
+    fn test_split_sql_with_triggers() {
+        let sql = r#"
+CREATE TABLE IF NOT EXISTS foo (id INTEGER PRIMARY KEY);
+CREATE INDEX IF NOT EXISTS idx_foo ON foo(id);
+
+CREATE TRIGGER IF NOT EXISTS foo_ai AFTER INSERT ON foo BEGIN
+    INSERT INTO bar(rowid, content) VALUES (new.id, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS foo_ad AFTER DELETE ON foo BEGIN
+    INSERT INTO bar(bar, rowid, content) VALUES ('delete', old.id, old.content);
+END;
+"#;
+        let stmts = split_sql_statements(sql);
+        assert_eq!(stmts.len(), 4, "Expected 4 statements, got: {stmts:#?}");
+        assert!(stmts[0].contains("CREATE TABLE"));
+        assert!(stmts[1].contains("CREATE INDEX"));
+        assert!(stmts[2].contains("CREATE TRIGGER") && stmts[2].contains("AFTER INSERT"));
+        assert!(stmts[3].contains("CREATE TRIGGER") && stmts[3].contains("AFTER DELETE"));
     }
 
     #[tokio::test]

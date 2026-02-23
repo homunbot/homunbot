@@ -13,7 +13,9 @@ pub struct Config {
     pub channels: ChannelsConfig,
     pub tools: ToolsConfig,
     pub storage: StorageConfig,
+    pub memory: MemoryConfig,
     pub mcp: McpConfig,
+    pub permissions: PermissionsConfig,
 }
 
 impl Config {
@@ -90,6 +92,38 @@ impl Config {
         // Check if provider has api_key in config (legacy plaintext or marker) or base URL
         if let Some(provider) = self.providers.get(name) {
             return !provider.api_key.is_empty() || provider.api_base.is_some();
+        }
+
+        false
+    }
+
+    /// Determine if XML tool dispatch should be used for a given provider/model.
+    ///
+    /// Priority:
+    /// 1. Provider-specific `force_xml_tools` setting (if set)
+    /// 2. Global `agent.force_xml_tools` setting
+    /// 3. Auto-detect: Ollama provider defaults to XML dispatch
+    pub fn should_use_xml_dispatch(&self, provider_name: &str, model: &str) -> bool {
+        // 1. Check provider-specific setting
+        if let Some(provider) = self.providers.get(provider_name) {
+            if let Some(force) = provider.force_xml_tools {
+                return force;
+            }
+        }
+
+        // 2. Check global setting
+        if self.agent.force_xml_tools {
+            return true;
+        }
+
+        // 3. Auto-detect: Ollama models often have unreliable native tool calling
+        // Models with :cloud suffix or certain patterns may work better with XML
+        if provider_name == "ollama" {
+            // For Ollama cloud models, default to XML dispatch
+            // Local models may support native tool calling better
+            if model.contains(":cloud") {
+                return true;
+            }
         }
 
         false
@@ -196,7 +230,17 @@ pub struct AgentConfig {
     pub max_tokens: u32,
     pub temperature: f32,
     pub max_iterations: u32,
+    /// How many recent messages to include in the LLM context window.
     pub memory_window: u32,
+    /// Message count threshold that triggers memory consolidation.
+    /// Lower than memory_window so consolidation runs before the context fills up.
+    pub consolidation_threshold: u32,
+    /// Force XML tool dispatch instead of native function calling.
+    /// Useful for models that accept tool definitions but don't reliably call them
+    /// (e.g., some Ollama models like GLM-5, Qwen2.5).
+    /// When true, tools are injected into the system prompt as XML and parsed
+    /// from the LLM's text response.
+    pub force_xml_tools: bool,
 }
 
 impl Default for AgentConfig {
@@ -207,6 +251,8 @@ impl Default for AgentConfig {
             temperature: 0.7,
             max_iterations: 20,
             memory_window: 50,
+            consolidation_threshold: 20,
+            force_xml_tools: false,
         }
     }
 }
@@ -220,6 +266,13 @@ pub struct ProviderConfig {
     pub api_base: Option<String>,
     #[serde(default)]
     pub extra_headers: HashMap<String, String>,
+    /// Force XML tool dispatch for this provider.
+    /// When set, overrides the global `agent.force_xml_tools` setting.
+    /// Useful for providers/models with unreliable native tool calling.
+    /// - `true`: Always use XML dispatch
+    /// - `false`: Always use native tool calling
+    /// - `None`: Use global setting or auto-detect
+    pub force_xml_tools: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -552,6 +605,291 @@ impl StorageConfig {
                 .join(&self.path[2..])
         } else {
             PathBuf::from(&self.path)
+        }
+    }
+}
+
+// --- Memory Config ---
+
+/// Memory retention and indexing configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemoryConfig {
+    /// Days to keep conversation messages before pruning (0 = never prune)
+    pub conversation_retention_days: u32,
+    /// Days to keep history entries (0 = never prune)
+    pub history_retention_days: u32,
+    /// Months after which daily files are archived (0 = never archive)
+    pub daily_archive_months: u32,
+    /// Enable automatic memory cleanup on startup
+    pub auto_cleanup: bool,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            conversation_retention_days: 30,   // Keep messages for 30 days
+            history_retention_days: 365,       // Keep history for 1 year
+            daily_archive_months: 3,           // Archive daily files after 3 months
+            auto_cleanup: false,               // Don't auto-cleanup by default
+        }
+    }
+}
+
+// --- Permissions Config ---
+
+/// Permission mode for file access control
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum PermissionMode {
+    /// No restrictions (except hardcoded blocks)
+    Open,
+    /// Only workspace + brain + memory directories
+    Workspace,
+    /// Full ACL-based control
+    Acl,
+}
+
+impl Default for PermissionMode {
+    fn default() -> Self {
+        Self::Workspace
+    }
+}
+
+/// Permission value - can be boolean or require confirmation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PermissionValue {
+    Bool(bool),
+    Confirm,
+}
+
+impl Default for PermissionValue {
+    fn default() -> Self {
+        Self::Bool(false)
+    }
+}
+
+impl PermissionValue {
+    pub fn is_allowed(&self) -> bool {
+        matches!(self, Self::Bool(true))
+    }
+
+    pub fn needs_confirmation(&self) -> bool {
+        matches!(self, Self::Confirm)
+    }
+}
+
+/// Permissions for a path (read/write/delete)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PathPermissions {
+    pub read: PermissionValue,
+    pub write: PermissionValue,
+    pub delete: PermissionValue,
+}
+
+impl Default for PathPermissions {
+    fn default() -> Self {
+        Self {
+            read: PermissionValue::Bool(true),
+            write: PermissionValue::Bool(false),
+            delete: PermissionValue::Bool(false),
+        }
+    }
+}
+
+/// Default permissions for unmatched paths
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DefaultPermissions {
+    pub read: bool,
+    pub write: bool,
+    pub delete: bool,
+}
+
+impl Default for DefaultPermissions {
+    fn default() -> Self {
+        Self {
+            read: true,
+            write: false,
+            delete: false,
+        }
+    }
+}
+
+/// ACL entry - matches a path pattern and defines permissions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AclEntry {
+    /// Glob pattern (supports **, *, ?)
+    pub path: String,
+    /// Permissions for matching paths
+    pub permissions: PathPermissions,
+    /// "allow" or "deny" - deny takes precedence
+    #[serde(default = "default_acl_type")]
+    pub entry_type: String,
+}
+
+fn default_acl_type() -> String {
+    "allow".to_string()
+}
+
+/// OS-specific shell profile
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OsShellProfile {
+    /// Allow risky commands (package removal, process killing, etc.)
+    pub allow_risky: bool,
+    /// Additional blocked commands beyond built-in deny lists
+    pub blocked_commands: Vec<String>,
+    /// If non-empty, only these commands are allowed (whitelist mode)
+    pub allowed_commands: Vec<String>,
+    /// Shell to use: "bash", "zsh", "sh", "powershell", "cmd"
+    pub shell: Option<String>,
+}
+
+impl OsShellProfile {
+    pub fn default_for(os: &str) -> Self {
+        Self {
+            allow_risky: false,
+            blocked_commands: match os {
+                "macos" => vec!["launchctl load".to_string(), "defaults delete".to_string()],
+                "linux" => vec!["systemctl --now disable".to_string()],
+                "windows" => vec!["reg delete".to_string(), "powershell -encodedcommand".to_string()],
+                _ => vec![],
+            },
+            allowed_commands: vec![],
+            shell: if os == "windows" { Some("powershell".to_string()) } else { None },
+        }
+    }
+}
+
+impl Default for OsShellProfile {
+    fn default() -> Self {
+        Self::default_for("")
+    }
+}
+
+/// Shell permissions for all platforms
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ShellPermissions {
+    pub macos: OsShellProfile,
+    pub linux: OsShellProfile,
+    pub windows: OsShellProfile,
+}
+
+impl Default for ShellPermissions {
+    fn default() -> Self {
+        Self {
+            macos: OsShellProfile::default_for("macos"),
+            linux: OsShellProfile::default_for("linux"),
+            windows: OsShellProfile::default_for("windows"),
+        }
+    }
+}
+
+impl ShellPermissions {
+    /// Get the profile for the current OS
+    pub fn current(&self) -> &OsShellProfile {
+        #[cfg(target_os = "macos")]
+        { &self.macos }
+        #[cfg(target_os = "linux")]
+        { &self.linux }
+        #[cfg(target_os = "windows")]
+        { &self.windows }
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        { &self.linux }
+    }
+}
+
+/// Root permissions configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PermissionsConfig {
+    /// Permission mode: "open", "workspace", or "acl"
+    pub mode: PermissionMode,
+    /// Default permissions for paths not matching any ACL
+    pub default: DefaultPermissions,
+    /// ACL entries (evaluated in order, first match wins)
+    pub acl: Vec<AclEntry>,
+    /// OS-specific shell permissions
+    pub shell: ShellPermissions,
+}
+
+impl Default for PermissionsConfig {
+    fn default() -> Self {
+        Self {
+            mode: PermissionMode::Workspace,
+            default: DefaultPermissions::default(),
+            acl: vec![
+                // Built-in protections (sensitive directories)
+                AclEntry {
+                    path: "~/.ssh/**".to_string(),
+                    permissions: PathPermissions {
+                        read: PermissionValue::Bool(false),
+                        write: PermissionValue::Bool(false),
+                        delete: PermissionValue::Bool(false),
+                    },
+                    entry_type: "deny".to_string(),
+                },
+                AclEntry {
+                    path: "~/.aws/**".to_string(),
+                    permissions: PathPermissions {
+                        read: PermissionValue::Bool(false),
+                        write: PermissionValue::Bool(false),
+                        delete: PermissionValue::Bool(false),
+                    },
+                    entry_type: "deny".to_string(),
+                },
+                AclEntry {
+                    path: "~/.gnupg/**".to_string(),
+                    permissions: PathPermissions {
+                        read: PermissionValue::Bool(false),
+                        write: PermissionValue::Bool(false),
+                        delete: PermissionValue::Bool(false),
+                    },
+                    entry_type: "deny".to_string(),
+                },
+                AclEntry {
+                    path: "~/.config/gcloud/**".to_string(),
+                    permissions: PathPermissions {
+                        read: PermissionValue::Bool(false),
+                        write: PermissionValue::Bool(false),
+                        delete: PermissionValue::Bool(false),
+                    },
+                    entry_type: "deny".to_string(),
+                },
+                // Always-allowed directories for agent operation
+                AclEntry {
+                    path: "~/.homun/brain/**".to_string(),
+                    permissions: PathPermissions {
+                        read: PermissionValue::Bool(true),
+                        write: PermissionValue::Bool(true),
+                        delete: PermissionValue::Bool(false),
+                    },
+                    entry_type: "allow".to_string(),
+                },
+                AclEntry {
+                    path: "~/.homun/memory/**".to_string(),
+                    permissions: PathPermissions {
+                        read: PermissionValue::Bool(true),
+                        write: PermissionValue::Bool(true),
+                        delete: PermissionValue::Bool(false),
+                    },
+                    entry_type: "allow".to_string(),
+                },
+                AclEntry {
+                    path: "~/.homun/workspace/**".to_string(),
+                    permissions: PathPermissions {
+                        read: PermissionValue::Bool(true),
+                        write: PermissionValue::Bool(true),
+                        delete: PermissionValue::Bool(true),
+                    },
+                    entry_type: "allow".to_string(),
+                },
+            ],
+            shell: ShellPermissions::default(),
         }
     }
 }
