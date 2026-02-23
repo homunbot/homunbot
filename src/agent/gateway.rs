@@ -314,7 +314,7 @@ impl Gateway {
                             match result {
                                 Ok(text) => text,
                                 Err(e) => {
-                                    tracing::error!(error = %e, "Agent error (streaming)");
+                                    tracing::error!(error = ?e, "Agent error (streaming)");
                                     format!("Sorry, I encountered an error: {e}")
                                 }
                             }
@@ -331,7 +331,7 @@ impl Gateway {
                             {
                                 Ok(text) => text,
                                 Err(e) => {
-                                    tracing::error!(error = %e, "Agent error");
+                                    tracing::error!(error = ?e, "Agent error");
                                     format!("Sorry, I encountered an error: {e}")
                                 }
                             }

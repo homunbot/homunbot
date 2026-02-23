@@ -321,12 +321,20 @@ impl AgentLoop {
                 temperature: self.config.agent.temperature,
             };
 
+            tracing::info!(
+                provider = %self.provider.name(),
+                model = %self.config.agent.model,
+                streaming = use_streaming,
+                "Calling LLM provider"
+            );
+
             let response = if use_streaming {
                 let tx = stream_tx.as_ref().unwrap().clone();
                 match self.provider.chat_stream(request, tx).await {
                     Ok(r) => r,
-                    Err(_e) => {
+                    Err(e) => {
                         // Fallback: if streaming fails, try non-streaming
+                        tracing::warn!(error = ?e, "Streaming failed, falling back to non-streaming");
                         let request2 = ChatRequest {
                             messages: messages.clone(),
                             tools: if xml_mode { Vec::new() } else { tool_defs.clone() },
@@ -335,7 +343,7 @@ impl AgentLoop {
                             temperature: self.config.agent.temperature,
                         };
                         self.provider.chat(request2).await
-                            .context("Failed to get response from LLM provider")?
+                            .context("Non-streaming fallback also failed")?
                     }
                 }
             } else {

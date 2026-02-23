@@ -75,7 +75,7 @@ fn default_api_base(provider_name: &str) -> String {
         "gemini"    => "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
         // Local providers
         "ollama"    => "http://localhost:11434/v1".to_string(),
-        "ollama_cloud" => "https://ollama.com".to_string(),
+        "ollama_cloud" => "https://ollama.com/v1".to_string(),
         "vllm"      => "http://localhost:8000/v1".to_string(),
         // Cloud providers (OpenAI-compatible)
         "deepseek"  => "https://api.deepseek.com/v1".to_string(),
@@ -244,11 +244,19 @@ impl Provider for OpenAICompatProvider {
             req = req.header(key, value);
         }
 
+        tracing::debug!(
+            provider = %self.provider_name,
+            url = %url,
+            model = %body.model,
+            has_tools = has_tools,
+            "Sending chat request to OpenAI-compatible provider"
+        );
+
         let response = req
             .json(&body)
             .send()
             .await
-            .with_context(|| format!("Failed to send request to {}", url))?;
+            .with_context(|| format!("Failed to send request to {} (provider: {})", url, self.provider_name))?;
 
         let status = response.status();
         let response_text = response.text().await
