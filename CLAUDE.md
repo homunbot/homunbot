@@ -37,7 +37,9 @@ homun/
 │   │   ├── web.rs              # Web search (Brave, Tavily)
 │   │   ├── message.rs          # Send message to user
 │   │   ├── spawn.rs            # Spawn subagent
-│   │   └── cron.rs             # Schedule recurring tasks
+│   │   ├── cron.rs             # Schedule recurring tasks
+│   │   ├── vault.rs            # Encrypted secret storage
+│   │   └── remember.rs         # Update USER.md memory
 │   ├── skills/
 │   │   ├── mod.rs
 │   │   ├── loader.rs           # Scan dirs, parse SKILL.md YAML frontmatter
@@ -62,7 +64,12 @@ homun/
 │   │   └── cron.rs             # Cron job scheduling (tokio-cron-scheduler)
 │   ├── storage/
 │   │   ├── mod.rs
-│   │   └── db.rs               # SQLite via sqlx (memory, sessions, cron jobs)
+│   │   ├── db.rs               # SQLite via sqlx (memory, sessions, cron jobs)
+│   │   └── secrets.rs          # Encrypted vault (AES-256-GCM, keychain)
+│   ├── utils/
+│   │   ├── mod.rs
+│   │   ├── retry.rs            # Network retry with exponential backoff
+│   │   └── reasoning_filter.rs # Strip thinking blocks from text channels
 │   ├── tui/
 │   │   ├── mod.rs
 │   │   ├── app.rs              # TUI application state + input handling
@@ -270,17 +277,26 @@ homun cron remove <id>       # Remove cron job
 
 ## Current Phase
 
-We are in **Phase 1: Core Foundation**. Focus on:
-1. Project scaffolding (Cargo.toml, module structure)
-2. Config loading (TOML)
-3. Provider trait + OpenAI-compatible implementation
-4. Basic agent loop (single iteration: user → LLM → response)
-5. CLI channel (interactive + one-shot)
-6. Shell tool (basic command execution)
-7. SQLite setup with migrations
+**Phase 6: UX & Web UI** (60% complete)
 
-Do NOT build channels (Telegram/WhatsApp), skills system, or cron scheduler yet.
-Build the core agent loop first, get it working end-to-end with CLI, then expand.
+### Completed
+- Core agent loop, providers, tools, channels
+- Memory system (consolidation, vector search, daily files)
+- Skills system (loader, installer, executor)
+- Web UI (dashboard, chat, skills, memory, vault, logs pages)
+
+### Remaining
+- Config wizard (guided setup)
+- Better error handling in UI
+- Real-time log streaming (SSE)
+- Token usage/cost tracking
+
+### Production Hardening (Phase 7 - Pending)
+- P0: Shell sandboxing, command allowlist, CI pipeline
+- P1: Model failover, Slack/Email channels, service install
+- P2: Browser automation, pre-built binaries, Docker
+
+See `PROJECT.md` for detailed phase breakdown and gap analysis vs competitors.
 
 ## Before Writing Code
 
@@ -373,6 +389,51 @@ Homun uses a **Semantic Markdown** format for user profile storage:
 - `~/.homun/MEMORY.md` — Long-term memory (consolidation)
 - `~/.homun/HISTORY.md` — Event log (consolidation)
 - `~/.homun/memory/YYYY-MM-DD.md` — Daily memory files
+
+---
+
+## Vault System (Encrypted Secrets)
+
+Homun usa un vault crittografato per la gestione sicura di secrets (API key, token, password).
+
+### Architettura Rapida
+```
+LLM Tool (vault) ──▶ VaultTool ──▶ EncryptedSecrets ──▶ ~/.homun/secrets.enc
+                                              │
+Gateway (channels) ──▶ Token Resolution ──────┘
+                                              │
+                     ┌────────────────────────┴────────────────────┐
+                     │             MASTER KEY STORAGE              │
+                     │  OS Keychain (preferito)  OR  File fallback │
+                     └─────────────────────────────────────────────┘
+```
+
+### Namespace Chiavi
+```
+provider.{name}.api_key  → API key per provider LLM
+channel.{name}.token     → Token per canale (telegram, discord)
+vault.{user_key}         → Secrets generici (via LLM tool)
+```
+
+### Configurazione
+```toml
+[channels.telegram]
+token = "***ENCRYPTED***"  # Marker: risolvi da vault
+```
+
+### Tool LLM
+- `vault store(key, value)` — Salva secret
+- `vault retrieve(key)` — Recupera secret
+- `vault list` — Lista chiavi
+- `vault delete(key)` — Elimina secret
+
+### Proprietà di Sicurezza
+- **AES-256-GCM** con nonce randomico
+- **OS Keychain** per master key (macOS/Linux/Windows)
+- **Permessi 0600** sui file
+- **Zeroize** della memoria dopo uso
+
+> **Documentazione completa**: `docs/security.md`
 
 ---
 

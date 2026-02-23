@@ -3,6 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use reqwest_011 as reqwest;  // Use reqwest 0.11 for teloxide compatibility
+use reqwest::Client;
 use teloxide::prelude::*;
 use teloxide::types::ParseMode;
 use teloxide::update_listeners::Polling;
@@ -31,15 +33,31 @@ impl TelegramChannel {
         inbound_tx: mpsc::Sender<InboundMessage>,
         outbound_rx: mpsc::Receiver<OutboundMessage>,
     ) -> Result<()> {
-        let bot = Bot::new(&self.config.token);
+        // Build HTTP client with extended timeout for slow connections
+        // Long polling waits up to 60s for updates, so we need at least 90s HTTP timeout
+        let http_client = Client::builder()
+            .timeout(Duration::from_secs(90))
+            .connect_timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to create HTTP client: {}", e))?;
+
+        let bot = Bot::with_client(&self.config.token, http_client);
 
         // Build allow-list as a HashSet for O(1) lookups
         let allow_from: HashSet<String> = self.config.allow_from.iter().cloned().collect();
         let allow_all = allow_from.is_empty();
 
+        // Log token status (masked for security)
+        let token_preview = if self.config.token.len() > 10 {
+            format!("{}...{}", &self.config.token[..6], &self.config.token[self.config.token.len()-4..])
+        } else {
+            "[too short]".to_string()
+        };
+
         tracing::info!(
             allow_from = ?self.config.allow_from,
             allow_all,
+            token_preview = %token_preview,
             "Telegram channel starting"
         );
 

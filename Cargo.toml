@@ -21,6 +21,8 @@ futures = "0.3"
 
 # HTTP
 reqwest = { version = "0.12", features = ["json", "stream"] }
+# Teloxide uses reqwest 0.11, so we need a separate instance for the Telegram client
+reqwest-011 = { package = "reqwest", version = "0.11", features = ["json"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -46,6 +48,9 @@ gray_matter = "0.2"
 
 # Regex (shell safety filters)
 regex = "1"
+
+# Hostname for runtime info
+hostname = "0.4"
 
 # Directories
 dirs = "6"
@@ -85,7 +90,7 @@ ratatui = "0.29"
 crossterm = "0.28"
 
 # File watcher (skill hot-reload)
-notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
+notify = "7"
 
 # MCP (Model Context Protocol) client
 rmcp = { version = "0.15", features = ["client", "transport-child-process"] }
@@ -96,12 +101,17 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 rust-embed = { version = "8", features = ["compression"] }
 mime_guess = "2"
+pulldown-cmark = "0.12"
 
 # Security - Encrypted secrets storage
 ring = "0.17"           # AES-256-GCM, HKDF
 base64 = "0.22"         # Encoding
 keyring = { version = "3", features = ["apple-native", "linux-native", "windows-native"] }  # OS keychain (macOS/Linux/Windows)
 zeroize = "1"           # Secure memory zeroing
+
+# Memory - Embedding + Vector search
+fastembed = "5"         # Local ONNX embedding (multilingual, 384-dim)
+usearch = "2"           # HNSW vector index (O(log N), 320KB)
 
 [dev-dependencies]
 tempfile = "3"
