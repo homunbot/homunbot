@@ -19,6 +19,7 @@ mod skills;
 mod storage;
 mod tools;
 mod tui;
+mod utils;
 mod web;
 
 use crate::channels::CliChannel;
@@ -28,7 +29,7 @@ use crate::session::SessionManager;
 use crate::storage::Database;
 use crate::tools::{
     CronTool, EditFileTool, ListDirTool, McpManager, MessageTool, ReadFileTool, ShellTool,
-    SpawnTool, ToolRegistry, WebFetchTool, WebSearchTool, WriteFileTool,
+    SpawnTool, ToolRegistry, VaultTool, RememberTool, WebFetchTool, WebSearchTool, WriteFileTool,
 };
 
 #[derive(Parser)]
@@ -75,6 +76,15 @@ enum Commands {
         #[command(subcommand)]
         command: McpCommands,
     },
+    /// Manage memory (reset, status)
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommands,
+    },
+    /// Stop the running gateway
+    Stop,
+    /// Restart the gateway (stop + start)
+    Restart,
 }
 
 #[derive(Subcommand)]
@@ -187,11 +197,23 @@ enum CronCommands {
     Remove { id: String },
 }
 
+#[derive(Subcommand)]
+enum MemoryCommands {
+    /// Show memory statistics
+    Status,
+    /// Reset all memory (conversations, facts, brain files)
+    Reset {
+        /// Skip confirmation prompt
+        #[arg(long)]
+        force: bool,
+    },
+}
+
 /// Create the LLM provider from config.
 ///
 /// Anthropic uses a native provider (different API format with content blocks
 /// and tool_use). All other providers use the OpenAI-compatible format.
-fn create_provider(config: &Config) -> Result<Box<dyn provider::Provider>> {
+fn create_provider(config: &Config) -> Result<Arc<dyn provider::Provider>> {
     let model = &config.agent.model;
     let (provider_name, provider_config) = config
         .resolve_provider(model)
@@ -249,9 +271,16 @@ fn create_provider(config: &Config) -> Result<Box<dyn provider::Provider>> {
             provider_config.api_base.as_deref(),
             provider_config.extra_headers.clone(),
         );
-        Ok(Box::new(provider))
+        Ok(Arc::new(provider))
+    } else if provider_name == "ollama" {
+        // Native Ollama provider (/api/chat — NDJSON, native tool calls, think control)
+        let provider = provider::OllamaProvider::new(
+            &api_key,
+            provider_config.api_base.as_deref(),
+        );
+        Ok(Arc::new(provider))
     } else {
-        // OpenAI-compatible provider (covers OpenRouter, Ollama, OpenAI, DeepSeek,
+        // OpenAI-compatible provider (covers OpenRouter, OpenAI, DeepSeek,
         // Groq, Gemini, Minimax, AiHubMix, DashScope, Moonshot, Zhipu, vLLM, custom)
         let provider = OpenAICompatProvider::from_config(
             provider_name,
@@ -259,7 +288,7 @@ fn create_provider(config: &Config) -> Result<Box<dyn provider::Provider>> {
             provider_config.api_base.as_deref(),
             provider_config.extra_headers.clone(),
         );
-        Ok(Box::new(provider))
+        Ok(Arc::new(provider))
     }
 }
 
@@ -274,17 +303,22 @@ fn create_tool_registry(config: &Config) -> ToolRegistry {
         None
     };
 
-    // Shell tool
-    registry.register(Box::new(ShellTool::new(
+    // Prepare permissions config for tools
+    let permissions = std::sync::Arc::new(config.permissions.clone());
+    let shell_permissions = std::sync::Arc::new(config.permissions.shell.clone());
+
+    // Shell tool with OS-specific permissions
+    registry.register(Box::new(ShellTool::with_permissions(
         config.tools.exec.timeout,
         config.tools.exec.restrict_to_workspace,
+        Some(shell_permissions),
     )));
 
-    // File tools (4 separate tools, following nanobot pattern)
-    registry.register(Box::new(ReadFileTool::new(allowed_dir.clone())));
-    registry.register(Box::new(WriteFileTool::new(allowed_dir.clone())));
-    registry.register(Box::new(EditFileTool::new(allowed_dir.clone())));
-    registry.register(Box::new(ListDirTool::new(allowed_dir)));
+    // File tools with ACL-based permissions
+    registry.register(Box::new(ReadFileTool::with_permissions(allowed_dir.clone(), permissions.clone())));
+    registry.register(Box::new(WriteFileTool::with_permissions(allowed_dir.clone(), permissions.clone())));
+    registry.register(Box::new(EditFileTool::with_permissions(allowed_dir.clone(), permissions.clone())));
+    registry.register(Box::new(ListDirTool::with_permissions(allowed_dir, permissions)));
 
     // Web search tool (Brave API)
     registry.register(Box::new(WebSearchTool::new(
@@ -295,12 +329,127 @@ fn create_tool_registry(config: &Config) -> ToolRegistry {
     // Web fetch tool
     registry.register(Box::new(WebFetchTool::new()));
 
+    // Vault tool (encrypted secrets storage)
+    registry.register(Box::new(VaultTool::new()));
+
+    // Remember tool (save personal information)
+    registry.register(Box::new(RememberTool::new()));
+
     tracing::info!(
         tools = registry.len(),
         "Tool registry initialized"
     );
 
     registry
+}
+
+/// Try to create a MemorySearcher (embedding engine + vector index).
+///
+/// Returns `None` if the embedding engine fails to initialize (e.g. ONNX model
+/// download fails). This keeps the agent functional without vector search.
+fn try_create_memory_searcher(db: Database) -> Option<agent::MemorySearcher> {
+    match agent::EmbeddingEngine::new() {
+        Ok(engine) => {
+            let searcher = agent::MemorySearcher::new(db, engine);
+            tracing::info!("Memory searcher initialized (vector + FTS5 hybrid search)");
+            Some(searcher)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to initialize embedding engine, vector search disabled");
+            None
+        }
+    }
+}
+
+/// Check if a process is alive by PID string.
+#[cfg(unix)]
+fn is_process_alive(pid_str: &str) -> bool {
+    pid_str
+        .parse::<u32>()
+        .ok()
+        .map(|pid| {
+            std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_process_alive(_pid_str: &str) -> bool {
+    // On Windows, assume alive if PID file exists (conservative)
+    true
+}
+
+/// Stop the running gateway via PID file. Returns true if a running process was stopped.
+fn stop_gateway() -> Result<bool> {
+    let pid_file = Config::data_dir().join("homun.pid");
+
+    let pid_str = match std::fs::read_to_string(&pid_file) {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("No gateway running (PID file not found)");
+            return Ok(false);
+        }
+    };
+
+    let pid = pid_str.trim();
+
+    if !is_process_alive(pid) {
+        eprintln!("Process {pid} not found (stale PID file). Cleaning up.");
+        let _ = std::fs::remove_file(&pid_file);
+        return Ok(false);
+    }
+
+    #[cfg(unix)]
+    {
+        let status = std::process::Command::new("kill")
+            .args(["-TERM", pid])
+            .status();
+        match status {
+            Ok(s) if s.success() => {
+                println!("Sent stop signal to gateway (PID {pid})");
+                // Wait for process to exit (poll for PID file removal, max 5s)
+                for _ in 0..50 {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    if !pid_file.exists() {
+                        println!("Gateway stopped.");
+                        return Ok(true);
+                    }
+                }
+                println!("Gateway may still be stopping (PID file not yet removed).");
+                Ok(true)
+            }
+            _ => {
+                eprintln!("Failed to stop process {pid}. Cleaning up stale PID file.");
+                let _ = std::fs::remove_file(&pid_file);
+                Ok(false)
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let status = std::process::Command::new("taskkill")
+            .args(["/PID", pid, "/F"])
+            .status();
+        match status {
+            Ok(s) if s.success() => {
+                println!("Gateway stopped (PID {pid}).");
+                let _ = std::fs::remove_file(&pid_file);
+                Ok(true)
+            }
+            _ => {
+                eprintln!("Failed to stop process {pid}. Cleaning up stale PID file.");
+                let _ = std::fs::remove_file(&pid_file);
+                Ok(false)
+            }
+        }
+    }
 }
 
 #[tokio::main]
@@ -352,6 +501,7 @@ async fn main() -> Result<()> {
             }
 
             let session_manager = SessionManager::new(db.clone());
+            let db_for_searcher = db.clone();
             let mut agent = agent::AgentLoop::new(
                 provider,
                 config,
@@ -359,6 +509,11 @@ async fn main() -> Result<()> {
                 tool_registry,
                 db,
             );
+
+            // Initialize memory searcher (vector + FTS5 hybrid search)
+            if let Some(searcher) = try_create_memory_searcher(db_for_searcher) {
+                agent.set_memory_searcher(searcher);
+            }
 
             // Load installed skills and inject into the agent's system prompt
             let mut skill_registry = skills::SkillRegistry::new();
@@ -390,6 +545,10 @@ async fn main() -> Result<()> {
         Commands::Gateway => {
             use std::sync::Arc;
             use crate::scheduler::CronScheduler;
+
+            // Write PID file so `homun stop` / `homun restart` can find us
+            let pid_file = Config::data_dir().join("homun.pid");
+            std::fs::write(&pid_file, std::process::id().to_string())?;
 
             let config = Config::load()?;
             let db = Database::open(&config.storage.resolved_path()).await?;
@@ -430,6 +589,8 @@ async fn main() -> Result<()> {
             let (tool_msg_tx, tool_msg_rx) = tokio::sync::mpsc::channel(100);
 
             // Create agent only if provider is available
+            let db_for_searcher = db.clone();
+            let db_for_web = db.clone();
             let mut agent = if let Some(p) = provider {
                 let mut a = agent::AgentLoop::new(
                     p,
@@ -439,6 +600,12 @@ async fn main() -> Result<()> {
                     db,
                 );
                 a.set_message_tx(tool_msg_tx);
+
+                // Initialize memory searcher (vector + FTS5 hybrid search)
+                if let Some(searcher) = try_create_memory_searcher(db_for_searcher) {
+                    a.set_memory_searcher(searcher);
+                }
+
                 Some(a)
             } else {
                 None
@@ -495,8 +662,9 @@ async fn main() -> Result<()> {
                 return Ok(());
             };
 
-            // Get the shared skills summary handle before wrapping agent in Arc
+            // Get the shared handles before wrapping agent in Arc
             let skills_summary_handle = agent.skills_summary_handle();
+            let (bootstrap_content_handle, bootstrap_files_handle) = agent.bootstrap_handles();
 
             let agent = Arc::new(agent);
 
@@ -520,8 +688,18 @@ async fn main() -> Result<()> {
             );
             let _watcher_handle = skill_watcher.start();
 
+            // Start bootstrap file hot-reload watcher (watches ~/.homun/brain/ and ~/.homun/)
+            // Now uses BOTH handles so the new modular prompt system stays synchronized across channels
+            let data_dir = config::Config::data_dir();
+            let bootstrap_watcher = agent::BootstrapWatcher::new(
+                bootstrap_content_handle,
+                bootstrap_files_handle,
+                data_dir,
+            );
+            let _bootstrap_watcher_handle = bootstrap_watcher.start();
+
             let mut gateway = agent::Gateway::new(
-                agent, config, session_manager, cron_scheduler, cron_event_rx,
+                agent, config, session_manager, cron_scheduler, cron_event_rx, db_for_web,
             );
             gateway.set_tool_message_rx(tool_msg_rx);
             gateway.run().await?;
@@ -659,6 +837,20 @@ async fn main() -> Result<()> {
             }
             println!("Config: {}", Config::default_path().display());
             println!("Data: {}", Config::data_dir().display());
+
+            // Check if gateway is running via PID file
+            let pid_file = Config::data_dir().join("homun.pid");
+            if let Ok(pid_str) = std::fs::read_to_string(&pid_file) {
+                let pid = pid_str.trim();
+                if is_process_alive(pid) {
+                    println!("Gateway: running (PID {pid})");
+                } else {
+                    println!("Gateway: not running (stale PID file)");
+                    let _ = std::fs::remove_file(&pid_file);
+                }
+            } else {
+                println!("Gateway: not running");
+            }
         }
         Commands::Skills { command } => match command {
             SkillsCommands::List => {
@@ -935,6 +1127,145 @@ async fn main() -> Result<()> {
                 }
             }
         },
+        Commands::Memory { command } => {
+            let data_dir = Config::data_dir();
+            match command {
+                MemoryCommands::Status => {
+                    println!("📊 Memory Status");
+                    println!("─────────────────────────────────");
+
+                    // Files
+                    let files = [
+                        ("MEMORY.md", data_dir.join("MEMORY.md")),
+                        ("HISTORY.md", data_dir.join("HISTORY.md")),
+                        ("brain/USER.md", data_dir.join("brain").join("USER.md")),
+                        ("brain/INSTRUCTIONS.md", data_dir.join("brain").join("INSTRUCTIONS.md")),
+                        ("brain/SOUL.md", data_dir.join("brain").join("SOUL.md")),
+                        ("memory.usearch", data_dir.join("memory.usearch")),
+                    ];
+
+                    for (name, path) in &files {
+                        if path.exists() {
+                            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                            println!("  ✅ {name:<28} ({size} bytes)");
+                        } else {
+                            println!("  ⬜ {name:<28} (not created)");
+                        }
+                    }
+
+                    // Daily memory files
+                    let memory_dir = data_dir.join("memory");
+                    let daily_count = std::fs::read_dir(&memory_dir)
+                        .map(|entries| entries.filter_map(|e| e.ok()).count())
+                        .unwrap_or(0);
+                    if daily_count > 0 {
+                        println!("  📁 memory/ (daily)          {daily_count} files");
+                    }
+
+                    // Database stats
+                    println!("\n📦 Database");
+                    let db_path = data_dir.join("homun.db");
+                    if db_path.exists() {
+                        let db = Database::open(&db_path).await?;
+
+                        let chunks: i64 = db.count_memory_chunks().await?;
+                        println!("  memory_chunks: {chunks} rows");
+
+                        let pool = db.pool();
+                        let sessions: i64 =
+                            sqlx::query_scalar::<_, i64>("SELECT COUNT(DISTINCT session_key) FROM messages")
+                                .fetch_one(pool)
+                                .await
+                                .unwrap_or(0);
+                        println!("  sessions: {sessions}");
+
+                        let messages: i64 =
+                            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM messages")
+                                .fetch_one(pool)
+                                .await
+                                .unwrap_or(0);
+                        println!("  messages: {messages}");
+                    } else {
+                        println!("  (no database found)");
+                    }
+                }
+                MemoryCommands::Reset { force } => {
+                    if !force {
+                        eprint!(
+                            "⚠️  This will delete ALL memory data:\n\
+                             \n\
+                             • Conversation history (all sessions)\n\
+                             • Long-term memory (MEMORY.md, memory chunks)\n\
+                             • Brain files (USER.md, INSTRUCTIONS.md, SOUL.md)\n\
+                             • Daily memory files\n\
+                             • Vector search index\n\
+                             \n\
+                             Type 'yes' to confirm: "
+                        );
+                        let mut input = String::new();
+                        std::io::stdin().read_line(&mut input)?;
+                        if input.trim() != "yes" {
+                            println!("Aborted.");
+                            return Ok(());
+                        }
+                    }
+
+                    println!("🗑  Resetting memory...");
+
+                    // 1. Delete files
+                    let files_to_delete = [
+                        data_dir.join("MEMORY.md"),
+                        data_dir.join("HISTORY.md"),
+                        data_dir.join("memory.usearch"),
+                        data_dir.join("brain").join("USER.md"),
+                        data_dir.join("brain").join("INSTRUCTIONS.md"),
+                        data_dir.join("brain").join("SOUL.md"),
+                    ];
+
+                    for path in &files_to_delete {
+                        if path.exists() {
+                            std::fs::remove_file(path)?;
+                            println!("  ✓ Deleted {}", path.strip_prefix(&data_dir)
+                                .unwrap_or(path).display());
+                        }
+                    }
+
+                    // 2. Delete daily memory directory
+                    let memory_dir = data_dir.join("memory");
+                    if memory_dir.exists() {
+                        std::fs::remove_dir_all(&memory_dir)?;
+                        println!("  ✓ Deleted memory/ (daily files)");
+                    }
+
+                    // 3. Clear database tables
+                    let db_path = data_dir.join("homun.db");
+                    if db_path.exists() {
+                        let db = Database::open(&db_path).await?;
+                        db.reset_all_memory().await?;
+                        println!("  ✓ Cleared database (memory_chunks, memories, messages)");
+                    }
+
+                    println!("\n✅ Memory reset complete. Restart the gateway to apply.");
+                }
+            }
+        }
+        Commands::Stop => {
+            stop_gateway()?;
+        }
+        Commands::Restart => {
+            let was_running = stop_gateway()?;
+            if was_running {
+                // Small delay to let the port release
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            // Re-exec ourselves with `gateway` argument
+            let exe = std::env::current_exe().context("Failed to find homun binary")?;
+            let status = std::process::Command::new(exe)
+                .arg("gateway")
+                .status()
+                .context("Failed to start gateway")?;
+            std::process::exit(status.code().unwrap_or(1));
+        }
     }
 
     Ok(())

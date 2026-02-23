@@ -1,13 +1,16 @@
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use teloxide::prelude::*;
 use teloxide::types::ParseMode;
+use teloxide::update_listeners::Polling;
 use tokio::sync::{mpsc, Mutex};
 
 use crate::bus::{InboundMessage, OutboundMessage};
 use crate::config::TelegramConfig;
+use crate::utils::set_network_online;
 
 /// Telegram channel — long polling bot via teloxide.
 ///
@@ -59,14 +62,49 @@ impl TelegramChannel {
             },
         );
 
+        // Configure polling with:
+        // - Extended timeout (60s) for slow connections
+        // - Drop pending updates on restart
+        // - Custom exponential backoff (2s to 120s)
+        let bot_for_listener = bot.clone();
+        let listener = Polling::builder(bot_for_listener)
+            .timeout(Duration::from_secs(60))
+            .drop_pending_updates()
+            .backoff_strategy(|error_count| {
+                // Exponential backoff: 2s, 4s, 8s, 16s, 32s, 64s, 120s (capped)
+                let base = 2u64;
+                let delay = base.saturating_pow(error_count.min(6)); // Cap at 64s
+                Duration::from_secs(delay.min(120)) // Max 2 minutes
+            })
+            .build();
+
         let mut dispatcher = Dispatcher::builder(bot, handler)
             .dependencies(dptree::deps![inbound_tx])
             .default_handler(|_upd| async {})
             .build();
 
+        // Custom error handler that tracks network state
+        let error_handler = Arc::new(|error: teloxide::RequestError| {
+            let err_str = error.to_string().to_lowercase();
+            if err_str.contains("timeout")
+                || err_str.contains("connection")
+                || err_str.contains("network")
+                || err_str.contains("timedout")
+            {
+                set_network_online(false);
+                tracing::warn!(
+                    error = %error,
+                    "Telegram network error - will retry with exponential backoff"
+                );
+            } else {
+                tracing::error!(error = %error, "Telegram API error");
+            }
+            async {}
+        });
+
         // Run both loops concurrently
         tokio::select! {
-            _ = dispatcher.dispatch() => {
+            _ = dispatcher.dispatch_with_listener(listener, error_handler) => {
                 tracing::info!("Telegram dispatcher stopped");
             }
             result = outbound_handle => {

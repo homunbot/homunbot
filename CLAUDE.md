@@ -296,3 +296,127 @@ For the skills system specifically:
 3. The SKILL.md format uses YAML frontmatter — parse with `gray_matter` crate
 
 This is a **Rust rewrite**, not a blind port. Replicate the logic, improve the implementation.
+
+---
+
+## Competitor Reference Projects
+
+When implementing features, **always check how competitors do it first**:
+
+### OpenClaw (TypeScript/Node.js)
+- **Repo**: https://github.com/openclaw/openclaw
+- **Docs**: https://docs.openclaw.ai/
+- **Local reference**: `/Users/fabio/Projects/Homunbot/openclaw/` (if cloned)
+- **Analysis doc**: `docs/competitors/openclaw.md`
+- **Key strengths**: 30+ channels, Web UI, Lobster workflows, ClawHub marketplace
+- **Memory format**: `~/.openclaw/MEMORY.md` + `memory/YYYY-MM-DD.md` daily files
+- **Bootstrap files**: `SOUL.md`, `AGENTS.md`, `TOOLS.md`, `MEMORY.md`
+
+### ZeroClaw (Rust)
+- **Repo**: https://github.com/zeroclaw-labs/zeroclaw
+- **Docs**: https://zeroclaw.net/
+- **Local reference**: `/Users/fabio/Projects/Homunbot/zeroclaw/` (if cloned)
+- **Analysis doc**: `docs/competitors/zeroclaw.md`
+- **Key strengths**: Binary ~3-8MB, <5MB RAM, HNSW vector search, FTS5, AIEOS identity
+- **Memory**: SQLite BLOBs for vectors + FTS5 for keyword search, hybrid scoring 0.7/0.3
+- **Identity format**: AIEOS v1.1 (JSON/Markdown)
+
+### Comparison Doc
+- Full comparison: `docs/competitors/COMPARISON.md`
+- Memory architecture: `docs/competitors/memory-architecture.md`
+
+---
+
+## Memory System (USER.md Format)
+
+Homun uses a **Semantic Markdown** format for user profile storage:
+
+```markdown
+# User Profile
+> Last updated: YYYY-MM-DD HH:MM
+
+## Identity
+<!-- Basic facts: name, birth, residence, profession, health -->
+- nome: Fabio Cantone
+- data_nascita: 16/07/1976
+- professione: Programmatore
+
+## Family
+<!-- Family relationships and loved ones -->
+- compagna: Felicia (chiamata "Felix")
+- figlio_maschio: Claudio (nato 11/10/2008)
+
+## Preferences
+<!-- Tastes, hobbies, interests, style -->
+- hobby: cucinare, bici, mare
+
+## Contacts
+<!-- Contact information: email, phone, addresses -->
+- email: fabio@example.com
+
+## CustomSection
+<!-- LLM can create new sections dynamically -->
+- custom_key: value
+```
+
+### Rules
+- **Sezioni di default**: Identity, Family, Preferences, Contacts, Context
+- **Sezioni dinamiche**: L'LLM può creare nuove sezioni con `## NuovaSezione`
+- **Formato**: `- key: value` per fatti semplici, prose narrative per fatti complessi
+- **Secrets**: Usare `vault://key_name` invece del valore reale
+- **Lingua**: Language-agnostic — il contenuto può essere in qualsiasi lingua
+- **Chi scrive**: **Solo il `remember` tool** — consolidation scrive solo MEMORY.md
+
+### File Locations
+- `~/.homun/brain/USER.md` — User profile (remember tool)
+- `~/.homun/brain/INSTRUCTIONS.md` — Learned instructions (consolidation)
+- `~/.homun/MEMORY.md` — Long-term memory (consolidation)
+- `~/.homun/HISTORY.md` — Event log (consolidation)
+- `~/.homun/memory/YYYY-MM-DD.md` — Daily memory files
+
+---
+
+## Network Retry System
+
+Homun implements a generic retry system in `src/utils/retry.rs`:
+
+### Key Components
+- `retry_with_backoff()` — Retry automatico con exponential backoff
+- `RetryConfig` — Configurazioni: `default()`, `fast()`, `patient()`, `persistent()`
+- `is_network_online()` / `set_network_online()` — Stato globale della rete
+
+### Error Classification
+- **WaitForNetwork**: timeout, connection reset, DNS errors → set network offline
+- **Retry**: 429 rate limit, 5xx server errors → retry with backoff
+- **Fail**: 400, 401, 403, 404 client errors → fail immediately
+
+### Telegram Channel Configuration
+- Timeout: 60 seconds (long polling)
+- Backoff: 2s → 4s → 8s → 16s → 32s → 64s → 120s (capped)
+- Drops pending updates on restart
+- Updates global network state on errors
+
+---
+
+## Project Structure Notes
+
+### Important Directories
+- `~/.homun/` — Data directory (config, db, memory files)
+- `~/.homun/brain/` — Agent-writable memory (USER.md, INSTRUCTIONS.md)
+- `~/.homun/skills/` — User-installed skills
+- `./skills/` — Project-local skills
+- `migrations/` — SQLite migrations (auto-applied)
+
+### Hot-Reload
+- `BootstrapWatcher` monitors `~/.homun/brain/` for changes to USER.md, SOUL.md, etc.
+- `SkillWatcher` monitors skills directories for changes
+- Changes are picked up within 200ms via `notify` crate
+
+---
+
+## Git Commit Guidelines
+
+- Use conventional commit format: `type(scope): description`
+- Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
+- Write descriptive commit messages in Italian or English
+- Do NOT add Claude as co-author
