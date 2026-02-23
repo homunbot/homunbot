@@ -1074,6 +1074,7 @@ struct AllModelsResponse {
     models: Vec<ModelEntry>,
     current: String,
     ollama_configured: bool,
+    ollama_cloud_configured: bool,
 }
 
 async fn list_all_models(State(state): State<Arc<AppState>>) -> Json<AllModelsResponse> {
@@ -1083,6 +1084,7 @@ async fn list_all_models(State(state): State<Arc<AppState>>) -> Json<AllModelsRe
 
     let mut models = Vec::new();
     let mut ollama_configured = false;
+    let mut ollama_cloud_configured = false;
 
     for (name, pc) in config.providers.iter() {
         // Check if configured
@@ -1099,9 +1101,13 @@ async fn list_all_models(State(state): State<Arc<AppState>>) -> Json<AllModelsRe
             continue;
         }
 
-        // Local providers: skip from hardcoded list (JS fetches them live)
+        // Local/cloud providers with dynamic model lists: skip hardcoded, JS fetches live
         if name == "ollama" {
             ollama_configured = true;
+            continue;
+        }
+        if name == "ollama_cloud" {
+            ollama_cloud_configured = true;
             continue;
         }
         if name == "vllm" || name == "custom" {
@@ -1124,6 +1130,7 @@ async fn list_all_models(State(state): State<Arc<AppState>>) -> Json<AllModelsRe
         models,
         current: current_model,
         ollama_configured,
+        ollama_cloud_configured,
     })
 }
 

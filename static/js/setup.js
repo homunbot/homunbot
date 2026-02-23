@@ -109,10 +109,25 @@ async function loadModelDropdown() {
                     groups['ollama'] = ollamaData.models.map(m => ({
                         provider: 'ollama',
                         model: 'ollama/' + m.name,
-                        label: 'Ollama / ' + m.name + ' (' + m.size + ')',
+                        label: 'Ollama (local) / ' + m.name + ' (' + m.size + ')',
                     }));
                 }
             } catch (_) { /* Ollama might not be running */ }
+        }
+
+        // If Ollama Cloud is configured, fetch live models
+        if (data.ollama_cloud_configured) {
+            try {
+                const cloudResp = await fetch('/api/v1/providers/ollama-cloud/models');
+                const cloudData = await cloudResp.json();
+                if (cloudData.ok && cloudData.models.length > 0) {
+                    groups['ollama_cloud'] = cloudData.models.map(m => ({
+                        provider: 'ollama_cloud',
+                        model: 'ollama_cloud/' + m.id,
+                        label: 'Ollama Cloud / ' + m.id,
+                    }));
+                }
+            } catch (_) { /* Ollama Cloud might not be reachable */ }
         }
 
         // If no models from any source, show placeholder
@@ -174,9 +189,14 @@ if (modelCustom) {
 function providerDisplayName(name) {
     const map = {
         anthropic: 'Anthropic', openai: 'OpenAI', openrouter: 'OpenRouter',
-        gemini: 'Gemini', deepseek: 'DeepSeek', groq: 'Groq', ollama: 'Ollama (local)',
+        gemini: 'Gemini', deepseek: 'DeepSeek', groq: 'Groq',
+        ollama: 'Ollama (local)', ollama_cloud: 'Ollama Cloud',
+        mistral: 'Mistral', xai: 'xAI', together: 'Together',
+        fireworks: 'Fireworks', perplexity: 'Perplexity', cohere: 'Cohere',
+        venice: 'Venice', aihubmix: 'AiHubMix', vercel: 'Vercel',
+        cloudflare: 'Cloudflare', copilot: 'Copilot', bedrock: 'Bedrock',
         moonshot: 'Moonshot', zhipu: 'Zhipu', dashscope: 'DashScope',
-        minimax: 'MiniMax', aihubmix: 'AiHubMix',
+        minimax: 'MiniMax', vllm: 'vLLM', custom: 'Custom',
     };
     return map[name] || name;
 }
