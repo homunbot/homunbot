@@ -942,3 +942,95 @@ if (chModal && channelCards.length > 0) {
         });
     }
 }
+
+
+// ═══ Memory Configuration Form ═══
+
+const memoryForm = document.getElementById('memory-form');
+const btnRunCleanup = document.getElementById('btn-run-cleanup');
+const memoryResult = document.getElementById('memory-result');
+
+if (memoryForm) {
+    memoryForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var btn = memoryForm.querySelector('button[type="submit"]');
+        var originalText = btn.textContent;
+        btn.textContent = 'Saving…';
+        btn.disabled = true;
+        memoryResult.textContent = '';
+        memoryResult.className = 'form-hint';
+
+        var form = new FormData(memoryForm);
+        var autoCleanup = form.get('auto_cleanup') === 'on';
+
+        // Convert to strings since ConfigPatch expects String type
+        var patches = [
+            { key: 'memory.conversation_retention_days', value: String(form.get('conversation_retention_days')) },
+            { key: 'memory.history_retention_days', value: String(form.get('history_retention_days')) },
+            { key: 'memory.daily_archive_months', value: String(form.get('daily_archive_months')) },
+            { key: 'memory.auto_cleanup', value: String(autoCleanup) },
+        ];
+
+        try {
+            for (var i = 0; i < patches.length; i++) {
+                var patch = patches[i];
+                var resp = await fetch('/api/v1/config', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(patch),
+                });
+                if (!resp.ok) {
+                    console.error('Config patch failed:', patch.key, resp.status);
+                    throw new Error('Failed to save ' + patch.key);
+                }
+            }
+            memoryResult.textContent = '✓ Settings saved to config.toml';
+            memoryResult.className = 'form-hint pairing-status success';
+            btn.textContent = 'Saved ✓';
+            setTimeout(function() {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }, 2000);
+        } catch (err) {
+            memoryResult.textContent = '✗ ' + (err.message || 'Failed to save settings');
+            memoryResult.className = 'form-hint pairing-status error';
+            btn.textContent = 'Error!';
+            setTimeout(function() {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }, 2000);
+        }
+    });
+}
+
+if (btnRunCleanup) {
+    btnRunCleanup.addEventListener('click', async function() {
+        btnRunCleanup.textContent = 'Running…';
+        btnRunCleanup.disabled = true;
+        memoryResult.textContent = '';
+        memoryResult.className = 'form-hint';
+
+        try {
+            var resp = await fetch('/api/v1/memory/cleanup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({}),
+            });
+            var data = await resp.json();
+
+            if (data.ok) {
+                memoryResult.textContent = '✓ ' + data.message;
+                memoryResult.className = 'form-hint pairing-status success';
+            } else {
+                memoryResult.textContent = '✗ Cleanup failed';
+                memoryResult.className = 'form-hint pairing-status error';
+            }
+        } catch (err) {
+            memoryResult.textContent = '✗ Request failed';
+            memoryResult.className = 'form-hint pairing-status error';
+        }
+
+        btnRunCleanup.textContent = 'Run Cleanup Now';
+        btnRunCleanup.disabled = false;
+    });
+}

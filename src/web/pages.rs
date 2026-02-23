@@ -277,6 +277,41 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                         {channels_html}
                     </div>
                 </section>
+
+                <section class="section">
+                    <h2>Memory</h2>
+                    <form class="form" id="memory-form">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Conversation Retention (days)</label>
+                                <input type="number" name="conversation_retention_days" value="{conversation_retention_days}" min="1" max="365" class="input">
+                                <div class="form-hint">Delete chat messages older than this many days.</div>
+                            </div>
+                            <div class="form-group">
+                                <label>History Retention (days)</label>
+                                <input type="number" name="history_retention_days" value="{history_retention_days}" min="1" max="3650" class="input">
+                                <div class="form-hint">Delete memory chunks older than this many days.</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Daily Archive Months</label>
+                                <input type="number" name="daily_archive_months" value="{daily_archive_months}" min="1" max="24" class="input">
+                                <div class="form-hint">Group daily logs by month in the UI.</div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="toggle-label-inline">
+                                <input type="checkbox" name="auto_cleanup" class="toggle-input" {auto_cleanup_checked}>
+                                <span>Auto-cleanup on startup</span>
+                            </label>
+                            <div class="form-hint">Automatically run memory cleanup when gateway starts.</div>
+                        </div>
+                        <div class="form-row">
+                            <button type="submit" class="btn btn-primary">Save Memory Config</button>
+                            <button type="button" class="btn btn-secondary" id="btn-run-cleanup">Run Cleanup Now</button>
+                        </div>
+                        <div id="memory-result" class="form-hint" style="margin-top:10px;"></div>
+                    </form>
+                </section>
             </div>
         </main>
 
@@ -395,6 +430,10 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
         max_tokens = config.agent.max_tokens,
         temperature = config.agent.temperature,
         max_iterations = config.agent.max_iterations,
+        conversation_retention_days = config.memory.conversation_retention_days,
+        history_retention_days = config.memory.history_retention_days,
+        daily_archive_months = config.memory.daily_archive_months,
+        auto_cleanup_checked = if config.memory.auto_cleanup { "checked" } else { "" },
         providers_html = providers_html,
         channels_html = build_channels_cards_html(&config),
     );

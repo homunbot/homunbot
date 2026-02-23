@@ -71,6 +71,30 @@ impl SkillInstaller {
         let skill_md_content = self.fetch_file(&owner, &repo, &branch, "SKILL.md").await
             .with_context(|| format!("No SKILL.md found in {}/{}. Is this an Agent Skill?", owner, repo))?;
 
+        // Security scan before installing
+        let security_report = super::security::scan_skill_content(&skill_md_content);
+        if security_report.is_blocked() {
+            tracing::warn!(
+                owner = %owner,
+                repo = %repo,
+                "Skill blocked by security check"
+            );
+            anyhow::bail!(
+                "Skill '{}/{}' blocked by security scan:\n{}",
+                owner,
+                repo,
+                security_report.summary()
+            );
+        }
+        if !security_report.warnings.is_empty() {
+            tracing::info!(
+                owner = %owner,
+                repo = %repo,
+                warnings = security_report.warnings.len(),
+                "Skill has security warnings (non-blocking)"
+            );
+        }
+
         let (meta, _body) = parse_skill_md_public(&skill_md_content)
             .with_context(|| "Failed to parse SKILL.md frontmatter")?;
 

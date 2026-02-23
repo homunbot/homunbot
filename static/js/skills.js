@@ -1,5 +1,5 @@
 // Homun — Skills Manager
-// Search ClawHub & GitHub, install, remove skills
+// Search ClawHub, GitHub & Open Skills, install, remove, detail modal
 
 (function() {
     'use strict';
@@ -13,6 +13,16 @@
     var installedGrid = document.getElementById('installed-grid');
     var installedCount = document.getElementById('installed-count');
     var toastEl = document.getElementById('skill-toast');
+    var catalogStatsEl = document.getElementById('catalog-stats');
+
+    // Modal refs
+    var modalOverlay = document.getElementById('skill-modal-overlay');
+    var modalTitle = document.getElementById('modal-title');
+    var modalSubtitle = document.getElementById('modal-subtitle');
+    var modalClose = document.getElementById('modal-close');
+    var modalMeta = document.getElementById('modal-meta');
+    var modalContent = document.getElementById('modal-content');
+    var modalFooter = document.getElementById('modal-footer');
 
     // Track installed skill names for cross-referencing search results
     var installedNames = new Set();
@@ -20,6 +30,88 @@
         var name = card.getAttribute('data-skill-name');
         if (name) installedNames.add(name);
     });
+
+    // --- Catalog cache check ---
+    var catalogBanner = document.getElementById('catalog-banner');
+    var catalogBar = document.getElementById('catalog-bar');
+    var catalogTitle = document.getElementById('catalog-banner-title');
+    var catalogDetail = document.getElementById('catalog-banner-detail');
+
+    function checkCatalog() {
+        fetch('/api/v1/skills/catalog/status')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data.cached || data.stale) {
+                    catalogBanner.style.display = 'block';
+                    catalogTitle.textContent = data.cached
+                        ? 'Updating skill catalog...'
+                        : 'Downloading skill catalog...';
+                    catalogDetail.textContent = data.cached
+                        ? 'Refreshing ' + data.skill_count + ' skills from ClawHub.'
+                        : 'First time setup — indexing 9,000+ skills from ClawHub.';
+                    var progress = 0;
+                    var barInterval = setInterval(function() {
+                        progress = Math.min(progress + 2, 90);
+                        catalogBar.style.width = progress + '%';
+                    }, 1000);
+                    fetch('/api/v1/skills/catalog/refresh', { method: 'POST' })
+                        .then(function(r) { return r.json(); })
+                        .then(function(result) {
+                            clearInterval(barInterval);
+                            catalogBar.style.width = '100%';
+                            catalogBanner.classList.add('catalog-banner--done');
+                            catalogTitle.textContent = 'Catalog ready';
+                            catalogDetail.textContent = result.skill_count + ' skills indexed.';
+                            setTimeout(function() {
+                                catalogBanner.style.display = 'none';
+                                catalogBanner.classList.remove('catalog-banner--done');
+                            }, 2000);
+                            // Refresh catalog stats after refresh
+                            fetchCatalogStats();
+                        })
+                        .catch(function() {
+                            clearInterval(barInterval);
+                            catalogTitle.textContent = 'Catalog update failed';
+                            catalogDetail.textContent = 'Search may be slower. Try again later.';
+                            setTimeout(function() { catalogBanner.style.display = 'none'; }, 4000);
+                        });
+                }
+            })
+            .catch(function() { /* silently ignore */ });
+    }
+    checkCatalog();
+
+    // --- Catalog source stats (under search bar) ---
+    function fetchCatalogStats() {
+        if (!catalogStatsEl) return;
+        fetch('/api/v1/skills/catalog/counts')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                catalogStatsEl.textContent = '';
+                var parts = [];
+                if (data.clawhub > 0) parts.push({ source: 'clawhub', count: data.clawhub });
+                if (data.openskills > 0) parts.push({ source: 'openskills', count: data.openskills });
+                // GitHub: live search (no cached catalog)
+                parts.push({ source: 'github', count: -1 });
+
+                var prefix = el('span', null, 'Search across ');
+                catalogStatsEl.appendChild(prefix);
+
+                parts.forEach(function(p, i) {
+                    if (i > 0) catalogStatsEl.appendChild(document.createTextNode('  ·  '));
+                    var stat = el('span', 'catalog-stat');
+                    var dot = el('span', 'catalog-stat-dot catalog-stat-dot--' + p.source);
+                    stat.appendChild(dot);
+                    var label = p.count > 0
+                        ? formatNum(p.count) + ' ' + sourceLabel(p.source)
+                        : sourceLabel(p.source) + (p.count < 0 ? ' (live)' : '');
+                    stat.appendChild(document.createTextNode(label));
+                    catalogStatsEl.appendChild(stat);
+                });
+            })
+            .catch(function() { /* silently ignore */ });
+    }
+    fetchCatalogStats();
 
     // --- Debounce helper ---
     var debounceTimer = null;
@@ -58,6 +150,13 @@
         return e;
     }
 
+    /** Map source id to display label */
+    function sourceLabel(src) {
+        if (src === 'clawhub') return 'ClawHub';
+        if (src === 'openskills') return 'Open Skills';
+        return 'GitHub';
+    }
+
     function svgStar() {
         var s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         s.setAttribute('viewBox', '0 0 16 16');
@@ -88,7 +187,6 @@
                 hideResults();
                 return;
             }
-            // If it looks like a direct slug (contains /), don't auto-search
             if (q.indexOf('/') !== -1) return;
             debouncedSearch(q);
         });
@@ -98,8 +196,6 @@
             e.preventDefault();
             var q = searchInput.value.trim();
             if (!q) return;
-
-            // Direct install if it contains /
             if (q.indexOf('/') !== -1) {
                 directInstall(q);
             } else if (q.length >= 2) {
@@ -115,7 +211,6 @@
 
     async function doSearch(query) {
         if (searchSpinner) searchSpinner.style.display = 'block';
-
         try {
             var res = await fetch('/api/v1/skills/search?q=' + encodeURIComponent(query));
             var results = await res.json();
@@ -129,59 +224,46 @@
 
     function renderSearchResults(results) {
         if (!searchGrid || !searchSection) return;
-
         searchGrid.textContent = '';
         searchSection.style.display = 'block';
-
-        if (searchCount) {
-            searchCount.textContent = results.length + ' found';
-        }
+        if (searchCount) searchCount.textContent = results.length + ' found';
 
         if (results.length === 0) {
             var empty = el('div', 'empty-state');
-            var p = el('p', null, 'No skills found. Try a different search term.');
-            empty.appendChild(p);
+            empty.appendChild(el('p', null, 'No skills found. Try a different search term.'));
             searchGrid.appendChild(empty);
             return;
         }
 
         results.forEach(function(skill) {
-            var card = buildSearchCard(skill);
-            searchGrid.appendChild(card);
+            searchGrid.appendChild(buildSearchCard(skill));
         });
     }
 
     function buildSearchCard(skill) {
         var card = el('div', 'skill-card');
 
-        // Determine display name: strip "clawhub:" prefix for display
         var displayName = skill.name;
-        if (displayName.indexOf('clawhub:') === 0) {
-            displayName = displayName.substring(8);
-        }
+        if (displayName.indexOf('clawhub:') === 0) displayName = displayName.substring(8);
+        if (displayName.indexOf('openskills:') === 0) displayName = displayName.substring(11);
 
-        // Check if already installed — match by the last segment (skill name)
         var skillBaseName = displayName.split('/').pop() || displayName;
         var isInstalled = installedNames.has(skillBaseName);
 
         // Header
         var header = el('div', 'skill-card-header');
-        var nameEl = el('div', 'skill-name', displayName);
-        header.appendChild(nameEl);
-
+        header.appendChild(el('div', 'skill-name', displayName));
         var badge = el('span', 'skill-source-badge skill-source-badge--' + skill.source);
-        badge.textContent = skill.source === 'clawhub' ? 'ClawHub' : 'GitHub';
+        badge.textContent = sourceLabel(skill.source);
         header.appendChild(badge);
         card.appendChild(header);
 
         // Description
-        var desc = el('div', 'skill-desc', skill.description || 'No description');
-        card.appendChild(desc);
+        card.appendChild(el('div', 'skill-desc', skill.description || 'No description'));
 
         // Meta row (stats)
         if (skill.stars > 0 || skill.downloads > 0) {
             var meta = el('div', 'skill-meta');
-
             if (skill.stars > 0) {
                 var starSpan = el('span', 'skill-stat');
                 starSpan.appendChild(svgStar());
@@ -194,34 +276,38 @@
                 dlSpan.appendChild(document.createTextNode(' ' + formatNum(skill.downloads)));
                 meta.appendChild(dlSpan);
             }
-
             card.appendChild(meta);
         }
 
         // Actions
         var actions = el('div', 'skill-card-actions');
-
         if (isInstalled) {
-            var installedBtn = el('button', 'btn btn-sm btn-installed', 'Installed');
-            actions.appendChild(installedBtn);
+            actions.appendChild(el('button', 'btn btn-sm btn-installed', 'Installed'));
         } else {
             var installBtn = el('button', 'btn btn-sm btn-primary', 'Install');
-            installBtn.addEventListener('click', function() {
+            installBtn.addEventListener('click', function(e) {
+                e.stopPropagation();
                 installSkill(skill.name, installBtn, card);
             });
             actions.appendChild(installBtn);
         }
-
         card.appendChild(actions);
+
+        // Click card to show detail
+        card.addEventListener('click', function() {
+            if (isInstalled) {
+                openInstalledDetail(skillBaseName);
+            } else {
+                openSearchDetail(skill, displayName);
+            }
+        });
+
         return card;
     }
 
     // --- Install ---
     async function installSkill(source, btn, card) {
-        if (btn) {
-            btn.textContent = 'Installing...';
-            btn.disabled = true;
-        }
+        if (btn) { btn.textContent = 'Installing...'; btn.disabled = true; }
         if (card) card.classList.add('skill-card--installing');
 
         try {
@@ -231,44 +317,28 @@
                 body: JSON.stringify({ source: source }),
             });
             var data = await res.json();
-
             if (data.ok) {
                 showToast('Installed: ' + data.name, 'success');
                 installedNames.add(data.name);
-
-                // Update button to "Installed"
-                if (btn) {
-                    btn.textContent = 'Installed';
-                    btn.className = 'btn btn-sm btn-installed';
-                    btn.disabled = true;
-                }
+                if (btn) { btn.textContent = 'Installed'; btn.className = 'btn btn-sm btn-installed'; btn.disabled = true; }
                 if (card) card.classList.remove('skill-card--installing');
-
-                // Refresh installed section
                 refreshInstalled();
             } else {
                 showToast(data.message || 'Install failed', 'error');
-                if (btn) {
-                    btn.textContent = 'Install';
-                    btn.disabled = false;
-                }
+                if (btn) { btn.textContent = 'Install'; btn.disabled = false; }
                 if (card) card.classList.remove('skill-card--installing');
             }
         } catch (err) {
             showToast('Install failed: ' + err.message, 'error');
-            if (btn) {
-                btn.textContent = 'Install';
-                btn.disabled = false;
-            }
+            if (btn) { btn.textContent = 'Install'; btn.disabled = false; }
             if (card) card.classList.remove('skill-card--installing');
         }
     }
 
-    // --- Direct install (from search bar with owner/repo) ---
+    // --- Direct install ---
     async function directInstall(slug) {
         if (searchSpinner) searchSpinner.style.display = 'block';
         searchInput.disabled = true;
-
         try {
             var res = await fetch('/api/v1/skills/install', {
                 method: 'POST',
@@ -276,7 +346,6 @@
                 body: JSON.stringify({ source: slug }),
             });
             var data = await res.json();
-
             if (data.ok) {
                 showToast('Installed: ' + data.name, 'success');
                 installedNames.add(data.name);
@@ -308,50 +377,36 @@
     }
 
     async function removeSkill(name, btn) {
-        if (btn) {
-            btn.textContent = 'Removing...';
-            btn.disabled = true;
-        }
-
+        if (btn) { btn.textContent = 'Removing...'; btn.disabled = true; }
         try {
-            var res = await fetch('/api/v1/skills/' + encodeURIComponent(name), {
-                method: 'DELETE',
-            });
+            var res = await fetch('/api/v1/skills/' + encodeURIComponent(name), { method: 'DELETE' });
             var data = await res.json();
-
             if (data.ok) {
                 showToast(data.message, 'success');
                 installedNames.delete(name);
-
-                // Remove card with fade
                 var card = document.querySelector('.skill-card[data-skill-name="' + CSS.escape(name) + '"]');
                 if (card) {
                     card.style.transition = 'opacity 0.3s ease';
                     card.style.opacity = '0';
                     setTimeout(function() { card.remove(); updateInstalledCount(); }, 300);
                 }
+                // Close modal if it was showing this skill
+                closeModal();
             } else {
                 showToast(data.message || 'Remove failed', 'error');
-                if (btn) {
-                    btn.textContent = 'Remove';
-                    btn.disabled = false;
-                }
+                if (btn) { btn.textContent = 'Remove'; btn.disabled = false; }
             }
         } catch (err) {
             showToast('Remove failed: ' + err.message, 'error');
-            if (btn) {
-                btn.textContent = 'Remove';
-                btn.disabled = false;
-            }
+            if (btn) { btn.textContent = 'Remove'; btn.disabled = false; }
         }
     }
 
-    // --- Refresh installed section from API ---
+    // --- Refresh installed section ---
     async function refreshInstalled() {
         try {
             var res = await fetch('/api/v1/skills');
             var skills = await res.json();
-
             installedNames.clear();
             skills.forEach(function(s) { installedNames.add(s.name); });
 
@@ -378,28 +433,24 @@
                 installedGrid.appendChild(empty);
             } else {
                 skills.forEach(function(s) {
-                    var card = buildInstalledCard(s);
-                    installedGrid.appendChild(card);
+                    installedGrid.appendChild(buildInstalledCard(s));
                 });
             }
-
             updateInstalledCount();
         } catch (err) {
-            // Silent — installed list will be stale but functional
+            // Silent
         }
     }
 
     function buildInstalledCard(s) {
         var card = el('div', 'skill-card');
         card.setAttribute('data-skill-name', s.name);
-
-        var sourceClass = s.source === 'clawhub' ? 'clawhub' : 'github';
-        var sourceLabel = s.source === 'clawhub' ? 'ClawHub' : 'GitHub';
+        card.setAttribute('data-skill-source', s.source || 'github');
 
         // Header
         var header = el('div', 'skill-card-header');
         header.appendChild(el('div', 'skill-name', s.name));
-        header.appendChild(el('span', 'skill-source-badge skill-source-badge--' + sourceClass, sourceLabel));
+        header.appendChild(el('span', 'skill-source-badge skill-source-badge--' + s.source, sourceLabel(s.source)));
         card.appendChild(header);
 
         // Description
@@ -408,7 +459,6 @@
         // Footer
         var footer = el('div', 'skill-card-footer');
         footer.appendChild(el('span', 'skill-path', s.path));
-
         var removeBtn = el('button', 'btn btn-sm btn-danger skill-remove-btn', 'Remove');
         removeBtn.setAttribute('data-skill', s.name);
         removeBtn.addEventListener('click', function(e) {
@@ -417,18 +467,185 @@
             removeSkill(s.name, removeBtn);
         });
         footer.appendChild(removeBtn);
-
         card.appendChild(footer);
+
+        // Click to open detail modal
+        card.addEventListener('click', function() {
+            openInstalledDetail(s.name);
+        });
+
         return card;
     }
 
     function updateInstalledCount() {
         if (!installedCount) return;
-        var count = document.querySelectorAll('#installed-grid .skill-card[data-skill-name]').length;
+        var cards = document.querySelectorAll('#installed-grid .skill-card[data-skill-name]');
+        var count = cards.length;
         installedCount.textContent = count + ' installed';
+
+        // Rebuild source counter chips
+        var counts = { clawhub: 0, github: 0, openskills: 0 };
+        cards.forEach(function(card) {
+            var src = card.getAttribute('data-skill-source') || 'github';
+            if (counts[src] !== undefined) counts[src]++;
+        });
+
+        var chipsEl = document.getElementById('source-chips');
+        if (!chipsEl) {
+            chipsEl = el('div', 'skill-source-chips');
+            chipsEl.id = 'source-chips';
+            var titleGroup = installedCount.parentElement;
+            if (titleGroup) titleGroup.appendChild(chipsEl);
+        }
+        chipsEl.textContent = '';
+        var sources = ['clawhub', 'github', 'openskills'];
+        sources.forEach(function(src) {
+            if (counts[src] > 0) {
+                chipsEl.appendChild(el('span', 'skill-source-chip skill-source-chip--' + src,
+                    counts[src] + ' ' + sourceLabel(src)));
+            }
+        });
+    }
+
+    // --- Detail modal ---
+
+    async function openInstalledDetail(name) {
+        if (!modalOverlay) return;
+        modalTitle.textContent = name;
+        modalSubtitle.textContent = 'Loading...';
+        modalMeta.textContent = '';
+        modalContent.textContent = '';
+        modalFooter.textContent = '';
+        modalOverlay.classList.add('active');
+
+        try {
+            var res = await fetch('/api/v1/skills/' + encodeURIComponent(name));
+            if (!res.ok) throw new Error('Not found');
+            var detail = await res.json();
+
+            // Title
+            modalTitle.textContent = detail.name;
+
+            // Subtitle: description (first line)
+            var shortDesc = detail.description || 'No description';
+            modalSubtitle.textContent = shortDesc;
+
+            // Meta bar: source badge + path
+            modalMeta.textContent = '';
+            var srcBadge = el('span', 'skill-source-badge skill-source-badge--' + detail.source, sourceLabel(detail.source));
+            modalMeta.appendChild(srcBadge);
+            var pathItem = el('span', 'skill-modal-meta-item');
+            pathItem.appendChild(el('code', null, detail.path));
+            modalMeta.appendChild(pathItem);
+
+            // Content: HTML rendered server-side via pulldown-cmark
+            modalContent.innerHTML = detail.content_html;
+
+            // Footer: scripts list + remove button
+            modalFooter.textContent = '';
+            if (detail.scripts && detail.scripts.length > 0) {
+                var scriptsEl = el('span', 'skill-modal-scripts', 'Scripts: ');
+                detail.scripts.forEach(function(s, i) {
+                    if (i > 0) scriptsEl.appendChild(document.createTextNode(', '));
+                    scriptsEl.appendChild(el('code', null, s));
+                });
+                modalFooter.appendChild(scriptsEl);
+            } else {
+                modalFooter.appendChild(el('span', 'skill-modal-scripts', 'Instruction-only skill (no scripts)'));
+            }
+
+            var removeBtn = el('button', 'btn btn-sm btn-danger', 'Remove');
+            removeBtn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                if (!confirm('Remove skill "' + detail.name + '"?')) return;
+                removeSkill(detail.name, removeBtn);
+            });
+            modalFooter.appendChild(removeBtn);
+
+        } catch (err) {
+            modalSubtitle.textContent = 'Failed to load skill details';
+            modalContent.textContent = err.message;
+        }
+    }
+
+    /** Open detail modal for a search result (not installed yet) */
+    function openSearchDetail(skill, displayName) {
+        if (!modalOverlay) return;
+
+        modalTitle.textContent = displayName;
+        modalSubtitle.textContent = '';
+
+        // Meta bar: source badge + stats + slug
+        modalMeta.textContent = '';
+        modalMeta.appendChild(el('span', 'skill-source-badge skill-source-badge--' + skill.source, sourceLabel(skill.source)));
+        if (skill.stars > 0) {
+            var starItem = el('span', 'skill-modal-meta-item');
+            starItem.appendChild(svgStar());
+            starItem.appendChild(document.createTextNode(' ' + formatNum(skill.stars)));
+            modalMeta.appendChild(starItem);
+        }
+        if (skill.downloads > 0) {
+            var dlItem = el('span', 'skill-modal-meta-item');
+            dlItem.appendChild(svgDownload());
+            dlItem.appendChild(document.createTextNode(' ' + formatNum(skill.downloads)));
+            modalMeta.appendChild(dlItem);
+        }
+        var sourceItem = el('span', 'skill-modal-meta-item');
+        sourceItem.appendChild(el('code', null, skill.name));
+        modalMeta.appendChild(sourceItem);
+
+        // Content: description only (no SKILL.md available pre-install)
+        modalContent.innerHTML = '';
+        modalContent.appendChild(el('p', null, skill.description || 'No description available.'));
+
+        // Footer: source label + install button
+        modalFooter.textContent = '';
+        modalFooter.appendChild(el('span', 'skill-modal-scripts', sourceLabel(skill.source) + ' skill'));
+
+        var skillBaseName = displayName.split('/').pop() || displayName;
+        var isInstalled = installedNames.has(skillBaseName);
+
+        if (isInstalled) {
+            modalFooter.appendChild(el('button', 'btn btn-sm btn-installed', 'Installed'));
+        } else {
+            var installBtn = el('button', 'btn btn-sm btn-primary', 'Install');
+            installBtn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                installSkill(skill.name, installBtn, null);
+            });
+            modalFooter.appendChild(installBtn);
+        }
+
+        modalOverlay.classList.add('active');
+    }
+
+    function closeModal() {
+        if (modalOverlay) modalOverlay.classList.remove('active');
+    }
+
+    // Close modal on X button, overlay click, Escape
+    if (modalClose) modalClose.addEventListener('click', closeModal);
+    if (modalOverlay) {
+        modalOverlay.addEventListener('click', function(e) {
+            if (e.target === modalOverlay) closeModal();
+        });
+    }
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') closeModal();
+    });
+
+    // --- Attach click handlers to server-rendered installed cards ---
+    function setupCardClicks() {
+        document.querySelectorAll('#installed-grid .skill-card[data-skill-name]').forEach(function(card) {
+            card.addEventListener('click', function() {
+                var name = card.getAttribute('data-skill-name');
+                if (name) openInstalledDetail(name);
+            });
+        });
     }
 
     // --- Init ---
     setupRemoveButtons();
+    setupCardClicks();
 
 })();

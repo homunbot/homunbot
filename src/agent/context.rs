@@ -1,84 +1,139 @@
+//! Context builder for system prompts.
+//!
+//! This module provides backward-compatible context building using the new
+//! modular `SystemPromptBuilder` internally.
+
 use std::path::Path;
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
+use crate::agent::prompt::{PromptContext, PromptMode, SystemPromptBuilder, ToolInfo};
 use crate::config::Config;
 use crate::provider::ChatMessage;
 
-/// Bootstrap file names, loaded from ~/.homun/ if they exist.
+/// Bootstrap file names and their search paths.
 ///
 /// Inspired by OpenClaw's SOUL.md pattern:
 /// - SOUL.md:   personality, values, communication style
 /// - AGENTS.md: directives on how the agent should behave
 /// - USER.md:   user preferences, context, personal info
+///
+/// Files are loaded from two directories (first match wins):
+/// 1. `~/.homun/brain/` — agent-written memory files (USER.md, INSTRUCTIONS.md, SOUL.md)
+/// 2. `~/.homun/` — user-placed config files (SOUL.md, AGENTS.md)
 const BOOTSTRAP_FILES: &[(&str, &str)] = &[
     ("SOUL.md", "Personality & Identity"),
     ("AGENTS.md", "Agent Directives"),
     ("USER.md", "User Context"),
+    ("INSTRUCTIONS.md", "Learned Instructions"),
 ];
 
 /// Builds the system prompt and assembles messages for the LLM.
 ///
-/// Prompt layers (in order):
-/// 1. Core identity + time + workspace
-/// 2. Bootstrap files (SOUL.md, AGENTS.md, USER.md) — if present
-/// 3. Guidelines
-/// 4. Skills summary
+/// Uses the new modular `SystemPromptBuilder` internally for a cleaner,
+/// more extensible prompt architecture inspired by ZeroClaw/OpenClaw.
 pub struct ContextBuilder {
     workspace: String,
     /// Shared skills summary — can be updated at runtime by the hot-reload watcher.
     skills_summary: Arc<RwLock<String>>,
-    bootstrap_content: String,
+    /// Shared bootstrap content — can be updated at runtime by the hot-reload watcher.
+    bootstrap_content: Arc<RwLock<String>>,
+    /// Bootstrap files as (filename, content) pairs for the new prompt system.
+    bootstrap_files: Arc<RwLock<Vec<(String, String)>>>,
     memory_content: String,
+    /// Relevant memories retrieved by vector + FTS5 search for the current query.
+    /// Uses RwLock for interior mutability — updated per-request via `&self`.
+    relevant_memories: RwLock<String>,
     /// Known channels and their default chat IDs for cross-channel messaging
     channels_info: String,
+    /// The modular prompt builder
+    prompt_builder: SystemPromptBuilder,
+    /// Current model name (for runtime section)
+    model_name: String,
 }
 
 impl ContextBuilder {
-    pub fn new(_config: &Config) -> Self {
+    pub fn new(config: &Config) -> Self {
         let data_dir = Config::data_dir();
-        let bootstrap_content = Self::load_bootstrap_files(&data_dir);
+        let (bootstrap_content, bootstrap_files) = Self::load_bootstrap_files(&data_dir);
 
         Self {
             workspace: Config::workspace_dir()
                 .to_string_lossy()
                 .to_string(),
             skills_summary: Arc::new(RwLock::new(String::new())),
-            bootstrap_content,
+            bootstrap_content: Arc::new(RwLock::new(bootstrap_content)),
+            bootstrap_files: Arc::new(RwLock::new(bootstrap_files)),
             memory_content: String::new(),
+            relevant_memories: RwLock::new(String::new()),
             channels_info: String::new(),
+            prompt_builder: SystemPromptBuilder::with_defaults(),
+            model_name: config.agent.model.clone(),
         }
     }
 
-    /// Load bootstrap files (SOUL.md, AGENTS.md, USER.md) from data directory.
-    /// Returns combined content, or empty string if none exist.
-    fn load_bootstrap_files(data_dir: &Path) -> String {
+    /// Load bootstrap files (SOUL.md, AGENTS.md, USER.md, INSTRUCTIONS.md).
+    ///
+    /// Search order for each file (first match wins):
+    /// 1. `~/.homun/brain/` — agent-written memory (allowed by file tool)
+    /// 2. `~/.homun/` — user-placed configuration (protected by file tool)
+    fn load_bootstrap_files(data_dir: &Path) -> (String, Vec<(String, String)>) {
         let mut content = String::new();
+        let mut files = Vec::new();
+        let brain_dir = data_dir.join("brain");
 
         for (filename, label) in BOOTSTRAP_FILES {
-            let file_path = data_dir.join(filename);
-            if file_path.exists() {
-                match std::fs::read_to_string(&file_path) {
-                    Ok(text) => {
-                        let trimmed = text.trim();
-                        if !trimmed.is_empty() {
-                            tracing::info!(file = %filename, "Loaded bootstrap file");
-                            content.push_str(&format!("\n\n## {label}\n{trimmed}"));
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
+            // Try brain/ first (agent-written), then data_dir (user-placed)
+            let candidates = [brain_dir.join(filename), data_dir.join(filename)];
+            let file_path = match candidates.iter().find(|p| p.exists()) {
+                Some(p) => p,
+                None => continue,
+            };
+
+            match std::fs::read_to_string(file_path) {
+                Ok(text) => {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        tracing::info!(
                             file = %filename,
-                            error = %e,
-                            "Failed to read bootstrap file"
+                            source = %file_path.display(),
+                            "Loaded bootstrap file"
                         );
+                        // Old format for backward compatibility
+                        content.push_str(&format!("\n\n## {label}\n{trimmed}"));
+                        // New format for modular system
+                        files.push((filename.to_string(), trimmed.to_string()));
                     }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        file = %filename,
+                        error = %e,
+                        "Failed to read bootstrap file"
+                    );
                 }
             }
         }
 
-        content
+        (content, files)
+    }
+
+    /// Reload bootstrap files from disk (called by hot-reload watcher).
+    pub async fn reload_bootstrap_files(&self) {
+        let data_dir = Config::data_dir();
+        let (content, files) = Self::load_bootstrap_files(&data_dir);
+        
+        {
+            let mut guard = self.bootstrap_content.write().await;
+            *guard = content;
+        }
+        {
+            let mut guard = self.bootstrap_files.write().await;
+            *guard = files;
+        }
+        
+        tracing::info!("Reloaded bootstrap files");
     }
 
     /// Set the skills summary (called after skills are loaded)
@@ -88,10 +143,27 @@ impl ContextBuilder {
     }
 
     /// Get a shared handle to the skills summary for hot-reload updates.
-    /// The watcher can update this `Arc<RwLock<String>>` and the context
-    /// will pick up changes on the next `build_system_prompt()` call.
     pub fn skills_summary_handle(&self) -> Arc<RwLock<String>> {
         self.skills_summary.clone()
+    }
+
+    /// Get a shared handle to the bootstrap content for hot-reload updates.
+    /// The watcher can update this `Arc<RwLock<String>>` and the context
+    /// will pick up changes on the next `build_system_prompt()` call.
+    pub fn bootstrap_content_handle(&self) -> Arc<RwLock<String>> {
+        self.bootstrap_content.clone()
+    }
+
+    /// Get a shared handle to the bootstrap files (new format) for hot-reload updates.
+    /// The watcher can update this `Arc<RwLock<Vec<(String, String)>>>` and the context
+    /// will pick up changes on the next `build_system_prompt()` call.
+    pub fn bootstrap_files_handle(&self) -> Arc<RwLock<Vec<(String, String)>>> {
+        self.bootstrap_files.clone()
+    }
+
+    /// Get both handles for the BootstrapWatcher (convenience method).
+    pub fn bootstrap_handles(&self) -> (Arc<RwLock<String>>, Arc<RwLock<Vec<(String, String)>>>) {
+        (self.bootstrap_content.clone(), self.bootstrap_files.clone())
     }
 
     /// Set long-term memory content (loaded from MEMORY.md)
@@ -99,8 +171,13 @@ impl ContextBuilder {
         self.memory_content = memory;
     }
 
+    /// Set relevant memories from vector + FTS5 search.
+    pub async fn set_relevant_memories(&self, memories: String) {
+        let mut guard = self.relevant_memories.write().await;
+        *guard = memories;
+    }
+
     /// Set available channels info for cross-channel messaging.
-    /// Format: list of (channel_name, default_chat_id) pairs.
     pub fn set_channels_info(&mut self, channels: &[(&str, &str)]) {
         if channels.is_empty() {
             return;
@@ -116,50 +193,59 @@ impl ContextBuilder {
         self.channels_info = info;
     }
 
-    /// Build the system prompt
+    /// Build the system prompt using the new modular system.
     pub async fn build_system_prompt(&self) -> String {
+        self.build_system_prompt_with_tools(&[]).await
+    }
+
+    /// Build the system prompt with tool definitions for the ToolsSection.
+    pub async fn build_system_prompt_with_tools(&self, tools: &[ToolInfo]) -> String {
+        // Gather all context
+        let bootstrap_files = self.bootstrap_files.read().await;
+        let skills_summary = self.skills_summary.read().await;
+        let relevant_memories = self.relevant_memories.read().await;
+
+        // Build PromptContext
+        let ctx = PromptContext {
+            workspace_dir: std::path::Path::new(&self.workspace),
+            model_name: &self.model_name,
+            tools,
+            skills_summary: &skills_summary,
+            bootstrap_files: &bootstrap_files,
+            memory_content: &self.memory_content,
+            relevant_memories: &relevant_memories,
+            channel: "main",
+            prompt_mode: PromptMode::Full,
+            channels_info: &self.channels_info,
+        };
+
+        // Build prompt using modular system
+        match self.prompt_builder.build(&ctx) {
+            Ok(prompt) => prompt,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to build modular prompt, using fallback");
+                self.build_fallback_prompt().await
+            }
+        }
+    }
+
+    /// Fallback prompt in case modular builder fails.
+    async fn build_fallback_prompt(&self) -> String {
         let now = chrono::Local::now();
-
-        // Layer 1: Core identity
         let mut prompt = format!(
-            "You are Homun, a personal AI assistant — a digital homunculus that helps your user with tasks.\n\
-            \n\
-            Current Time: {}\n\
-            Workspace: ~/workspace",
+            "You are Homun, a personal AI assistant.\n\nTime: {}\nWorkspace: {}",
             now.format("%Y-%m-%d %H:%M (%A) %Z"),
+            self.workspace
         );
 
-        // Layer 2: Bootstrap files (SOUL.md, AGENTS.md, USER.md)
-        if !self.bootstrap_content.is_empty() {
-            prompt.push_str(&self.bootstrap_content);
+        let bootstrap = self.bootstrap_content.read().await;
+        if !bootstrap.is_empty() {
+            prompt.push_str(&bootstrap);
         }
 
-        // Layer 3: Long-term memory (consolidated facts about the user)
         if !self.memory_content.is_empty() {
-            prompt.push_str("\n\n## Long-term Memory\n");
+            prompt.push_str("\n\n## Memory\n");
             prompt.push_str(&self.memory_content);
-        }
-
-        // Layer 4: Guidelines
-        prompt.push_str(
-            "\n\n\
-            Guidelines:\n\
-            - Be concise and helpful\n\
-            - When asked to perform tasks, use available tools\n\
-            - If you cannot do something, explain why clearly\n\
-            - Reply in the same language as the user's message",
-        );
-
-        // Layer 5: Skills summary (read from shared RwLock — may be hot-reloaded)
-        let skills = self.skills_summary.read().await;
-        if !skills.is_empty() {
-            prompt.push_str(&skills);
-        }
-        drop(skills);
-
-        // Layer 6: Available channels for cross-channel messaging
-        if !self.channels_info.is_empty() {
-            prompt.push_str(&self.channels_info);
         }
 
         prompt
@@ -171,10 +257,20 @@ impl ContextBuilder {
         history: &[ChatMessage],
         user_message: &str,
     ) -> Vec<ChatMessage> {
+        self.build_messages_with_tools(history, user_message, &[]).await
+    }
+
+    /// Build messages with tool definitions included in the prompt.
+    pub async fn build_messages_with_tools(
+        &self,
+        history: &[ChatMessage],
+        user_message: &str,
+        tools: &[ToolInfo],
+    ) -> Vec<ChatMessage> {
         let mut messages = Vec::with_capacity(history.len() + 2);
 
-        // System prompt
-        messages.push(ChatMessage::system(&self.build_system_prompt().await));
+        // System prompt with tools
+        messages.push(ChatMessage::system(&self.build_system_prompt_with_tools(tools).await));
 
         // Conversation history
         messages.extend_from_slice(history);
@@ -197,19 +293,24 @@ mod tests {
         let prompt = ctx.build_system_prompt().await;
 
         assert!(prompt.contains("Homun"));
-        assert!(prompt.contains("Guidelines"));
-        assert!(prompt.contains("Workspace"));
+        assert!(prompt.contains("Safety"));
     }
 
     #[tokio::test]
-    async fn test_build_system_prompt_with_skills() {
+    async fn test_build_system_prompt_with_tools() {
         let config = Config::default();
         let ctx = ContextBuilder::new(&config);
-        ctx.set_skills_summary("\n\nAvailable Skills:\n- test: A test skill\n".to_string()).await;
-        let prompt = ctx.build_system_prompt().await;
+        let tools = vec![
+            ToolInfo {
+                name: "remember".to_string(),
+                description: "Save user info".to_string(),
+                parameters_schema: serde_json::json!({}),
+            },
+        ];
+        let prompt = ctx.build_system_prompt_with_tools(&tools).await;
 
-        assert!(prompt.contains("Available Skills"));
-        assert!(prompt.contains("test: A test skill"));
+        assert!(prompt.contains("remember"));
+        assert!(prompt.contains("Tool Call Format"));
     }
 
     #[tokio::test]
@@ -236,8 +337,9 @@ mod tests {
 
     #[test]
     fn test_bootstrap_files_from_nonexistent_dir() {
-        let content = ContextBuilder::load_bootstrap_files(std::path::Path::new("/nonexistent"));
+        let (content, files) = ContextBuilder::load_bootstrap_files(std::path::Path::new("/nonexistent"));
         assert!(content.is_empty());
+        assert!(files.is_empty());
     }
 
     #[tokio::test]
@@ -258,13 +360,16 @@ mod tests {
         )
         .unwrap();
 
-        let content = ContextBuilder::load_bootstrap_files(dir.path());
+        let (content, files) = ContextBuilder::load_bootstrap_files(dir.path());
 
         assert!(content.contains("Personality & Identity"));
         assert!(content.contains("friendly and witty"));
         assert!(content.contains("User Context"));
         assert!(content.contains("Fabio"));
-        // AGENTS.md was not created, should not appear
-        assert!(!content.contains("Agent Directives"));
+        
+        // Check new format
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|(n, _)| n == "SOUL.md"));
+        assert!(files.iter().any(|(n, _)| n == "USER.md"));
     }
 }

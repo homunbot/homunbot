@@ -269,6 +269,26 @@ mod tests {
     }
 
     #[test]
+    fn test_config_set_memory() {
+        let mut config = Config::default();
+        config_set(&mut config, "memory.conversation_retention_days", "60").unwrap();
+        assert_eq!(config.memory.conversation_retention_days, 60);
+
+        config_set(&mut config, "memory.history_retention_days", "180").unwrap();
+        assert_eq!(config.memory.history_retention_days, 180);
+
+        config_set(&mut config, "memory.auto_cleanup", "true").unwrap();
+        assert!(config.memory.auto_cleanup);
+    }
+
+    #[test]
+    fn test_config_get_memory() {
+        let config = Config::default();
+        let result = config_get(&config, "memory.conversation_retention_days").unwrap();
+        assert_eq!(result, "30");
+    }
+
+    #[test]
     fn test_config_list_keys() {
         let config = Config::default();
         let keys = config_list_keys(&config);

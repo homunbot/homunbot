@@ -6,6 +6,8 @@ pub mod cron;
 pub mod spawn;
 pub mod message;
 pub mod mcp;
+pub mod vault;
+pub mod remember;
 
 pub use registry::{Tool, ToolContext, ToolRegistry, ToolResult};
 pub use shell::ShellTool;
@@ -15,3 +17,5 @@ pub use cron::CronTool;
 pub use spawn::SpawnTool;
 pub use message::MessageTool;
 pub use mcp::{McpManager, McpServerInfo};
+pub use vault::VaultTool;
+pub use remember::RememberTool;

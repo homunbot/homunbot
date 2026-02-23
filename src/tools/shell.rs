@@ -1,9 +1,12 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 use tokio::process::Command;
 
 use super::registry::{get_optional_string, get_string_param, Tool, ToolContext, ToolResult};
+use crate::config::{OsShellProfile, ShellPermissions};
 
 /// Maximum output length before truncation (chars)
 const MAX_OUTPUT_LEN: usize = 10_000;
@@ -121,19 +124,31 @@ const RISKY_COMMANDS: &[&str] = &[
 /// 1. **Deny list**: exact pattern matching (catastrophic commands)
 /// 2. **Regex filters**: catches obfuscation/variations
 /// 3. **Risky command detection**: blocks package removal, process killing, etc.
-/// 4. **Workspace restriction**: optional path traversal prevention
-/// 5. **Timeout**: kills long-running processes
-/// 6. **Output truncation**: prevents memory exhaustion
-/// 7. **Env sanitization**: strips API keys from subprocess environment
+/// 4. **OS-specific checks**: platform-specific blocked commands
+/// 5. **Workspace restriction**: optional path traversal prevention
+/// 6. **Timeout**: kills long-running processes
+/// 7. **Output truncation**: prevents memory exhaustion
+/// 8. **Env sanitization**: strips API keys from subprocess environment
 pub struct ShellTool {
     timeout_secs: u64,
     restrict_to_workspace: bool,
     allow_risky: bool,
     deny_regex: Vec<regex::Regex>,
+    /// OS-specific profile for current platform
+    os_profile: Option<OsShellProfile>,
 }
 
 impl ShellTool {
     pub fn new(timeout_secs: u64, restrict_to_workspace: bool) -> Self {
+        Self::with_permissions(timeout_secs, restrict_to_workspace, None)
+    }
+
+    /// Create ShellTool with OS-specific permissions
+    pub fn with_permissions(
+        timeout_secs: u64,
+        restrict_to_workspace: bool,
+        shell_perms: Option<Arc<ShellPermissions>>,
+    ) -> Self {
         // Pre-compile regex patterns at construction time
         let deny_regex = DENY_REGEX_PATTERNS
             .iter()
@@ -148,11 +163,24 @@ impl ShellTool {
             })
             .collect();
 
+        // Get OS-specific profile
+        let os_profile = shell_perms.map(|p| {
+            #[cfg(target_os = "macos")]
+            { p.macos.clone() }
+            #[cfg(target_os = "linux")]
+            { p.linux.clone() }
+            #[cfg(target_os = "windows")]
+            { p.windows.clone() }
+            #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+            { p.linux.clone() }
+        });
+
         Self {
             timeout_secs,
             restrict_to_workspace,
-            allow_risky: false,
+            allow_risky: os_profile.as_ref().map(|p| p.allow_risky).unwrap_or(false),
             deny_regex,
+            os_profile,
         }
     }
 
@@ -227,7 +255,49 @@ impl ShellTool {
             );
         }
 
+        // Layer 5: OS-specific checks
+        if let Some(ref profile) = self.os_profile {
+            // Check blocked commands for this OS
+            for blocked in &profile.blocked_commands {
+                if command.to_lowercase().contains(&blocked.to_lowercase()) {
+                    return Some(format!(
+                        "BLOCKED (OS-specific): command matches blocked pattern '{}'",
+                        blocked
+                    ));
+                }
+            }
+
+            // Check whitelist mode (if allowed_commands is non-empty)
+            if !profile.allowed_commands.is_empty() {
+                let cmd_base = command.split_whitespace().next().unwrap_or("");
+                if !profile.allowed_commands.iter().any(|a| cmd_base == a) {
+                    return Some(format!(
+                        "BLOCKED (whitelist mode): '{}' not in allowed commands",
+                        cmd_base
+                    ));
+                }
+            }
+        }
+
         None
+    }
+
+    /// Get the shell command and args for current OS
+    fn get_shell_command(&self) -> (&'static str, Vec<&'static str>) {
+        if let Some(ref profile) = self.os_profile {
+            if let Some(ref shell) = profile.shell {
+                match shell.as_str() {
+                    "powershell" => return ("powershell", vec!["-Command"]),
+                    "cmd" => return ("cmd", vec!["/C"]),
+                    "zsh" => return ("zsh", vec!["-c"]),
+                    "bash" => return ("bash", vec!["-c"]),
+                    _ => {}
+                }
+            }
+        }
+
+        // Default: sh -c (works on Unix)
+        ("sh", vec!["-c"])
     }
 
     /// Truncate output if it's too long
@@ -295,8 +365,10 @@ impl Tool for ShellTool {
             "PATH", "HOME", "USER", "SHELL", "LANG", "LC_ALL", "TERM", "TMPDIR",
         ];
 
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c")
+        // Get OS-appropriate shell
+        let (shell, args) = self.get_shell_command();
+        let mut cmd = Command::new(shell);
+        cmd.args(&args)
             .arg(&command)
             .current_dir(&working_dir)
             .env_clear();

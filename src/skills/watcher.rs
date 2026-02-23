@@ -20,6 +20,27 @@ pub struct SkillWatcher {
     skills_dir: PathBuf,
 }
 
+/// Handle to a running watcher. Drop it to stop watching.
+///
+/// On drop, signals the watcher loop to stop gracefully.
+pub struct WatcherHandle {
+    stop_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    join_handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for WatcherHandle {
+    fn drop(&mut self) {
+        // Signal the watcher to stop
+        if let Some(tx) = self.stop_tx.take() {
+            let _ = tx.send(());
+        }
+        // Abort the task to ensure it stops
+        if let Some(handle) = self.join_handle.take() {
+            handle.abort();
+        }
+    }
+}
+
 impl SkillWatcher {
     pub fn new(skills_summary: Arc<RwLock<String>>, skills_dir: PathBuf) -> Self {
         Self {
@@ -28,17 +49,26 @@ impl SkillWatcher {
         }
     }
 
-    /// Start watching the skills directory. Returns the join handle.
-    /// Runs until cancelled (e.g. when the gateway shuts down).
-    pub fn start(self) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async move {
-            if let Err(e) = self.watch_loop().await {
-                tracing::error!(error = %e, "Skill watcher error");
+    /// Start watching the skills directory. Returns a handle that stops on drop.
+    /// Runs until cancelled (e.g. when the handle is dropped).
+    pub fn start(self) -> WatcherHandle {
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let join_handle = tokio::spawn(async move {
+            if let Err(e) = self.watch_loop(stop_rx).await {
+                if !e.to_string().contains("channel closed") {
+                    tracing::error!(error = %e, "Skill watcher error");
+                }
             }
-        })
+        });
+
+        WatcherHandle {
+            stop_tx: Some(stop_tx),
+            join_handle: Some(join_handle),
+        }
     }
 
-    async fn watch_loop(self) -> Result<()> {
+    async fn watch_loop(self, mut stop_rx: tokio::sync::oneshot::Receiver<()>) -> Result<()> {
         // Create the directory if it doesn't exist
         if !self.skills_dir.exists() {
             tokio::fs::create_dir_all(&self.skills_dir).await?;
@@ -89,9 +119,17 @@ impl SkillWatcher {
         // Debounce: wait for events, then reload after a brief pause
         // to avoid multiple reloads for a single install operation.
         loop {
-            // Wait for at least one event
-            if rx.recv().await.is_none() {
-                break; // Channel closed
+            // Wait for events or stop signal
+            tokio::select! {
+                _ = &mut stop_rx => {
+                    tracing::debug!("Skill watcher received stop signal");
+                    break;
+                }
+                msg = rx.recv() => {
+                    if msg.is_none() {
+                        break; // Channel closed
+                    }
+                }
             }
 
             // Debounce: drain any additional events that arrive within 500ms
@@ -101,8 +139,14 @@ impl SkillWatcher {
             loop {
                 tokio::select! {
                     _ = &mut debounce => break,
+                    _ = &mut stop_rx => {
+                        // Stop signal during debounce - exit immediately
+                        drop(watcher);
+                        return Ok(());
+                    }
                     msg = rx.recv() => {
                         if msg.is_none() {
+                            drop(watcher);
                             return Ok(());
                         }
                         // Reset debounce timer
@@ -121,6 +165,10 @@ impl SkillWatcher {
                 }
             }
         }
+
+        // Explicitly drop the watcher before the channel to avoid kqueue panic
+        drop(watcher);
+        tracing::debug!("Skill watcher stopped cleanly");
 
         Ok(())
     }

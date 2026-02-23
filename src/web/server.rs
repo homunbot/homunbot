@@ -8,8 +8,9 @@ use tokio::sync::mpsc;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
-use crate::bus::{InboundMessage, OutboundMessage};
+use crate::bus::{InboundMessage, OutboundMessage, StreamMessage};
 use crate::config::Config;
+use crate::storage::Database;
 
 use super::api;
 use super::pages;
@@ -22,6 +23,13 @@ pub struct AppState {
     pub inbound_tx: Option<mpsc::Sender<InboundMessage>>,
     /// Active WebSocket sessions: chat_id → sender for outbound messages
     pub ws_sessions: tokio::sync::RwLock<std::collections::HashMap<String, mpsc::Sender<String>>>,
+    /// Stream sessions: chat_id → sender for real-time stream chunks and tool events.
+    /// Used to deliver incremental text as the LLM generates it,
+    /// plus tool_start/tool_end notifications.
+    pub stream_sessions: tokio::sync::RwLock<std::collections::HashMap<String, mpsc::Sender<super::ws::WsStreamEvent>>>,
+    /// Database handle — used by memory/vault API endpoints.
+    /// `None` in setup-only mode (no agent, just config UI).
+    pub db: Option<Database>,
 }
 
 impl AppState {
@@ -38,6 +46,8 @@ pub struct WebServer {
     config: Config,
     inbound_tx: Option<mpsc::Sender<InboundMessage>>,
     outbound_rx: Option<mpsc::Receiver<OutboundMessage>>,
+    stream_rx: Option<mpsc::Receiver<StreamMessage>>,
+    db: Option<Database>,
 }
 
 impl WebServer {
@@ -45,12 +55,23 @@ impl WebServer {
         config: Config,
         inbound_tx: mpsc::Sender<InboundMessage>,
         outbound_rx: mpsc::Receiver<OutboundMessage>,
+        db: Database,
     ) -> Self {
         Self {
             config,
             inbound_tx: Some(inbound_tx),
             outbound_rx: Some(outbound_rx),
+            stream_rx: None,
+            db: Some(db),
         }
+    }
+
+    /// Set the receiver for streaming chunks from the gateway.
+    /// When the agent streams text for a web chat session, the gateway
+    /// sends StreamMessage chunks here so they can be forwarded to the
+    /// correct WebSocket connection.
+    pub fn set_stream_rx(&mut self, rx: mpsc::Receiver<StreamMessage>) {
+        self.stream_rx = Some(rx);
     }
 
     /// Create a setup-only server (no agent, just config UI)
@@ -59,6 +80,8 @@ impl WebServer {
             config,
             inbound_tx: None,
             outbound_rx: None,
+            stream_rx: None,
+            db: None,
         }
     }
 
@@ -72,6 +95,8 @@ impl WebServer {
             started_at: Instant::now(),
             inbound_tx: self.inbound_tx,
             ws_sessions: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+            stream_sessions: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+            db: self.db,
         });
 
         // If we have outbound messages, spawn task to route them to WebSocket sessions
@@ -89,6 +114,26 @@ impl WebServer {
                             chat_id = %msg.chat_id,
                             "No WebSocket session found for outbound message"
                         );
+                    }
+                }
+            });
+        }
+
+        // If we have stream messages, spawn task to forward chunks to WebSocket stream sessions
+        if let Some(mut stream_rx) = self.stream_rx {
+            let state_for_stream = state.clone();
+            tokio::spawn(async move {
+                while let Some(msg) = stream_rx.recv().await {
+                    let streams = state_for_stream.stream_sessions.read().await;
+                    if let Some(tx) = streams.get(&msg.chat_id) {
+                        let event = super::ws::WsStreamEvent {
+                            delta: msg.delta,
+                            event_type: msg.event_type,
+                            tool_call_data: msg.tool_call_data,
+                        };
+                        if tx.send(event).await.is_err() {
+                            tracing::debug!(chat_id = %msg.chat_id, "Stream session closed");
+                        }
                     }
                 }
             });

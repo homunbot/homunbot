@@ -1,13 +1,175 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 
 use super::registry::{get_string_param, Tool, ToolContext, ToolResult};
+use crate::config::{AclEntry, DefaultPermissions, PathPermissions, PermissionMode, PermissionValue, PermissionsConfig};
 
 /// Maximum file size to read (chars)
 const MAX_READ_SIZE: usize = 50_000;
+
+// =============================================================================
+// ACL-based Permission Checking
+// =============================================================================
+
+/// File operation types for permission checking
+#[derive(Debug, Clone, Copy)]
+pub enum FileOp {
+    Read,
+    Write,
+    Delete,
+}
+
+impl FileOp {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FileOp::Read => "read",
+            FileOp::Write => "write",
+            FileOp::Delete => "delete",
+        }
+    }
+}
+
+/// Result of permission check
+#[derive(Debug, Clone)]
+pub enum PermissionResult {
+    Allowed,
+    Denied(String),
+    NeedsConfirmation(String),
+}
+
+/// Check if a path matches a glob pattern (supports **, *, ?)
+fn glob_matches(pattern: &str, path: &Path) -> bool {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    
+    // Expand ~ in pattern
+    let expanded_pattern = if pattern.starts_with("~/") {
+        home.join(&pattern[2..]).to_string_lossy().to_string()
+    } else {
+        pattern.to_string()
+    };
+
+    // Convert path to string
+    let path_str = path.to_string_lossy();
+
+    // Convert glob pattern to regex-like matching
+    // Simple implementation: support ** (any path), * (any non-separator), ? (single char)
+    let pattern_parts: Vec<&str> = expanded_pattern.split(std::path::is_separator).collect();
+    let path_parts: Vec<&str> = path_str.split(std::path::is_separator).collect();
+    
+    fn match_parts(pat_parts: &[&str], path_parts: &[&str]) -> bool {
+        match (pat_parts.first(), path_parts.first()) {
+            (None, None) => true,
+            (None, Some(_)) => false,
+            (Some(pat), None) => pat == &"**",
+            (Some(pat), Some(p)) => {
+                if *pat == "**" {
+                    // ** matches zero or more path segments
+                    match_parts(&pat_parts[1..], path_parts) 
+                        || match_parts(pat_parts, &path_parts[1..])
+                } else if glob_segment_matches(pat, p) {
+                    match_parts(&pat_parts[1..], &path_parts[1..])
+                } else {
+                    false
+                }
+            }
+        }
+    }
+    
+    fn glob_segment_matches(pattern: &str, segment: &str) -> bool {
+        let pat_chars: Vec<char> = pattern.chars().collect();
+        let seg_chars: Vec<char> = segment.chars().collect();
+        
+        fn match_chars(pat: &[char], seg: &[char]) -> bool {
+            match (pat.first(), seg.first()) {
+                (None, None) => true,
+                (None, Some(_)) => false,
+                (Some('*'), None) => match_chars(&pat[1..], seg),
+                (Some('?'), None) => false,
+                (Some('*'), Some(_)) => {
+                    match_chars(&pat[1..], seg) || match_chars(pat, &seg[1..])
+                }
+                (Some('?'), Some(_)) => match_chars(&pat[1..], &seg[1..]),
+                (Some(p), Some(s)) if *p == *s => match_chars(&pat[1..], &seg[1..]),
+                _ => false,
+            }
+        }
+        
+        match_chars(&pat_chars, &seg_chars)
+    }
+    
+    match_parts(&pattern_parts, &path_parts)
+}
+
+/// Get permission value for an operation from PathPermissions
+fn get_permission_value(perms: &PathPermissions, op: FileOp) -> &PermissionValue {
+    match op {
+        FileOp::Read => &perms.read,
+        FileOp::Write => &perms.write,
+        FileOp::Delete => &perms.delete,
+    }
+}
+
+/// Check path against ACL rules
+fn check_acl_permission(
+    resolved: &Path,
+    operation: FileOp,
+    permissions: &PermissionsConfig,
+) -> PermissionResult {
+    // Evaluate ACL entries in order (first match wins)
+    for entry in &permissions.acl {
+        if glob_matches(&entry.path, resolved) {
+            let perm_value = get_permission_value(&entry.permissions, operation);
+            
+            // Check if it's a deny rule
+            if entry.entry_type == "deny" {
+                if !perm_value.is_allowed() {
+                    return PermissionResult::Denied(format!(
+                        "Access denied by ACL rule: {} not allowed on '{}'",
+                        operation.as_str(),
+                        resolved.display()
+                    ));
+                }
+                // If deny rule allows, continue to next rule
+                continue;
+            }
+            
+            // Allow rule
+            return match perm_value {
+                PermissionValue::Bool(true) => PermissionResult::Allowed,
+                PermissionValue::Bool(false) => PermissionResult::Denied(format!(
+                    "Access denied by ACL: {} not allowed on '{}'",
+                    operation.as_str(),
+                    resolved.display()
+                )),
+                PermissionValue::Confirm => PermissionResult::NeedsConfirmation(format!(
+                    "Confirmation required to {} '{}'",
+                    operation.as_str(),
+                    resolved.display()
+                )),
+            };
+        }
+    }
+    
+    // No ACL match - use default permissions
+    let default_allowed = match operation {
+        FileOp::Read => permissions.default.read,
+        FileOp::Write => permissions.default.write,
+        FileOp::Delete => permissions.default.delete,
+    };
+    
+    if default_allowed {
+        PermissionResult::Allowed
+    } else {
+        PermissionResult::Denied(format!(
+            "Access denied by default policy: {} not allowed",
+            operation.as_str()
+        ))
+    }
+}
 
 /// Check if a resolved path points to a sensitive location.
 ///
@@ -25,16 +187,23 @@ fn check_sensitive_path(resolved: &Path) -> Result<(), String> {
         home.join(".config/gcloud"),
     ];
 
-    // Blocked files inside ~/.homun/ (allow ~/.homun/workspace/ subtree)
+    // Blocked files inside ~/.homun/ (allow workspace/, brain/, memory/ subtrees)
     let homun_dir = home.join(".homun");
-    let workspace_dir = homun_dir.join("workspace");
+    let allowed_subtrees: &[PathBuf] = &[
+        homun_dir.join("workspace"),
+        homun_dir.join("brain"),
+        homun_dir.join("memory"),
+    ];
 
-    // If path is under ~/.homun/ but NOT under ~/.homun/workspace/, block it
-    if resolved.starts_with(&homun_dir) && !resolved.starts_with(&workspace_dir) {
-        return Err(format!(
-            "Access denied: '{}' is in the protected Homun config directory",
-            resolved.display()
-        ));
+    // If path is under ~/.homun/ but NOT under an allowed subtree, block it
+    if resolved.starts_with(&homun_dir) {
+        let in_allowed = allowed_subtrees.iter().any(|s| resolved.starts_with(s));
+        if !in_allowed {
+            return Err(format!(
+                "Access denied: '{}' is in the protected Homun config directory",
+                resolved.display()
+            ));
+        }
     }
 
     // Check blocked directory prefixes
@@ -63,12 +232,93 @@ fn check_sensitive_path(resolved: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Resolve and validate a path, optionally restricting to an allowed directory.
+/// Check path permission with optional ACL-based permissions.
+/// 
+/// This combines:
+/// 1. Hardcoded sensitive path checks (always enforced)
+/// 2. Mode-based permission checking (open/workspace/acl)
+pub fn check_path_permission(
+    resolved: &Path,
+    operation: FileOp,
+    permissions: Option<&PermissionsConfig>,
+    allowed_dir: Option<&Path>,
+) -> PermissionResult {
+    // Layer 1: Always check hardcoded sensitive paths
+    if let Err(reason) = check_sensitive_path(resolved) {
+        return PermissionResult::Denied(reason);
+    }
+
+    // If no permissions config, use legacy workspace mode
+    let perms = match permissions {
+        Some(p) => p,
+        None => {
+            // Legacy mode: use allowed_dir logic
+            if let Some(allowed) = allowed_dir {
+                let allowed_resolved = allowed.canonicalize().unwrap_or_else(|_| allowed.to_path_buf());
+                let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+                let always_allowed: Vec<PathBuf> = vec![
+                    home.join(".homun").join("brain"),
+                    home.join(".homun").join("memory"),
+                ];
+                
+                let in_allowed = resolved.starts_with(&allowed_resolved)
+                    || always_allowed.iter().any(|a| resolved.starts_with(a));
+                
+                if !in_allowed {
+                    return PermissionResult::Denied(format!(
+                        "Path '{}' is outside allowed directories",
+                        resolved.display()
+                    ));
+                }
+            }
+            return PermissionResult::Allowed;
+        }
+    };
+
+    // Layer 2: Mode-based permission checking
+    match perms.mode {
+        PermissionMode::Open => {
+            // Open mode: only hardcoded checks apply (already done above)
+            PermissionResult::Allowed
+        }
+        PermissionMode::Workspace => {
+            // Workspace mode: use allowed_dir logic
+            let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+            let workspace = crate::config::Config::workspace_dir();
+            let always_allowed: Vec<PathBuf> = vec![
+                home.join(".homun").join("brain"),
+                home.join(".homun").join("memory"),
+            ];
+            
+            let in_allowed = resolved.starts_with(&workspace)
+                || always_allowed.iter().any(|a| resolved.starts_with(a));
+            
+            if in_allowed {
+                PermissionResult::Allowed
+            } else {
+                PermissionResult::Denied(format!(
+                    "Path '{}' is outside allowed directories (workspace mode)",
+                    resolved.display()
+                ))
+            }
+        }
+        PermissionMode::Acl => {
+            // ACL mode: full ACL evaluation
+            check_acl_permission(resolved, operation, perms)
+        }
+    }
+}
+
+/// Resolve and validate a path, optionally restricting to allowed directories.
+///
+/// When `restrict_to_workspace` is enabled, the agent can access:
+/// - `~/workspace/` (or configured workspace)
+/// - `~/.homun/brain/` (agent memory files)
+/// - `~/.homun/memory/` (daily memory files)
 fn resolve_path(path: &str, allowed_dir: Option<&Path>) -> Result<PathBuf, String> {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let expanded = if let Some(stripped) = path.strip_prefix("~/") {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(stripped)
+        home.join(stripped)
     } else {
         PathBuf::from(path)
     };
@@ -91,13 +341,24 @@ fn resolve_path(path: &str, allowed_dir: Option<&Path>) -> Result<PathBuf, Strin
         })
         .map_err(|e| format!("Invalid path '{path}': {e}"))?;
 
+    // If restrict_to_workspace is enabled, check allowed directories
     if let Some(allowed) = allowed_dir {
         let allowed_resolved = allowed.canonicalize().unwrap_or_else(|_| allowed.to_path_buf());
-        if !resolved.starts_with(&allowed_resolved) {
+        
+        // Always allow brain/ and memory/ directories for agent memory access
+        let homun_dir = home.join(".homun");
+        let always_allowed: Vec<PathBuf> = vec![
+            homun_dir.join("brain"),
+            homun_dir.join("memory"),
+        ];
+        
+        let in_allowed = resolved.starts_with(&allowed_resolved)
+            || always_allowed.iter().any(|a| resolved.starts_with(a));
+        
+        if !in_allowed {
             return Err(format!(
-                "Path '{}' is outside allowed directory '{}'",
-                path,
-                allowed.display()
+                "Path '{}' is outside allowed directories. Allowed: workspace, ~/.homun/brain/, ~/.homun/memory/",
+                path
             ));
         }
     }
@@ -112,11 +373,16 @@ fn resolve_path(path: &str, allowed_dir: Option<&Path>) -> Result<PathBuf, Strin
 /// Read the contents of a file.
 pub struct ReadFileTool {
     allowed_dir: Option<PathBuf>,
+    permissions: Option<Arc<PermissionsConfig>>,
 }
 
 impl ReadFileTool {
     pub fn new(allowed_dir: Option<PathBuf>) -> Self {
-        Self { allowed_dir }
+        Self { allowed_dir, permissions: None }
+    }
+
+    pub fn with_permissions(allowed_dir: Option<PathBuf>, permissions: Arc<PermissionsConfig>) -> Self {
+        Self { allowed_dir, permissions: Some(permissions) }
     }
 }
 
@@ -150,9 +416,11 @@ impl Tool for ReadFileTool {
             Err(e) => return Ok(ToolResult::error(e)),
         };
 
-        // Sensitive path blocklist — unconditional
-        if let Err(reason) = check_sensitive_path(&path) {
-            return Ok(ToolResult::error(reason));
+        // Check permissions (combines sensitive path + ACL)
+        match check_path_permission(&path, FileOp::Read, self.permissions.as_deref(), self.allowed_dir.as_deref()) {
+            PermissionResult::Denied(reason) => return Ok(ToolResult::error(reason)),
+            PermissionResult::NeedsConfirmation(reason) => return Ok(ToolResult::error(format!("{} (confirmation required)", reason))),
+            PermissionResult::Allowed => {}
         }
 
         if !path.exists() {
@@ -187,11 +455,16 @@ impl Tool for ReadFileTool {
 /// Write content to a file, creating it and parent directories if needed.
 pub struct WriteFileTool {
     allowed_dir: Option<PathBuf>,
+    permissions: Option<Arc<PermissionsConfig>>,
 }
 
 impl WriteFileTool {
     pub fn new(allowed_dir: Option<PathBuf>) -> Self {
-        Self { allowed_dir }
+        Self { allowed_dir, permissions: None }
+    }
+
+    pub fn with_permissions(allowed_dir: Option<PathBuf>, permissions: Arc<PermissionsConfig>) -> Self {
+        Self { allowed_dir, permissions: Some(permissions) }
     }
 }
 
@@ -230,9 +503,11 @@ impl Tool for WriteFileTool {
             Err(e) => return Ok(ToolResult::error(e)),
         };
 
-        // Sensitive path blocklist — unconditional
-        if let Err(reason) = check_sensitive_path(&path) {
-            return Ok(ToolResult::error(reason));
+        // Check permissions (combines sensitive path + ACL)
+        match check_path_permission(&path, FileOp::Write, self.permissions.as_deref(), self.allowed_dir.as_deref()) {
+            PermissionResult::Denied(reason) => return Ok(ToolResult::error(reason)),
+            PermissionResult::NeedsConfirmation(reason) => return Ok(ToolResult::error(format!("{} (confirmation required)", reason))),
+            PermissionResult::Allowed => {}
         }
 
         // Create parent directories
@@ -262,11 +537,16 @@ impl Tool for WriteFileTool {
 /// Edit a file by replacing an exact text match.
 pub struct EditFileTool {
     allowed_dir: Option<PathBuf>,
+    permissions: Option<Arc<PermissionsConfig>>,
 }
 
 impl EditFileTool {
     pub fn new(allowed_dir: Option<PathBuf>) -> Self {
-        Self { allowed_dir }
+        Self { allowed_dir, permissions: None }
+    }
+
+    pub fn with_permissions(allowed_dir: Option<PathBuf>, permissions: Arc<PermissionsConfig>) -> Self {
+        Self { allowed_dir, permissions: Some(permissions) }
     }
 }
 
@@ -312,9 +592,11 @@ impl Tool for EditFileTool {
             Err(e) => return Ok(ToolResult::error(e)),
         };
 
-        // Sensitive path blocklist — unconditional
-        if let Err(reason) = check_sensitive_path(&path) {
-            return Ok(ToolResult::error(reason));
+        // Check permissions (edit requires write)
+        match check_path_permission(&path, FileOp::Write, self.permissions.as_deref(), self.allowed_dir.as_deref()) {
+            PermissionResult::Denied(reason) => return Ok(ToolResult::error(reason)),
+            PermissionResult::NeedsConfirmation(reason) => return Ok(ToolResult::error(format!("{} (confirmation required)", reason))),
+            PermissionResult::Allowed => {}
         }
 
         if !path.exists() {
@@ -361,11 +643,16 @@ impl Tool for EditFileTool {
 /// List the contents of a directory.
 pub struct ListDirTool {
     allowed_dir: Option<PathBuf>,
+    permissions: Option<Arc<PermissionsConfig>>,
 }
 
 impl ListDirTool {
     pub fn new(allowed_dir: Option<PathBuf>) -> Self {
-        Self { allowed_dir }
+        Self { allowed_dir, permissions: None }
+    }
+
+    pub fn with_permissions(allowed_dir: Option<PathBuf>, permissions: Arc<PermissionsConfig>) -> Self {
+        Self { allowed_dir, permissions: Some(permissions) }
     }
 }
 
@@ -399,9 +686,11 @@ impl Tool for ListDirTool {
             Err(e) => return Ok(ToolResult::error(e)),
         };
 
-        // Sensitive path blocklist — unconditional
-        if let Err(reason) = check_sensitive_path(&path) {
-            return Ok(ToolResult::error(reason));
+        // Check permissions (list requires read)
+        match check_path_permission(&path, FileOp::Read, self.permissions.as_deref(), self.allowed_dir.as_deref()) {
+            PermissionResult::Denied(reason) => return Ok(ToolResult::error(reason)),
+            PermissionResult::NeedsConfirmation(reason) => return Ok(ToolResult::error(format!("{} (confirmation required)", reason))),
+            PermissionResult::Allowed => {}
         }
 
         if !path.exists() {
@@ -546,6 +835,62 @@ mod tests {
         let args = serde_json::json!({"path": "/etc/passwd"});
         let result = read_tool.execute(args, &test_ctx()).await.unwrap();
         assert!(result.is_error);
-        assert!(result.output.contains("outside allowed directory"));
+        assert!(result.output.contains("outside allowed directories"));
+    }
+
+    #[tokio::test]
+    async fn test_homun_dir_protection() {
+        let home = dirs::home_dir().expect("need home dir for test");
+        let homun_dir = home.join(".homun");
+
+        // Files directly in ~/.homun/ should be blocked
+        for filename in &["config.toml", "homun.db", "MEMORY.md"] {
+            let path = homun_dir.join(filename);
+            let result = check_sensitive_path(&path);
+            assert!(result.is_err(), "{filename} should be blocked but was allowed");
+        }
+
+        // Files under ~/.homun/workspace/ should be allowed
+        let ws_file = homun_dir.join("workspace").join("notes.txt");
+        let result = check_sensitive_path(&ws_file);
+        assert!(result.is_ok(), "workspace file should be allowed");
+
+        // Files under ~/.homun/brain/ should be allowed (agent memory)
+        for filename in &["USER.md", "INSTRUCTIONS.md", "SOUL.md"] {
+            let path = homun_dir.join("brain").join(filename);
+            let result = check_sensitive_path(&path);
+            assert!(result.is_ok(), "brain/{filename} should be allowed but got: {result:?}");
+        }
+
+        // Files under ~/.homun/memory/ should be allowed (daily memory)
+        let mem_file = homun_dir.join("memory").join("2026-02-21.md");
+        let result = check_sensitive_path(&mem_file);
+        assert!(result.is_ok(), "memory/2026-02-21.md should be allowed but got: {result:?}");
+    }
+
+    #[tokio::test]
+    async fn test_brain_and_memory_always_allowed() {
+        // When restrict_to_workspace is true, brain/ and memory/ should still be accessible
+        let home = dirs::home_dir().expect("need home dir for test");
+        let workspace = TempDir::new().unwrap();
+        
+        // Simulate restrict_to_workspace mode
+        let read_tool = ReadFileTool::new(Some(workspace.path().to_path_buf()));
+        
+        // brain/ should be allowed even with restrict_to_workspace
+        let brain_path = home.join(".homun").join("brain").join("USER.md");
+        let result = resolve_path(
+            brain_path.to_str().unwrap(),
+            Some(workspace.path()),
+        );
+        assert!(result.is_ok(), "brain/ should be allowed: {:?}", result);
+        
+        // memory/ should be allowed
+        let memory_path = home.join(".homun").join("memory").join("2026-02-21.md");
+        let result = resolve_path(
+            memory_path.to_str().unwrap(),
+            Some(workspace.path()),
+        );
+        assert!(result.is_ok(), "memory/ should be allowed: {:?}", result);
     }
 }

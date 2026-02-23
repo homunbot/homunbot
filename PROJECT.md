@@ -273,7 +273,7 @@ Scratch space for the agent to read/write files during task execution.
 
 ## Development Phases
 
-### Phase 1: Core Foundation ← DONE
+### Phase 1: Core Foundation ✅ COMPLETE
 - [x] Project scaffold (Cargo.toml, modules, CLAUDE.md)
 - [x] Config loading from TOML
 - [x] Provider trait + OpenAI-compatible implementation (covers OpenRouter, Ollama)
@@ -282,9 +282,9 @@ Scratch space for the agent to read/write files during task execution.
 - [x] SQLite setup with migrations
 - [x] Basic conversation history (persisted in SQLite)
 
-### Phase 2: Tools & Skills ← DONE
+### Phase 2: Tools & Skills ✅ COMPLETE
 - [x] Tool trait + registry
-- [x] Shell tool (command execution with sandboxing)
+- [x] Shell tool (command execution)
 - [x] File tools (read, write, edit, list)
 - [x] Web search tool (Brave API) + Web fetch tool
 - [x] Tool calling integration in agent loop (ReAct iterations, max 20)
@@ -292,55 +292,119 @@ Scratch space for the agent to read/write files during task execution.
 - [x] Skill activation in context builder
 - [x] `homun skills add/remove/list` CLI commands
 
-### Phase 3: Channels & Communication ← DONE
+### Phase 3: Channels & Communication ✅ COMPLETE
 - [x] Channel trait + message bus (tokio mpsc)
-- [x] Telegram channel (teloxide, long polling)
-- [ ] WhatsApp bridge (Node.js process, local HTTP API) ← deferred
+- [x] Telegram channel (teloxide, long polling, retry with backoff)
+- [x] WhatsApp channel (native wa-rs Rust implementation, no Node.js bridge)
+- [x] Discord channel (serenity)
 - [x] Gateway command (orchestrate all channels)
 - [x] Message routing (inbound → agent → outbound)
 
-### Phase 4: Memory & Scheduling ← DONE
-- [x] Memory consolidation (LLM-powered summarization)
+### Phase 4: Memory & Scheduling ✅ COMPLETE
+- [x] Memory consolidation v2 (LLM classification: history/facts/instructions/secrets)
 - [x] Long-term memory retrieval in context builder
-- [x] Cron scheduler (custom implementation, no external crate)
+- [x] Vector embeddings (fastembed AllMiniLML6V2Q, 384-dim, multilingual)
+- [x] Vector search (USearch HNSW, O(log N))
+- [x] Hybrid search (Vector + FTS5 BM25 with RRF merge)
+- [x] Daily memory files (`memory/YYYY-MM-DD.md`)
+- [x] INSTRUCTIONS.md (learned rules from conversations)
+- [x] Encrypted vault (AES-256-GCM, keyring integration)
+- [x] Cron scheduler (tokio-cron-scheduler)
 - [x] Cron tool (LLM can create/list/remove jobs via tool_use)
-- [x] Cron CLI commands (`homun cron list/add/remove`)
-- [x] Auto deliver_to (cron jobs route responses to originating channel)
 - [x] Heartbeat system (periodic proactive wake-up)
-- [x] Subagent system (background task spawning via spawn_subagent tool)
+- [x] Subagent system (background task spawning)
 
-### Phase 5: Providers & Skills Ecosystem ← DONE
-- [x] Anthropic native provider (Claude API with tool_use, content blocks, system extraction)
-- [x] 14 LLM providers (anthropic, openai, openrouter, ollama, deepseek, groq, gemini, minimax, aihubmix, dashscope, moonshot, zhipu, vllm, custom)
-- [x] Keyword-based provider resolution with gateway/local fallback
-- [x] Skill installer (`homun skills add owner/repo` — GitHub fetch + tarball extraction)
-- [x] Skill executor (run Python/Bash/JS/TS scripts from skill directories)
-- [x] Bundled skills (daily-briefing, code-review)
+### Phase 5: Providers & Skills Ecosystem ✅ COMPLETE
+- [x] Anthropic native provider (Claude API with tool_use, streaming)
+- [x] Ollama native provider (`/api/chat` endpoint, think parameter control)
+- [x] OpenAI-compatible provider (covers OpenRouter, DeepSeek, Groq, etc.)
+- [x] XML dispatcher (fallback for models without native function calling)
+- [x] Auto-detect tool support (switches to XML mode automatically)
+- [x] Skill installer (`homun skills add owner/repo`)
+- [x] Skill executor (run Python/Bash/JS scripts)
+- [x] Skill security scanner (checks for dangerous patterns)
+- [x] ClawHub integration (browse community skills)
 
-### Phase 6: UX & Web UI ← CURRENT
-> See TASKS.md for detailed task breakdown
+### Phase 6: UX & Web UI 🔄 IN PROGRESS (60%)
 
-- [ ] Web server embedded (axum, port 18080, embedded assets)
-- [ ] Dashboard home (agent status, channels, sessions, resources)
+#### Completed
+- [x] Web server embedded (axum, port 18080, embedded assets)
+- [x] Dashboard page (agent status, channels, resources)
+- [x] Chat UI (WebSocket streaming, markdown rendering)
+- [x] Skills page (list, install from ClawHub)
+- [x] Memory page (browse/edit USER.md, MEMORY.md)
+- [x] Vault page (encrypted secrets management)
+- [x] Permissions page (channel auth settings)
+- [x] Logs page (real-time log viewer)
+- [x] REST API (`/api/v1/*` endpoints)
+- [x] Reasoning filter (strips thinking from text channels, keeps for Web UI)
+
+#### Remaining
 - [ ] Config wizard (guided setup, zero TOML editing)
-- [ ] Skill manager UI (browse ClawHub, install one-click, security badges)
-- [ ] Chat UI (WebSocket, markdown, tool execution display)
-- [ ] Log viewer (real-time SSE, filters)
-- [ ] REST API (`/api/v1/chat`, `/api/v1/skills`, `/api/v1/config`)
-- [ ] Browser control tool (CDP via chromiumoxide)
-- [ ] 10 skill bundled (daily-briefing, market-monitor, email-digest, etc.)
-- [ ] Skill security (SHA256 hash, script sandboxing, trust levels)
+- [ ] Better error handling in UI
+- [ ] Real-time log streaming (SSE)
+- [ ] Token usage/cost tracking dashboard
 
-### Phase 7: Channels & Distribution
+### Phase 7: Production Hardening 🔴 PENDING
+
+#### P0 - Critical (Security & Stability)
+- [ ] Shell tool sandboxing (allowlist, workspace restriction)
+- [ ] Command allowlist (ZeroClaw-style permissions)
+- [ ] Graceful shutdown (SIGTERM/SIGINT handling, DB flush)
+- [ ] Config validation at startup
+- [ ] CI pipeline (GitHub Actions: check, test, clippy)
+
+#### P1 - High (Production Viability)
+- [ ] Model failover (fallback on provider errors)
 - [ ] Slack channel (Socket Mode)
 - [ ] Email channel (IMAP + SMTP)
-- [ ] Voice transcription (Groq Whisper)
-- [ ] Webhook tool (inbound + outbound)
-- [ ] Dockerfile (FROM scratch, <15MB)
-- [ ] GitHub Actions CI/CD (multi-arch builds)
+- [ ] Service install (systemd/launchd scripts)
+
+#### P2 - Medium (Feature Parity with Competitors)
+- [ ] Browser automation tool (CDP via chromiumoxide)
+- [ ] Git tool (safer than shell commands)
+- [ ] Pre-built binaries (GitHub Releases for macOS/Linux/Windows)
+- [ ] Docker image (multi-arch)
+- [ ] Typing indicators (Telegram, Discord)
+
+#### P3 - Low (Polish)
+- [ ] Homebrew formula
 - [ ] Installer script (`curl | sh`)
-- [ ] Homebrew formula + crates.io
 - [ ] Documentation site
+- [ ] Tunnel support (Cloudflare, Tailscale)
+
+---
+
+## Known Gaps vs Competitors
+
+### vs OpenClaw
+| Feature | Status | Priority |
+|---------|--------|----------|
+| Browser automation (CDP) | ❌ Missing | P2 |
+| Slack channel | ❌ Missing | P1 |
+| Email channel | ❌ Missing | P1 |
+| 30+ channels | 5 channels | P2 |
+| Lobster workflows | ❌ Missing | Future |
+
+### vs ZeroClaw
+| Feature | Status | Priority |
+|---------|--------|----------|
+| Pre-built binaries | ❌ Missing | P2 |
+| Docker image | ❌ Missing | P2 |
+| 30+ providers | 4 providers | P2 |
+| AIEOS identity | ❌ Missing | Future |
+| Command allowlist | ❌ Missing | P0 |
+
+### Homun Advantages
+| Feature | Homun | OpenClaw | ZeroClaw |
+|---------|-------|----------|----------|
+| Embeddings locali | ✅ | ❌ | ❌ (API) |
+| Web UI | ✅ 8 pages | ✅ | ❌ |
+| Daily memory files | ✅ | ✅ | ❌ |
+| Instruction learning | ✅ | ❌ | ❌ |
+| Agent Skills standard | ✅ | ❌ | ❌ |
+| WhatsApp nativo Rust | ✅ | Node.js | ❓ |
+| Hybrid search (RRF) | ✅ | ❌ | ✅ |
 
 ## Open Questions & Future Ideas
 

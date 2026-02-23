@@ -26,6 +26,20 @@ pub struct OutboundMessage {
     pub content: String,
 }
 
+/// A streaming text chunk routed to a specific chat session.
+/// Used by the gateway to push incremental LLM output to the web UI
+/// via the WebSocket stream_sessions map.
+#[derive(Debug, Clone)]
+pub struct StreamMessage {
+    pub chat_id: String,
+    pub delta: String,
+    pub done: bool,
+    /// Optional event type for non-text chunks (e.g. "tool_start", "tool_end").
+    pub event_type: Option<String>,
+    /// Tool call details for tool_start events
+    pub tool_call_data: Option<crate::provider::ToolCallData>,
+}
+
 /// Message bus — routes messages between channels and the agent loop
 /// using tokio mpsc channels.
 pub struct MessageBus {

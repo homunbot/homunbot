@@ -1,16 +1,17 @@
-//! Secure secrets storage using AES-256-GCM encryption with OS keychain-backed keys.
+//! Secure secrets storage using AES-256-GCM encryption.
 //!
 //! Architecture:
 //! - Secrets are stored in `~/.homun/secrets.enc` (encrypted JSON)
-//! - Encryption key is stored in OS keychain (macOS Keychain / Linux Secret Service)
+//! - Master key storage (in priority order):
+//!   1. OS keychain (macOS Keychain / Linux Secret Service / Windows Credential Manager)
+//!   2. File-based fallback (`~/.homun/master.key`, permissions 0600)
 //! - Algorithm: AES-256-GCM with random nonce per encryption
-//! - Key derivation: Direct key storage (no password-based derivation needed)
 //!
 //! Security properties:
-//! - Keys never written to disk in plaintext
 //! - Each encryption uses a fresh random nonce
 //! - Authentication tag prevents tampering
 //! - Memory is zeroed after use (zeroize)
+//! - File-based fallback uses restrictive permissions (owner-only)
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -107,60 +108,138 @@ impl NonceSequence for SingleNonce {
     }
 }
 
+/// Where the master key is stored
+#[derive(Debug)]
+enum KeyBackend {
+    /// OS keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager)
+    Keychain(keyring::Entry),
+    /// File-based fallback for headless/server environments (~/.homun/master.key)
+    File(PathBuf),
+}
+
 /// Secure secrets storage with AES-256-GCM encryption
 pub struct EncryptedSecrets {
     path: PathBuf,
     rng: SystemRandom,
-    #[allow(dead_code)]
-    keyring: keyring::Entry,
+    backend: KeyBackend,
 }
 
 impl EncryptedSecrets {
-    /// Create a new secrets storage at the default location
+    /// Create a new secrets storage at the default location.
+    ///
+    /// Tries OS keychain first; falls back to file-based key storage
+    /// on headless systems (servers, Docker, WSL without GUI).
     pub fn new() -> Result<Self> {
         let path = Self::default_path()?;
-
-        // Create keyring entry for master key
-        let keyring = keyring::Entry::new(KEYCHAIN_SERVICE, MASTER_KEY_ID)
-            .map_err(|e| SecretsError::KeychainError(e.to_string()))?;
-
         let rng = SystemRandom::new();
 
-        let storage = Self { path, rng, keyring };
+        // Try OS keychain first
+        let backend = match Self::try_keychain() {
+            Ok(entry) => {
+                tracing::debug!("Using OS keychain for master key");
+                KeyBackend::Keychain(entry)
+            }
+            Err(e) => {
+                let key_path = crate::config::Config::data_dir().join("master.key");
+                tracing::info!(
+                    reason = %e,
+                    fallback = %key_path.display(),
+                    "OS keychain unavailable, using file-based key storage"
+                );
+                KeyBackend::File(key_path)
+            }
+        };
 
-        // Ensure the master key exists
+        let storage = Self { path, rng, backend };
         storage.ensure_master_key()?;
 
         Ok(storage)
     }
 
-    /// Get the default path for secrets file
-    fn default_path() -> Result<PathBuf> {
-        let data_dir = dirs::data_local_dir()
-            .or_else(|| dirs::data_dir())
-            .context("Cannot determine data directory")?;
-        Ok(data_dir.join("homun").join("secrets.enc"))
+    /// Attempt to create a keychain entry. Fails on headless systems.
+    fn try_keychain() -> Result<keyring::Entry, String> {
+        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, MASTER_KEY_ID)
+            .map_err(|e| format!("keyring init: {e}"))?;
+
+        // Probe: try to read — NoEntry is fine (we'll create it), other errors = unsupported
+        match entry.get_password() {
+            Ok(_) => Ok(entry),
+            Err(keyring::Error::NoEntry) => Ok(entry),
+            Err(e) => Err(format!("keyring probe: {e}")),
+        }
     }
 
-    /// Ensure a master key exists in the keychain
-    fn ensure_master_key(&self) -> Result<()> {
-        // Try to get existing key
-        match self.keyring.get_password() {
-            Ok(_) => {
-                tracing::debug!("Master key already exists in keychain");
-                Ok(())
+    /// Get the default path for secrets file (~/.homun/secrets.enc)
+    fn default_path() -> Result<PathBuf> {
+        let data_dir = crate::config::Config::data_dir();
+        let new_path = data_dir.join("secrets.enc");
+
+        // Migrate from legacy location (~/Library/Application Support/homun/)
+        if !new_path.exists() {
+            let legacy = dirs::data_local_dir()
+                .or_else(|| dirs::data_dir())
+                .map(|d| d.join("homun").join("secrets.enc"));
+
+            if let Some(old_path) = legacy {
+                if old_path.exists() {
+                    tracing::info!(
+                        from = %old_path.display(),
+                        to = %new_path.display(),
+                        "Migrating secrets.enc to new location"
+                    );
+                    if let Err(e) = std::fs::rename(&old_path, &new_path) {
+                        tracing::warn!("Failed to migrate secrets.enc, copying instead: {e}");
+                        let _ = std::fs::copy(&old_path, &new_path);
+                    }
+                }
             }
-            Err(keyring::Error::NoEntry) => {
-                tracing::info!("Generating new master key for secrets encryption");
-                let key = self.generate_key()?;
-                self.keyring
-                    .set_password(&key)
-                    .map_err(|e| SecretsError::KeychainError(e.to_string()))?;
-                tracing::info!("Master key stored in OS keychain");
-                Ok(())
-            }
-            Err(e) => Err(SecretsError::KeychainError(e.to_string()).into()),
         }
+
+        Ok(new_path)
+    }
+
+    /// Ensure a master key exists (keychain or file)
+    fn ensure_master_key(&self) -> Result<()> {
+        match &self.backend {
+            KeyBackend::Keychain(entry) => {
+                match entry.get_password() {
+                    Ok(_) => {
+                        tracing::debug!("Master key already exists in keychain");
+                    }
+                    Err(keyring::Error::NoEntry) => {
+                        tracing::info!("Generating new master key for secrets encryption");
+                        let key = self.generate_key()?;
+                        entry
+                            .set_password(&key)
+                            .map_err(|e| SecretsError::KeychainError(e.to_string()))?;
+                        tracing::info!("Master key stored in OS keychain");
+                    }
+                    Err(e) => return Err(SecretsError::KeychainError(e.to_string()).into()),
+                }
+            }
+            KeyBackend::File(path) => {
+                if !path.exists() {
+                    tracing::info!("Generating new master key (file-based)");
+                    let key = self.generate_key()?;
+
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::write(path, &key)?;
+
+                    // Set restrictive permissions (owner read/write only)
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+                    }
+                    tracing::info!(path = %path.display(), "Master key stored in file (0600)");
+                } else {
+                    tracing::debug!(path = %path.display(), "Master key file already exists");
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Generate a new random key (Base64-encoded 32 bytes)
@@ -171,11 +250,21 @@ impl EncryptedSecrets {
         Ok(BASE64.encode(key_bytes))
     }
 
-    /// Get the master key from keychain
+    /// Get the master key from keychain or file
     fn get_master_key(&self) -> Result<Zeroizing<[u8; 32]>> {
-        let key_b64 = self.keyring
-            .get_password()
-            .map_err(|e| SecretsError::KeychainError(e.to_string()))?;
+        let key_b64 = match &self.backend {
+            KeyBackend::Keychain(entry) => {
+                entry
+                    .get_password()
+                    .map_err(|e| SecretsError::KeychainError(e.to_string()))?
+            }
+            KeyBackend::File(path) => {
+                std::fs::read_to_string(path)
+                    .with_context(|| format!("Failed to read master key from {}", path.display()))?
+                    .trim()
+                    .to_string()
+            }
+        };
 
         let mut key_bytes = Zeroizing::new([0u8; 32]);
         BASE64.decode_slice(&key_b64, &mut *key_bytes)
@@ -302,6 +391,14 @@ impl EncryptedSecrets {
         self.save(&secrets)
     }
 
+    /// List all secret keys (returns key strings, not values)
+    pub fn list_keys(&self) -> Vec<String> {
+        match self.load() {
+            Ok(secrets) => secrets.keys().cloned().collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
     /// Check if secrets file exists
     pub fn exists(&self) -> bool {
         self.path.exists()
@@ -333,15 +430,13 @@ mod tests {
     use tempfile::TempDir;
 
     impl EncryptedSecrets {
-        /// Create a test instance with a custom path
+        /// Create a test instance using file-based key (no keychain pollution)
         fn test_new(path: PathBuf) -> Result<Self> {
             let rng = SystemRandom::new();
-            let keyring = keyring::Entry::new(
-                &format!("{}.test", KEYCHAIN_SERVICE),
-                &format!("{}.{:?}", MASTER_KEY_ID, std::time::Instant::now()),
-            ).map_err(|e| SecretsError::KeychainError(e.to_string()))?;
+            let key_path = path.with_extension("key");
+            let backend = KeyBackend::File(key_path);
 
-            let storage = Self { path, rng, keyring };
+            let storage = Self { path, rng, backend };
             storage.ensure_master_key()?;
             Ok(storage)
         }

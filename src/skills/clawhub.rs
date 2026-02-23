@@ -156,6 +156,9 @@ impl ClawHubInstaller {
     /// `slug` format: `owner/skill-name` (maps to openclaw/skills repo path)
     pub async fn install(&self, slug: &str) -> Result<InstallResult> {
         let (owner, skill_name) = parse_clawhub_slug(slug)?;
+        // The monorepo uses lowercase paths even if the ClawHub handle has mixed case
+        let owner_lower = owner.to_lowercase();
+        let skill_lower = skill_name.to_lowercase();
 
         tracing::info!(
             owner = %owner,
@@ -163,8 +166,8 @@ impl ClawHubInstaller {
             "Installing skill from ClawHub"
         );
 
-        // 1. Fetch SKILL.md from the monorepo
-        let skill_md_path = format!("{}/{}/{}/SKILL.md", CLAWHUB_SKILLS_PATH, owner, skill_name);
+        // 1. Fetch SKILL.md from the monorepo (paths are lowercase)
+        let skill_md_path = format!("{}/{}/{}/SKILL.md", CLAWHUB_SKILLS_PATH, owner_lower, skill_lower);
         let skill_md_content = self
             .fetch_file_from_monorepo(&skill_md_path)
             .await
@@ -175,7 +178,31 @@ impl ClawHubInstaller {
                 )
             })?;
 
-        // 2. Parse metadata
+        // 2. Security check before parsing/installing
+        let security_report = super::security::scan_skill_content(&skill_md_content);
+        if security_report.is_blocked() {
+            tracing::warn!(
+                owner = %owner,
+                skill = %skill_name,
+                "Skill blocked by security check"
+            );
+            anyhow::bail!(
+                "Skill '{}/{}' blocked by security scan:\n{}",
+                owner,
+                skill_name,
+                security_report.summary()
+            );
+        }
+        if !security_report.warnings.is_empty() {
+            tracing::info!(
+                owner = %owner,
+                skill = %skill_name,
+                warnings = security_report.warnings.len(),
+                "Skill has security warnings (non-blocking)"
+            );
+        }
+
+        // 3. Parse metadata
         let (meta, _body) = parse_skill_md_public(&skill_md_content)
             .with_context(|| "Failed to parse SKILL.md frontmatter from ClawHub skill")?;
 
@@ -192,10 +219,16 @@ impl ClawHubInstaller {
             });
         }
 
-        // 4. Download the skill directory from the monorepo
-        let skill_repo_path = format!("{}/{}/{}", CLAWHUB_SKILLS_PATH, owner, skill_name);
-        self.download_skill_dir(&skill_repo_path, &skill_dir)
-            .await?;
+        // 4. Write SKILL.md directly (we already have the content).
+        // Then try to download additional files from the monorepo.
+        tokio::fs::create_dir_all(&skill_dir).await?;
+        tokio::fs::write(skill_dir.join("SKILL.md"), &skill_md_content).await?;
+
+        // Try to download any additional files (scripts/, etc.) — non-fatal if it fails
+        let skill_repo_path = format!("{}/{}/{}", CLAWHUB_SKILLS_PATH, owner_lower, skill_lower);
+        if let Err(e) = self.download_extra_files(&skill_repo_path, &skill_dir).await {
+            tracing::debug!(error = %e, "No extra files to download (most skills are SKILL.md only)");
+        }
 
         // 5. Write a source marker so we know where it came from
         let source_file = skill_dir.join(".clawhub-source");
@@ -761,16 +794,34 @@ impl ClawHubInstaller {
 
     // --- Private helpers ---
 
-    /// Fetch a single file from the ClawHub monorepo via GitHub Contents API
+    /// Fetch a single file from the ClawHub monorepo.
+    /// Tries raw.githubusercontent.com first (no rate limit), falls back to Contents API.
     async fn fetch_file_from_monorepo(&self, path: &str) -> Result<String> {
-        let url = format!(
+        // Primary: raw.githubusercontent.com (no rate limit, fast)
+        let raw_url = format!(
+            "https://raw.githubusercontent.com/{}/{}/{}/{}",
+            CLAWHUB_REPO_OWNER, CLAWHUB_REPO_NAME, CLAWHUB_BRANCH, path
+        );
+
+        let response = self.client.get(&raw_url).send().await;
+        if let Ok(resp) = response {
+            if resp.status().is_success() {
+                return resp
+                    .text()
+                    .await
+                    .context("Failed to read raw content from GitHub");
+            }
+        }
+
+        // Fallback: GitHub Contents API (rate-limited but more reliable for edge cases)
+        let api_url = format!(
             "https://api.github.com/repos/{}/{}/contents/{}?ref={}",
             CLAWHUB_REPO_OWNER, CLAWHUB_REPO_NAME, path, CLAWHUB_BRANCH
         );
 
         let resp: GitHubContent = self
             .client
-            .get(&url)
+            .get(&api_url)
             .header("Accept", "application/vnd.github.v3+json")
             .send()
             .await
@@ -794,20 +845,27 @@ impl ClawHubInstaller {
         }
     }
 
+    /// Download extra files (scripts, etc.) from a skill directory, skipping SKILL.md.
+    /// Non-fatal — most skills only have SKILL.md which is already written.
+    async fn download_extra_files(&self, repo_path: &str, dest: &Path) -> Result<()> {
+        self.download_dir_recursive(repo_path, dest).await?;
+
+        // Make scripts executable
+        let scripts_dir = dest.join("scripts");
+        if scripts_dir.exists() {
+            make_scripts_executable(&scripts_dir).await;
+        }
+        Ok(())
+    }
+
     /// Download all files in a skill directory from the monorepo.
-    ///
-    /// Uses the GitHub Contents API to list directory contents (works for any repo size),
-    /// then recursively downloads files and subdirectories.
     async fn download_skill_dir(&self, repo_path: &str, dest: &Path) -> Result<()> {
-        // Create destination directory
         tokio::fs::create_dir_all(dest)
             .await
             .with_context(|| format!("Failed to create directory {}", dest.display()))?;
 
-        // Recursively download the directory
         self.download_dir_recursive(repo_path, dest).await?;
 
-        // Make scripts executable
         let scripts_dir = dest.join("scripts");
         if scripts_dir.exists() {
             make_scripts_executable(&scripts_dir).await;

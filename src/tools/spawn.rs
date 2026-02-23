@@ -77,7 +77,7 @@ impl Tool for SpawnTool {
                 }
             }
             "list" => {
-                let running = self.manager.list_running().await;
+                let running: Vec<(String, String)> = self.manager.list_running().await;
                 if running.is_empty() {
                     ToolResult::success("No background tasks running.")
                 } else {

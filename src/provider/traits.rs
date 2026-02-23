@@ -131,11 +131,56 @@ pub struct ChatRequest {
     pub temperature: f32,
 }
 
+/// A streaming chunk from the LLM
+#[derive(Debug, Clone)]
+pub struct StreamChunk {
+    /// Delta text content (may be empty)
+    pub delta: String,
+    /// True if this is the final chunk
+    pub done: bool,
+    /// Optional event type for non-text chunks (e.g. "tool_start", "tool_end").
+    /// `None` for regular text streaming chunks.
+    pub event_type: Option<String>,
+    /// Optional tool call data (for tool_call events)
+    pub tool_call_data: Option<ToolCallData>,
+}
+
+/// Data for tool_call streaming events
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallData {
+    pub id: String,
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
 /// LLM provider trait — abstracts over different API backends
 #[async_trait]
 pub trait Provider: Send + Sync {
     /// Send a chat request and get a response
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse>;
+
+    /// Send a chat request and stream text chunks back.
+    /// Default implementation falls back to non-streaming chat.
+    /// Only used for the final text response (no tool calls).
+    async fn chat_stream(
+        &self,
+        request: ChatRequest,
+        tx: tokio::sync::mpsc::Sender<StreamChunk>,
+    ) -> Result<ChatResponse> {
+        // Default: non-streaming — call chat() and send the full response as one chunk
+        let response = self.chat(request).await?;
+        if let Some(ref text) = response.content {
+            let _ = tx
+                .send(StreamChunk {
+                    delta: text.clone(),
+                    done: true,
+                    event_type: None,
+                    tool_call_data: None,
+                })
+                .await;
+        }
+        Ok(response)
+    }
 
     /// Provider name for logging/display
     fn name(&self) -> &str;

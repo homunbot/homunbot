@@ -13,6 +13,16 @@ use crate::bus::InboundMessage;
 
 use super::server::AppState;
 
+/// A stream event delivered to an individual WebSocket connection.
+/// Carries either a text delta (normal streaming) or a tool-call event.
+#[derive(Debug)]
+pub struct WsStreamEvent {
+    pub delta: String,
+    pub event_type: Option<String>,
+    /// Tool call details for tool_start events
+    pub tool_call_data: Option<crate::provider::ToolCallData>,
+}
+
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/ws/chat", get(ws_handler))
 }
@@ -27,17 +37,25 @@ async fn ws_handler(
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let (mut sender, mut receiver) = socket.split();
 
-    // Unique session for this WebSocket connection
-    let session_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
-    let chat_id = format!("web-{session_id}");
+    // Stable session — all Web UI tabs share one conversation in the DB.
+    // This ensures messages accumulate for memory consolidation to trigger.
+    // (WebSocket routing still works: each connection gets its own response_tx/stream_tx.)
+    let chat_id = "default".to_string();
 
-    // Channel for sending responses back to this WebSocket
+    // Channel for sending full responses back to this WebSocket
     let (response_tx, mut response_rx) = mpsc::channel::<String>(32);
 
-    // Register this session
+    // Channel for streaming text chunks and tool events (real-time delivery)
+    let (stream_tx, mut stream_rx) = mpsc::channel::<WsStreamEvent>(128);
+
+    // Register this session for both full responses and streaming
     {
         let mut sessions = state.ws_sessions.write().await;
         sessions.insert(chat_id.clone(), response_tx);
+    }
+    {
+        let mut streams = state.stream_sessions.write().await;
+        streams.insert(chat_id.clone(), stream_tx);
     }
 
     tracing::info!(session = %chat_id, "WebSocket client connected");
@@ -45,26 +63,64 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     // Send welcome message
     let welcome = serde_json::json!({
         "type": "connected",
-        "session_id": session_id,
+        "session_id": &chat_id,
     });
     let _ = sender
         .send(Message::Text(welcome.to_string().into()))
         .await;
 
-    // Task: forward agent responses to WebSocket
+    // Task: forward both full responses and stream chunks to WebSocket.
+    // Stream chunks arrive as `type: "stream"` messages.
+    // Full responses arrive as `type: "response"` messages.
     let chat_id_for_forward = chat_id.clone();
     let forward_task = tokio::spawn(async move {
-        while let Some(msg) = response_rx.recv().await {
-            let payload = serde_json::json!({
-                "type": "response",
-                "content": msg,
-            });
-            if sender
-                .send(Message::Text(payload.to_string().into()))
-                .await
-                .is_err()
-            {
-                break;
+        loop {
+            tokio::select! {
+                Some(msg) = response_rx.recv() => {
+                    let payload = serde_json::json!({
+                        "type": "response",
+                        "content": msg,
+                    });
+                    if sender
+                        .send(Message::Text(payload.to_string().into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Some(event) = stream_rx.recv() => {
+                    let payload = if let Some(ref evt) = event.event_type {
+                        // Tool event: tool_start or tool_end
+                        if evt == "tool_start" {
+                            // Include tool call data for tool_start events
+                            serde_json::json!({
+                                "type": evt,
+                                "name": event.delta,
+                                "tool_call": event.tool_call_data,
+                            })
+                        } else {
+                            serde_json::json!({
+                                "type": evt,
+                                "name": event.delta,
+                            })
+                        }
+                    } else {
+                        // Regular text streaming chunk
+                        serde_json::json!({
+                            "type": "stream",
+                            "delta": event.delta,
+                        })
+                    };
+                    if sender
+                        .send(Message::Text(payload.to_string().into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                else => break,
             }
         }
         tracing::info!(session = %chat_id_for_forward, "WebSocket forward task ended");
@@ -108,6 +164,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     {
         let mut sessions = state.ws_sessions.write().await;
         sessions.remove(&chat_id);
+    }
+    {
+        let mut streams = state.stream_sessions.write().await;
+        streams.remove(&chat_id);
     }
 
     forward_task.abort();

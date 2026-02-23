@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+use futures::StreamExt as _;
 use super::traits::*;
 
 /// OpenAI-compatible provider — covers OpenRouter, Ollama, OpenAI, DeepSeek, Groq,
@@ -98,6 +99,48 @@ struct OpenAIRequest {
     tools: Vec<ToolDefinition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
+}
+
+/// SSE streaming chunk from OpenAI-compatible API
+#[derive(Deserialize)]
+struct OpenAIStreamChunk {
+    choices: Vec<OpenAIStreamChoice>,
+}
+
+#[derive(Deserialize)]
+struct OpenAIStreamChoice {
+    delta: OpenAIStreamDelta,
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OpenAIStreamDelta {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<OpenAIStreamToolCall>>,
+}
+
+/// A tool call delta in an SSE chunk. The `id` and `function.name` arrive
+/// in the first chunk for each tool call; subsequent chunks for the same
+/// `index` append to `function.arguments`.
+#[derive(Deserialize)]
+struct OpenAIStreamToolCall {
+    index: usize,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    function: Option<OpenAIStreamToolFn>,
+}
+
+#[derive(Deserialize)]
+struct OpenAIStreamToolFn {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -167,6 +210,7 @@ impl Provider for OpenAICompatProvider {
             temperature: Some(request.temperature),
             tools: request.tools,
             tool_choice: if has_tools { Some("auto".to_string()) } else { None },
+            stream: None,
         };
 
         let mut req = self
@@ -252,6 +296,163 @@ impl Provider for OpenAICompatProvider {
         })
     }
 
+    async fn chat_stream(
+        &self,
+        request: ChatRequest,
+        tx: tokio::sync::mpsc::Sender<StreamChunk>,
+    ) -> Result<ChatResponse> {
+        let model = self.resolve_model(&request.model);
+        let url = format!("{}/chat/completions", self.api_base);
+
+        let body = OpenAIRequest {
+            model,
+            messages: request.messages,
+            max_tokens: Some(request.max_tokens.max(1)),
+            temperature: Some(request.temperature),
+            tools: request.tools,
+            tool_choice: None,
+            stream: Some(true),
+        };
+
+        let mut req = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json");
+
+        if !self.api_key.is_empty() {
+            req = req.bearer_auth(&self.api_key);
+        }
+
+        for (key, value) in &self.extra_headers {
+            req = req.header(key, value);
+        }
+
+        let response = req
+            .json(&body)
+            .send()
+            .await
+            .with_context(|| format!("Failed to send streaming request to {}", url))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            anyhow::bail!("Provider {} streaming error: HTTP {}: {}", self.provider_name, status, text);
+        }
+
+        // Read SSE stream — accumulate text content and tool call deltas.
+        let mut full_content = String::new();
+        let mut bytes_stream = response.bytes_stream();
+        let mut buffer = String::new();
+        let mut finish_reason = String::from("stop");
+
+        // Tool call accumulator: index → (id, name, arguments_buffer)
+        let mut tc_acc: std::collections::HashMap<usize, (String, String, String)> =
+            std::collections::HashMap::new();
+
+        while let Some(chunk_result) = bytes_stream.next().await {
+            let chunk = chunk_result.context("Error reading SSE stream")?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            // Process complete SSE lines from the buffer
+            while let Some(line_end) = buffer.find('\n') {
+                let line = buffer[..line_end].trim().to_string();
+                buffer = buffer[line_end + 1..].to_string();
+
+                if line.is_empty() || line.starts_with(':') {
+                    continue;
+                }
+
+                if let Some(data) = line.strip_prefix("data: ") {
+                    if data.trim() == "[DONE]" {
+                        // Only send done if we were streaming text (not tool calls)
+                        if tc_acc.is_empty() {
+                            let _ = tx.send(StreamChunk { 
+                                delta: String::new(), 
+                                done: true, 
+                                event_type: None,
+                                tool_call_data: None,
+                            }).await;
+                        }
+                        break;
+                    }
+
+                    if let Ok(chunk) = serde_json::from_str::<OpenAIStreamChunk>(data) {
+                        if let Some(choice) = chunk.choices.first() {
+                            // Text content delta → forward to client
+                            if let Some(ref delta) = choice.delta.content {
+                                if !delta.is_empty() {
+                                    full_content.push_str(delta);
+                                    let _ = tx.send(StreamChunk {
+                                        delta: delta.clone(),
+                                        done: false,
+                                        event_type: None,
+                                        tool_call_data: None,
+                                    }).await;
+                                }
+                            }
+
+                            // Tool call deltas → accumulate
+                            if let Some(ref tool_calls) = choice.delta.tool_calls {
+                                for tc_delta in tool_calls {
+                                    let entry = tc_acc
+                                        .entry(tc_delta.index)
+                                        .or_insert_with(|| (String::new(), String::new(), String::new()));
+
+                                    if let Some(ref func) = tc_delta.function {
+                                        if let Some(ref name) = func.name {
+                                            entry.1 = name.clone();
+                                        }
+                                        if let Some(ref args) = func.arguments {
+                                            entry.2.push_str(args);
+                                        }
+                                    }
+                                    if let Some(ref id) = tc_delta.id {
+                                        entry.0 = id.clone();
+                                    }
+                                }
+                            }
+
+                            if let Some(ref reason) = choice.finish_reason {
+                                finish_reason = reason.clone();
+                                if tc_acc.is_empty() {
+                                    let _ = tx.send(StreamChunk { 
+                                        delta: String::new(), 
+                                        done: true, 
+                                        event_type: None,
+                                        tool_call_data: None,
+                                    }).await;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Build tool calls from accumulated deltas
+        let mut tool_calls: Vec<ToolCallRequest> = Vec::new();
+        if !tc_acc.is_empty() {
+            let mut indices: Vec<usize> = tc_acc.keys().copied().collect();
+            indices.sort();
+            for idx in indices {
+                let (id, name, raw_args) = tc_acc.remove(&idx).unwrap();
+                let id = if id.is_empty() { format!("call_{idx}") } else { id };
+                let args_str = repair_json(&raw_args);
+                let arguments: serde_json::Value =
+                    serde_json::from_str(&args_str).unwrap_or(serde_json::json!({}));
+                tool_calls.push(ToolCallRequest { id, name, arguments });
+            }
+            finish_reason = "tool_calls".to_string();
+        }
+
+        Ok(ChatResponse {
+            content: if full_content.is_empty() { None } else { Some(full_content) },
+            tool_calls,
+            finish_reason,
+            usage: Usage::default(),
+        })
+    }
+
     fn name(&self) -> &str {
         &self.provider_name
     }
@@ -265,6 +466,11 @@ impl Provider for OpenAICompatProvider {
 /// - Unquoted keys: `{key: "value"}`
 /// - Trailing text after JSON: `{"key": "value"} and some other text`
 /// - Missing closing braces: `{"key": "value"`
+/// Public wrapper for use by xml_dispatcher
+pub(crate) fn repair_json_public(input: &str) -> String {
+    repair_json(input)
+}
+
 fn repair_json(input: &str) -> String {
     let mut s = input.trim().to_string();
 

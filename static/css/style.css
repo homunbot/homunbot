@@ -706,6 +706,23 @@ html, body {
     outline-offset: 2px;
 }
 
+.toggle-label-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.toggle-label-inline .toggle-input {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+}
+
+.toggle-label-inline span {
+    font-weight: 500;
+}
+
 /* ─── Model selector ─── */
 
 .model-selector-section {

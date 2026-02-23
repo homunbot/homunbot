@@ -197,6 +197,33 @@ impl Gateway {
         let mut cron_event_rx = self.cron_event_rx;
         tracing::info!("Cron scheduler started");
 
+        // --- Run memory cleanup if enabled ---
+        if self.config.memory.auto_cleanup {
+            let mem_config = &self.config.memory;
+            tracing::info!(
+                conversation_days = mem_config.conversation_retention_days,
+                history_days = mem_config.history_retention_days,
+                "Running automatic memory cleanup"
+            );
+            match self.db.run_memory_cleanup(
+                mem_config.conversation_retention_days,
+                mem_config.history_retention_days,
+            ).await {
+                Ok(result) => {
+                    if result.messages_deleted > 0 || result.chunks_deleted > 0 {
+                        tracing::info!(
+                            messages = result.messages_deleted,
+                            chunks = result.chunks_deleted,
+                            "Memory cleanup completed"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Memory cleanup failed (non-fatal)");
+                }
+            }
+        }
+
         if channels.is_empty() {
             println!("No channels enabled. Set [channels.telegram] enabled = true or [channels.web] enabled = true in ~/.homun/config.toml");
             return Ok(());

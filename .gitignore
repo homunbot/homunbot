@@ -28,3 +28,10 @@ vendor/
 *.db-shm
 *.db-wal
 *.log
+.cursorignore
+.fastembed_cache/*
+screenshot/*
+CLAUDE.md
+COMPARISON.md
+PROJECT.md
+TASKS.md
