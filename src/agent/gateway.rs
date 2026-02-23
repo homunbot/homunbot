@@ -4,11 +4,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::Result;
 use tokio::sync::mpsc;
 
-use crate::bus::{InboundMessage, OutboundMessage};
+use crate::bus::{InboundMessage, OutboundMessage, StreamMessage};
 use crate::channels::{DiscordChannel, TelegramChannel, WhatsAppChannel};
 use crate::config::Config;
 use crate::scheduler::{CronEvent, CronScheduler};
 use crate::session::SessionManager;
+use crate::storage::Database;
+use crate::utils::strip_reasoning;
 use crate::web::WebServer;
 
 use super::AgentLoop;
@@ -37,6 +39,10 @@ pub struct Gateway {
     cron_event_rx: mpsc::Receiver<CronEvent>,
     /// Receiver for messages sent by tools (MessageTool) that need routing to channels
     tool_message_rx: Option<mpsc::Receiver<OutboundMessage>>,
+    /// Sender for streaming chunks to the web server (forwarded to WebSocket sessions)
+    web_stream_tx: Option<mpsc::Sender<StreamMessage>>,
+    /// Database handle passed to the web server for memory/vault APIs
+    db: Database,
 }
 
 impl Gateway {
@@ -46,6 +52,7 @@ impl Gateway {
         session_manager: SessionManager,
         cron_scheduler: Arc<CronScheduler>,
         cron_event_rx: mpsc::Receiver<CronEvent>,
+        db: Database,
     ) -> Self {
         Self {
             agent,
@@ -54,6 +61,8 @@ impl Gateway {
             cron_scheduler,
             cron_event_rx,
             tool_message_rx: None,
+            web_stream_tx: None,
+            db,
         }
     }
 
@@ -64,7 +73,7 @@ impl Gateway {
 
     /// Start the gateway — runs all channels + cron + agent loop.
     /// Blocks until Ctrl+C.
-    pub async fn run(self) -> Result<()> {
+    pub async fn run(mut self) -> Result<()> {
         let (inbound_tx, mut inbound_rx) = mpsc::channel::<InboundMessage>(100);
         let mut channels: Vec<ChannelHandle> = Vec::new();
 
@@ -162,8 +171,14 @@ impl Gateway {
             let port = web_config.channels.web.port;
             let (web_outbound_tx, web_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
 
+            // Channel for streaming text chunks from the agent to WebSocket clients
+            let (stream_tx, stream_rx) = mpsc::channel::<StreamMessage>(256);
+            self.web_stream_tx = Some(stream_tx);
+
+            let web_db = self.db.clone();
             let handle = tokio::spawn(async move {
-                let server = WebServer::new(web_config, web_inbound_tx, web_outbound_rx);
+                let mut server = WebServer::new(web_config, web_inbound_tx, web_outbound_rx, web_db);
+                server.set_stream_rx(stream_rx);
                 if let Err(e) = server.start().await {
                     tracing::error!(error = %e, "Web UI server error");
                 }
@@ -209,6 +224,7 @@ impl Gateway {
         // --- Main message routing loop ---
         let agent = self.agent.clone();
         let senders_for_routing = outbound_senders.clone();
+        let web_stream_tx = self.web_stream_tx.take();
 
         let routing_loop = tokio::spawn(async move {
             while let Some(inbound) = inbound_rx.recv().await {
@@ -230,16 +246,84 @@ impl Gateway {
                 // Process through agent loop (spawned per-message)
                 let agent = agent.clone();
                 let senders = senders_for_routing.clone();
+                let stream_tx = web_stream_tx.clone();
 
                 tokio::spawn(async move {
-                    let response = match agent
-                        .process_message(&inbound.content, &session_key, &channel_name, &chat_id)
-                        .await
-                    {
-                        Ok(text) => text,
-                        Err(e) => {
-                            tracing::error!(error = %e, "Agent error");
-                            format!("Sorry, I encountered an error: {e}")
+                    // For the web channel, use streaming mode so we can push
+                    // incremental text chunks to the WebSocket client.
+                    let response = if channel_name == "web" {
+                        if let Some(bus_stream_tx) = stream_tx {
+                            let chat_id_for_stream = chat_id.clone();
+                            let (chunk_tx, mut chunk_rx) =
+                                mpsc::channel::<crate::provider::StreamChunk>(128);
+
+                            // Bridge: forward StreamChunks from the agent into
+                            // StreamMessages on the bus (routed to the web server)
+                            let bridge = tokio::spawn(async move {
+                                while let Some(chunk) = chunk_rx.recv().await {
+                                    let _ = bus_stream_tx
+                                        .send(StreamMessage {
+                                            chat_id: chat_id_for_stream.clone(),
+                                            delta: chunk.delta,
+                                            done: chunk.done,
+                                            event_type: chunk.event_type,
+                                            tool_call_data: chunk.tool_call_data,
+                                        })
+                                        .await;
+                                }
+                            });
+
+                            let result = agent
+                                .process_message_streaming(
+                                    &inbound.content,
+                                    &session_key,
+                                    &channel_name,
+                                    &chat_id,
+                                    chunk_tx,
+                                )
+                                .await;
+
+                            bridge.abort();
+                            match result {
+                                Ok(text) => text,
+                                Err(e) => {
+                                    tracing::error!(error = %e, "Agent error (streaming)");
+                                    format!("Sorry, I encountered an error: {e}")
+                                }
+                            }
+                        } else {
+                            // Fallback: no stream channel available
+                            match agent
+                                .process_message(
+                                    &inbound.content,
+                                    &session_key,
+                                    &channel_name,
+                                    &chat_id,
+                                )
+                                .await
+                            {
+                                Ok(text) => text,
+                                Err(e) => {
+                                    tracing::error!(error = %e, "Agent error");
+                                    format!("Sorry, I encountered an error: {e}")
+                                }
+                            }
+                        }
+                    } else {
+                        match agent
+                            .process_message(
+                                &inbound.content,
+                                &session_key,
+                                &channel_name,
+                                &chat_id,
+                            )
+                            .await
+                        {
+                            Ok(text) => text,
+                            Err(e) => {
+                                tracing::error!(error = %e, "Agent error");
+                                format!("Sorry, I encountered an error: {e}")
+                            }
                         }
                     };
 
@@ -249,10 +333,18 @@ impl Gateway {
                         "Agent response ready, routing to channel"
                     );
 
+                    // Strip reasoning/thinking blocks for non-web channels
+                    // Web UI handles reasoning separately via streaming events
+                    let content = if channel_name == "web" {
+                        response
+                    } else {
+                        strip_reasoning(&response)
+                    };
+
                     let outbound = OutboundMessage {
                         channel: channel_name.clone(),
                         chat_id,
-                        content: response,
+                        content,
                     };
 
                     route_outbound(outbound, &senders).await;
@@ -364,6 +456,10 @@ impl Gateway {
             ch.handle.abort();
             tracing::info!(channel = %ch.name, "Channel stopped");
         }
+
+        // Remove PID file so `homun stop` knows we're gone
+        let pid_file = crate::config::Config::data_dir().join("homun.pid");
+        let _ = std::fs::remove_file(&pid_file);
 
         tracing::info!("Gateway shutdown complete");
         println!("Goodbye! 🧪");
