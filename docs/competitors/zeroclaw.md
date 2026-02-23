@@ -25,8 +25,8 @@ The tagline: "Fast, small, and fully autonomous AI assistant infrastructure — 
 
 | Metric | ZeroClaw | OpenClaw | Homun |
 |--------|----------|----------|-------|
-| Binary size | ~3.4-8.8MB | N/A (Node.js) | ~30MB (debug) |
-| RAM | <5MB | ~1GB+ | ~50MB |
+| Binary size | ~3.4-8.8MB | N/A (Node.js) | ~47MB (release, stripped) |
+| RAM | <5MB | ~1GB+ | ~100MB (gateway mode) |
 | Startup | <10ms | seconds | ~100ms |
 | Min hardware | $10 boards | Mac mini | RPi 4+ |
 
@@ -133,8 +133,8 @@ Noop, Log, and Multi implementations. Extensible for Prometheus or OpenTelemetry
 ## Strengths vs Homun
 
 1. **Memory engine**: vector embeddings + FTS5 hybrid search in SQLite — far ahead of our file-based MEMORY.md
-2. **30+ providers**: more than our 14
-3. **16+ channels**: more than our 4
+2. **30+ providers**: slightly more than our 27
+3. **16+ channels**: more than our 4 + Web UI
 4. **Service management**: `zeroclaw service install` for background daemon
 5. **Tunnel abstraction**: Cloudflare, Tailscale, ngrok built-in
 6. **Hardware tools**: IoT/embedded support
@@ -142,15 +142,17 @@ Noop, Log, and Multi implementations. Extensible for Prometheus or OpenTelemetry
 8. **Observability traits**: extensible metrics/tracing
 9. **Channel doctor**: diagnostic tool for integration health
 10. **Encrypted auth profiles**: OAuth + API key management
+11. **Smaller binary**: ~8MB vs our ~47MB
 
 ## Weaknesses vs Homun
 
 1. **No Agent Skills standard**: uses own skill/identity format (AIEOS)
-2. **No Web UI** (as far as documented — CLI/Gateway/Daemon only)
-3. **No ClawHub/marketplace integration** for skill discovery
+2. **No Web UI**: CLI/Gateway/Daemon only — we have complete Web UI (dashboard, chat, skills, memory, vault, permissions)
+3. **No ClawHub/marketplace integration** for skill discovery — we have ClawHub client
 4. **Less mature documentation** than OpenClaw
 5. **Smaller community** (newer project)
 6. **No TUI** (we have ratatui-based TUI for WhatsApp pairing, etc.)
+7. **Fewer bundled skills**: we support Agent Skills open standard + ClawHub (3.286+ skills)
 
 ## Key Lessons for Homun
 
