@@ -273,15 +273,17 @@ fn create_provider(config: &Config) -> Result<Arc<dyn provider::Provider>> {
         );
         Ok(Arc::new(provider))
     } else if provider_name == "ollama" {
-        // Native Ollama provider (/api/chat — NDJSON, native tool calls, think control)
+        // Native Ollama provider (local /api/chat — NDJSON, native tool calls, think control)
         let provider = provider::OllamaProvider::new(
             &api_key,
             provider_config.api_base.as_deref(),
         );
         Ok(Arc::new(provider))
     } else {
-        // OpenAI-compatible provider (covers OpenRouter, OpenAI, DeepSeek,
-        // Groq, Gemini, Minimax, AiHubMix, DashScope, Moonshot, Zhipu, vLLM, custom)
+        // OpenAI-compatible provider (covers OpenRouter, OpenAI, DeepSeek, Groq, Gemini,
+        // Mistral, xAI, Together, Fireworks, Perplexity, Cohere, Venice, AiHubMix, Vercel,
+        // Cloudflare, Copilot, Bedrock, Minimax, DashScope, Moonshot, Zhipu, vLLM, custom,
+        // and ollama_cloud for Ollama's hosted service)
         let provider = OpenAICompatProvider::from_config(
             provider_name,
             &api_key,

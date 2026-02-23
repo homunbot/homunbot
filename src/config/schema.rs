@@ -174,10 +174,17 @@ impl Config {
         // --- 1. Direct keyword matching (ordered by specificity) ---
         let keyword_providers: &[(&[&str], &str, &ProviderConfig)] = &[
             (&["anthropic/", "claude"],           "anthropic",  &self.providers.anthropic),
-            (&["openai/", "gpt"],                 "openai",     &self.providers.openai),
+            (&["openai/", "gpt-", "o1-", "o3-"],  "openai",     &self.providers.openai),
+            (&["mistral/", "mixtral", "codestral"], "mistral",  &self.providers.mistral),
             (&["deepseek"],                       "deepseek",   &self.providers.deepseek),
             (&["groq/"],                          "groq",       &self.providers.groq),
             (&["gemini"],                         "gemini",     &self.providers.gemini),
+            (&["xai/", "grok"],                   "xai",        &self.providers.xai),
+            (&["together/"],                      "together",   &self.providers.together),
+            (&["fireworks/"],                     "fireworks",  &self.providers.fireworks),
+            (&["perplexity/", "sonar"],           "perplexity", &self.providers.perplexity),
+            (&["cohere/", "command"],             "cohere",     &self.providers.cohere),
+            (&["venice/"],                        "venice",     &self.providers.venice),
             (&["minimax"],                        "minimax",    &self.providers.minimax),
             (&["dashscope/", "qwen"],             "dashscope",  &self.providers.dashscope),
             (&["moonshot", "kimi"],               "moonshot",   &self.providers.moonshot),
@@ -190,15 +197,22 @@ impl Config {
             }
         }
 
-        // --- 2. Local providers — explicit prefix always wins ---
+        // --- 2. Local/cloud providers — explicit prefix always wins ---
         // These have unambiguous prefixes so they must match before gateways
         if m.starts_with("ollama/") {
+            // Check if ollama_cloud is configured (for Ollama cloud), otherwise use local
+            if self.is_provider_configured("ollama_cloud") {
+                return Some(("ollama_cloud", &self.providers.ollama_cloud));
+            }
             return Some(("ollama", &self.providers.ollama));
+        }
+        if m.starts_with("ollama_cloud/") {
+            return Some(("ollama_cloud", &self.providers.ollama_cloud));
         }
         if m.starts_with("vllm/") {
             return Some(("vllm", &self.providers.vllm));
         }
-        if m.starts_with("custom/") {
+        if m.starts_with("custom/") || m.starts_with("custom:") {
             return Some(("custom", &self.providers.custom));
         }
 
@@ -278,40 +292,74 @@ pub struct ProviderConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProvidersConfig {
+    // Primary providers
     pub anthropic: ProviderConfig,
     pub openai: ProviderConfig,
     pub openrouter: ProviderConfig,
+    pub gemini: ProviderConfig,
+    // Local/self-hosted
     pub ollama: ProviderConfig,
+    pub ollama_cloud: ProviderConfig,
+    pub vllm: ProviderConfig,
+    pub custom: ProviderConfig,
+    // Cloud providers (OpenAI-compatible)
     pub deepseek: ProviderConfig,
     pub groq: ProviderConfig,
-    pub gemini: ProviderConfig,
-    pub minimax: ProviderConfig,
+    pub mistral: ProviderConfig,
+    pub xai: ProviderConfig,
+    pub together: ProviderConfig,
+    pub fireworks: ProviderConfig,
+    pub perplexity: ProviderConfig,
+    pub cohere: ProviderConfig,
+    pub venice: ProviderConfig,
+    // Gateways/aggregators
     pub aihubmix: ProviderConfig,
+    pub vercel: ProviderConfig,
+    pub cloudflare: ProviderConfig,
+    pub copilot: ProviderConfig,
+    pub bedrock: ProviderConfig,
+    // Chinese providers
+    pub minimax: ProviderConfig,
     pub dashscope: ProviderConfig,
     pub moonshot: ProviderConfig,
     pub zhipu: ProviderConfig,
-    pub vllm: ProviderConfig,
-    pub custom: ProviderConfig,
 }
 
 impl ProvidersConfig {
     /// Iterate over all providers as (name, config) pairs
     pub fn iter(&self) -> impl Iterator<Item = (&str, &ProviderConfig)> {
         [
+            // Primary
             ("anthropic", &self.anthropic),
             ("openai", &self.openai),
             ("openrouter", &self.openrouter),
+            ("gemini", &self.gemini),
+            // Local
             ("ollama", &self.ollama),
+            ("ollama_cloud", &self.ollama_cloud),
+            ("vllm", &self.vllm),
+            ("custom", &self.custom),
+            // Cloud
             ("deepseek", &self.deepseek),
             ("groq", &self.groq),
-            ("gemini", &self.gemini),
-            ("minimax", &self.minimax),
+            ("mistral", &self.mistral),
+            ("xai", &self.xai),
+            ("together", &self.together),
+            ("fireworks", &self.fireworks),
+            ("perplexity", &self.perplexity),
+            ("cohere", &self.cohere),
+            ("venice", &self.venice),
+            // Gateways
             ("aihubmix", &self.aihubmix),
+            ("vercel", &self.vercel),
+            ("cloudflare", &self.cloudflare),
+            ("copilot", &self.copilot),
+            ("bedrock", &self.bedrock),
+            // Chinese
+            ("minimax", &self.minimax),
             ("dashscope", &self.dashscope),
             ("moonshot", &self.moonshot),
             ("zhipu", &self.zhipu),
-            ("vllm", &self.vllm),
-            ("custom", &self.custom),
         ]
         .into_iter()
     }
@@ -322,17 +370,29 @@ impl ProvidersConfig {
             "anthropic" => Some(&self.anthropic),
             "openai" => Some(&self.openai),
             "openrouter" => Some(&self.openrouter),
+            "gemini" => Some(&self.gemini),
             "ollama" => Some(&self.ollama),
+            "ollama_cloud" => Some(&self.ollama_cloud),
+            "vllm" => Some(&self.vllm),
+            "custom" => Some(&self.custom),
             "deepseek" => Some(&self.deepseek),
             "groq" => Some(&self.groq),
-            "gemini" => Some(&self.gemini),
-            "minimax" => Some(&self.minimax),
+            "mistral" => Some(&self.mistral),
+            "xai" | "grok" => Some(&self.xai),
+            "together" => Some(&self.together),
+            "fireworks" => Some(&self.fireworks),
+            "perplexity" => Some(&self.perplexity),
+            "cohere" => Some(&self.cohere),
+            "venice" => Some(&self.venice),
             "aihubmix" => Some(&self.aihubmix),
+            "vercel" => Some(&self.vercel),
+            "cloudflare" => Some(&self.cloudflare),
+            "copilot" => Some(&self.copilot),
+            "bedrock" => Some(&self.bedrock),
+            "minimax" => Some(&self.minimax),
             "dashscope" => Some(&self.dashscope),
             "moonshot" => Some(&self.moonshot),
             "zhipu" => Some(&self.zhipu),
-            "vllm" => Some(&self.vllm),
-            "custom" => Some(&self.custom),
             _ => None,
         }
     }
@@ -343,17 +403,29 @@ impl ProvidersConfig {
             "anthropic" => Some(&mut self.anthropic),
             "openai" => Some(&mut self.openai),
             "openrouter" => Some(&mut self.openrouter),
+            "gemini" => Some(&mut self.gemini),
             "ollama" => Some(&mut self.ollama),
+            "ollama_cloud" => Some(&mut self.ollama_cloud),
+            "vllm" => Some(&mut self.vllm),
+            "custom" => Some(&mut self.custom),
             "deepseek" => Some(&mut self.deepseek),
             "groq" => Some(&mut self.groq),
-            "gemini" => Some(&mut self.gemini),
-            "minimax" => Some(&mut self.minimax),
+            "mistral" => Some(&mut self.mistral),
+            "xai" | "grok" => Some(&mut self.xai),
+            "together" => Some(&mut self.together),
+            "fireworks" => Some(&mut self.fireworks),
+            "perplexity" => Some(&mut self.perplexity),
+            "cohere" => Some(&mut self.cohere),
+            "venice" => Some(&mut self.venice),
             "aihubmix" => Some(&mut self.aihubmix),
+            "vercel" => Some(&mut self.vercel),
+            "cloudflare" => Some(&mut self.cloudflare),
+            "copilot" => Some(&mut self.copilot),
+            "bedrock" => Some(&mut self.bedrock),
+            "minimax" => Some(&mut self.minimax),
             "dashscope" => Some(&mut self.dashscope),
             "moonshot" => Some(&mut self.moonshot),
             "zhipu" => Some(&mut self.zhipu),
-            "vllm" => Some(&mut self.vllm),
-            "custom" => Some(&mut self.custom),
             _ => None,
         }
     }
@@ -361,9 +433,17 @@ impl ProvidersConfig {
     /// List of all known provider names
     pub fn known_names() -> &'static [&'static str] {
         &[
-            "anthropic", "openai", "openrouter", "ollama", "deepseek",
-            "groq", "gemini", "minimax", "aihubmix", "dashscope",
-            "moonshot", "zhipu", "vllm", "custom",
+            // Primary
+            "anthropic", "openai", "openrouter", "gemini",
+            // Local
+            "ollama", "ollama_cloud", "vllm", "custom",
+            // Cloud
+            "deepseek", "groq", "mistral", "xai", "together",
+            "fireworks", "perplexity", "cohere", "venice",
+            // Gateways
+            "aihubmix", "vercel", "cloudflare", "copilot", "bedrock",
+            // Chinese
+            "minimax", "dashscope", "moonshot", "zhipu",
         ]
     }
 }

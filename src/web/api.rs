@@ -30,6 +30,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/v1/providers/deactivate", axum::routing::post(deactivate_provider))
         .route("/v1/providers/models", get(list_all_models))
         .route("/v1/providers/ollama/models", get(list_ollama_models))
+        .route("/v1/providers/ollama-cloud/models", get(list_ollama_cloud_models))
         // --- Channels ---
         .route("/v1/channels/{name}", get(get_channel))
         .route("/v1/channels/configure", axum::routing::post(configure_channel))
@@ -933,6 +934,7 @@ async fn deactivate_provider(
 /// Hardcoded popular models per cloud provider
 fn cloud_models_for(provider: &str) -> &'static [&'static str] {
     match provider {
+        // Primary providers
         "anthropic" => &[
             "anthropic/claude-sonnet-4-20250514",
             "anthropic/claude-opus-4-20250514",
@@ -950,43 +952,111 @@ fn cloud_models_for(provider: &str) -> &'static [&'static str] {
             "gemini/gemini-2.0-pro",
             "gemini/gemini-1.5-pro",
         ],
-        "deepseek" => &[
-            "deepseek/deepseek-chat",
-            "deepseek/deepseek-r1",
-        ],
-        "groq" => &[
-            "groq/llama-3.3-70b-versatile",
-            "groq/llama-3.1-8b-instant",
-            "groq/mixtral-8x7b-32768",
-        ],
         "openrouter" => &[
             "openrouter/anthropic/claude-sonnet-4",
             "openrouter/openai/gpt-4o",
             "openrouter/google/gemini-2.0-flash",
             "openrouter/meta-llama/llama-3.3-70b-instruct",
         ],
+        // Cloud providers
+        "deepseek" => &[
+            "deepseek/deepseek-chat",
+            "deepseek/deepseek-reasoner",
+        ],
+        "groq" => &[
+            "groq/llama-3.3-70b-versatile",
+            "groq/llama-3.1-8b-instant",
+            "groq/mixtral-8x7b-32768",
+        ],
+        "mistral" => &[
+            "mistral/mistral-large-latest",
+            "mistral/mistral-small-latest",
+            "mistral/codestral-latest",
+        ],
+        "xai" => &[
+            "xai/grok-beta",
+        ],
+        "together" => &[
+            "together/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            "together/mistralai/Mixtral-8x7B-Instruct-v0.1",
+        ],
+        "fireworks" => &[
+            "fireworks/accounts/fireworks/models/llama-v3p3-70b-instruct",
+            "fireworks/accounts/fireworks/models/qwen2p5-72b-instruct",
+        ],
+        "perplexity" => &[
+            "perplexity/sonar-pro",
+            "perplexity/sonar-reasoning-pro",
+        ],
+        "cohere" => &[
+            "cohere/command-r-plus",
+            "cohere/command-r",
+        ],
+        "venice" => &[
+            "venice/llama-3.3-70b",
+        ],
+        // Gateways
+        "aihubmix" => &[
+            "aihubmix/claude-sonnet-4",
+        ],
+        "vercel" => &[
+            "vercel/claude-3-5-sonnet",
+        ],
+        "cloudflare" => &[
+            "cloudflare/@cf/meta/llama-3.3-70b-instruct",
+        ],
+        "copilot" => &[
+            "copilot/gpt-4o",
+        ],
+        "bedrock" => &[
+            "bedrock/anthropic.claude-3-sonnet",
+        ],
+        "ollama_cloud" => &[
+            "ollama_cloud/llama3.3",
+            "ollama_cloud/mistral",
+        ],
+        // Chinese providers
         "moonshot" => &["moonshot/moonshot-v1-8k"],
         "zhipu" => &["zhipu/glm-4"],
         "dashscope" => &["dashscope/qwen-plus"],
         "minimax" => &["minimax/MiniMax-M2"],
-        "aihubmix" => &["aihubmix/claude-sonnet-4"],
         _ => &[],
     }
 }
 
 fn display_name_for(provider: &str) -> &'static str {
     match provider {
+        // Primary
         "anthropic" => "Anthropic",
         "openai" => "OpenAI",
         "openrouter" => "OpenRouter",
         "gemini" => "Gemini",
+        // Cloud
         "deepseek" => "DeepSeek",
         "groq" => "Groq",
+        "mistral" => "Mistral",
+        "xai" => "xAI",
+        "together" => "Together",
+        "fireworks" => "Fireworks",
+        "perplexity" => "Perplexity",
+        "cohere" => "Cohere",
+        "venice" => "Venice",
+        // Gateways
+        "aihubmix" => "AiHubMix",
+        "vercel" => "Vercel",
+        "cloudflare" => "Cloudflare",
+        "copilot" => "Copilot",
+        "bedrock" => "Bedrock",
+        "ollama_cloud" => "Ollama Cloud",
+        // Chinese
         "moonshot" => "Moonshot",
         "zhipu" => "Zhipu",
         "dashscope" => "DashScope",
         "minimax" => "MiniMax",
-        "aihubmix" => "AiHubMix",
+        // Local
+        "ollama" => "Ollama",
+        "vllm" => "vLLM",
+        "custom" => "Custom",
         _ => "Unknown",
     }
 }
@@ -1154,6 +1224,149 @@ async fn list_ollama_models(
             ok: false,
             models: vec![],
             error: Some(format!("Cannot connect to Ollama: {}. Is Ollama running?", e)),
+        }),
+    }
+}
+
+/// List available models from Ollama Cloud (uses same /api/tags format as local Ollama)
+#[derive(Serialize)]
+struct OllamaCloudModelsResponse {
+    ok: bool,
+    models: Vec<OllamaCloudModel>,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct OllamaCloudModel {
+    id: String,
+    owned_by: String,
+}
+
+async fn list_ollama_cloud_models(
+    State(state): State<Arc<AppState>>,
+) -> Json<OllamaCloudModelsResponse> {
+    let config = state.config.read().await;
+
+    // Get Ollama Cloud API key and base URL
+    let api_key = if let Some(pc) = config.providers.get("ollama_cloud") {
+        if pc.api_key == "***ENCRYPTED***" {
+            // Retrieve from secure storage
+            let secrets = match crate::storage::global_secrets() {
+                Ok(s) => s,
+                Err(_) => {
+                    return Json(OllamaCloudModelsResponse {
+                        ok: false,
+                        models: vec![],
+                        error: Some("Failed to access secure storage".to_string()),
+                    });
+                }
+            };
+            let key = crate::storage::SecretKey::provider_api_key("ollama_cloud");
+            match secrets.get(&key) {
+                Ok(Some(k)) => k,
+                _ => {
+                    return Json(OllamaCloudModelsResponse {
+                        ok: false,
+                        models: vec![],
+                        error: Some("Ollama Cloud API key not found in vault".to_string()),
+                    });
+                }
+            }
+        } else if pc.api_key.is_empty() {
+            return Json(OllamaCloudModelsResponse {
+                ok: false,
+                models: vec![],
+                error: Some("Ollama Cloud API key not configured".to_string()),
+            });
+        } else {
+            pc.api_key.clone()
+        }
+    } else {
+        return Json(OllamaCloudModelsResponse {
+            ok: false,
+            models: vec![],
+            error: Some("Ollama Cloud provider not configured".to_string()),
+        });
+    };
+
+    // Ollama Cloud uses https://ollama.com with /api/tags (same as local)
+    let base_url = config
+        .providers
+        .get("ollama_cloud")
+        .and_then(|p| p.api_base.as_deref())
+        .unwrap_or("https://ollama.com")
+        .trim_end_matches('/')
+        .to_string();
+
+    drop(config);
+
+    // Use /api/tags endpoint (same format as local Ollama)
+    let url = format!("{}/api/tags", base_url);
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => {
+            return Json(OllamaCloudModelsResponse {
+                ok: false,
+                models: vec![],
+                error: Some("Failed to create HTTP client".to_string()),
+            });
+        }
+    };
+
+    match client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            // Parse same format as local Ollama
+            #[derive(Deserialize)]
+            struct OllamaApiResponse {
+                models: Vec<OllamaApiModel>,
+            }
+            #[derive(Deserialize)]
+            struct OllamaApiModel {
+                name: String,
+            }
+
+            match resp.json::<OllamaApiResponse>().await {
+                Ok(data) => {
+                    let models = data
+                        .models
+                        .into_iter()
+                        .map(|m| OllamaCloudModel {
+                            id: m.name,
+                            owned_by: "ollama".to_string(),
+                        })
+                        .collect();
+
+                    Json(OllamaCloudModelsResponse {
+                        ok: true,
+                        models,
+                        error: None,
+                    })
+                }
+                Err(e) => Json(OllamaCloudModelsResponse {
+                    ok: false,
+                    models: vec![],
+                    error: Some(format!("Failed to parse response: {}", e)),
+                }),
+            }
+        }
+        Ok(resp) => Json(OllamaCloudModelsResponse {
+            ok: false,
+            models: vec![],
+            error: Some(format!("API returned status {}", resp.status())),
+        }),
+        Err(e) => Json(OllamaCloudModelsResponse {
+            ok: false,
+            models: vec![],
+            error: Some(format!("Connection failed: {}", e)),
         }),
     }
 }

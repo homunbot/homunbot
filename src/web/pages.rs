@@ -1223,23 +1223,42 @@ fn build_providers_html(config: &crate::config::Config) -> String {
         .map(|(n, _)| n.to_string());
 
     /// Provider display metadata: (display_name, description, needs_api_key, needs_base_url)
+    /// needs_base_url is true only for providers that REQUIRE a custom URL (vllm, custom)
+    /// All cloud providers have fixed URLs and don't need user input
     fn get_provider_meta(name: &str) -> (&'static str, &'static str, bool, bool) {
         match name {
-            "anthropic" => ("Anthropic", "Claude API (claude-3.5-sonnet, etc.)", true, true),
-            "openai" => ("OpenAI", "GPT-4, GPT-4o, GPT-3.5", true, true),
-            "openrouter" => ("OpenRouter", "Access to 100+ models via unified API", true, true),
-            "ollama" => ("Ollama", "Run models locally (llama3, mistral, etc.)", false, true),
-            "gemini" => ("Google Gemini", "Gemini 1.5 Pro, Gemini 2.0 Flash", true, true),
-            "deepseek" => ("DeepSeek", "DeepSeek Chat, DeepSeek Coder", true, true),
-            "groq" => ("Groq", "Fast inference (llama, mixtral)", true, true),
-            "moonshot" => ("Moonshot", "Moonshot AI models", true, true),
-            "zhipu" => ("Zhipu AI", "GLM models (Chinese)", true, true),
-            "dashscope" => ("DashScope", "Alibaba Qwen models", true, true),
-            "aihubmix" => ("AiHubMix", "Multi-model aggregator", true, true),
-            "minimax" => ("MiniMax", "MiniMax AI models", true, true),
+            // Primary providers (fixed URLs)
+            "anthropic" => ("Anthropic", "Claude API (claude-3.5-sonnet, claude-opus, etc.)", true, false),
+            "openai" => ("OpenAI", "GPT-4, GPT-4o, o1, o3 series", true, false),
+            "openrouter" => ("OpenRouter", "Access to 200+ models via unified API", true, false),
+            "gemini" => ("Google Gemini", "Gemini 1.5 Pro, Gemini 2.0 Flash", true, false),
+            // Local/cloud providers
+            "ollama" => ("Ollama (local)", "Run models locally (llama3, mistral, etc.)", false, true),
+            "ollama_cloud" => ("Ollama Cloud", "Hosted Ollama models with API key", true, false),
             "vllm" => ("vLLM", "Self-hosted vLLM server", false, true),
-            "custom" => ("Custom", "Any OpenAI-compatible API", false, true),
-            _ => ("Unknown", "Unknown provider", true, true),
+            "custom" => ("Custom", "Any OpenAI-compatible API endpoint", false, true),
+            // Cloud providers (all have fixed URLs)
+            "deepseek" => ("DeepSeek", "DeepSeek V3, DeepSeek R1, Coder", true, false),
+            "groq" => ("Groq", "Ultra-fast inference (llama, mixtral)", true, false),
+            "mistral" => ("Mistral", "Mistral and Mixtral models", true, false),
+            "xai" => ("xAI (Grok)", "Grok models by xAI", true, false),
+            "together" => ("Together AI", "Open-source models at scale", true, false),
+            "fireworks" => ("Fireworks AI", "Fast serverless inference", true, false),
+            "perplexity" => ("Perplexity", "Sonar models with web search", true, false),
+            "cohere" => ("Cohere", "Command R+, Command models", true, false),
+            "venice" => ("Venice", "Privacy-focused AI inference", true, false),
+            // Gateways/aggregators (fixed URLs)
+            "aihubmix" => ("AiHubMix", "Multi-model aggregator gateway", true, false),
+            "vercel" => ("Vercel AI", "Vercel AI Gateway", true, false),
+            "cloudflare" => ("Cloudflare AI", "Cloudflare AI Gateway", true, false),
+            "copilot" => ("GitHub Copilot", "GitHub Copilot API", true, false),
+            "bedrock" => ("AWS Bedrock", "Amazon Bedrock foundation models", true, false),
+            // Chinese providers (fixed URLs)
+            "minimax" => ("MiniMax", "MiniMax AI models", true, false),
+            "dashscope" => ("DashScope", "Alibaba Qwen models", true, false),
+            "moonshot" => ("Moonshot (Kimi)", "Moonshot AI models", true, false),
+            "zhipu" => ("Zhipu AI (GLM)", "GLM models by Zhipu", true, false),
+            _ => ("Unknown", "Unknown provider", true, false),
         }
     }
 
@@ -1253,6 +1272,8 @@ fn build_providers_html(config: &crate::config::Config) -> String {
 
             let (display_name, description, has_key, has_url) = get_provider_meta(name);
             let is_ollama = name == "ollama";
+            let is_ollama_cloud = name == "ollama_cloud";
+            let shows_models = is_ollama || is_ollama_cloud;
 
             // Build CSS class list for the card
             let mut card_classes = String::from("provider-card");
@@ -1284,7 +1305,7 @@ fn build_providers_html(config: &crate::config::Config) -> String {
             let toggle_checked = if configured { "checked" } else { "" };
 
             format!(
-                r#"<div class="{card_classes}" data-provider="{name}" data-display="{display_name}" data-description="{description}" data-has-key="{has_key}" data-has-url="{has_url}" data-is-ollama="{is_ollama}" data-configured="{configured}" data-api-key-mask="{api_key_mask}" data-api-base="{api_base}">
+                r#"<div class="{card_classes}" data-provider="{name}" data-display="{display_name}" data-description="{description}" data-has-key="{has_key}" data-has-url="{has_url}" data-is-ollama="{is_ollama}" data-shows-models="{shows_models}" data-configured="{configured}" data-api-key-mask="{api_key_mask}" data-api-base="{api_base}">
                     <div class="provider-card-header">
                         <div class="provider-card-info">
                             <span class="provider-card-name">{display_name}</span>

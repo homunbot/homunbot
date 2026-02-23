@@ -69,18 +69,36 @@ impl OpenAICompatProvider {
 /// Anthropic is handled by a separate native provider.
 fn default_api_base(provider_name: &str) -> String {
     match provider_name {
+        // Primary providers
         "openai"    => "https://api.openai.com/v1".to_string(),
         "openrouter"=> "https://openrouter.ai/api/v1".to_string(),
+        "gemini"    => "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
+        // Local providers
+        "ollama"    => "http://localhost:11434/v1".to_string(),
+        "ollama_cloud" => "https://ollama.com".to_string(),
+        "vllm"      => "http://localhost:8000/v1".to_string(),
+        // Cloud providers (OpenAI-compatible)
         "deepseek"  => "https://api.deepseek.com/v1".to_string(),
         "groq"      => "https://api.groq.com/openai/v1".to_string(),
-        "gemini"    => "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
-        "minimax"   => "https://api.minimax.chat/v1".to_string(),
+        "mistral"   => "https://api.mistral.ai/v1".to_string(),
+        "xai"       => "https://api.x.ai/v1".to_string(),
+        "together"  => "https://api.together.xyz/v1".to_string(),
+        "fireworks" => "https://api.fireworks.ai/inference/v1".to_string(),
+        "perplexity"=> "https://api.perplexity.ai".to_string(),
+        "cohere"    => "https://api.cohere.ai/compatibility/v1".to_string(),
+        "venice"    => "https://api.venice.ai/api/v1".to_string(),
+        // Gateways/aggregators
         "aihubmix"  => "https://aihubmix.com/v1".to_string(),
+        "vercel"    => "https://api.vercel.ai/v1".to_string(),
+        "cloudflare"=> "https://gateway.ai.cloudflare.com/v1".to_string(),
+        "copilot"   => "https://api.githubcopilot.com".to_string(),
+        "bedrock"   => "https://bedrock-runtime.us-east-1.amazonaws.com".to_string(),
+        // Chinese providers
+        "minimax"   => "https://api.minimax.chat/v1".to_string(),
         "dashscope" => "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
         "moonshot"  => "https://api.moonshot.cn/v1".to_string(),
         "zhipu"     => "https://open.bigmodel.cn/api/paas/v4".to_string(),
-        "ollama"    => "http://localhost:11434/v1".to_string(),
-        "vllm"      => "http://localhost:8000/v1".to_string(),
+        // Fallback
         _           => "https://api.openai.com/v1".to_string(),
     }
 }

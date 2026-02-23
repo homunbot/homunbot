@@ -225,8 +225,8 @@ if (modal && providerCards.length > 0) {
             setDefaultLink.addEventListener('click', (e) => {
                 e.preventDefault();
                 const providerName = card.dataset.provider;
-                // For Ollama, need to pick a model → open modal instead
-                if (card.dataset.isOllama === 'true') {
+                // For providers that show models (Ollama, Ollama Cloud), need to pick a model → open modal instead
+                if (card.dataset.showsModels === 'true') {
                     openProviderModal(card);
                     return;
                 }
@@ -322,6 +322,7 @@ if (modal && providerCards.length > 0) {
         const hasKey = card.dataset.hasKey === 'true';
         const hasUrl = card.dataset.hasUrl === 'true';
         const isOllama = card.dataset.isOllama === 'true';
+        const showsModels = card.dataset.showsModels === 'true';
         const apiKeyMask = card.dataset.apiKeyMask || '';
         const apiBase = card.dataset.apiBase || '';
 
@@ -340,15 +341,18 @@ if (modal && providerCards.length > 0) {
         if (isOllama) {
             baseHint.textContent = 'Ollama server URL (default: http://localhost:11434/v1)';
             document.getElementById('api-base').placeholder = 'http://localhost:11434/v1';
+        } else if (currentProvider === 'ollama_cloud') {
+            baseHint.textContent = 'Ollama Cloud API endpoint (default: https://api.ollama.ai/v1)';
+            document.getElementById('api-base').placeholder = 'https://api.ollama.ai/v1';
         } else if (currentProvider === 'vllm' || currentProvider === 'custom') {
             baseHint.textContent = 'API endpoint URL (required)';
         } else {
             baseHint.textContent = 'Custom API endpoint (optional)';
         }
 
-        ollamaModelsGroup.style.display = isOllama ? 'block' : 'none';
-        if (isOllama) {
-            loadOllamaModels();
+        ollamaModelsGroup.style.display = showsModels ? 'block' : 'none';
+        if (showsModels) {
+            loadOllamaModels(currentProvider);
         }
 
         const noConfigNeeded = isOllama || currentProvider === 'vllm' || currentProvider === 'custom';
@@ -374,40 +378,65 @@ if (modal && providerCards.length > 0) {
     }
 
     // --- Load Ollama models ---
-    async function loadOllamaModels() {
+    async function loadOllamaModels(provider) {
         ollamaLoading.style.display = 'block';
         ollamaLoading.textContent = 'Loading models...';
         ollamaError.style.display = 'none';
         ollamaModelSelect.style.display = 'none';
 
+        // Choose endpoint based on provider
+        const endpoint = provider === 'ollama_cloud'
+            ? '/api/v1/providers/ollama-cloud/models'
+            : '/api/v1/providers/ollama/models';
+
         try {
-            const resp = await fetch('/api/v1/providers/ollama/models');
+            const resp = await fetch(endpoint);
             const data = await resp.json();
 
             if (data.ok && data.models.length > 0) {
                 clearChildren(ollamaModelSelect);
                 ollamaModelSelect.appendChild(makeOption('', 'Select a model...'));
-                data.models.forEach(model => {
-                    ollamaModelSelect.appendChild(
-                        makeOption(model.name, model.name + ' (' + model.size + ')')
-                    );
-                });
+
+                if (provider === 'ollama_cloud') {
+                    // Ollama Cloud response format
+                    data.models.forEach(model => {
+                        ollamaModelSelect.appendChild(
+                            makeOption(model.id, model.id + ' (' + model.owned_by + ')')
+                        );
+                    });
+                } else {
+                    // Local Ollama response format
+                    data.models.forEach(model => {
+                        ollamaModelSelect.appendChild(
+                            makeOption(model.name, model.name + ' (' + model.size + ')')
+                        );
+                    });
+                }
                 ollamaModelSelect.style.display = 'block';
                 ollamaLoading.style.display = 'none';
             } else {
                 ollamaLoading.style.display = 'none';
-                ollamaError.textContent = data.error || 'No models found. Run `ollama pull llama3` to download a model.';
+                const errorMsg = provider === 'ollama_cloud'
+                    ? (data.error || 'No models found. Check your API key.')
+                    : (data.error || 'No models found. Run `ollama pull llama3` to download a model.');
+                ollamaError.textContent = errorMsg;
                 ollamaError.style.display = 'block';
             }
         } catch (err) {
             ollamaLoading.style.display = 'none';
-            ollamaError.textContent = 'Failed to load models. Is Ollama running?';
+            ollamaError.textContent = provider === 'ollama_cloud'
+                ? 'Failed to load models. Check your API key and connection.'
+                : 'Failed to load models. Is Ollama running?';
             ollamaError.style.display = 'block';
         }
     }
 
     if (refreshOllamaBtn) {
-        refreshOllamaBtn.addEventListener('click', loadOllamaModels);
+        refreshOllamaBtn.addEventListener('click', () => {
+            if (currentProvider) {
+                loadOllamaModels(currentProvider);
+            }
+        });
     }
 
     // --- Save provider configuration ---
