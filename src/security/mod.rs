@@ -1,16 +1,16 @@
-//! Security module — TOTP 2FA, session management, and vault protection.
+//! Security module — TOTP 2FA, session management, vault protection, and exfiltration prevention.
 //!
-//! This module implements two-factor authentication for vault access using
-//! TOTP (Time-based One-Time Password) compatible with Google Authenticator,
+//! This module implements security features for Homun:
+//!
+//! ## 1. Two-Factor Authentication (Vault 2FA)
+//!
+//! TOTP-based authentication for vault access using Google Authenticator,
 //! Authy, 1Password, Bitwarden, and other authenticator apps.
-//!
-//! # Architecture
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────────┐
 //! │                        VAULT 2FA FLOW                           │
 //! ├─────────────────────────────────────────────────────────────────┤
-//! │                                                                 │
 //! │   1. Setup (Settings → Enable 2FA)                              │
 //! │      ├── Generate TOTP secret (Base32)                         │
 //! │      ├── Generate QR code (server-side PNG)                    │
@@ -27,8 +27,15 @@
 //! │      ├── In-memory sessions with configurable TTL              │
 //! │      ├── Auto-expiry after timeout                             │
 //! │      └── Rate limiting (5 attempts, 5 min lockout)             │
-//! │                                                                 │
 //! └─────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## 2. Exfiltration Prevention (T-SEC-02)
+//!
+//! Detects and redacts secrets in LLM output before they reach the user.
+//!
+//! ```text
+//! LLM Response → ExfilFilter → Pattern Match → Redact/Block → User
 //! ```
 //!
 //! # Security Properties
@@ -38,10 +45,18 @@
 //! - **Rate limiting** to prevent brute force
 //! - **Recovery codes** for account recovery
 //! - **No bypass** — even disabling 2FA requires 2FA!
+//! - **Exfiltration detection** for API keys, tokens, passwords
 
+mod exfiltration;
 mod totp;
 mod two_factor;
+mod vault_leak;
 
+pub use exfiltration::{
+    scan, redact, global_filter, init_global_filter,
+    Detection, ExfilConfig, ExfilFilter, ScanResult, Severity,
+};
+pub use vault_leak::redact_vault_values;
 pub use totp::{generate_recovery_codes, TotpError, TotpManager};
 pub use two_factor::{
     global_session_manager, TwoFactorConfig, TwoFactorSession, TwoFactorSessionManager,

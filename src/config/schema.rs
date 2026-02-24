@@ -16,6 +16,7 @@ pub struct Config {
     pub memory: MemoryConfig,
     pub mcp: McpConfig,
     pub permissions: PermissionsConfig,
+    pub security: SecurityConfig,
 }
 
 impl Config {
@@ -972,6 +973,40 @@ impl Default for PermissionsConfig {
             shell: ShellPermissions::default(),
         }
     }
+}
+
+// --- Security Config ---
+
+/// Exfiltration prevention configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExfiltrationConfig {
+    /// Enable exfiltration detection for LLM output
+    pub enabled: bool,
+    /// Block output on detection (true) or just redact (false)
+    pub block_on_detection: bool,
+    /// Log detection attempts
+    pub log_attempts: bool,
+    /// Custom patterns to detect (regex strings)
+    pub custom_patterns: Vec<String>,
+}
+
+impl Default for ExfiltrationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            block_on_detection: false, // Redact by default, don't block
+            log_attempts: true,
+            custom_patterns: Vec::new(),
+        }
+    }
+}
+
+/// Root security configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SecurityConfig {
+    pub exfiltration: ExfiltrationConfig,
 }
 
 #[cfg(test)]

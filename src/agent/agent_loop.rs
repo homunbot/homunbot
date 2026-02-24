@@ -10,6 +10,7 @@ use crate::provider::{
     ChatMessage, ChatRequest, Provider, ToolCallFunction, ToolCallSerialized,
 };
 use crate::provider::xml_dispatcher;
+use crate::security::{redact, redact_vault_values};
 use crate::session::SessionManager;
 use crate::storage::Database;
 use crate::skills::loader::SkillRegistry;
@@ -582,12 +583,44 @@ impl AgentLoop {
             "(max iterations reached without final response)".to_string()
         });
 
+        // Apply exfiltration filter to prevent secret leaks in output
+        // This scans the response for API keys, tokens, passwords, etc.
+        // and redacts them before returning to the user.
+        let mut safe_response = redact(&response_text);
+
+        // Also redact any vault values that might have leaked into the response
+        // This ensures that even if the LLM retrieved a vault value and tries to
+        // output it, we catch it and replace with vault://key reference
+        if let Ok(secrets) = crate::storage::global_secrets() {
+            let vault_entries: Vec<(String, String)> = secrets
+                .list_keys()
+                .into_iter()
+                .filter(|k| k.starts_with("vault."))
+                .filter_map(|k| {
+                    let short_key = k.strip_prefix("vault.")?.to_string();
+                    let value = secrets.get(&crate::storage::SecretKey::custom(&k)).ok()??;
+                    Some((short_key, value))
+                })
+                .collect();
+
+            if !vault_entries.is_empty() {
+                let redacted = redact_vault_values(&safe_response, &vault_entries);
+                if redacted != safe_response {
+                    tracing::info!(
+                        redacted_count = vault_entries.len(),
+                        "Redacted vault values from LLM output"
+                    );
+                    safe_response = redacted;
+                }
+            }
+        }
+
         // Persist conversation to SQLite
         self.session_manager
             .add_message(session_key, "user", content)
             .await?;
         self.session_manager
-            .add_message_with_tools(session_key, "assistant", &response_text, &tools_used)
+            .add_message_with_tools(session_key, "assistant", &safe_response, &tools_used)
             .await?;
 
         if !tools_used.is_empty() {
@@ -600,7 +633,7 @@ impl AgentLoop {
         // Check if memory consolidation is needed (non-blocking background task)
         self.maybe_consolidate(session_key).await;
 
-        Ok(response_text)
+        Ok(safe_response)
     }
 
     /// Try to load a skill's full SKILL.md body by name.

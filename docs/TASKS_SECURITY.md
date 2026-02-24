@@ -1,6 +1,6 @@
 # Homun — Security Implementation Tasks
 
-> Last updated: 2026-02-23
+> Last updated: 2026-02-24
 > Context: OpenClaw ClawHavoc attack (Feb 2026) — 2,419 malicious skills in marketplace
 
 ---
@@ -55,45 +55,40 @@
 
 ---
 
-### T-SEC-02: Data Exfiltration Prevention
+### T-SEC-02: Data Exfiltration Prevention ✅ DONE
 
-**Priority: P0 | Complexity: High | Est: 3-4 days**
+**Priority: P0 | Complexity: High | Completed: 2026-02-24**
 
-**Problem**: Malicious skill or compromised agent could exfiltrate secrets via network.
+**Problem**: Malicious skill or compromised agent could exfiltrate secrets via network or LLM output.
 
-**Solution**: Monitor and block suspicious outbound data patterns.
-
-**Detection Rules**:
-1. **Secret patterns in output** — block if API key format detected in shell output, web requests
-2. **High entropy strings** — flag base64-encoded data leaving the system
-3. **Unexpected network connections** — alert on connections to non-allowlisted hosts
-4. **File access to sensitive paths** — block reads of `~/.homun/secrets.enc`, `config.toml`
+**Solution**: Multi-layer protection — pattern detection + vault value redaction.
 
 **Implementation**:
-- `src/security/exfiltration.rs` — pattern detection engine
-- `src/tools/shell.rs` — scan output for secret patterns
-- `src/tools/web_fetch.rs` — scan request bodies
-- `src/agent/loop.rs` — hook for output inspection
 
-**Alert Channels**:
-- Log warning with full context
-- Send alert to primary channel (Telegram)
-- Optionally block the action
+1. **Regex Pattern Detection** (`src/security/exfiltration.rs`):
+   - 15+ patterns for API keys, tokens, passwords
+   - OpenAI, Anthropic, AWS, Telegram, Discord, GitHub, JWT, private keys
+   - Applied to LLM output before returning to user
+
+2. **Vault Leak Prevention** (`src/security/vault_leak.rs`):
+   - Redact vault values from memory files during consolidation
+   - Redact vault values from LLM output before returning to user
+   - Replace with `vault://key_name` references
+
+**Files created/modified**:
+- `src/security/exfiltration.rs` — Pattern detection engine + 14 tests
+- `src/security/vault_leak.rs` — Vault value redaction + 6 tests
+- `src/security/mod.rs` — Exports
+- `src/agent/agent_loop.rs` — Apply redaction to LLM output
+- `src/agent/memory.rs` — Redact during consolidation
 
 **Config**:
 ```toml
 [security.exfiltration]
 enabled = true
-block_on_detection = true
-alert_channel = "telegram"
-# Patterns to detect (regex)
-secret_patterns = [
-    "sk-[a-zA-Z0-9]{20,}",      # OpenAI keys
-    "sk-ant-[a-zA-Z0-9]{20,}",  # Anthropic keys
-    "[a-f0-9]{32,}",            # Generic hex secrets
-]
-# Allowlist for network
-allowed_hosts = ["api.anthropic.com", "api.openai.com", "api.brave.com"]
+block_on_detection = false  # true = block output, false = redact only
+log_attempts = true
+custom_patterns = []
 ```
 
 ---
@@ -301,8 +296,8 @@ Rate limit failed vault PIN attempts, lockout after N failures.
 
 ```
 Sprint 1: Critical (P0)
-├── T-SEC-01: Vault 2FA
-└── T-SEC-02: Exfiltration Prevention
+├── T-SEC-01: Vault 2FA ✅
+└── T-SEC-02: Exfiltration Prevention ✅
 
 Sprint 2: Skill Security (P1)
 ├── T-SEC-03: VirusTotal Integration

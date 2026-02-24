@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 use crate::config::Config;
 use crate::provider::{ChatMessage, ChatRequest, Provider};
+use crate::security::redact_vault_values;
 use crate::storage::Database;
 
 /// Memory consolidation system — LLM-powered summarization.
@@ -201,6 +202,7 @@ impl MemoryConsolidator {
         // --- 1. Store secrets in vault (encrypted, FIRST — before anything touches memory) ---
         // DEDUPLICATION: Skip if value already exists with same key
         let mut secrets_stored = 0;
+        let mut all_vault_entries: Vec<(String, String)> = Vec::new();
         if !parsed.vault_entries.is_empty() {
             match crate::storage::global_secrets() {
                 Ok(secrets) => {
@@ -208,7 +210,7 @@ impl MemoryConsolidator {
                         let key = crate::storage::SecretKey::custom(
                             &format!("vault.{}", entry.key),
                         );
-                        
+
                         // Check if value already exists (deduplication)
                         match secrets.get(&key) {
                             Ok(Some(existing_value)) if existing_value == entry.value => {
@@ -216,6 +218,8 @@ impl MemoryConsolidator {
                                     key = %entry.key,
                                     "Vault entry already exists with same value, skipping"
                                 );
+                                // Still add to redaction list (existing value should be redacted)
+                                all_vault_entries.push((entry.key.clone(), entry.value.clone()));
                                 continue; // Skip duplicate
                             }
                             Ok(Some(_)) => {
@@ -236,7 +240,7 @@ impl MemoryConsolidator {
                                 );
                             }
                         }
-                        
+
                         if let Err(e) = secrets.set(&key, &entry.value) {
                             tracing::warn!(
                                 key = %entry.key,
@@ -250,12 +254,45 @@ impl MemoryConsolidator {
                                 "Stored secret in vault during consolidation"
                             );
                         }
+
+                        // Add to redaction list
+                        all_vault_entries.push((entry.key.clone(), entry.value.clone()));
                     }
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "Vault unavailable, skipping secret storage");
                 }
             }
+        }
+
+        // --- 1b. Redact vault values from history and memory (vault leak prevention) ---
+        // Load ALL existing vault values for redaction (not just new ones)
+        if let Ok(secrets) = crate::storage::global_secrets() {
+            for key in secrets.list_keys() {
+                if key.starts_with("vault.") {
+                    if let Ok(Some(value)) = secrets.get(&crate::storage::SecretKey::custom(&key)) {
+                        let short_key = key.strip_prefix("vault.").unwrap_or(&key);
+                        // Only add if not already in list
+                        if !all_vault_entries.iter().any(|(k, _)| k == short_key) {
+                            all_vault_entries.push((short_key.to_string(), value));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Redact vault values from parsed content
+        let history_entry = redact_vault_values(&parsed.history_entry, &all_vault_entries);
+        let memory_update = redact_vault_values(&parsed.memory_update, &all_vault_entries);
+
+        // Log if any redaction occurred
+        if history_entry != parsed.history_entry || memory_update != parsed.memory_update {
+            tracing::info!(
+                history_redacted = history_entry != parsed.history_entry,
+                memory_redacted = memory_update != parsed.memory_update,
+                vault_entries_count = all_vault_entries.len(),
+                "Redacted vault values from consolidation output"
+            );
         }
 
         // --- 2. Save learned instructions to INSTRUCTIONS.md ---
@@ -272,26 +309,26 @@ impl MemoryConsolidator {
         }
 
         // --- 3. Append to HISTORY.md and daily memory file ---
-        if !parsed.history_entry.is_empty() {
-            self.append_history_md(&parsed.history_entry)?;
-            self.save_daily_md(&parsed.history_entry)?;
+        if !history_entry.is_empty() {
+            self.append_history_md(&history_entry)?;
+            self.save_daily_md(&history_entry)?;
         }
 
         // --- 4. Update MEMORY.md + DB if memory changed ---
-        let memory_updated = !parsed.memory_update.is_empty()
-            && parsed.memory_update != current_memory;
+        let memory_updated = !memory_update.is_empty()
+            && memory_update != current_memory;
         if memory_updated {
-            self.save_memory_md(&parsed.memory_update)?;
-            self.db.upsert_long_term_memory(&parsed.memory_update).await?;
+            self.save_memory_md(&memory_update)?;
+            self.db.upsert_long_term_memory(&memory_update).await?;
         }
 
         // --- 5. Store history entry in DB (legacy) + memory_chunks (for vector/FTS5 search) ---
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let mut new_chunk_ids: Vec<(i64, String)> = Vec::new();
 
-        if !parsed.history_entry.is_empty() {
+        if !history_entry.is_empty() {
             self.db
-                .insert_memory(Some(session_key), &parsed.history_entry, "history")
+                .insert_memory(Some(session_key), &history_entry, "history")
                 .await?;
 
             // Also insert into memory_chunks for hybrid search
@@ -301,11 +338,11 @@ impl MemoryConsolidator {
                     &today,
                     session_key,
                     "consolidation",
-                    &parsed.history_entry,
+                    &history_entry,
                     "history",
                 )
                 .await?;
-            new_chunk_ids.push((chunk_id, parsed.history_entry.clone()));
+            new_chunk_ids.push((chunk_id, history_entry.clone()));
         }
 
         // Insert memory facts as a separate chunk (so they're independently searchable)
@@ -316,11 +353,11 @@ impl MemoryConsolidator {
                     &today,
                     session_key,
                     "memory",
-                    &parsed.memory_update,
+                    &memory_update,
                     "fact",
                 )
                 .await?;
-            new_chunk_ids.push((chunk_id, parsed.memory_update.clone()));
+            new_chunk_ids.push((chunk_id, memory_update.clone()));
         }
 
         // Insert each learned instruction as its own chunk
