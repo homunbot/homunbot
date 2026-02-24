@@ -16,6 +16,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/memory", get(memory_page))
         .route("/vault", get(vault_page))
         .route("/permissions", get(permissions_page))
+        .route("/account", get(account_page))
         .route("/logs", get(logs_page))
 }
 
@@ -30,6 +31,7 @@ const ICON_LOGS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentC
 const ICON_MEMORY: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v14"/><path d="M3 9h12"/><circle cx="9" cy="9" r="3"/><circle cx="9" cy="9" r="7"/></svg>"#;
 const ICON_VAULT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="14" height="11" rx="1.5"/><path d="M5 5V4a4 4 0 0 1 8 0v1"/><circle cx="9" cy="11" r="1.5"/><path d="M9 12.5V14"/></svg>"#;
 const ICON_PERMISSIONS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="16" height="12" rx="1.5"/><circle cx="9" cy="10" r="2"/><path d="M5 4V3a4 4 0 0 1 8 0v1"/></svg>"#;
+const ICON_ACCOUNT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="6" r="3.5"/><path d="M3 17c0-3.5 2.5-6 6-6s6 2.5 6 6"/></svg>"#;
 
 /// Channel icons — minimal stroke SVGs for dashboard/settings
 const ICON_WEB: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="7.5"/><path d="M1.5 9h15"/><path d="M9 1.5a11.5 11.5 0 0 1 3 7.5 11.5 11.5 0 0 1-3 7.5"/><path d="M9 1.5a11.5 11.5 0 0 0-3 7.5 11.5 11.5 0 0 0 3 7.5"/></svg>"#;
@@ -50,6 +52,7 @@ fn sidebar(active: &str) -> String {
         ("memory", "/memory", "Memory", ICON_MEMORY),
         ("vault", "/vault", "Vault", ICON_VAULT),
         ("permissions", "/permissions", "Permissions", ICON_PERMISSIONS),
+        ("account", "/account", "Account", ICON_ACCOUNT),
         ("settings", "/setup", "Settings", ICON_SETTINGS),
         ("logs", "/logs", "Logs", ICON_LOGS),
     ];
@@ -1562,4 +1565,122 @@ fn format_uptime(secs: u64) -> String {
     } else {
         format!("{}d {}h", secs / 86400, (secs % 86400) / 3600)
     }
+}
+
+// ─── Account Page ─────────────────────────────────────────────────
+
+async fn account_page(State(_state): State<Arc<AppState>>) -> Html<String> {
+    let body = r#"<main class="content">
+            <div class="content-inner">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">Account</h1>
+                        <span class="badge badge-neutral" id="account-status">Loading…</span>
+                    </div>
+                </div>
+
+                <!-- Owner Info Section -->
+                <section class="section">
+                    <div class="section-header">
+                        <h2>Owner</h2>
+                    </div>
+                    <div class="account-owner-card" id="owner-card">
+                        <div class="owner-avatar">
+                            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" style="width:32px;height:32px">
+                                <circle cx="9" cy="6" r="3.5"/>
+                                <path d="M3 17c0-3.5 2.5-6 6-6s6 2.5 6 6"/>
+                            </svg>
+                        </div>
+                        <div class="owner-info">
+                            <div class="owner-username" id="owner-username">—</div>
+                            <div class="owner-role" id="owner-role">—</div>
+                        </div>
+                    </div>
+                    <div id="no-owner-warning" style="display:none" class="empty-state">
+                        <p>No owner configured. Create one with: <code>homun users add &lt;username&gt; --admin</code></p>
+                    </div>
+                </section>
+
+                <!-- Channel Identities Section -->
+                <section class="section">
+                    <div class="section-header">
+                        <h2>Channel Identities</h2>
+                        <span class="badge" id="identities-count">0</span>
+                    </div>
+                    <p style="color:var(--muted);margin-bottom:1rem;font-size:0.875rem">
+                        Link your Telegram, Discord, or WhatsApp account to identify yourself as the owner.
+                    </p>
+                    <div class="item-list" id="identities-list">
+                        <div class="empty-state" id="identities-empty">
+                            <p>No identities linked</p>
+                        </div>
+                    </div>
+
+                    <!-- Add Identity Form -->
+                    <details class="details-collapse" style="margin-top:1rem">
+                        <summary class="btn btn-secondary btn-sm">+ Link Identity</summary>
+                        <form id="link-identity-form" class="form" style="margin-top:1rem">
+                            <div class="form-row form-row--3">
+                                <div class="form-group">
+                                    <label>Channel</label>
+                                    <select id="identity-channel" class="input">
+                                        <option value="telegram">Telegram</option>
+                                        <option value="discord">Discord</option>
+                                        <option value="whatsapp">WhatsApp</option>
+                                        <option value="web">Web</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Platform ID</label>
+                                    <input type="text" id="identity-platform-id" class="input" placeholder="e.g., 123456789">
+                                </div>
+                                <div class="form-group">
+                                    <label>Display Name (optional)</label>
+                                    <input type="text" id="identity-display-name" class="input" placeholder="My Account">
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-sm">Link</button>
+                        </form>
+                    </details>
+                </section>
+
+                <!-- Webhook Tokens Section -->
+                <section class="section">
+                    <div class="section-header">
+                        <h2>Webhook Tokens</h2>
+                        <span class="badge" id="tokens-count">0</span>
+                    </div>
+                    <p style="color:var(--muted);margin-bottom:1rem;font-size:0.875rem">
+                        Create tokens to allow external services to send messages to your assistant.
+                    </p>
+                    <div class="item-list" id="tokens-list">
+                        <div class="empty-state" id="tokens-empty">
+                            <p>No webhook tokens</p>
+                        </div>
+                    </div>
+
+                    <!-- Create Token Form -->
+                    <details class="details-collapse" style="margin-top:1rem">
+                        <summary class="btn btn-secondary btn-sm">+ Create Token</summary>
+                        <form id="create-token-form" class="form" style="margin-top:1rem">
+                            <div class="form-row form-row--2">
+                                <div class="form-group">
+                                    <label>Token Name</label>
+                                    <input type="text" id="token-name" class="input" placeholder="e.g., Home Assistant">
+                                </div>
+                                <div class="form-group">
+                                    <label>Webhook URL (after creation)</label>
+                                    <input type="text" id="webhook-url-preview" class="input" readonly value="POST /api/v1/webhook/{token}">
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-sm">Create Token</button>
+                        </form>
+                    </details>
+                </section>
+
+            </div>
+        </main>"#;
+
+    let html = page_html("Account", "account", body, &["account.js"]);
+    Html(html)
 }

@@ -37,6 +37,14 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/v1/channels/deactivate", axum::routing::post(deactivate_channel))
         .route("/v1/channels/test", axum::routing::post(test_channel))
         .route("/v1/channels/whatsapp/pair", get(ws_whatsapp_pair))
+        // --- Webhook Ingress ---
+        .route("/v1/webhook/{token}", axum::routing::post(webhook_ingress))
+        // --- Account ---
+        .route("/v1/account", get(get_account))
+        .route("/v1/account/identities", get(list_identities).post(add_identity))
+        .route("/v1/account/identities/{channel}/{platform_id}", axum::routing::delete(remove_identity))
+        .route("/v1/account/tokens", get(list_tokens).post(create_token))
+        .route("/v1/account/tokens/{token}", axum::routing::delete(delete_token).post(toggle_token))
         // --- Memory ---
         .route("/v1/memory/stats", get(memory_stats))
         .route("/v1/memory/content", get(get_memory_file).put(put_memory_file))
@@ -3386,5 +3394,452 @@ async fn browse_directories(
         current_path: current_display,
         parent_path: parent,
         entries,
+    }))
+}
+
+// ═══════════════════════════════════════════════════════════════
+// WEBHOOK INGRESS
+// ═══════════════════════════════════════════════════════════════
+
+/// Request body for webhook ingress
+#[derive(Debug, Deserialize)]
+struct WebhookRequest {
+    /// The message to send to the agent
+    message: String,
+    /// Optional: conversation ID for threading (defaults to "webhook")
+    #[serde(default)]
+    conversation_id: Option<String>,
+}
+
+/// Response for webhook ingress
+#[derive(Debug, Serialize)]
+struct WebhookResponse {
+    status: &'static str,
+    user: String,
+    conversation_id: String,
+}
+
+/// Error response for webhook ingress
+#[derive(Debug, Serialize)]
+struct WebhookError {
+    error: &'static str,
+    message: String,
+}
+
+/// Handle incoming webhook requests.
+///
+/// Validates the webhook token, resolves the user, and forwards the message
+/// to the agent for processing.
+///
+/// POST /api/v1/webhook/{token}
+/// Body: { "message": "...", "conversation_id": "optional" }
+async fn webhook_ingress(
+    Path(token): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<WebhookRequest>,
+) -> Result<Json<WebhookResponse>, (StatusCode, Json<WebhookError>)> {
+    // Validate token format (should start with "wh_")
+    if !token.starts_with("wh_") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(WebhookError {
+                error: "invalid_token",
+                message: "Token must start with 'wh_'".to_string(),
+            }),
+        ));
+    }
+
+    // Look up the user by webhook token
+    let db = match &state.db {
+        Some(db) => db,
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(WebhookError {
+                    error: "no_database",
+                    message: "Database not available".to_string(),
+                }),
+            ));
+        }
+    };
+
+    let user = db
+        .lookup_user_by_webhook_token(&token)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(WebhookError {
+                    error: "database_error",
+                    message: e.to_string(),
+                }),
+            )
+        })?;
+
+    let user = match user {
+        Some(u) => u,
+        None => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(WebhookError {
+                    error: "invalid_token",
+                    message: "Unknown or disabled webhook token".to_string(),
+                }),
+            ));
+        }
+    };
+
+    // Update token last_used
+    let _ = db.touch_webhook_token(&token).await;
+
+    // Build session key: webhook:{conversation_id}
+    let conversation_id = body.conversation_id.unwrap_or_else(|| "default".to_string());
+    let session_key = format!("webhook:{}", conversation_id);
+
+    // Create inbound message
+    let inbound = crate::bus::InboundMessage {
+        channel: "webhook".to_string(),
+        sender_id: user.id.clone(),
+        chat_id: session_key.clone(),
+        content: body.message,
+        timestamp: chrono::Utc::now(),
+    };
+
+    // Send to agent
+    let inbound_tx = match &state.inbound_tx {
+        Some(tx) => tx,
+        None => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(WebhookError {
+                    error: "agent_not_running",
+                    message: "Agent is not running. Start the gateway first.".to_string(),
+                }),
+            ));
+        }
+    };
+
+    inbound_tx.send(inbound).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(WebhookError {
+                error: "send_failed",
+                message: format!("Failed to send message to agent: {}", e),
+            }),
+        )
+    })?;
+
+    tracing::info!(
+        token = &token[..12.min(token.len())],
+        user = %user.username,
+        session = %session_key,
+        "Webhook message received"
+    );
+
+    Ok(Json(WebhookResponse {
+        status: "queued",
+        user: user.username,
+        conversation_id,
+    }))
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ACCOUNT API
+// ═══════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize)]
+struct AccountResponse {
+    id: String,
+    username: String,
+    role: String,
+    created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct IdentityResponse {
+    channel: String,
+    platform_id: String,
+    display_name: Option<String>,
+    created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TokenResponse {
+    token: String,
+    name: String,
+    enabled: bool,
+    last_used: Option<String>,
+    created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AddIdentityRequest {
+    channel: String,
+    platform_id: String,
+    display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateTokenRequest {
+    name: String,
+}
+
+/// Get the owner account info (first user in database)
+async fn get_account(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Option<AccountResponse>>, (StatusCode, Json<serde_json::Value>)> {
+    let db = match &state.db {
+        Some(db) => db,
+        None => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database not available"})))),
+    };
+
+    let users = db.load_all_users().await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+    })?;
+
+    // Return the first user (owner)
+    let owner = users.into_iter().next().map(|u| {
+        let roles: Vec<String> = serde_json::from_str(&u.roles).unwrap_or_default();
+        let role = roles.first().cloned().unwrap_or_else(|| "user".to_string());
+        AccountResponse {
+            id: u.id,
+            username: u.username,
+            role,
+            created_at: u.created_at,
+        }
+    });
+
+    Ok(Json(owner))
+}
+
+/// List all channel identities for the owner
+async fn list_identities(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<IdentityResponse>>, (StatusCode, Json<serde_json::Value>)> {
+    let db = match &state.db {
+        Some(db) => db,
+        None => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database not available"})))),
+    };
+
+    // Get owner user ID
+    let users = db.load_all_users().await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+    })?;
+
+    let owner = match users.into_iter().next() {
+        Some(u) => u,
+        None => return Ok(Json(Vec::new())),
+    };
+
+    let identities = db.load_user_identities(&owner.id).await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+    })?;
+
+    let response: Vec<IdentityResponse> = identities
+        .into_iter()
+        .map(|i| IdentityResponse {
+            channel: i.channel,
+            platform_id: i.platform_id,
+            display_name: i.display_name,
+            created_at: i.created_at,
+        })
+        .collect();
+
+    Ok(Json(response))
+}
+
+/// Add a new channel identity
+async fn add_identity(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<AddIdentityRequest>,
+) -> Result<Json<IdentityResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let db = match &state.db {
+        Some(db) => db,
+        None => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database not available"})))),
+    };
+
+    // Get owner user ID
+    let users = db.load_all_users().await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+    })?;
+
+    let owner = match users.into_iter().next() {
+        Some(u) => u,
+        None => return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "No owner user found. Create one first."})))),
+    };
+
+    db.add_user_identity(
+        &owner.id,
+        &body.channel,
+        &body.platform_id,
+        body.display_name.as_deref(),
+    )
+    .await
+    .map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+    })?;
+
+    Ok(Json(IdentityResponse {
+        channel: body.channel,
+        platform_id: body.platform_id,
+        display_name: body.display_name,
+        created_at: chrono::Utc::now().to_rfc3339(),
+    }))
+}
+
+/// Remove a channel identity
+async fn remove_identity(
+    State(state): State<Arc<AppState>>,
+    Path((channel, platform_id)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    let db = match &state.db {
+        Some(db) => db,
+        None => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database not available"})))),
+    };
+
+    // Get owner user ID
+    let users = db.load_all_users().await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+    })?;
+
+    let owner = match users.into_iter().next() {
+        Some(u) => u,
+        None => return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "No owner user found"})))),
+    };
+
+    let removed = db.remove_user_identity(&owner.id, &channel, &platform_id).await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+    })?;
+
+    if removed {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Identity not found"}))))
+    }
+}
+
+/// List all webhook tokens for the owner
+async fn list_tokens(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<TokenResponse>>, (StatusCode, Json<serde_json::Value>)> {
+    let db = match &state.db {
+        Some(db) => db,
+        None => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database not available"})))),
+    };
+
+    // Get owner user ID
+    let users = db.load_all_users().await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+    })?;
+
+    let owner = match users.into_iter().next() {
+        Some(u) => u,
+        None => return Ok(Json(Vec::new())),
+    };
+
+    let tokens = db.load_webhook_tokens(&owner.id).await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+    })?;
+
+    let response: Vec<TokenResponse> = tokens
+        .into_iter()
+        .map(|t| TokenResponse {
+            token: t.token,
+            name: t.name,
+            enabled: t.enabled,
+            last_used: t.last_used,
+            created_at: t.created_at,
+        })
+        .collect();
+
+    Ok(Json(response))
+}
+
+/// Create a new webhook token
+async fn create_token(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CreateTokenRequest>,
+) -> Result<Json<TokenResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let db = match &state.db {
+        Some(db) => db,
+        None => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database not available"})))),
+    };
+
+    // Get owner user ID
+    let users = db.load_all_users().await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+    })?;
+
+    let owner = match users.into_iter().next() {
+        Some(u) => u,
+        None => return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "No owner user found. Create one first."})))),
+    };
+
+    // Generate token
+    let token = format!("wh_{}", uuid::Uuid::new_v4().simple());
+
+    db.create_webhook_token(&token, &owner.id, &body.name).await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+    })?;
+
+    Ok(Json(TokenResponse {
+        token,
+        name: body.name,
+        enabled: true,
+        last_used: None,
+        created_at: chrono::Utc::now().to_rfc3339(),
+    }))
+}
+
+/// Delete a webhook token
+async fn delete_token(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    let db = match &state.db {
+        Some(db) => db,
+        None => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database not available"})))),
+    };
+
+    let removed = db.delete_webhook_token(&token).await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+    })?;
+
+    if removed {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Token not found"}))))
+    }
+}
+
+/// Toggle a webhook token (enable/disable)
+async fn toggle_token(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+) -> Result<Json<TokenResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let db = match &state.db {
+        Some(db) => db,
+        None => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database not available"})))),
+    };
+
+    // Get current state and toggle
+    let tokens = db.load_webhook_tokens("owner").await.unwrap_or_default();
+    let current = tokens.iter().find(|t| t.token == token);
+    let new_enabled = current.map(|t| !t.enabled).unwrap_or(false);
+
+    let updated = db.toggle_webhook_token(&token, new_enabled).await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+    })?;
+
+    if !updated {
+        return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Token not found"}))));
+    }
+
+    Ok(Json(TokenResponse {
+        token,
+        name: current.map(|t| t.name.clone()).unwrap_or_default(),
+        enabled: new_enabled,
+        last_used: current.and_then(|t| t.last_used.clone()),
+        created_at: current.map(|t| t.created_at.clone()).unwrap_or_default(),
     }))
 }

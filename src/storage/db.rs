@@ -113,6 +113,14 @@ impl Database {
         )
         .await?;
 
+        // Migration 003 — users + identities + webhook_tokens
+        Self::apply_migration(
+            pool,
+            "003_users",
+            include_str!("../../migrations/003_users.sql"),
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -672,6 +680,275 @@ impl Database {
             chunks_deleted,
         })
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // USER SYSTEM OPERATIONS
+    // ═══════════════════════════════════════════════════════════════
+
+    /// Create a new user with the given ID, username, and roles.
+    pub async fn create_user(
+        &self,
+        id: &str,
+        username: &str,
+        roles: &[&str],
+    ) -> Result<()> {
+        let roles_json = serde_json::to_string(roles)
+            .unwrap_or_else(|_| "[]".to_string());
+
+        sqlx::query(
+            "INSERT INTO users (id, username, roles) VALUES (?, ?, ?)"
+        )
+        .bind(id)
+        .bind(username)
+        .bind(roles_json)
+        .execute(&self.pool)
+        .await
+        .context("Failed to create user")?;
+
+        Ok(())
+    }
+
+    /// Load a user by their internal ID.
+    pub async fn load_user(&self, id: &str) -> Result<Option<UserRow>> {
+        let row = sqlx::query_as::<_, UserRow>(
+            "SELECT id, username, roles, created_at, updated_at, metadata
+             FROM users WHERE id = ?"
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to load user")?;
+
+        Ok(row)
+    }
+
+    /// Load a user by their username.
+    pub async fn load_user_by_username(&self, username: &str) -> Result<Option<UserRow>> {
+        let row = sqlx::query_as::<_, UserRow>(
+            "SELECT id, username, roles, created_at, updated_at, metadata
+             FROM users WHERE username = ?"
+        )
+        .bind(username)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to load user by username")?;
+
+        Ok(row)
+    }
+
+    /// Load all users.
+    pub async fn load_all_users(&self) -> Result<Vec<UserRow>> {
+        let rows = sqlx::query_as::<_, UserRow>(
+            "SELECT id, username, roles, created_at, updated_at, metadata
+             FROM users ORDER BY created_at ASC"
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to load users")?;
+
+        Ok(rows)
+    }
+
+    /// Update a user's roles.
+    pub async fn update_user_roles(&self, id: &str, roles: &[&str]) -> Result<bool> {
+        let roles_json = serde_json::to_string(roles)
+            .unwrap_or_else(|_| "[]".to_string());
+
+        let result = sqlx::query(
+            "UPDATE users SET roles = ?, updated_at = datetime('now') WHERE id = ?"
+        )
+        .bind(roles_json)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .context("Failed to update user roles")?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Delete a user (cascades to identities and webhook tokens).
+    pub async fn delete_user(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM users WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete user")?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    // --- User identities ---
+
+    /// Add a channel identity to a user.
+    pub async fn add_user_identity(
+        &self,
+        user_id: &str,
+        channel: &str,
+        platform_id: &str,
+        display_name: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO user_identities (user_id, channel, platform_id, display_name)
+             VALUES (?, ?, ?, ?)"
+        )
+        .bind(user_id)
+        .bind(channel)
+        .bind(platform_id)
+        .bind(display_name)
+        .execute(&self.pool)
+        .await
+        .context("Failed to add user identity")?;
+
+        Ok(())
+    }
+
+    /// Look up a user by their channel identity.
+    pub async fn lookup_user_by_identity(
+        &self,
+        channel: &str,
+        platform_id: &str,
+    ) -> Result<Option<UserRow>> {
+        let row = sqlx::query_as::<_, UserRow>(
+            "SELECT u.id, u.username, u.roles, u.created_at, u.updated_at, u.metadata
+             FROM users u
+             JOIN user_identities i ON u.id = i.user_id
+             WHERE i.channel = ? AND i.platform_id = ?"
+        )
+        .bind(channel)
+        .bind(platform_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to lookup user by identity")?;
+
+        Ok(row)
+    }
+
+    /// Load all identities for a user.
+    pub async fn load_user_identities(&self, user_id: &str) -> Result<Vec<UserIdentityRow>> {
+        let rows = sqlx::query_as::<_, UserIdentityRow>(
+            "SELECT id, user_id, channel, platform_id, display_name, created_at
+             FROM user_identities WHERE user_id = ?
+             ORDER BY created_at ASC"
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to load user identities")?;
+
+        Ok(rows)
+    }
+
+    /// Remove a user identity.
+    pub async fn remove_user_identity(
+        &self,
+        user_id: &str,
+        channel: &str,
+        platform_id: &str,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "DELETE FROM user_identities
+             WHERE user_id = ? AND channel = ? AND platform_id = ?"
+        )
+        .bind(user_id)
+        .bind(channel)
+        .bind(platform_id)
+        .execute(&self.pool)
+        .await
+        .context("Failed to remove user identity")?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    // --- Webhook tokens ---
+
+    /// Create a new webhook token for a user.
+    pub async fn create_webhook_token(
+        &self,
+        token: &str,
+        user_id: &str,
+        name: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO webhook_tokens (token, user_id, name) VALUES (?, ?, ?)"
+        )
+        .bind(token)
+        .bind(user_id)
+        .bind(name)
+        .execute(&self.pool)
+        .await
+        .context("Failed to create webhook token")?;
+
+        Ok(())
+    }
+
+    /// Look up a webhook token and return the associated user.
+    pub async fn lookup_user_by_webhook_token(&self, token: &str) -> Result<Option<UserRow>> {
+        let row = sqlx::query_as::<_, UserRow>(
+            "SELECT u.id, u.username, u.roles, u.created_at, u.updated_at, u.metadata
+             FROM users u
+             JOIN webhook_tokens wt ON u.id = wt.user_id
+             WHERE wt.token = ? AND wt.enabled = 1"
+        )
+        .bind(token)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to lookup user by webhook token")?;
+
+        Ok(row)
+    }
+
+    /// Update the last_used timestamp for a webhook token.
+    pub async fn touch_webhook_token(&self, token: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE webhook_tokens SET last_used = datetime('now') WHERE token = ?"
+        )
+        .bind(token)
+        .execute(&self.pool)
+        .await
+        .context("Failed to update webhook token last_used")?;
+
+        Ok(())
+    }
+
+    /// Load all webhook tokens for a user.
+    pub async fn load_webhook_tokens(&self, user_id: &str) -> Result<Vec<WebhookTokenRow>> {
+        let rows = sqlx::query_as::<_, WebhookTokenRow>(
+            "SELECT token, user_id, name, enabled, last_used, created_at
+             FROM webhook_tokens WHERE user_id = ?
+             ORDER BY created_at DESC"
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to load webhook tokens")?;
+
+        Ok(rows)
+    }
+
+    /// Delete a webhook token.
+    pub async fn delete_webhook_token(&self, token: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM webhook_tokens WHERE token = ?")
+            .bind(token)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete webhook token")?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Toggle a webhook token's enabled state.
+    pub async fn toggle_webhook_token(&self, token: &str, enabled: bool) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE webhook_tokens SET enabled = ? WHERE token = ?"
+        )
+        .bind(enabled)
+        .bind(token)
+        .execute(&self.pool)
+        .await
+        .context("Failed to toggle webhook token")?;
+
+        Ok(result.rows_affected() > 0)
+    }
 }
 
 /// Result of memory cleanup operation.
@@ -731,6 +1008,40 @@ pub struct CronJobRow {
     pub enabled: bool,
     pub deliver_to: Option<String>,
     pub last_run: Option<String>,
+    pub created_at: String,
+}
+
+// ═══════════════════════════════════════════════════════════════
+// USER SYSTEM ROW TYPES
+// ═══════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct UserRow {
+    pub id: String,
+    pub username: String,
+    pub roles: String,        // JSON array
+    pub created_at: String,
+    pub updated_at: String,
+    pub metadata: String,     // JSON object
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct UserIdentityRow {
+    pub id: i64,
+    pub user_id: String,
+    pub channel: String,
+    pub platform_id: String,
+    pub display_name: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct WebhookTokenRow {
+    pub token: String,
+    pub user_id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub last_used: Option<String>,
     pub created_at: String,
 }
 

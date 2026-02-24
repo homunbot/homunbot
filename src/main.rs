@@ -20,6 +20,7 @@ mod skills;
 mod storage;
 mod tools;
 mod tui;
+mod user;
 mod utils;
 mod web;
 
@@ -81,6 +82,11 @@ enum Commands {
     Memory {
         #[command(subcommand)]
         command: MemoryCommands,
+    },
+    /// Manage users and permissions
+    Users {
+        #[command(subcommand)]
+        command: UserCommands,
     },
     /// Stop the running gateway
     Stop,
@@ -207,6 +213,66 @@ enum MemoryCommands {
         /// Skip confirmation prompt
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum UserCommands {
+    /// List all users
+    List,
+    /// Create a new user
+    Add {
+        /// Username
+        name: String,
+        /// Make user an admin
+        #[arg(long)]
+        admin: bool,
+    },
+    /// Show user details
+    Info {
+        /// Username or ID
+        user: String,
+    },
+    /// Link a channel identity to a user
+    Link {
+        /// Username or ID
+        #[arg(long)]
+        user: String,
+        /// Channel type (telegram, discord, whatsapp, webhook)
+        #[arg(long)]
+        channel: String,
+        /// Platform-specific ID (e.g., Telegram user ID)
+        #[arg(long)]
+        id: String,
+        /// Display name for the identity
+        #[arg(long)]
+        display_name: Option<String>,
+    },
+    /// Unlink a channel identity from a user
+    Unlink {
+        /// Username or ID
+        #[arg(long)]
+        user: String,
+        /// Channel type
+        #[arg(long)]
+        channel: String,
+        /// Platform-specific ID
+        #[arg(long)]
+        id: String,
+    },
+    /// Create a webhook token for a user
+    Token {
+        /// Username or ID
+        #[arg(long)]
+        user: String,
+        /// Token name/description
+        #[arg(long)]
+        name: String,
+    },
+    /// Delete a user
+    Remove {
+        /// Username or ID
+        user: String,
     },
 }
 
@@ -1301,6 +1367,161 @@ async fn main() -> Result<()> {
                     }
 
                     println!("\n✅ Memory reset complete. Restart the gateway to apply.");
+                }
+            }
+        }
+        Commands::Users { command } => {
+            let data_dir = Config::data_dir();
+            let db_path = data_dir.join("homun.db");
+            let db = Database::open(&db_path).await?;
+            let user_mgr = user::UserManager::new(db);
+
+            match command {
+                UserCommands::List => {
+                    println!("👥 Users");
+                    println!("─────────────────────────────────");
+
+                    let users = user_mgr.list_users().await?;
+                    if users.is_empty() {
+                        println!("  No users configured.");
+                        println!("\n  Create one with: homun users add <username>");
+                    } else {
+                        for u in users {
+                            let roles: Vec<&str> = u.roles.iter().map(|r| r.as_str()).collect();
+                            println!("  • {} ({}) [{}]", u.username, &u.id[..8], roles.join(", "));
+                        }
+                    }
+                }
+                UserCommands::Add { name, admin } => {
+                    let user = if admin {
+                        user_mgr.create_admin(&name).await?
+                    } else {
+                        user_mgr.create_user(&name).await?
+                    };
+                    let role = if admin { "admin" } else { "user" };
+                    println!("✅ Created user '{}' with role {} (ID: {})", name, role, user.id);
+                }
+                UserCommands::Info { user } => {
+                    let info = if user.contains('-') && user.len() == 36 {
+                        // Looks like a UUID
+                        user_mgr.get_user(&user).await?
+                    } else {
+                        // Treat as username
+                        user_mgr.get_user_by_username(&user).await?
+                    };
+
+                    match info {
+                        Some(u) => {
+                            println!("👤 User: {}", u.username);
+                            println!("─────────────────────────────────");
+                            println!("  ID: {}", u.id);
+                            let roles: Vec<&str> = u.roles.iter().map(|r| r.as_str()).collect();
+                            println!("  Roles: {}", roles.join(", "));
+
+                            // Show identities
+                            let db = user_mgr.db();
+                            let identities = db.load_user_identities(&u.id).await?;
+                            if !identities.is_empty() {
+                                println!("\n  Channel Identities:");
+                                for id in identities {
+                                    let dn = id.display_name.map(|d| format!(" ({})", d)).unwrap_or_default();
+                                    println!("    • {}: {}{}", id.channel, id.platform_id, dn);
+                                }
+                            }
+
+                            // Show webhook tokens
+                            let tokens = db.load_webhook_tokens(&u.id).await?;
+                            if !tokens.is_empty() {
+                                println!("\n  Webhook Tokens:");
+                                for t in tokens {
+                                    let status = if t.enabled { "✓" } else { "✗" };
+                                    let last = t.last_used.map(|l| format!(" (last: {})", l)).unwrap_or_default();
+                                    println!("    • [{}] {} – {}{}", status, &t.token[..12], t.name, last);
+                                }
+                            }
+                        }
+                        None => {
+                            println!("❌ User not found: {}", user);
+                        }
+                    }
+                }
+                UserCommands::Link { user, channel, id, display_name } => {
+                    let info = if user.contains('-') && user.len() == 36 {
+                        user_mgr.get_user(&user).await?
+                    } else {
+                        user_mgr.get_user_by_username(&user).await?
+                    };
+
+                    match info {
+                        Some(u) => {
+                            user_mgr.link_identity(&u.id, &channel, &id, display_name.as_deref()).await?;
+                            println!("✅ Linked {} identity '{}' to user '{}'", channel, id, u.username);
+                        }
+                        None => {
+                            println!("❌ User not found: {}", user);
+                        }
+                    }
+                }
+                UserCommands::Unlink { user, channel, id } => {
+                    let info = if user.contains('-') && user.len() == 36 {
+                        user_mgr.get_user(&user).await?
+                    } else {
+                        user_mgr.get_user_by_username(&user).await?
+                    };
+
+                    match info {
+                        Some(u) => {
+                            let removed = user_mgr.unlink_identity(&u.id, &channel, &id).await?;
+                            if removed {
+                                println!("✅ Unlinked {} identity '{}' from user '{}'", channel, id, u.username);
+                            } else {
+                                println!("⚠️  Identity not found");
+                            }
+                        }
+                        None => {
+                            println!("❌ User not found: {}", user);
+                        }
+                    }
+                }
+                UserCommands::Token { user, name } => {
+                    let info = if user.contains('-') && user.len() == 36 {
+                        user_mgr.get_user(&user).await?
+                    } else {
+                        user_mgr.get_user_by_username(&user).await?
+                    };
+
+                    match info {
+                        Some(u) => {
+                            let token = user_mgr.create_webhook_token(&u.id, &name).await?;
+                            println!("✅ Created webhook token for user '{}':", u.username);
+                            println!("   Token: {}", token);
+                            println!("\n   Usage: POST /api/webhook/{}", token);
+                        }
+                        None => {
+                            println!("❌ User not found: {}", user);
+                        }
+                    }
+                }
+                UserCommands::Remove { user } => {
+                    let info = if user.contains('-') && user.len() == 36 {
+                        user_mgr.get_user(&user).await?
+                    } else {
+                        user_mgr.get_user_by_username(&user).await?
+                    };
+
+                    match info {
+                        Some(u) => {
+                            let removed = user_mgr.delete_user(&u.id).await?;
+                            if removed {
+                                println!("✅ Deleted user '{}' ({})", u.username, u.id);
+                            } else {
+                                println!("⚠️  User not found");
+                            }
+                        }
+                        None => {
+                            println!("❌ User not found: {}", user);
+                        }
+                    }
                 }
             }
         }

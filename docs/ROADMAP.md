@@ -1,7 +1,7 @@
 # Homun — Development Roadmap
 
 > Last updated: 2026-02-24
-> Status: Phase 7 (Security complete, 28K LOC, 305 tests)
+> Status: Phase 7.1 (User system + Webhook ingress complete)
 
 ---
 
@@ -9,12 +9,12 @@
 
 | Metric | Value |
 |--------|-------|
-| Source files | 71 |
-| Lines of code | ~28,000 |
+| Source files | 72 |
+| Lines of code | ~29,000 |
 | Tests | 305 passing |
 | Binary size | ~47MB (release) |
 | LLM Providers | 27 |
-| Channels | 5 (CLI, Telegram, Discord, WhatsApp, Web UI) |
+| Channels | 6 (CLI, Telegram, Discord, WhatsApp, Web UI, Webhook) |
 | Tools | 11 built-in |
 | Web UI pages | 8 |
 
@@ -79,14 +79,15 @@
 |------|--------|------------|
 | Slack | ❌ TODO | Medium |
 | Email (IMAP/SMTP) | ❌ TODO | Medium |
-| Webhook ingress | ❌ TODO | Low |
+| **Webhook ingress** | ✅ DONE | POST /api/v1/webhook/{token} |
 
 ### User Management
 | Task | Status | Description |
 |------|--------|-------------|
-| User system | ❌ TODO | Users, roles, permissions |
-| Channel auth | ❌ TODO | Map channel IDs to users |
-| Permission enforcement | ❌ TODO | Middleware in agent loop |
+| **User system** | ✅ DONE | Single owner, channel identities, webhook tokens |
+| **Channel auth** | ✅ DONE | Map channel IDs to owner |
+| **Webhook ingress** | ✅ DONE | POST /api/v1/webhook/{token} |
+| **Web UI Account page** | ❌ TODO | Owner info, identities, tokens in dashboard |
 
 ---
 
@@ -154,17 +155,21 @@
 ## Phase Timeline
 
 ```
-Phase 7 — Security & Stability (Current)
-├── P0: Vault 2FA ✅, Exfiltration prevention ✅, Vault leak ✅, CI
+Phase 7.1 — User System (Current)
+├── ✅ Owner identity + CLI (homun users add/link/token)
+├── ✅ Webhook ingress (POST /api/v1/webhook/{token})
+└── ❌ Web UI Account page (identities + tokens)
+
+Phase 7.2 — Infrastructure
+├── P0: CI Pipeline
 └── P1: Rate limiting, Cost tracking, Service install
 
 Phase 8 — Channels (Q2 2026)
-├── P1: Slack, Email, Webhook
+├── P1: Slack, Email
 └── P2: Matrix, IRC, Signal
 
-Phase 9 — User & Marketplace (Q3 2026)
-├── P1: User system, Permissions
-├── P1: VirusTotal, Skill sandbox
+Phase 9 — Security & Marketplace (Q3 2026)
+├── P1: VirusTotal, Skill sandbox, Audit logging
 └── P2: Skill/Data marketplace
 
 Phase 10 — Workflows (Q4 2026)
@@ -197,3 +202,4 @@ Phase 11 — Distribution (Q1 2027)
 4. **WhatsApp native Rust** — no Node.js bridge
 5. **Local embeddings** — fastembed ONNX, no API calls
 6. **Security-first** — 2FA, sandboxing, exfiltration + vault leak prevention
+7. **Webhook channel** — External integrations via token-authenticated API
