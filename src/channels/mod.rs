@@ -1,5 +1,6 @@
 mod cli;
 mod traits;
+pub mod slack;
 
 #[cfg(feature = "channel-telegram")]
 pub mod telegram;
@@ -11,6 +12,7 @@ pub mod discord;
 pub mod whatsapp;
 
 pub use cli::CliChannel;
+pub use slack::SlackChannel;
 
 #[cfg(feature = "channel-telegram")]
 pub use telegram::TelegramChannel;

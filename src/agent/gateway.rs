@@ -24,6 +24,9 @@ use crate::channels::DiscordChannel;
 #[cfg(feature = "channel-whatsapp")]
 use crate::channels::WhatsAppChannel;
 
+use crate::channels::SlackChannel;
+use crate::channels::Channel; // Import trait to call .start()
+
 use super::AgentLoop;
 
 /// A running channel: name + task handle + outbound sender
@@ -182,6 +185,43 @@ impl Gateway {
                 outbound_tx: wa_outbound_tx,
             });
             tracing::info!("WhatsApp channel started");
+        }
+
+        // --- Start Slack channel ---
+        if self.config.channels.slack.enabled {
+            let mut slack_config = self.config.channels.slack.clone();
+            
+            // Resolve token from encrypted storage if marker is present
+            if slack_config.token == "***ENCRYPTED***" || slack_config.token.is_empty() {
+                if let Ok(secrets) = crate::storage::global_secrets() {
+                    let key = crate::storage::SecretKey::channel_token("slack");
+                    if let Ok(Some(real_token)) = secrets.get(&key) {
+                        slack_config.token = real_token;
+                    }
+                }
+            }
+            
+            // Skip if no valid token
+            if slack_config.token.is_empty() || slack_config.token == "***ENCRYPTED***" {
+                tracing::error!("Slack enabled but no token found - skipping channel");
+            } else {
+                let slack_inbound_tx = inbound_tx.clone();
+                let (slack_outbound_tx, slack_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
+                
+                let handle = tokio::spawn(async move {
+                    let channel = crate::channels::SlackChannel::new(slack_config);
+                    if let Err(e) = channel.start(slack_inbound_tx, slack_outbound_rx).await {
+                        tracing::error!(error = %e, "Slack channel error");
+                    }
+                });
+                
+                channels.push(ChannelHandle {
+                    name: "slack".to_string(),
+                    handle,
+                    outbound_tx: slack_outbound_tx,
+                });
+                tracing::info!("Slack channel started");
+            }
         }
 
         // --- Start Web UI server ---

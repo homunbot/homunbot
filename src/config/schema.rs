@@ -542,12 +542,28 @@ impl Default for WebConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
+pub struct SlackConfig {
+    pub enabled: bool,
+    pub token: String,
+    /// Channel ID to monitor (e.g., "C1234567890"). Empty or "*" = auto-discover all accessible channels.
+    #[serde(default)]
+    pub channel_id: String,
+    /// List of user IDs allowed to interact (e.g., "U1234567890"). "*" = allow all.
+    #[serde(default)]
+    pub allow_from: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ChannelsConfig {
     pub telegram: TelegramConfig,
     pub whatsapp: WhatsAppConfig,
     pub discord: DiscordConfig,
     pub web: WebConfig,
+    pub slack: SlackConfig,
 }
+
+
 
 impl ChannelsConfig {
     /// Return a list of enabled channels with their default chat IDs.
