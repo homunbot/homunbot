@@ -649,17 +649,17 @@ if (chModal && channelCards.length > 0) {
         buildGuide(currentChannel);
 
         // Show/hide form groups based on channel type
-        chTokenGroup.style.display = hasToken ? 'block' : 'none';
-        chPhoneGroup.style.display = currentChannel === 'whatsapp' ? 'block' : 'none';
-        chAllowGroup.style.display = (currentChannel !== 'web') ? 'block' : 'none';
-        chDiscordGroup.style.display = currentChannel === 'discord' ? 'block' : 'none';
-        chSlackGroup.style.display = currentChannel === 'slack' ? 'block' : 'none';
-        chWebHostGroup.style.display = isWeb ? 'block' : 'none';
-        chWebPortGroup.style.display = isWeb ? 'block' : 'none';
-        chWaPairing.style.display = 'none';
-        btnWaPair.style.display = currentChannel === 'whatsapp' ? 'inline-flex' : 'none';
-        btnTestCh.style.display = isWeb ? 'none' : 'inline-flex';
-        btnChSave.style.display = isWeb ? 'none' : 'inline-flex';
+        if (chTokenGroup) chTokenGroup.style.display = hasToken ? 'block' : 'none';
+        if (chPhoneGroup) chPhoneGroup.style.display = currentChannel === 'whatsapp' ? 'block' : 'none';
+        if (chAllowGroup) chAllowGroup.style.display = (currentChannel !== 'web') ? 'block' : 'none';
+        if (chDiscordGroup) chDiscordGroup.style.display = currentChannel === 'discord' ? 'block' : 'none';
+        if (chSlackGroup) chSlackGroup.style.display = currentChannel === 'slack' ? 'block' : 'none';
+        if (chWebHostGroup) chWebHostGroup.style.display = isWeb ? 'block' : 'none';
+        if (chWebPortGroup) chWebPortGroup.style.display = isWeb ? 'block' : 'none';
+        if (chWaPairing) chWaPairing.style.display = 'none';
+        if (btnWaPair) btnWaPair.style.display = currentChannel === 'whatsapp' ? 'inline-flex' : 'none';
+        if (btnTestCh) btnTestCh.style.display = isWeb ? 'none' : 'inline-flex';
+        if (btnChSave) btnChSave.style.display = isWeb ? 'none' : 'inline-flex';
 
         // Set hints
         if (currentChannel === 'telegram') {
