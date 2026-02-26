@@ -299,6 +299,7 @@ impl AgentLoop {
             channel: channel.to_string(),
             chat_id: chat_id.to_string(),
             message_tx: self.message_tx.clone(),
+            approval_manager: crate::tools::global_approval_manager(),
         };
 
         let mut final_content: Option<String> = None;

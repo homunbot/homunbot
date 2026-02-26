@@ -383,6 +383,9 @@ fn create_tool_registry(config: &Config) -> ToolRegistry {
     // Prepare permissions config for tools
     let permissions = std::sync::Arc::new(config.permissions.clone());
     let shell_permissions = std::sync::Arc::new(config.permissions.shell.clone());
+    
+    // Initialize approval manager for command approval workflow
+    tools::init_approval_manager(&config.permissions.approval);
 
     // Shell tool with OS-specific permissions
     registry.register(Box::new(ShellTool::with_permissions(

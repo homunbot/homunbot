@@ -356,6 +356,28 @@ impl Tool for ShellTool {
             return Ok(ToolResult::error(reason));
         }
 
+        // Approval workflow check (P0-4)
+        if let Some(ref approval_mgr) = ctx.approval_manager {
+            if approval_mgr.needs_approval("shell") {
+                // Check if command is pre-approved via session allowlist
+                let response = approval_mgr.check_command(&command, &ctx.channel);
+                if !response.approved {
+                    tracing::warn!(command = %command, channel = %ctx.channel, "Shell command requires approval");
+                    return Ok(ToolResult::error(format!(
+                        "Command requires approval: {}\n\n{}",
+                        &command, response.message
+                    )));
+                }
+                // Record the approval for audit
+                approval_mgr.record_decision(
+                    "shell",
+                    &args,
+                    crate::tools::ApprovalDecision::Yes,
+                    &ctx.channel,
+                );
+            }
+        }
+
         tracing::info!(command = %command, cwd = %working_dir, "Executing shell command");
 
         // Spawn subprocess with clean environment — allowlist approach.

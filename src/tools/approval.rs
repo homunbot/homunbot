@@ -46,6 +46,7 @@ pub struct ApprovalResponse {
 }
 
 /// Manages the interactive approval workflow.
+#[derive(Debug)]
 pub struct ApprovalManager {
     auto_approve: HashSet<String>,
     always_ask: HashSet<String>,

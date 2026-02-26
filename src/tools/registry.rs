@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
@@ -7,6 +8,7 @@ use tokio::sync::mpsc;
 
 use crate::bus::OutboundMessage;
 use crate::provider::{FunctionDefinition, ToolDefinition};
+use crate::tools::approval::ApprovalManager;
 
 /// Result of executing a tool — always a string for the LLM
 #[derive(Debug, Clone)]
@@ -40,6 +42,8 @@ pub struct ToolContext {
     /// Optional sender for proactive messaging (MessageTool).
     /// Set in Gateway mode where channels are available; None in CLI mode.
     pub message_tx: Option<mpsc::Sender<OutboundMessage>>,
+    /// Optional approval manager for interactive approval workflow.
+    pub approval_manager: Option<Arc<ApprovalManager>>,
 }
 
 /// Tool trait — every built-in tool and skill implements this.
