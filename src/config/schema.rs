@@ -905,7 +905,7 @@ pub enum AutonomyLevel {
 
 impl Default for AutonomyLevel {
     fn default() -> Self {
-        Self::Supervised
+        Self::Full  // Default to full autonomy - approval workflow is opt-in
     }
 }
 
@@ -928,7 +928,7 @@ pub struct ApprovalConfig {
 impl Default for ApprovalConfig {
     fn default() -> Self {
         Self {
-            level: AutonomyLevel::Supervised,
+            level: AutonomyLevel::Full,  // Default to full autonomy - approval workflow is opt-in
             // Safe commands that don't need approval
             auto_approve: vec![
                 "ls".to_string(),
