@@ -541,6 +541,7 @@ if (chModal && channelCards.length > 0) {
     const chPhoneGroup = document.getElementById('ch-phone-group');
     const chAllowGroup = document.getElementById('ch-allow-from-group');
     const chDiscordGroup = document.getElementById('ch-discord-channel-group');
+    const chSlackGroup = document.getElementById('ch-slack-channel-group');
     const chWebHostGroup = document.getElementById('ch-web-host-group');
     const chWebPortGroup = document.getElementById('ch-web-port-group');
     const chWaPairing = document.getElementById('ch-wa-pairing');
@@ -565,6 +566,13 @@ if (chModal && channelCards.length > 0) {
             'Copy the token and paste it below',
             'Enable Privileged Gateway Intents (Message Content)',
             'Generate invite URL (OAuth2 \u2192 bot scope \u2192 Send Messages)',
+        ],
+        slack: [
+            'Go to api.slack.com/apps and create a new app',
+            'Go to OAuth & Permissions \u2192 Bot Token Scopes',
+            'Add scopes: chat:write, channels:history, groups:history',
+            'Install app to workspace and copy Bot User OAuth Token',
+            'Channel ID is optional \u2014 leave empty for auto-discovery',
         ],
         whatsapp: [
             'Enter your phone number (international format without +)',
@@ -645,6 +653,7 @@ if (chModal && channelCards.length > 0) {
         chPhoneGroup.style.display = currentChannel === 'whatsapp' ? 'block' : 'none';
         chAllowGroup.style.display = (currentChannel !== 'web') ? 'block' : 'none';
         chDiscordGroup.style.display = currentChannel === 'discord' ? 'block' : 'none';
+        chSlackGroup.style.display = currentChannel === 'slack' ? 'block' : 'none';
         chWebHostGroup.style.display = isWeb ? 'block' : 'none';
         chWebPortGroup.style.display = isWeb ? 'block' : 'none';
         chWaPairing.style.display = 'none';
@@ -659,6 +668,9 @@ if (chModal && channelCards.length > 0) {
         } else if (currentChannel === 'discord') {
             document.getElementById('ch-token-hint').textContent = 'Bot token from Discord Developer Portal. Stored encrypted.';
             document.getElementById('ch-allow-from-hint').textContent = 'Discord User IDs (numeric). Enable Developer Mode to copy.';
+        } else if (currentChannel === 'slack') {
+            document.getElementById('ch-token-hint').textContent = 'Bot User OAuth Token (xoxb-...) from Slack App. Stored encrypted.';
+            document.getElementById('ch-allow-from-hint').textContent = 'Slack User IDs (U...). Use "*" to allow everyone.';
         } else if (currentChannel === 'whatsapp') {
             document.getElementById('ch-allow-from-hint').textContent = 'Phone numbers of allowed senders (e.g. 393331234567).';
         }
@@ -669,6 +681,7 @@ if (chModal && channelCards.length > 0) {
         document.getElementById('ch-phone').value = card.dataset.phone || '';
         document.getElementById('ch-allow-from').value = card.dataset.allowFrom || '';
         document.getElementById('ch-discord-channel').value = card.dataset.discordChannel || '';
+        document.getElementById('ch-slack-channel').value = card.dataset.slackChannel || '';
         document.getElementById('ch-web-host').value = card.dataset.webHost || '';
         document.getElementById('ch-web-port').value = card.dataset.webPort || '';
 
@@ -699,6 +712,10 @@ if (chModal && channelCards.length > 0) {
                 // Discord default channel
                 if (data.default_channel_id) {
                     document.getElementById('ch-discord-channel').value = data.default_channel_id;
+                }
+                // Slack channel
+                if (data.channel_id) {
+                    document.getElementById('ch-slack-channel').value = data.channel_id;
                 }
                 // Web host/port
                 if (data.host) {
@@ -781,6 +798,9 @@ if (chModal && channelCards.length > 0) {
             }
             if (chDiscordGroup.style.display !== 'none') {
                 payload.default_channel_id = document.getElementById('ch-discord-channel').value.trim();
+            }
+            if (chSlackGroup.style.display !== 'none') {
+                payload.default_channel_id = document.getElementById('ch-slack-channel').value.trim();
             }
             if (chWebHostGroup.style.display !== 'none') {
                 payload.host = document.getElementById('ch-web-host').value.trim();

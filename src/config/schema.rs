@@ -154,6 +154,15 @@ impl Config {
                 }
                 !self.channels.discord.token.is_empty()
             }
+            "slack" => {
+                if let Ok(secrets) = crate::storage::global_secrets() {
+                    let key = crate::storage::SecretKey::channel_token("slack");
+                    if matches!(secrets.get(&key), Ok(Some(_))) {
+                        return true;
+                    }
+                }
+                !self.channels.slack.token.is_empty()
+            }
             "whatsapp" => {
                 // WhatsApp is "configured" if it has a phone number and the session DB exists
                 !self.channels.whatsapp.phone_number.is_empty()

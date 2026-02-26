@@ -1564,6 +1564,25 @@ async fn configure_channel(
             }
             config.channels.discord.enabled = true;
         }
+        "slack" => {
+            if let Some(token) = &req.token {
+                if !token.is_empty() {
+                    let secrets = crate::storage::global_secrets()
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    let key = crate::storage::SecretKey::channel_token("slack");
+                    secrets.set(&key, token)
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    config.channels.slack.token = "***ENCRYPTED***".to_string();
+                }
+            }
+            if let Some(allow_from) = &req.allow_from {
+                config.channels.slack.allow_from = allow_from.clone();
+            }
+            if let Some(channel_id) = &req.default_channel_id {
+                config.channels.slack.channel_id = channel_id.clone();
+            }
+            config.channels.slack.enabled = true;
+        }
         "whatsapp" => {
             if let Some(phone) = &req.phone_number {
                 config.channels.whatsapp.phone_number = phone.clone();

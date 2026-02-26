@@ -39,6 +39,7 @@ const ICON_ACCOUNT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="curre
 const ICON_WEB: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="7.5"/><path d="M1.5 9h15"/><path d="M9 1.5a11.5 11.5 0 0 1 3 7.5 11.5 11.5 0 0 1-3 7.5"/><path d="M9 1.5a11.5 11.5 0 0 0-3 7.5 11.5 11.5 0 0 0 3 7.5"/></svg>"#;
 const ICON_TELEGRAM: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 2.5L1.5 8l5 2m9-7.5L6.5 10m9-7.5l-3 13-5.5-5.5"/><path d="M6.5 10v4.5l2.5-2.5"/></svg>"#;
 const ICON_DISCORD: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3C5 3 3 3.5 2 5c-1.5 3-.5 7.5 1 9.5.5.5 1.5 1.5 3 1.5s2-1 3-1 1.5 1 3 1 2.5-1 3-1.5c1.5-2 2.5-6.5 1-9.5-1-1.5-3-2-4.5-2"/><circle cx="6.5" cy="10" r="1"/><circle cx="11.5" cy="10" r="1"/></svg>"#;
+const ICON_SLACK: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z"/><path d="M9 6a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/><path d="M15 9a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z"/><path d="M9 15a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/><path d="M6 6v3m0 3v3"/><path d="M12 6v3m0 3v3"/><path d="M6 6h3m3 0h3"/><path d="M6 12h3m3 0h3"/></svg>"#;
 const ICON_PHONE: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="1" width="10" height="16" rx="2"/><line x1="9" y1="14" x2="9" y2="14"/></svg>"#;
 
 /// Logo icon — serves the SVG logotype via <img> tag.
@@ -549,6 +550,12 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <label for="ch-discord-channel">Default Channel ID</label>
                             <input type="text" id="ch-discord-channel" name="default_channel_id" class="input">
                             <div class="form-hint">For proactive messages (optional)</div>
+                        </div>
+
+                        <div class="form-group" id="ch-slack-channel-group" style="display:none;">
+                            <label for="ch-slack-channel">Channel ID</label>
+                            <input type="text" id="ch-slack-channel" name="slack_channel_id" class="input">
+                            <div class="form-hint">Specific channel to monitor (e.g., C1234567890). Leave empty for auto-discovery.</div>
                         </div>
 
                         <div class="form-group" id="ch-web-host-group" style="display:none;">
@@ -1580,10 +1587,10 @@ fn build_channels_cards_html(config: &crate::config::Config) -> String {
             has_token: true,
         },
         ChannelMeta {
-            name: "discord",
-            display: "Discord",
-            desc: "Discord bot integration",
-            icon: ICON_DISCORD,
+            name: "slack",
+            display: "Slack",
+            desc: "Slack workspace integration via Web API",
+            icon: ICON_SLACK,
             has_token: true,
         },
         ChannelMeta {
@@ -1609,6 +1616,7 @@ fn build_channels_cards_html(config: &crate::config::Config) -> String {
             let enabled = match ch.name {
                 "telegram" => config.channels.telegram.enabled,
                 "discord" => config.channels.discord.enabled,
+                "slack" => config.channels.slack.enabled,
                 "whatsapp" => config.channels.whatsapp.enabled,
                 "web" => config.channels.web.enabled,
                 _ => false,
@@ -1637,21 +1645,24 @@ fn build_channels_cards_html(config: &crate::config::Config) -> String {
             let token_mask = match ch.name {
                 "telegram" if configured => resolve_and_mask_token("telegram", &config.channels.telegram.token),
                 "discord" if configured => resolve_and_mask_token("discord", &config.channels.discord.token),
+                "slack" if configured => resolve_and_mask_token("slack", &config.channels.slack.token),
                 _ => String::new(),
             };
             let allow_from = match ch.name {
                 "telegram" => config.channels.telegram.allow_from.join(","),
                 "discord" => config.channels.discord.allow_from.join(","),
+                "slack" => config.channels.slack.allow_from.join(","),
                 "whatsapp" => config.channels.whatsapp.allow_from.join(","),
                 _ => String::new(),
             };
             let phone = &config.channels.whatsapp.phone_number;
             let discord_channel = &config.channels.discord.default_channel_id;
+            let slack_channel = &config.channels.slack.channel_id;
             let web_host = &config.channels.web.host;
             let web_port = config.channels.web.port;
 
             format!(
-                r##"<div class="{classes}" data-channel="{name}" data-display="{display}" data-configured="{configured}" data-enabled="{enabled}" data-has-token="{has_token}" data-token-mask="{token_mask}" data-allow-from="{allow_from}" data-phone="{phone}" data-discord-channel="{discord_channel}" data-web-host="{web_host}" data-web-port="{web_port}" data-is-web="{is_web}">
+                r##"<div class="{classes}" data-channel="{name}" data-display="{display}" data-configured="{configured}" data-enabled="{enabled}" data-has-token="{has_token}" data-token-mask="{token_mask}" data-allow-from="{allow_from}" data-phone="{phone}" data-discord-channel="{discord_channel}" data-slack-channel="{slack_channel}" data-web-host="{web_host}" data-web-port="{web_port}" data-is-web="{is_web}">
                     <div class="provider-card-header">
                         <div class="provider-card-info">
                             <span class="channel-icon">{icon}</span>
@@ -1672,6 +1683,7 @@ fn build_channels_cards_html(config: &crate::config::Config) -> String {
                 desc = ch.desc,
                 icon = ch.icon,
                 has_token = ch.has_token,
+                slack_channel = slack_channel,
             )
         })
         .collect()
