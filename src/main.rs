@@ -17,6 +17,7 @@ mod config;
 mod provider;
 mod scheduler;
 mod security;
+mod service;
 mod session;
 mod skills;
 mod storage;
@@ -95,6 +96,11 @@ enum Commands {
     Users {
         #[command(subcommand)]
         command: UserCommands,
+    },
+    /// Manage system service (auto-start at boot)
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommands,
     },
     /// Stop the running gateway
     Stop,
@@ -282,6 +288,20 @@ enum UserCommands {
         /// Username or ID
         user: String,
     },
+}
+
+#[derive(Subcommand)]
+enum ServiceCommands {
+    /// Install homun as a user service (auto-start at boot)
+    Install,
+    /// Uninstall the homun service
+    Uninstall,
+    /// Start the homun service
+    Start,
+    /// Stop the homun service
+    Stop,
+    /// Show service status
+    Status,
 }
 
 /// Create the LLM provider from config.
@@ -1552,6 +1572,27 @@ async fn main() -> Result<()> {
                             println!("❌ User not found: {}", user);
                         }
                     }
+                }
+            }
+        }
+        Commands::Service { command } => {
+            use service::*;
+            match command {
+                ServiceCommands::Install => {
+                    install()?;
+                }
+                ServiceCommands::Uninstall => {
+                    uninstall()?;
+                }
+                ServiceCommands::Start => {
+                    start()?;
+                }
+                ServiceCommands::Stop => {
+                    stop()?;
+                }
+                ServiceCommands::Status => {
+                    let status = status()?;
+                    println!("{}", status);
                 }
             }
         }
