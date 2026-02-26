@@ -23,3 +23,6 @@ pub use vault::VaultTool;
 
 #[cfg(feature = "local-embeddings")]
 pub use remember::RememberTool;
+
+#[cfg(feature = "browser")]
+pub use crate::browser::BrowserTool;

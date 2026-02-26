@@ -589,6 +589,9 @@ async fn main() -> Result<()> {
             }
 
             let session_manager = SessionManager::new(db.clone());
+            #[cfg(feature = "local-embeddings")]
+            let db_for_searcher = db.clone();
+            #[cfg(not(feature = "local-embeddings"))]
             let _db_for_searcher = db.clone();
             let mut agent = agent::AgentLoop::new(
                 provider,
@@ -723,6 +726,9 @@ async fn main() -> Result<()> {
             let (tool_msg_tx, tool_msg_rx) = tokio::sync::mpsc::channel(100);
 
             // Create agent only if provider is available
+            #[cfg(feature = "local-embeddings")]
+            let db_for_searcher = db.clone();
+            #[cfg(not(feature = "local-embeddings"))]
             let _db_for_searcher = db.clone();
             let db_for_web = db.clone();
             let mut agent = if let Some(p) = provider {

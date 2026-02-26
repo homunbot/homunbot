@@ -23,10 +23,6 @@ use crate::channels::DiscordChannel;
 
 #[cfg(feature = "channel-whatsapp")]
 use crate::channels::WhatsAppChannel;
-#[cfg(feature = "channel-discord")]
-use crate::channels::DiscordChannel;
-#[cfg(feature = "channel-whatsapp")]
-use crate::channels::WhatsAppChannel;
 
 use super::AgentLoop;
 

@@ -40,9 +40,9 @@ cargo build --release
 
 | Build Command | Binary Size | Description |
 |---------------|-------------|-------------|
-| `cargo build --release` | ~6.6 MB | Default features (CLI + Web UI) |
-| `cargo build --release --features gateway` | ~40 MB | All channels + embeddings |
-| `cargo build --release --features full` | ~50 MB | Everything including browser |
+| `cargo build --release` | ~7 MB | Default features (CLI + Web UI) |
+| `cargo build --release --features gateway` | ~29 MB | All channels + embeddings |
+| `cargo build --release --features full` | ~31 MB | Everything including browser |
 
 ### Release Profile
 
