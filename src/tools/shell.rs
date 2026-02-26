@@ -360,7 +360,7 @@ impl Tool for ShellTool {
         if let Some(ref approval_mgr) = ctx.approval_manager {
             if approval_mgr.needs_approval("shell") {
                 // Check if command is pre-approved via session allowlist
-                let response = approval_mgr.check_command(&command, &ctx.channel);
+                let response = approval_mgr.check_command(&command, &ctx.channel, &ctx.chat_id);
                 if !response.approved {
                     tracing::warn!(command = %command, channel = %ctx.channel, "Shell command requires approval");
                     return Ok(ToolResult::error(format!(

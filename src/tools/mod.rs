@@ -21,7 +21,7 @@ pub use spawn::SpawnTool;
 pub use message::MessageTool;
 pub use mcp::{McpManager, McpServerInfo};
 pub use vault::VaultTool;
-pub use approval::{ApprovalManager, ApprovalDecision, ApprovalRequest, ApprovalResponse, ApprovalLogEntry, init_approval_manager, global_approval_manager};
+pub use approval::{ApprovalManager, ApprovalDecision, ApprovalResponse, ApprovalLogEntry, PendingApproval, ApprovalId, init_approval_manager, global_approval_manager};
 
 #[cfg(feature = "local-embeddings")]
 pub use remember::RememberTool;

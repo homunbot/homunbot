@@ -16,6 +16,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/memory", get(memory_page))
         .route("/vault", get(vault_page))
         .route("/permissions", get(permissions_page))
+        .route("/approvals", get(approvals_page))
         .route("/account", get(account_page))
         .route("/logs", get(logs_page))
 }
@@ -31,6 +32,7 @@ const ICON_LOGS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentC
 const ICON_MEMORY: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v14"/><path d="M3 9h12"/><circle cx="9" cy="9" r="3"/><circle cx="9" cy="9" r="7"/></svg>"#;
 const ICON_VAULT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="14" height="11" rx="1.5"/><path d="M5 5V4a4 4 0 0 1 8 0v1"/><circle cx="9" cy="11" r="1.5"/><path d="M9 12.5V14"/></svg>"#;
 const ICON_PERMISSIONS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="16" height="12" rx="1.5"/><circle cx="9" cy="10" r="2"/><path d="M5 4V3a4 4 0 0 1 8 0v1"/></svg>"#;
+const ICON_APPROVALS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1v4M9 13v4M1 9h4M13 9h4"/><circle cx="9" cy="9" r="3"/><path d="M6 9l2 2 4-4"/></svg>"#;
 const ICON_ACCOUNT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="6" r="3.5"/><path d="M3 17c0-3.5 2.5-6 6-6s6 2.5 6 6"/></svg>"#;
 
 /// Channel icons — minimal stroke SVGs for dashboard/settings
@@ -87,6 +89,10 @@ fn sidebar(active: &str) -> String {
             <span class="nav-icon">{icon_perms}</span>
             <span class="nav-label">Permissions</span>
         </a>
+        <a href="/approvals" class="nav-link{approvals_active}">
+            <span class="nav-icon">{icon_approvals}</span>
+            <span class="nav-label">Approvals</span>
+        </a>
         <a href="/account" class="nav-link{account_active}">
             <span class="nav-icon">{icon_account}</span>
             <span class="nav-label">Account</span>
@@ -109,6 +115,7 @@ fn sidebar(active: &str) -> String {
         memory_active = if active == "memory" { " active" } else { "" },
         vault_active = if active == "vault" { " active" } else { "" },
         perms_active = if active == "permissions" { " active" } else { "" },
+        approvals_active = if active == "approvals" { " active" } else { "" },
         account_active = if active == "account" { " active" } else { "" },
         settings_active = if active == "settings" { " active" } else { "" },
         logs_active = if active == "logs" { " active" } else { "" },
@@ -118,6 +125,7 @@ fn sidebar(active: &str) -> String {
         icon_memory = ICON_MEMORY,
         icon_vault = ICON_VAULT,
         icon_perms = ICON_PERMISSIONS,
+        icon_approvals = ICON_APPROVALS,
         icon_account = ICON_ACCOUNT,
         icon_settings = ICON_SETTINGS,
         icon_logs = ICON_LOGS,
@@ -1822,5 +1830,89 @@ async fn account_page(State(_state): State<Arc<AppState>>) -> Html<String> {
         </main>"#;
 
     let html = page_html("Account", "account", body, &["account.js"]);
+    Html(html)
+}
+
+// ═══════════════════════════════════════════════════════════════
+// APPROVALS PAGE (P0-4)
+// ═══════════════════════════════════════════════════════════════
+
+async fn approvals_page(State(state): State<Arc<AppState>>) -> Html<String> {
+    let config = state.config.read().await;
+    let level = format!("{:?}", config.permissions.approval.level).to_lowercase();
+    drop(config);
+
+    let body = format!(r#"
+        <main class="main">
+            <div class="page-header">
+                <h1>Approvals</h1>
+                <p class="page-desc">Manage command approval workflow for shell commands</p>
+            </div>
+
+            <div class="content-grid">
+                <!-- Approval Configuration -->
+                <section class="card">
+                    <div class="card-header">
+                        <h2>Configuration</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label>Autonomy Level</label>
+                            <select id="approval-level" class="input">
+                                <option value="full" {full_selected}>Full - No approval required</option>
+                                <option value="supervised" {supervised_selected}>Supervised - Ask for unknown commands</option>
+                                <option value="readonly" {readonly_selected}>ReadOnly - Ask for all commands</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin-top:1rem">
+                            <label>Auto-approve commands (comma-separated)</label>
+                            <input type="text" id="auto-approve-list" class="input" placeholder="ls, cat, pwd">
+                        </div>
+                        <div class="form-group" style="margin-top:1rem">
+                            <label>Always ask for (comma-separated)</label>
+                            <input type="text" id="always-ask-list" class="input" placeholder="rm, sudo, chmod">
+                        </div>
+                        <button id="save-approval-config" class="btn btn-primary btn-sm" style="margin-top:1rem">Save Configuration</button>
+                    </div>
+                </section>
+
+                <!-- Pending Approvals -->
+                <section class="card">
+                    <div class="card-header">
+                        <h2>Pending Approvals</h2>
+                        <span class="badge" id="pending-count">0</span>
+                    </div>
+                    <div class="card-body">
+                        <div id="pending-approvals-list">
+                            <div class="empty-state">
+                                <p>No pending approvals</p>
+                                <p class="muted">Commands requiring approval will appear here</p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Audit Log -->
+                <section class="card">
+                    <div class="card-header">
+                        <h2>Recent Activity</h2>
+                    </div>
+                    <div class="card-body">
+                        <div id="approval-audit-log" class="item-list">
+                            <div class="empty-state">
+                                <p>No activity yet</p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+            </div>
+        </main>"#,
+        full_selected = if level == "full" { "selected" } else { "" },
+        supervised_selected = if level == "supervised" { "selected" } else { "" },
+        readonly_selected = if level == "readonly" { "selected" } else { "" },
+    );
+
+    let html = page_html("Approvals", "approvals", &body, &["approvals.js"]);
     Html(html)
 }
