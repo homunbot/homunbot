@@ -42,7 +42,8 @@ impl Tool for WebSearchTool {
     }
 
     fn description(&self) -> &str {
-        "Search the web using Brave Search. Returns a list of relevant results with titles, URLs, and descriptions."
+        "Search the web using Brave Search. Returns a list of relevant results with titles, URLs, and descriptions. \
+         Use this to discover URLs, then use web_fetch to read specific pages."
     }
 
     fn parameters(&self) -> Value {
@@ -168,8 +169,14 @@ impl Tool for WebFetchTool {
     }
 
     fn description(&self) -> &str {
-        "Fetch the content of a web page at the given URL. Returns the page text content. \
-         Useful for reading articles, documentation, or any web page."
+        "Fetch and extract readable content from a URL (HTML → text). \
+         Use for LIGHTWEIGHT page access WITHOUT browser automation. \
+         \n\
+         ⚠️ WHEN TO USE THIS vs BROWSER: \
+         - Use web_fetch: Reading static content (articles, docs, blogs) \
+         - Use browser: Interactions (login, clicking, forms, navigation, JavaScript-heavy sites) \
+         \n\
+         This tool is faster but cannot handle dynamic content or interactions."
     }
 
     fn parameters(&self) -> Value {

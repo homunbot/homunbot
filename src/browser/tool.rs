@@ -1521,6 +1521,10 @@ impl Tool for BrowserTool {
     fn description(&self) -> &str {
         "Browser automation tool for web browsing and interaction. \
          \
+         ⚠️ WHEN TO USE THIS vs WEB_FETCH: \
+         - Use browser: Login, clicking, forms, navigation, JavaScript-heavy sites, multi-step workflows \
+         - Use web_fetch: Just reading static content (articles, docs) — much faster \
+         \
          📋 WORKFLOW: \
          1. Call navigate to open a URL \
          2. Read the accessibility tree snapshot (shows page structure with [ref=e1], [ref=e2], etc.) \
