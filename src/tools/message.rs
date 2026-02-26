@@ -101,6 +101,7 @@ mod tests {
             channel: "telegram".to_string(),
             chat_id: "123456".to_string(),
             message_tx: None,
+            approval_manager: None,
         }
     }
 
@@ -142,6 +143,7 @@ mod tests {
             channel: "telegram".to_string(),
             chat_id: "123".to_string(),
             message_tx: Some(tx),
+            approval_manager: None,
         };
 
         let args = serde_json::json!({"content": "Hello from the agent!"});
@@ -166,6 +168,7 @@ mod tests {
             channel: "cli".to_string(),
             chat_id: "local".to_string(),
             message_tx: Some(tx),
+            approval_manager: None,
         };
 
         let args = serde_json::json!({

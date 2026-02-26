@@ -468,6 +468,7 @@ mod tests {
             channel: "cli".to_string(),
             chat_id: "test".to_string(),
             message_tx: None,
+            approval_manager: None,
         }
     }
 
