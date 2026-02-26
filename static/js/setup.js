@@ -1076,24 +1076,20 @@ if (btnRunCleanup) {
             // Get values from inputs (toggles are outside form)
             var enabled = enabledToggle ? enabledToggle.checked : false;
             var headless = headlessToggle ? headlessToggle.checked : true;
-            var execPath = document.getElementById('browser-exec-path');
-            var screenshotDir = document.getElementById('browser-screenshot-dir');
-            var navTimeout = document.getElementById('browser-nav-timeout');
+            var browserType = document.getElementById('browser-type');
             var actionTimeout = document.getElementById('browser-action-timeout');
 
             console.log('[Browser] Saving:', {
                 enabled: enabled,
                 headless: headless,
-                execPath: execPath ? execPath.value : '',
-                screenshotDir: screenshotDir ? screenshotDir.value : ''
+                browserType: browserType ? browserType.value : 'chromium',
+                actionTimeout: actionTimeout ? actionTimeout.value : '10'
             });
 
             var patches = [
                 { key: 'browser.enabled', value: String(enabled) },
                 { key: 'browser.headless', value: String(headless) },
-                { key: 'browser.executable_path', value: execPath ? (execPath.value || '') : '' },
-                { key: 'browser.screenshot_dir', value: screenshotDir ? (screenshotDir.value || 'screenshots') : 'screenshots' },
-                { key: 'browser.navigation_timeout_secs', value: navTimeout ? (navTimeout.value || '30') : '30' },
+                { key: 'browser.browser_type', value: browserType ? (browserType.value || 'chromium') : 'chromium' },
                 { key: 'browser.action_timeout_secs', value: actionTimeout ? (actionTimeout.value || '10') : '10' },
             ];
 
@@ -1149,7 +1145,7 @@ if (btnRunCleanup) {
                 });
                 var data = await resp.json();
 
-                if (data.ok) {
+                if (data.success) {
                     browserResult.textContent = '✓ ' + data.message;
                     browserResult.className = 'form-hint pairing-status success';
                 } else {
@@ -1167,6 +1163,84 @@ if (btnRunCleanup) {
         });
     }
     console.log('[Browser] Form handler initialized');
+})();
+
+// ═══ Appearance Form ═══
+
+(function() {
+    var appearanceForm = document.getElementById('appearance-form');
+    var themeSelect = document.getElementById('theme-select');
+
+    if (appearanceForm) {
+        appearanceForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            var btn = appearanceForm.querySelector('button[type="submit"]');
+            var originalText = btn.textContent;
+            btn.textContent = 'Saving…';
+            btn.disabled = true;
+
+            var theme = themeSelect ? themeSelect.value : 'system';
+
+            try {
+                var resp = await fetch('/api/v1/config', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: 'ui.theme', value: theme }),
+                });
+
+                if (resp.ok) {
+                    // Apply theme immediately
+                    applyTheme(theme);
+                    btn.textContent = 'Saved!';
+                    setTimeout(function() {
+                        btn.textContent = originalText;
+                        btn.disabled = false;
+                    }, 1500);
+                } else {
+                    throw new Error('Failed to save theme');
+                }
+            } catch (err) {
+                console.error('[Appearance] Save error:', err);
+                btn.textContent = 'Error!';
+                setTimeout(function() {
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                }, 1500);
+            }
+        });
+    }
+
+    // Apply theme on page load
+    function applyTheme(theme) {
+        // Save to localStorage for persistence across pages
+        localStorage.setItem('homun-theme', theme);
+
+        // Remove any existing theme classes
+        document.documentElement.classList.remove('dark');
+
+        if (theme === 'system') {
+            var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            if (prefersDark) {
+                document.documentElement.classList.add('dark');
+            }
+        } else if (theme === 'dark') {
+            document.documentElement.classList.add('dark');
+        }
+    }
+
+    // Load and apply saved theme on startup
+    if (themeSelect) {
+        applyTheme(themeSelect.value);
+
+        // Listen for system theme changes when in 'system' mode
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
+            if (themeSelect.value === 'system') {
+                applyTheme('system');
+            }
+        });
+    }
+
+    console.log('[Appearance] Form handler initialized');
 })();
 
 console.log('[Setup] Script loaded completely');

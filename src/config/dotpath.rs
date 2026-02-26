@@ -324,4 +324,37 @@ mod tests {
         let result = config_get(&config, "agent.model").unwrap();
         assert_eq!(result, "test-model");
     }
+
+    #[test]
+    fn test_config_set_vision_model() {
+        let mut config = Config::default();
+        config_set(&mut config, "agent.vision_model", "ollama/llava").unwrap();
+        assert_eq!(config.agent.vision_model, "ollama/llava");
+    }
+
+    #[test]
+    fn test_config_set_browser() {
+        let mut config = Config::default();
+        config_set(&mut config, "browser.enabled", "true").unwrap();
+        assert!(config.browser.enabled);
+
+        config_set(&mut config, "browser.headless", "false").unwrap();
+        assert!(!config.browser.headless);
+
+        config_set(&mut config, "browser.browser_type", "firefox").unwrap();
+        assert_eq!(config.browser.browser_type, "firefox");
+
+        config_set(&mut config, "browser.action_timeout_secs", "30").unwrap();
+        assert_eq!(config.browser.action_timeout_secs, 30);
+    }
+
+    #[test]
+    fn test_config_set_ui_theme() {
+        let mut config = Config::default();
+        config_set(&mut config, "ui.theme", "dark").unwrap();
+        assert_eq!(config.ui.theme, "dark");
+
+        config_set(&mut config, "ui.theme", "light").unwrap();
+        assert_eq!(config.ui.theme, "light");
+    }
 }

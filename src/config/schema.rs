@@ -18,6 +18,7 @@ pub struct Config {
     pub permissions: PermissionsConfig,
     pub security: SecurityConfig,
     pub browser: BrowserConfig,
+    pub ui: UiConfig,
 }
 
 impl Config {
@@ -243,6 +244,8 @@ impl Config {
 #[serde(default)]
 pub struct AgentConfig {
     pub model: String,
+    /// Model to use for vision/image analysis. Falls back to `model` if empty.
+    pub vision_model: String,
     pub max_tokens: u32,
     pub temperature: f32,
     pub max_iterations: u32,
@@ -263,6 +266,7 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             model: "anthropic/claude-sonnet-4-20250514".to_string(),
+            vision_model: String::new(),
             max_tokens: 8192,
             temperature: 0.7,
             max_iterations: 20,
@@ -1008,6 +1012,24 @@ impl Default for ExfiltrationConfig {
 #[serde(default)]
 pub struct SecurityConfig {
     pub exfiltration: ExfiltrationConfig,
+}
+
+// --- UI Config ---
+
+/// UI configuration for web dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiConfig {
+    /// Theme: "light", "dark", or "system"
+    pub theme: String,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            theme: "system".to_string(),
+        }
+    }
 }
 
 /// Browser automation configuration

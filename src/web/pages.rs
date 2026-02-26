@@ -40,51 +40,104 @@ const ICON_DISCORD: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="curre
 const ICON_PHONE: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="1" width="10" height="16" rx="2"/><line x1="9" y1="14" x2="9" y2="14"/></svg>"#;
 
 /// Logo icon — serves the SVG logotype via <img> tag.
-const LOGO_ICON: &str = r#"<img class="logo-icon" src="/static/img/logo.svg" alt="HOMUN">"#;
+const LOGO_ICON: &str = r#"<div class="logo-icon" title="HOMUN"></div>"#;
 
 
 /// Build the sidebar navigation HTML
 fn sidebar(active: &str) -> String {
-    let nav_items = [
-        ("dashboard", "/", "Dashboard", ICON_DASHBOARD),
-        ("chat", "/chat", "Chat", ICON_CHAT),
-        ("skills", "/skills", "Skills", ICON_SKILLS),
-        ("memory", "/memory", "Memory", ICON_MEMORY),
-        ("vault", "/vault", "Vault", ICON_VAULT),
-        ("permissions", "/permissions", "Permissions", ICON_PERMISSIONS),
-        ("account", "/account", "Account", ICON_ACCOUNT),
-        ("settings", "/setup", "Settings", ICON_SETTINGS),
-        ("logs", "/logs", "Logs", ICON_LOGS),
-    ];
+    // Settings submenu (only visible when settings is active)
+    let settings_submenu = if active == "settings" {
+        r##"<div class="nav-submenu">
+            <a href="#section-agent" class="nav-submenu-link">Agent</a>
+            <a href="#section-providers" class="nav-submenu-link">Providers</a>
+            <a href="#section-channels" class="nav-submenu-link">Channels</a>
+            <a href="#section-browser" class="nav-submenu-link">Browser</a>
+            <a href="#section-memory" class="nav-submenu-link">Memory</a>
+            <a href="#section-theme" class="nav-submenu-link">Theme</a>
+        </div>"##
+    } else {
+        ""
+    };
 
-    let links: String = nav_items
-        .iter()
-        .map(|(id, href, label, icon)| {
-            let cls = if *id == active { " active" } else { "" };
-            format!(
-                r#"<a href="{href}" class="nav-link{cls}">
-                    <span class="nav-icon">{icon}</span>
-                    <span class="nav-label">{label}</span>
-                </a>"#
-            )
-        })
-        .collect();
+    let links = format!(
+        r##"<div class="nav-group nav-group-featured">
+            <a href="/chat" class="nav-link{chat_active}">
+                <span class="nav-icon">{icon_chat}</span>
+                <span class="nav-label">Chat</span>
+            </a>
+        </div>
+        <div class="nav-section">Main</div>
+        <a href="/" class="nav-link{dash_active}">
+            <span class="nav-icon">{icon_dash}</span>
+            <span class="nav-label">Dashboard</span>
+        </a>
+        <a href="/skills" class="nav-link{skills_active}">
+            <span class="nav-icon">{icon_skills}</span>
+            <span class="nav-label">Skills</span>
+        </a>
+        <a href="/memory" class="nav-link{memory_active}">
+            <span class="nav-icon">{icon_memory}</span>
+            <span class="nav-label">Memory</span>
+        </a>
+        <a href="/vault" class="nav-link{vault_active}">
+            <span class="nav-icon">{icon_vault}</span>
+            <span class="nav-label">Vault</span>
+        </a>
+        <a href="/permissions" class="nav-link{perms_active}">
+            <span class="nav-icon">{icon_perms}</span>
+            <span class="nav-label">Permissions</span>
+        </a>
+        <a href="/account" class="nav-link{account_active}">
+            <span class="nav-icon">{icon_account}</span>
+            <span class="nav-label">Account</span>
+        </a>
+        <div class="nav-section">Settings</div>
+        <div class="nav-group nav-group-settings">
+            <a href="/setup" class="nav-link{settings_active}">
+                <span class="nav-icon">{icon_settings}</span>
+                <span class="nav-label">Settings</span>
+            </a>
+            {settings_submenu}
+        </div>
+        <a href="/logs" class="nav-link{logs_active}">
+            <span class="nav-icon">{icon_logs}</span>
+            <span class="nav-label">Logs</span>
+        </a>"##,
+        chat_active = if active == "chat" { " active" } else { "" },
+        dash_active = if active == "dashboard" { " active" } else { "" },
+        skills_active = if active == "skills" { " active" } else { "" },
+        memory_active = if active == "memory" { " active" } else { "" },
+        vault_active = if active == "vault" { " active" } else { "" },
+        perms_active = if active == "permissions" { " active" } else { "" },
+        account_active = if active == "account" { " active" } else { "" },
+        settings_active = if active == "settings" { " active" } else { "" },
+        logs_active = if active == "logs" { " active" } else { "" },
+        icon_chat = ICON_CHAT,
+        icon_dash = ICON_DASHBOARD,
+        icon_skills = ICON_SKILLS,
+        icon_memory = ICON_MEMORY,
+        icon_vault = ICON_VAULT,
+        icon_perms = ICON_PERMISSIONS,
+        icon_account = ICON_ACCOUNT,
+        icon_settings = ICON_SETTINGS,
+        icon_logs = ICON_LOGS,
+        settings_submenu = settings_submenu,
+    );
 
     format!(
-        r#"<nav class="sidebar">
+        r##"<nav class="sidebar">
             <div class="sidebar-header">
                 <a href="/" class="logo-link">
                     {icon}
                 </a>
             </div>
             <div class="nav">
-                <div class="nav-section">Main</div>
                 {links}
             </div>
             <div class="sidebar-footer">
                 <span class="version-badge">v{version}</span>
             </div>
-        </nav>"#,
+        </nav>"##,
         icon = LOGO_ICON,
         links = links,
         version = env!("CARGO_PKG_VERSION"),
@@ -100,14 +153,25 @@ fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String 
         .collect();
 
     format!(
-        r#"<!DOCTYPE html>
+        r##"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{title} — Homun</title>
+    <link rel="icon" href="/static/img/favicon/favicon.ico" sizes="any">
     <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/static/img/favicon/apple-touch-icon.png">
+    <link rel="manifest" href="/static/img/favicon/site.webmanifest">
     <link rel="stylesheet" href="/static/css/style.css">
+    <script>
+    (function() {{
+        const theme = localStorage.getItem('homun-theme') || 'system';
+        if (theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {{
+            document.documentElement.classList.add('dark');
+        }}
+    }})();
+    </script>
 </head>
 <body>
     <div class="app">
@@ -116,7 +180,7 @@ fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String 
     </div>
     {script_tags}
 </body>
-</html>"#
+</html>"##
     )
 }
 
@@ -245,7 +309,7 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
     };
 
     let body = format!(
-        r#"<main class="content">
+        r##"<main class="content">
             <div class="content-inner">
                 <div class="page-header">
                     <div class="page-title-group">
@@ -255,16 +319,24 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
 
                 {no_model_warning}
 
-                <section class="section">
+                <section class="section" id="section-agent">
                     <h2>Agent Configuration</h2>
                     <form class="form form--full" id="agent-form">
                         <div class="form-group model-selector-section">
-                            <label class="model-selector-label">Model</label>
+                            <label class="model-selector-label">Chat Model</label>
                             <select id="model-select" class="input">
                                 <option value="">Loading models…</option>
                             </select>
                             <input type="hidden" name="model" id="model-value" value="{model}">
                             <div class="form-hint">Select a model from configured providers, or type to search.</div>
+                        </div>
+                        <div class="form-group model-selector-section">
+                            <label class="model-selector-label">Vision Model</label>
+                            <select id="vision-model-select" class="input">
+                                <option value="">Loading models…</option>
+                            </select>
+                            <input type="hidden" name="vision_model" id="vision-model-value" value="{vision_model}">
+                            <div class="form-hint">Model for image analysis. Falls back to Chat Model if empty.</div>
                         </div>
                         <div class="form-row">
                             <div class="form-group">
@@ -284,21 +356,63 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     </form>
                 </section>
 
-                <section class="section">
+                <section class="section" id="section-providers">
                     <h2>Providers</h2>
                     <div class="provider-grid">
                         {providers_html}
                     </div>
                 </section>
 
-                <section class="section">
+                <section class="section" id="section-channels">
                     <h2>Channels</h2>
                     <div class="provider-grid" id="channel-grid">
                         {channels_html}
                     </div>
                 </section>
 
-                <section class="section">
+                <section class="section" id="section-browser">
+                    <h2>Browser Automation</h2>
+                    <form class="form" id="browser-form">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label class="toggle-label-inline">
+                                    <input type="checkbox" name="enabled" class="toggle-input" {browser_enabled_checked}>
+                                    <span>Enable Browser Automation</span>
+                                </label>
+                                <div class="form-hint">Allow the agent to control a web browser.</div>
+                            </div>
+                            <div class="form-group">
+                                <label class="toggle-label-inline">
+                                    <input type="checkbox" name="headless" class="toggle-input" {browser_headless_checked}>
+                                    <span>Headless Mode</span>
+                                </label>
+                                <div class="form-hint">Run browser without visible window.</div>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Browser Type</label>
+                                <select name="browser_type" class="input">
+                                    <option value="chromium" {browser_type_chromium}>Chromium</option>
+                                    <option value="firefox" {browser_type_firefox}>Firefox</option>
+                                    <option value="webkit" {browser_type_webkit}>WebKit</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Action Timeout (seconds)</label>
+                                <input type="number" name="action_timeout_secs" value="{action_timeout_secs}" min="5" max="300" class="input">
+                                <div class="form-hint">Maximum time to wait for browser actions.</div>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <button type="submit" class="btn btn-primary">Save Browser Config</button>
+                            <button type="button" class="btn btn-secondary" id="btn-test-browser">Test Connection</button>
+                        </div>
+                        <div id="browser-result" class="form-hint" style="margin-top:10px;"></div>
+                    </form>
+                </section>
+
+                <section class="section" id="section-memory">
                     <h2>Memory</h2>
                     <form class="form" id="memory-form">
                         <div class="form-row">
@@ -330,6 +444,22 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <button type="button" class="btn btn-secondary" id="btn-run-cleanup">Run Cleanup Now</button>
                         </div>
                         <div id="memory-result" class="form-hint" style="margin-top:10px;"></div>
+                    </form>
+                </section>
+
+                <section class="section" id="section-theme">
+                    <h2>Appearance</h2>
+                    <form class="form" id="appearance-form">
+                        <div class="form-group">
+                            <label>Theme</label>
+                            <select name="theme" class="input" id="theme-select">
+                                <option value="system" {theme_system}>System</option>
+                                <option value="light" {theme_light}>Light</option>
+                                <option value="dark" {theme_dark}>Dark</option>
+                            </select>
+                            <div class="form-hint">Choose the interface color scheme.</div>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Save Appearance</button>
                     </form>
                 </section>
             </div>
@@ -433,8 +563,9 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     <div id="ch-test-result" class="form-hint" style="margin-top:10px;"></div>
                 </div>
             </div>
-        </div>"#,
+        </div>"##,
         model = config.agent.model,
+        vision_model = config.agent.vision_model,
         max_tokens = config.agent.max_tokens,
         temperature = config.agent.temperature,
         max_iterations = config.agent.max_iterations,
@@ -442,6 +573,15 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
         history_retention_days = config.memory.history_retention_days,
         daily_archive_months = config.memory.daily_archive_months,
         auto_cleanup_checked = if config.memory.auto_cleanup { "checked" } else { "" },
+        browser_enabled_checked = if config.browser.enabled { "checked" } else { "" },
+        browser_headless_checked = if config.browser.headless { "checked" } else { "" },
+        browser_type_chromium = if config.browser.browser_type == "chromium" { "selected" } else { "" },
+        browser_type_firefox = if config.browser.browser_type == "firefox" { "selected" } else { "" },
+        browser_type_webkit = if config.browser.browser_type == "webkit" { "selected" } else { "" },
+        action_timeout_secs = config.browser.action_timeout_secs,
+        theme_system = if config.ui.theme == "system" { "selected" } else { "" },
+        theme_light = if config.ui.theme == "light" { "selected" } else { "" },
+        theme_dark = if config.ui.theme == "dark" { "selected" } else { "" },
         providers_html = providers_html,
         channels_html = build_channels_cards_html(&config),
         no_model_warning = no_model_warning,

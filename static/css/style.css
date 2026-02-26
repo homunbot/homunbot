@@ -80,7 +80,7 @@
     --med:   200ms;
 
     /* Layout */
-    --sidebar-w: 220px;
+    --sidebar-w: 185px;
     --sidebar-collapsed-w: 56px;
 
     /* Logo */
@@ -92,7 +92,7 @@
     Palette: Void (#141210), Background (#1E1B18), Surface (#2A2522),
     Text (#F5F0E6), Accent (#D97757)
 */
-[data-theme="dark"] {
+.dark {
     /* Surface — warm dark tones */
     --bg:             #1E1B18;
     --surface:        #2A2522;
@@ -205,16 +205,16 @@ html, body {
 
 .logo-icon {
     height: 36px;
-    width: 156px;  /* aspect ratio from PNG */
+    width: 156px;
     flex-shrink: 0;
     background-image: var(--logo-src);
     background-size: contain;
     background-repeat: no-repeat;
-    background-position: left center;
+    background-position: center center;
     filter: drop-shadow(0 1px 3px rgba(42,31,22,0.1));
 }
 
-[data-theme="dark"] .logo-icon {
+.dark .logo-icon {
     filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.4));
 }
 
@@ -282,6 +282,58 @@ html, body {
 
 .nav-link:hover .nav-icon { opacity: 0.7; }
 .nav-link.active .nav-icon { opacity: 1; }
+
+/* Featured nav group (Chat) */
+.nav-group-featured {
+    margin-bottom: 16px;
+}
+
+.nav-group-featured .nav-link {
+    padding: 12px 10px;
+    background: var(--accent-light);
+    border: 1px solid var(--accent-border);
+}
+
+.nav-group-featured .nav-link:hover {
+    background: var(--accent-light);
+    border-color: var(--accent);
+}
+
+.nav-group-featured .nav-link.active {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+}
+
+.nav-group-featured .nav-link.active .nav-icon {
+    opacity: 1;
+    color: white;
+}
+
+/* Settings submenu */
+.nav-submenu {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px 0 4px 26px;
+    margin-bottom: 4px;
+    border-left: 1px solid var(--border);
+    margin-left: 18px;
+}
+
+.nav-submenu-link {
+    font-size: 11px;
+    color: var(--t3);
+    text-decoration: none;
+    padding: 4px 8px;
+    border-radius: var(--r-sm);
+    transition: all var(--fast);
+}
+
+.nav-submenu-link:hover {
+    color: var(--t1);
+    background: var(--surface-hover);
+}
 
 .sidebar-footer {
     padding: 12px 20px;
