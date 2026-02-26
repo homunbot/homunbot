@@ -4,6 +4,8 @@ const messagesEl = document.getElementById('messages');
 const chatForm = document.getElementById('chat-form');
 const chatText = document.getElementById('chat-text');
 const wsStatus = document.getElementById('ws-status');
+const btnSend = document.getElementById('btn-send');
+const btnStop = document.getElementById('btn-stop');
 
 let ws = null;
 let reconnectTimer = null;
@@ -23,6 +25,13 @@ let currentToolCalls = [];
 // Thinking block element
 let thinkingEl = null;
 let thinkingContent = '';
+
+// Browser screenshot gallery
+let browserGalleryEl = null;
+let browserScreenshots = [];
+
+// Processing state (true when agent is working)
+let isProcessing = false;
 
 // Configure marked.js for LLM output
 if (typeof marked !== 'undefined') {
@@ -55,9 +64,27 @@ chatText.addEventListener('keydown', (e) => {
  */
 function renderContent(el, content, role) {
     if (role === 'assistant' && typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
-        const rawHtml = marked.parse(content);
-        // DOMPurify sanitizes the HTML to prevent XSS attacks
+        // Convert screenshot URLs to inline images before markdown parsing
+        let processedContent = content.replace(
+            /\/api\/v1\/browser\/screenshots\/(\S+\.png)/g,
+            '\n\n![Screenshot](/api/v1/browser/screenshots/$1)\n\n'
+        );
+
+        const rawHtml = marked.parse(processedContent);
+        // DOMPurify sanitizes the HTML to prevent XSS attacks (safe: uses sanitize)
         el.innerHTML = DOMPurify.sanitize(rawHtml);
+
+        // Add click-to-expand for screenshots
+        el.querySelectorAll('img[src*="/api/v1/browser/screenshots/"]').forEach(img => {
+            img.style.cursor = 'pointer';
+            img.style.maxWidth = '100%';
+            img.style.borderRadius = '8px';
+            img.style.marginTop = '8px';
+            img.style.boxShadow = 'var(--shadow-md)';
+            img.addEventListener('click', () => {
+                window.open(img.src, '_blank');
+            });
+        });
     } else {
         el.textContent = content;
     }
@@ -86,6 +113,56 @@ async function loadHistory() {
 // List of tool names currently executing (for multi-tool sequences)
 let activeTools = [];
 
+// Reasoning section element (collapsible container for tool calls)
+let reasoningSectionEl = null;
+let reasoningContentEl = null;
+let reasoningCount = 0;
+
+/** Create the collapsible reasoning section */
+function createReasoningSection() {
+    if (reasoningSectionEl) return reasoningSectionEl;
+
+    reasoningSectionEl = document.createElement('div');
+    reasoningSectionEl.className = 'chat-reasoning collapsed';
+    reasoningSectionEl.innerHTML = `
+        <div class="chat-reasoning-header" onclick="toggleReasoning(this)">
+            <span class="chat-reasoning-icon">⚙️</span>
+            <span class="chat-reasoning-label">Reasoning</span>
+            <span class="chat-reasoning-count">(0)</span>
+            <span class="chat-reasoning-toggle">▶</span>
+        </div>
+        <div class="chat-reasoning-content"></div>
+    `;
+
+    reasoningContentEl = reasoningSectionEl.querySelector('.chat-reasoning-content');
+    messagesEl.appendChild(reasoningSectionEl);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    return reasoningSectionEl;
+}
+
+/** Toggle reasoning section visibility */
+window.toggleReasoning = function(headerEl) {
+    const section = headerEl.closest('.chat-reasoning');
+    if (section) {
+        section.classList.toggle('collapsed');
+        const toggle = section.querySelector('.chat-reasoning-toggle');
+        if (toggle) {
+            toggle.textContent = section.classList.contains('collapsed') ? '▶' : '▼';
+        }
+    }
+};
+
+/** Update reasoning count */
+function updateReasoningCount() {
+    if (reasoningSectionEl) {
+        const countEl = reasoningSectionEl.querySelector('.chat-reasoning-count');
+        if (countEl) {
+            countEl.textContent = `(${reasoningCount})`;
+        }
+    }
+}
+
 function showToolIndicator(toolName, toolCallData) {
     activeTools.push(toolName);
 
@@ -97,42 +174,106 @@ function showToolIndicator(toolName, toolCallData) {
 
     toolIndicatorEl.textContent = `Using ${activeTools[activeTools.length - 1]}\u2026`;
     messagesEl.scrollTop = messagesEl.scrollHeight;
-    
-    // Also add a tool call card if we have data
+
+    // Add to reasoning section
     if (toolCallData) {
         addToolCallCard(toolCallData);
     }
 }
 
-/** Add a tool call card to the current tool calls container */
+/** Add a tool call card to the reasoning section */
 function addToolCallCard(toolCallData) {
-    if (!currentToolCallsEl) {
-        currentToolCallsEl = document.createElement('div');
-        currentToolCallsEl.className = 'chat-tool-calls';
-        messagesEl.appendChild(currentToolCallsEl);
+    // Ensure reasoning section exists
+    if (!reasoningSectionEl) {
+        createReasoningSection();
     }
-    
+
     const card = document.createElement('div');
     card.className = 'chat-tool-call';
     card.id = `tool-call-${toolCallData.id}`;
-    
-    // Build card content
+
+    // Build card content - compact format
     let argsDisplay = '';
     if (toolCallData.arguments && Object.keys(toolCallData.arguments).length > 0) {
-        argsDisplay = `<pre class="chat-tool-args">${JSON.stringify(toolCallData.arguments, null, 2)}</pre>`;
+        // Compact one-line display for common actions
+        const args = toolCallData.arguments;
+        if (toolCallData.name === 'browser' && args.action) {
+            const action = args.action;
+            let summary = action;
+            if (action === 'navigate' && args.url) {
+                summary = 'navigate \u2192 ' + truncate(args.url, 50);
+            } else if (action === 'click' && args.ref) {
+                summary = 'click [' + args.ref + ']';
+            } else if (action === 'type' && args.ref && args.text) {
+                summary = 'type "' + truncate(args.text, 30) + '" \u2192 [' + args.ref + ']';
+            } else if (action === 'snapshot') {
+                summary = 'get page snapshot';
+            }
+            argsDisplay = '<span class="chat-tool-summary">' + escapeHtml(summary) + '</span>';
+        } else if (toolCallData.name === 'web_search' && args.query) {
+            argsDisplay = '<span class="chat-tool-summary">"' + escapeHtml(truncate(args.query, 50)) + '"</span>';
+        } else if (toolCallData.name === 'web_fetch' && args.url) {
+            argsDisplay = '<span class="chat-tool-summary">' + escapeHtml(truncate(args.url, 50)) + '</span>';
+        } else {
+            // Fallback to JSON for other tools
+            argsDisplay = '<pre class="chat-tool-args">' + JSON.stringify(args, null, 2) + '</pre>';
+        }
     }
-    
-    card.innerHTML = `
-        <div class="chat-tool-call-header">
-            <span class="chat-tool-call-icon">⚡</span>
-            <span class="chat-tool-call-name">${escapeHtml(toolCallData.name)}</span>
-        </div>
-        ${argsDisplay}
-    `;
-    
-    currentToolCallsEl.appendChild(card);
+
+    card.innerHTML = '<div class="chat-tool-call-compact">' +
+        '<span class="chat-tool-call-icon">\u26a1</span>' +
+        '<span class="chat-tool-call-name">' + escapeHtml(toolCallData.name) + '</span>' +
+        argsDisplay + '</div>';
+
+    reasoningContentEl.appendChild(card);
+    reasoningCount++;
+    updateReasoningCount();
     currentToolCalls.push(toolCallData.id);
+
+    // Auto-expand while tools are running
+    reasoningSectionEl.classList.remove('collapsed');
+    const toggle = reasoningSectionEl.querySelector('.chat-reasoning-toggle');
+    if (toggle) toggle.textContent = '\u25bc';
+
     messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+/** Truncate a string with ellipsis */
+function truncate(str, maxLen) {
+    if (!str) return '';
+    return str.length > maxLen ? str.substring(0, maxLen) + '...' : str;
+}
+
+// ─── Browser Screenshot Gallery ────────────────────────────────────
+
+/** Add a screenshot to the browser gallery */
+function addBrowserScreenshot(url) {
+    if (!browserGalleryEl) {
+        browserGalleryEl = document.createElement('div');
+        browserGalleryEl.className = 'browser-gallery';
+        browserGalleryEl.innerHTML = '<div class="browser-gallery-header">📷 Browser Screenshots</div><div class="browser-gallery-images"></div>';
+        messagesEl.appendChild(browserGalleryEl);
+    }
+
+    const imagesEl = browserGalleryEl.querySelector('.browser-gallery-images');
+    const img = document.createElement('img');
+    img.src = url;
+    img.className = 'browser-gallery-img';
+    img.loading = 'lazy';
+    img.addEventListener('click', () => window.open(url, '_blank'));
+
+    imagesEl.appendChild(img);
+    browserScreenshots.push(url);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+/** Clear the browser gallery for a new session */
+function clearBrowserGallery() {
+    if (browserGalleryEl) {
+        browserGalleryEl.remove();
+        browserGalleryEl = null;
+    }
+    browserScreenshots = [];
 }
 
 function endToolIndicator(toolName) {
@@ -167,8 +308,35 @@ function removeToolIndicator() {
     }
 }
 
+/** Finalize and collapse reasoning section */
+function finalizeReasoning() {
+    if (reasoningSectionEl && reasoningCount > 0) {
+        // Auto-collapse after completion
+        reasoningSectionEl.classList.add('collapsed');
+        const toggle = reasoningSectionEl.querySelector('.chat-reasoning-toggle');
+        if (toggle) toggle.textContent = '\u25b6';
+
+        // Update label to show it's done
+        const labelEl = reasoningSectionEl.querySelector('.chat-reasoning-label');
+        if (labelEl) {
+            labelEl.textContent = 'Reasoning';
+        }
+    }
+}
+
+/** Reset reasoning section for next message */
+function resetReasoning() {
+    reasoningSectionEl = null;
+    reasoningContentEl = null;
+    reasoningCount = 0;
+}
+
 /** Clear tool calls container after response */
 function clearToolCalls() {
+    // Finalize and collapse reasoning section
+    finalizeReasoning();
+    // Reset for next message
+    resetReasoning();
     if (currentToolCallsEl) {
         currentToolCallsEl = null;
     }
@@ -306,6 +474,10 @@ function connect() {
                 // Tool finished — update indicator but keep it visible
                 endToolIndicator(data.name);
 
+            } else if (data.type === 'screenshot') {
+                // Screenshot URL from browser tool — add to gallery
+                addBrowserScreenshot(data.delta);
+
             } else if (data.type === 'stream') {
                 // First text chunk: morph indicator into streaming bubble (no layout jump)
                 if (toolIndicatorEl) morphIndicatorToStreaming();
@@ -363,6 +535,13 @@ function handleStreamChunk(delta) {
  *  Render markdown on the final content for proper formatting.
  */
 function finalizeStream(content) {
+    // Detect and add screenshots to the browser gallery
+    const screenshotRegex = /\/api\/v1\/browser\/screenshots\/([a-zA-Z0-9_-]+\.png)/g;
+    let match;
+    while ((match = screenshotRegex.exec(content)) !== null) {
+        addBrowserScreenshot(match[0]);
+    }
+
     if (streamingEl) {
         renderContent(streamingEl, content, 'assistant');
         streamingEl.classList.remove('streaming');
@@ -372,6 +551,9 @@ function finalizeStream(content) {
         addMessage('assistant', content);
     }
     messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    // Reset processing state
+    setProcessing(false);
 }
 
 // ─── Message rendering ─────────────────────────────────────────
@@ -405,7 +587,37 @@ chatForm.addEventListener('submit', (e) => {
     chatText.value = '';
     chatText.style.height = 'auto';
     chatText.focus();
+    setProcessing(true);
 });
+
+// ─── Stop button ─────────────────────────────────────────────────
+
+/** Set processing state and toggle Send/Stop buttons */
+function setProcessing(processing) {
+    isProcessing = processing;
+    if (btnSend) btnSend.style.display = processing ? 'none' : '';
+    if (btnStop) btnStop.style.display = processing ? '' : 'none';
+}
+
+/** Handle stop button click */
+async function handleStop() {
+    try {
+        const res = await fetch('/api/v1/chat/stop', { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+            showToast('Stopping...', 'warning');
+        } else {
+            showToast('Failed to stop', 'error');
+        }
+    } catch (e) {
+        console.error('Failed to send stop:', e);
+        showToast('Failed to stop', 'error');
+    }
+}
+
+if (btnStop) {
+    btnStop.addEventListener('click', handleStop);
+}
 
 // ─── Chat actions (New / Compact / Clear) ─────────────────────────
 
@@ -429,6 +641,7 @@ function showToast(message, type = 'info') {
 /** Clear the screen (UI only, keeps DB history) */
 function handleClearChat() {
     messagesEl.textContent = '';
+    clearBrowserGallery();
     showToast('Screen cleared', 'info');
 }
 
@@ -437,9 +650,10 @@ async function handleNewChat() {
     try {
         const res = await fetch('/api/v1/chat/history', { method: 'DELETE' });
         const data = await res.json();
-        
+
         if (data.ok) {
             messagesEl.textContent = '';
+            clearBrowserGallery();
             addMessage('system', 'New conversation started');
             showToast('Started new conversation', 'success');
         } else {
@@ -472,6 +686,149 @@ async function handleCompactChat() {
 document.getElementById('btn-clear-chat')?.addEventListener('click', handleClearChat);
 document.getElementById('btn-new-chat')?.addEventListener('click', handleNewChat);
 document.getElementById('btn-compact-chat')?.addEventListener('click', handleCompactChat);
+
+// ─── Model Selector ─────────────────────────────────────────────
+
+const chatModelSelect = document.getElementById('chat-model-select');
+const chatConfig = document.getElementById('chat-config');
+let currentModel = '';
+let currentVisionModel = '';
+
+/** Load available models and populate the dropdown */
+async function loadChatModelDropdown() {
+    if (!chatModelSelect) return;
+
+    // Get current model from config
+    if (chatConfig) {
+        currentModel = chatConfig.dataset.model || '';
+        currentVisionModel = chatConfig.dataset.visionModel || '';
+    }
+
+    try {
+        const resp = await fetch('/api/v1/providers/models');
+        const data = await resp.json();
+
+        // Clear existing options
+        while (chatModelSelect.firstChild) {
+            chatModelSelect.removeChild(chatModelSelect.firstChild);
+        }
+
+        // Add current model as first option (selected)
+        const currentOpt = document.createElement('option');
+        currentOpt.value = '';
+        const modelDisplay = currentModel.split('/').pop() || currentModel;
+        currentOpt.textContent = modelDisplay;
+        currentOpt.selected = true;
+        chatModelSelect.appendChild(currentOpt);
+
+        // Group models by provider
+        const groups = {};
+
+        // Add static cloud models
+        if (data.ok && data.models.length > 0) {
+            data.models.forEach(function(m) {
+                if (!groups[m.provider]) groups[m.provider] = [];
+                groups[m.provider].push({ value: m.model, label: m.label });
+            });
+        }
+
+        // If Ollama is configured, fetch live models
+        if (data.ollama_configured) {
+            try {
+                const ollamaResp = await fetch('/api/v1/providers/ollama/models');
+                const ollamaData = await ollamaResp.json();
+                if (ollamaData.ok && ollamaData.models.length > 0) {
+                    groups['ollama'] = ollamaData.models.map(function(m) {
+                        return { value: 'ollama/' + m.name, label: m.name + ' (' + m.size + ')' };
+                    });
+                }
+            } catch (_) { /* Ollama might not be running */ }
+        }
+
+        // If Ollama Cloud is configured, fetch live models
+        if (data.ollama_cloud_configured) {
+            try {
+                const cloudResp = await fetch('/api/v1/providers/ollama-cloud/models');
+                const cloudData = await cloudResp.json();
+                if (cloudData.ok && cloudData.models.length > 0) {
+                    groups['ollama_cloud'] = cloudData.models.map(function(m) {
+                        return { value: 'ollama_cloud/' + m.id, label: m.id };
+                    });
+                }
+            } catch (_) { /* Ollama Cloud might not be reachable */ }
+        }
+
+        // Add separator
+        const sepOpt = document.createElement('option');
+        sepOpt.disabled = true;
+        sepOpt.textContent = '── Switch to ──';
+        chatModelSelect.appendChild(sepOpt);
+
+        // Add model groups
+        Object.keys(groups).forEach(function(provider) {
+            const optgroup = document.createElement('optgroup');
+            optgroup.label = providerDisplayName(provider);
+
+            groups[provider].forEach(function(m) {
+                const option = document.createElement('option');
+                option.value = m.value;
+                option.textContent = m.label;
+                optgroup.appendChild(option);
+            });
+
+            chatModelSelect.appendChild(optgroup);
+        });
+
+    } catch (err) {
+        console.error('Failed to load models:', err);
+    }
+}
+
+function providerDisplayName(name) {
+    const map = {
+        anthropic: 'Anthropic', openai: 'OpenAI', openrouter: 'OpenRouter',
+        gemini: 'Gemini', deepseek: 'DeepSeek', groq: 'Groq',
+        ollama: 'Ollama', ollama_cloud: 'Ollama Cloud',
+        mistral: 'Mistral', xai: 'xAI', together: 'Together',
+        fireworks: 'Fireworks', perplexity: 'Perplexity', cohere: 'Cohere',
+        venice: 'Venice', aihubmix: 'AiHubMix', vllm: 'vLLM', custom: 'Custom',
+    };
+    return map[name] || name;
+}
+
+/** Handle model change */
+if (chatModelSelect) {
+    chatModelSelect.addEventListener('change', async function() {
+        const newModel = chatModelSelect.value;
+        if (!newModel) return; // Empty means keep current
+
+        try {
+            const res = await fetch('/api/v1/config', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: 'agent.model', value: newModel })
+            });
+
+            if (res.ok) {
+                currentModel = newModel;
+                showToast('Model switched to ' + newModel.split('/').pop(), 'success');
+
+                // Update display
+                const opt = chatModelSelect.options[0];
+                opt.textContent = newModel.split('/').pop();
+                opt.selected = true;
+            } else {
+                showToast('Failed to switch model', 'error');
+            }
+        } catch (e) {
+            console.error('Failed to switch model:', e);
+            showToast('Failed to switch model', 'error');
+        }
+    });
+}
+
+// Load model dropdown on connect
+loadChatModelDropdown();
 
 // Start connection
 connect();

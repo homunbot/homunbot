@@ -262,7 +262,7 @@ homun cron remove <id>       # Remove cron job
 1. Run `cargo check` frequently — catch errors early.
 2. Run `cargo clippy` before committing.
 3. Run `cargo test` for all tests.
-4. Use `RUST_LOG=debug cargo run` for verbose logging during development.
+4. Use `RUST_LOG=debug cargo run --gateway` for verbose logging during development.
 5. Database migrations are in `migrations/` and auto-applied on startup.
 
 ## What NOT to do
@@ -319,10 +319,10 @@ This is a **Rust rewrite**, not a blind port. Replicate the logic, improve the i
 
 When implementing features, **always check how competitors do it first**:
 
-### OpenClaw (TypeScript/Node.js)
+### OpenClaw (TypeScript/Node.js) — De facto standard
 - **Repo**: https://github.com/openclaw/openclaw
 - **Docs**: https://docs.openclaw.ai/
-- **Local reference**: `/Users/fabio/Projects/Homunbot/openclaw/` (if cloned)
+- **Local reference**: `~/Projects/openclaw/`
 - **Analysis doc**: `docs/competitors/openclaw.md`
 - **Key strengths**: 30+ channels, Web UI, Lobster workflows, ClawHub marketplace
 - **Memory format**: `~/.openclaw/MEMORY.md` + `memory/YYYY-MM-DD.md` daily files
@@ -331,7 +331,7 @@ When implementing features, **always check how competitors do it first**:
 ### ZeroClaw (Rust)
 - **Repo**: https://github.com/zeroclaw-labs/zeroclaw
 - **Docs**: https://zeroclaw.net/
-- **Local reference**: `/Users/fabio/Projects/Homunbot/zeroclaw/` (if cloned)
+- **Local reference**: `~/Projects/zeroclaw/`
 - **Analysis doc**: `docs/competitors/zeroclaw.md`
 - **Key strengths**: Binary ~3-8MB, <5MB RAM, HNSW vector search, FTS5, AIEOS identity
 - **Memory**: SQLite BLOBs for vectors + FTS5 for keyword search, hybrid scoring 0.7/0.3

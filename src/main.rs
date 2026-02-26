@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 mod agent;
+mod browser;
 mod bus;
 mod channels;
 mod config;
@@ -33,6 +34,7 @@ use crate::tools::{
     CronTool, EditFileTool, ListDirTool, McpManager, MessageTool, ReadFileTool, ShellTool,
     SpawnTool, ToolRegistry, VaultTool, RememberTool, WebFetchTool, WebSearchTool, WriteFileTool,
 };
+use crate::browser::BrowserTool;
 
 #[derive(Parser)]
 #[command(name = "homun", version, about = "🧪 The digital homunculus that lives in your computer")]
@@ -403,6 +405,12 @@ fn create_tool_registry(config: &Config) -> ToolRegistry {
 
     // Remember tool (save personal information)
     registry.register(Box::new(RememberTool::new()));
+
+    // Browser tool (if enabled in config)
+    if config.browser.enabled {
+        registry.register(Box::new(BrowserTool::new()));
+        tracing::info!("Browser tool registered");
+    }
 
     tracing::info!(
         tools = registry.len(),

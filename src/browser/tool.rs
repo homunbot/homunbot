@@ -1526,19 +1526,21 @@ impl Tool for BrowserTool {
          2. Read the accessibility tree snapshot (shows page structure with [ref=e1], [ref=e2], etc.) \
          3. Interact with elements using their refs (e.g., click ref=e1, type ref=e2) \
          4. After each action, a new snapshot is automatically taken \
-         5. Repeat until task is complete, then call 'close' \
+         5. When task is COMPLETE, call 'close' to free memory \
          \
          📸 SNAPSHOT FORMAT (accessibility tree, like Playwright): \
          - button \"Search\" [ref=e1] \
          - textbox \"Enter query\" [ref=e2] \
          - link \"About us\" [ref=e3] \
          \
-         ⚠️ IMPORTANT RULES: \
+         ⚠️ CRITICAL RULES: \
          - ALWAYS read the snapshot before taking action \
          - Use refs from the snapshot (e.g., click ref=e1) \
          - accept_privacy: ONLY call if you see a privacy banner in the snapshot \
          - Do NOT guess URLs or invent refs \
-         - Call 'close' when done to clean up \
+         - **MANDATORY**: Call 'close' when task is complete to free browser resources** \
+         - Keeping browser open wastes memory - close it as soon as you're done \
+         - Use 'shutdown' to completely close the browser process (for cleanup) \
          \
          🔧 ACTIONS: \
          - navigate: Open URL \
@@ -1568,7 +1570,7 @@ impl Tool for BrowserTool {
                     "enum": ["navigate", "snapshot", "click", "type", "select", "wait", "screenshot",
                              "evaluate", "back", "forward", "close", "tabs", "open_tab", "focus_tab",
                              "console", "scroll", "hover", "accept_privacy", "press", "drag", "fill",
-                             "resize", "dialog", "upload", "pdf", "network"],
+                             "resize", "dialog", "upload", "pdf", "network", "shutdown"],
                     "description": "The browser action to perform"
                 },
                 "url": {
@@ -1945,6 +1947,13 @@ impl Tool for BrowserTool {
                 let clear = get_optional_bool(&args, "clear").unwrap_or(false);
                 let url_filter = get_optional_string(&args, "url_filter");
                 self.execute_network(&ctx.chat_id, clear, url_filter.as_deref()).await
+            }
+            "shutdown" => {
+                // Close all pages and shutdown browser completely
+                match manager.shutdown().await {
+                    Ok(()) => return Ok(ToolResult::success("🛑 Browser shutdown complete. All resources freed.".to_string())),
+                    Err(e) => return Ok(ToolResult::error(format!("Shutdown failed: {}", e))),
+                }
             }
             other => return Ok(ToolResult::error(format!("Unknown browser action: {}", other))),
         };

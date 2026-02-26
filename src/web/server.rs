@@ -170,13 +170,37 @@ fn static_assets() -> Router<Arc<AppState>> {
     use axum::extract::Path;
     use axum::http::{header, StatusCode};
     use axum::response::IntoResponse;
-    use rust_embed::Embed;
 
-    #[derive(Embed)]
-    #[folder = "static/"]
-    struct StaticAssets;
-
+    #[cfg(debug_assertions)]
     async fn serve_static(Path(path): Path<String>) -> impl IntoResponse {
+        // In debug mode, serve from filesystem for hot reload
+        let static_path = std::path::Path::new("static").join(&path);
+
+        match tokio::fs::read(&static_path).await {
+            Ok(content) => {
+                let mime = mime_guess::from_path(&path).first_or_octet_stream();
+                (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, mime.as_ref().to_string())],
+                    content,
+                )
+                    .into_response()
+            }
+            Err(_) => {
+                tracing::warn!(path = %static_path.display(), "Static file not found");
+                StatusCode::NOT_FOUND.into_response()
+            }
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    async fn serve_static(Path(path): Path<String>) -> impl IntoResponse {
+        use rust_embed::Embed;
+
+        #[derive(Embed)]
+        #[folder = "static/"]
+        struct StaticAssets;
+
         match StaticAssets::get(&path) {
             Some(content) => {
                 let mime = mime_guess::from_path(&path).first_or_octet_stream();

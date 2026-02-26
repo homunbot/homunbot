@@ -1,5 +1,13 @@
 // Homun — Settings: agent form, provider toggles, model dropdown
 
+// Global error handler for debugging
+window.onerror = function(msg, url, line, col, error) {
+    console.error('[Global Error]', msg, 'at', url, ':', line, ':', col, error);
+    return false;
+};
+
+console.log('[Setup] Script loading...');
+
 // ═══ Agent Form ═══
 
 const agentForm = document.getElementById('agent-form');
@@ -12,12 +20,14 @@ if (agentForm) {
         btn.textContent = 'Saving…';
         btn.disabled = true;
 
-        // Sync model value from dropdown/custom into hidden input
+        // Sync model values from dropdown/custom into hidden inputs
         syncModelValue();
+        syncVisionModelValue();
 
         const form = new FormData(agentForm);
         const patches = [
             { key: 'agent.model', value: form.get('model') },
+            { key: 'agent.vision_model', value: form.get('vision_model') || '' },
             { key: 'agent.max_tokens', value: form.get('max_tokens') },
             { key: 'agent.temperature', value: form.get('temperature') },
             { key: 'agent.max_iterations', value: form.get('max_iterations') },
@@ -25,7 +35,7 @@ if (agentForm) {
 
         try {
             for (const patch of patches) {
-                if (patch.value) {
+                if (patch.value !== undefined) {
                     await fetch('/api/v1/config', {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
@@ -53,6 +63,8 @@ if (agentForm) {
 
 const modelSelect = document.getElementById('model-select');
 const modelValue = document.getElementById('model-value');
+const visionModelSelect = document.getElementById('vision-model-select');
+const visionModelValue = document.getElementById('vision-model-value');
 
 function providerDisplayName(name) {
     var map = {
@@ -69,7 +81,74 @@ function providerDisplayName(name) {
     return map[name] || name;
 }
 
-/** Populate the model dropdown using native select with optgroups */
+/** Populate a model dropdown using native select with optgroups */
+function populateModelDropdown(selectEl, valueEl, currentModel, groups) {
+    // Clear existing options
+    while (selectEl.firstChild) {
+        selectEl.removeChild(selectEl.firstChild);
+    }
+
+    // Add "Same as chat model" option for vision dropdown
+    if (selectEl.id === 'vision-model-select') {
+        var sameOption = document.createElement('option');
+        sameOption.value = '';
+        sameOption.textContent = '(Same as chat model)';
+        if (!currentModel || currentModel === '') {
+            sameOption.selected = true;
+        }
+        selectEl.appendChild(sameOption);
+    }
+
+    var foundCurrent = false;
+
+    // Build native select options with optgroups using safe DOM methods
+    Object.keys(groups).forEach(function(provider) {
+        var optgroup = document.createElement('optgroup');
+        optgroup.label = providerDisplayName(provider);
+
+        groups[provider].forEach(function(m) {
+            var option = document.createElement('option');
+            option.value = m.value;
+            option.textContent = m.label;
+            if (m.value === currentModel) {
+                option.selected = true;
+                foundCurrent = true;
+            }
+            optgroup.appendChild(option);
+        });
+
+        selectEl.appendChild(optgroup);
+    });
+
+    // Add custom option group
+    var customGroup = document.createElement('optgroup');
+    customGroup.label = 'Custom';
+    var customOption = document.createElement('option');
+    customOption.value = '__custom__';
+    customOption.textContent = '✏ Custom model…';
+    customGroup.appendChild(customOption);
+    selectEl.appendChild(customGroup);
+
+    // If current model wasn't found in options, add it at the top (after the "same" option for vision)
+    if (currentModel && !foundCurrent) {
+        var currentOpt = document.createElement('option');
+        currentOpt.value = currentModel;
+        currentOpt.textContent = currentModel + ' (current)';
+        currentOpt.selected = true;
+        if (selectEl.id === 'vision-model-select' && selectEl.firstChild) {
+            selectEl.insertBefore(currentOpt, selectEl.firstChild.nextSibling);
+        } else {
+            selectEl.insertBefore(currentOpt, selectEl.firstChild);
+        }
+    }
+
+    // Update hidden value with current model
+    if (valueEl && currentModel) {
+        valueEl.value = currentModel;
+    }
+}
+
+/** Populate both model dropdowns using native select with optgroups */
 async function loadModelDropdown() {
     if (!modelSelect) return;
 
@@ -78,6 +157,7 @@ async function loadModelDropdown() {
         var data = await resp.json();
 
         var currentModel = data.current || '';
+        var currentVisionModel = data.vision_model || '';
 
         // Group models by provider
         var groups = {};
@@ -116,53 +196,12 @@ async function loadModelDropdown() {
             } catch (_) { /* Ollama Cloud might not be reachable */ }
         }
 
-        // Clear existing options
-        while (modelSelect.firstChild) {
-            modelSelect.removeChild(modelSelect.firstChild);
-        }
+        // Populate chat model dropdown
+        populateModelDropdown(modelSelect, modelValue, currentModel, groups);
 
-        var foundCurrent = false;
-
-        // Build native select options with optgroups using safe DOM methods
-        Object.keys(groups).forEach(function(provider) {
-            var optgroup = document.createElement('optgroup');
-            optgroup.label = providerDisplayName(provider);
-
-            groups[provider].forEach(function(m) {
-                var option = document.createElement('option');
-                option.value = m.value;
-                option.textContent = m.label;
-                if (m.value === currentModel) {
-                    option.selected = true;
-                    foundCurrent = true;
-                }
-                optgroup.appendChild(option);
-            });
-
-            modelSelect.appendChild(optgroup);
-        });
-
-        // Add custom option group
-        var customGroup = document.createElement('optgroup');
-        customGroup.label = 'Custom';
-        var customOption = document.createElement('option');
-        customOption.value = '__custom__';
-        customOption.textContent = '✏ Custom model…';
-        customGroup.appendChild(customOption);
-        modelSelect.appendChild(customGroup);
-
-        // If current model wasn't found in options, add it at the top
-        if (currentModel && !foundCurrent) {
-            var currentOpt = document.createElement('option');
-            currentOpt.value = currentModel;
-            currentOpt.textContent = currentModel + ' (current)';
-            currentOpt.selected = true;
-            modelSelect.insertBefore(currentOpt, modelSelect.firstChild);
-        }
-
-        // Update hidden value with current model
-        if (modelValue && currentModel) {
-            modelValue.value = currentModel;
+        // Populate vision model dropdown
+        if (visionModelSelect) {
+            populateModelDropdown(visionModelSelect, visionModelValue, currentVisionModel, groups);
         }
 
     } catch (err) {
@@ -175,10 +214,20 @@ async function loadModelDropdown() {
         errorOpt.value = '';
         errorOpt.textContent = 'Error loading models';
         modelSelect.appendChild(errorOpt);
+
+        if (visionModelSelect) {
+            while (visionModelSelect.firstChild) {
+                visionModelSelect.removeChild(visionModelSelect.firstChild);
+            }
+            var visionErrorOpt = document.createElement('option');
+            visionErrorOpt.value = '';
+            visionErrorOpt.textContent = 'Error loading models';
+            visionModelSelect.appendChild(visionErrorOpt);
+        }
     }
 }
 
-// Handle selection change
+// Handle selection change for chat model
 if (modelSelect) {
     modelSelect.addEventListener('change', function() {
         if (modelSelect.value === '__custom__') {
@@ -196,11 +245,38 @@ if (modelSelect) {
     });
 }
 
+// Handle selection change for vision model
+if (visionModelSelect) {
+    visionModelSelect.addEventListener('change', function() {
+        if (visionModelSelect.value === '__custom__') {
+            var customModel = prompt('Enter custom vision model (e.g., ollama/llava:latest):');
+            if (customModel && customModel.trim()) {
+                visionModelValue.value = customModel.trim();
+            } else {
+                // Reset selection
+                loadModelDropdown();
+                return;
+            }
+        } else {
+            // Empty string means "same as chat model"
+            visionModelValue.value = visionModelSelect.value;
+        }
+    });
+}
+
 // Sync model value from select to hidden input
 function syncModelValue() {
     if (!modelValue || !modelSelect) return;
     if (modelSelect.value && modelSelect.value !== '__custom__') {
         modelValue.value = modelSelect.value;
+    }
+}
+
+// Sync vision model value from select to hidden input
+function syncVisionModelValue() {
+    if (!visionModelValue || !visionModelSelect) return;
+    if (visionModelSelect.value !== '__custom__') {
+        visionModelValue.value = visionModelSelect.value;
     }
 }
 
@@ -971,3 +1047,126 @@ if (btnRunCleanup) {
         btnRunCleanup.disabled = false;
     });
 }
+
+// ─── Browser Form ─────────────────────────────────────────────────
+
+(function() {
+    console.log('[Browser] Initializing browser form handler...');
+    var browserForm = document.getElementById('browser-form');
+    var btnTestBrowser = document.getElementById('btn-test-browser');
+    var browserResult = document.getElementById('browser-result');
+    var enabledToggle = document.getElementById('browser-enabled');
+    var headlessToggle = document.getElementById('browser-headless');
+
+    console.log('[Browser] Form:', browserForm, 'Enabled:', enabledToggle, 'Headless:', headlessToggle);
+
+    if (browserForm) {
+        browserForm.addEventListener('submit', async function(e) {
+            console.log('[Browser] Form submit triggered');
+            e.preventDefault();
+            e.stopPropagation();
+
+            var btn = browserForm.querySelector('button[type="submit"]');
+            var originalText = btn.textContent;
+            btn.textContent = 'Saving…';
+            btn.disabled = true;
+            browserResult.textContent = '';
+            browserResult.className = 'form-hint';
+
+            // Get values from inputs (toggles are outside form)
+            var enabled = enabledToggle ? enabledToggle.checked : false;
+            var headless = headlessToggle ? headlessToggle.checked : true;
+            var execPath = document.getElementById('browser-exec-path');
+            var screenshotDir = document.getElementById('browser-screenshot-dir');
+            var navTimeout = document.getElementById('browser-nav-timeout');
+            var actionTimeout = document.getElementById('browser-action-timeout');
+
+            console.log('[Browser] Saving:', {
+                enabled: enabled,
+                headless: headless,
+                execPath: execPath ? execPath.value : '',
+                screenshotDir: screenshotDir ? screenshotDir.value : ''
+            });
+
+            var patches = [
+                { key: 'browser.enabled', value: String(enabled) },
+                { key: 'browser.headless', value: String(headless) },
+                { key: 'browser.executable_path', value: execPath ? (execPath.value || '') : '' },
+                { key: 'browser.screenshot_dir', value: screenshotDir ? (screenshotDir.value || 'screenshots') : 'screenshots' },
+                { key: 'browser.navigation_timeout_secs', value: navTimeout ? (navTimeout.value || '30') : '30' },
+                { key: 'browser.action_timeout_secs', value: actionTimeout ? (actionTimeout.value || '10') : '10' },
+            ];
+
+            try {
+                for (var i = 0; i < patches.length; i++) {
+                    var patch = patches[i];
+                    console.log('[Browser] Patching:', patch.key, '=', patch.value);
+                    var resp = await fetch('/api/v1/config', {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ key: patch.key, value: patch.value }),
+                    });
+                    if (!resp.ok) {
+                        var errData = await resp.json();
+                        throw new Error(errData.error || errData.message || 'Failed to save ' + patch.key);
+                    }
+                }
+
+                browserResult.textContent = '✓ Browser settings saved. Restart gateway to apply.';
+                browserResult.className = 'form-hint pairing-status success';
+                btn.textContent = 'Saved!';
+                setTimeout(function() {
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                }, 2000);
+            } catch (err) {
+                console.error('[Browser] Save error:', err);
+                browserResult.textContent = '✗ ' + (err.message || 'Failed to save settings');
+                browserResult.className = 'form-hint pairing-status error';
+                btn.textContent = 'Error!';
+                setTimeout(function() {
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                }, 2000);
+            }
+        });
+    }
+
+    if (btnTestBrowser) {
+        btnTestBrowser.addEventListener('click', async function(e) {
+            console.log('[Browser] Test button clicked');
+            e.preventDefault();
+            e.stopPropagation();
+            btnTestBrowser.textContent = 'Testing…';
+            btnTestBrowser.disabled = true;
+            browserResult.textContent = '';
+            browserResult.className = 'form-hint';
+
+            try {
+                var resp = await fetch('/api/v1/browser/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                });
+                var data = await resp.json();
+
+                if (data.ok) {
+                    browserResult.textContent = '✓ ' + data.message;
+                    browserResult.className = 'form-hint pairing-status success';
+                } else {
+                    browserResult.textContent = '✗ ' + (data.message || 'Browser test failed');
+                    browserResult.className = 'form-hint pairing-status error';
+                }
+            } catch (err) {
+                console.error('[Browser] Test error:', err);
+                browserResult.textContent = '✗ Request failed: ' + err.message;
+                browserResult.className = 'form-hint pairing-status error';
+            }
+
+            btnTestBrowser.textContent = 'Test Browser';
+            btnTestBrowser.disabled = false;
+        });
+    }
+    console.log('[Browser] Form handler initialized');
+})();
+
+console.log('[Setup] Script loaded completely');

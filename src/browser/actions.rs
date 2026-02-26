@@ -225,6 +225,10 @@ pub enum BrowserAction {
         #[serde(default)]
         url_filter: Option<String>,
     },
+
+    /// Shutdown the browser completely (closes all tabs and browser process)
+    /// Use this to free all browser resources when you're completely done.
+    Shutdown,
 }
 
 /// Default true helper
@@ -271,6 +275,7 @@ impl BrowserAction {
             BrowserAction::Upload { .. } => "upload",
             BrowserAction::Pdf { .. } => "pdf",
             BrowserAction::Network { .. } => "network",
+            BrowserAction::Shutdown => "shutdown",
         }
     }
 }

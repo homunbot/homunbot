@@ -1,7 +1,7 @@
 # Homun — Development Roadmap
 
 > Last updated: 2026-02-24
-> Status: Phase 7.1 (User system + Webhook ingress complete)
+> Status: Phase 7.1 COMPLETE — Moving to Phase 7.2 (Infrastructure)
 
 ---
 
@@ -87,7 +87,7 @@
 | **User system** | ✅ DONE | Single owner, channel identities, webhook tokens |
 | **Channel auth** | ✅ DONE | Map channel IDs to owner |
 | **Webhook ingress** | ✅ DONE | POST /api/v1/webhook/{token} |
-| **Web UI Account page** | ❌ TODO | Owner info, identities, tokens in dashboard |
+| **Web UI Account page** | ✅ DONE | Owner info, identities, tokens in dashboard |
 
 ---
 
@@ -155,10 +155,10 @@
 ## Phase Timeline
 
 ```
-Phase 7.1 — User System (Current)
+Phase 7.1 — User System ✅ COMPLETE
 ├── ✅ Owner identity + CLI (homun users add/link/token)
 ├── ✅ Webhook ingress (POST /api/v1/webhook/{token})
-└── ❌ Web UI Account page (identities + tokens)
+└── ✅ Web UI Account page (identities + tokens)
 
 Phase 7.2 — Infrastructure
 ├── P0: CI Pipeline
