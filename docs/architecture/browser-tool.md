@@ -350,6 +350,15 @@ playwright-rs 0.8.3
 
 ## Changelog
 
+### 2026-02-26 (Auto-Cleanup Fix)
+- [x] Fix critico: browser non si chiudeva dopo task completato
+  - [x] `close_page()` ora chiude automaticamente il browser se non ci sono altre pagine
+  - [x] `close_page_for_profile()` chiude il browser se è l'ultima pagina del profilo
+  - [x] Auto-cleanup in `agent_loop.rs` alla fine del task (se browser è stato usato)
+  - [x] Aggiunto `shutdown_profile()` per chiudere un singolo profilo
+  - [x] Messaggio di risposta di `close` indica se browser chiuso completamente
+- [x] Il browser ora viene sempre chiuso quando il task è completato
+
 ### 2026-02-26 (Phase 6 Complete - Feature Parity!)
 - [x] Phase 6 completata - Feature Parity con OpenClaw
   - [x] Nuova azione `pdf` - salva pagina come PDF via CDP PrintToPDF
