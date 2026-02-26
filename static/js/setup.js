@@ -528,6 +528,13 @@ if (modal && providerCards.length > 0) {
 
 // ═══ Channel Configuration Cards ═══
 
+// Helper: remove all children from an element
+function clearChildren(el) {
+    while (el && el.firstChild) {
+        el.removeChild(el.firstChild);
+    }
+}
+
 const channelCards = document.querySelectorAll('.channel-card');
 const chModal = document.getElementById('channel-modal');
 
