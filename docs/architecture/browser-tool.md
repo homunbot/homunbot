@@ -90,6 +90,27 @@
 
 **Score: Homun 27/27 azioni (100%)** ✅
 
+### Browser vs Web Fetch
+
+**OpenClaw** ha due tool separati con scopi distinti:
+
+| Tool | Descrizione | Quando usare |
+|------|-------------|--------------|
+| **`browser`** | Control browser (status/start/stop/profiles/tabs/snapshot/actions) | Login, clicking, forms, navigation, JS-heavy sites |
+| **`web_fetch`** | "Lightweight page access **without browser automation**" | Solo leggere contenuto statico |
+
+**Homun** segue lo stesso approccio (allineato con OpenClaw):
+
+| Tool | Descrizione | Quando usare |
+|------|-------------|--------------|
+| **`browser`** | Browser automation per interazioni complesse | Login, clicking, forms, navigation, multi-step workflows |
+| **`web_fetch`** | "LIGHTWEIGHT page access **WITHOUT browser automation**" | Leggere articoli, documentazione, contenuto statico |
+| **`web_search`** | Brave Search per scoprire URL | Cercare informazioni, poi usare web_fetch per leggere |
+
+**Messaggi chiave nelle descrizioni:**
+- `web_fetch`: "Cannot handle dynamic content or interactions"
+- `browser`: "Use browser: Login, clicking, forms, navigation, JavaScript-heavy sites"
+
 ### Snapshot Format
 
 **Entrambi usano lo stesso formato output:**
@@ -349,6 +370,13 @@ playwright-rs 0.8.3
 ---
 
 ## Changelog
+
+### 2026-02-26 (Tool Descriptions Alignment)
+- [x] Allineamento con OpenClaw per evitare ambiguità browser vs web_fetch
+  - [x] `web_fetch`: "LIGHTWEIGHT page access WITHOUT browser automation"
+  - [x] `browser`: Aggiunta sezione "WHEN TO USE THIS vs WEB_FETCH"
+  - [x] `web_search`: Aggiunto hint per usare web_fetch dopo aver trovato URL
+  - [x] Documentata la distinzione nella tabella comparativa
 
 ### 2026-02-26 (Auto-Cleanup Fix)
 - [x] Fix critico: browser non si chiudeva dopo task completato
