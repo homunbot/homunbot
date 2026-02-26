@@ -20,14 +20,14 @@
 //! headless = true
 //! ```
 
+pub mod actions;
 pub mod manager;
 pub mod snapshot;
-pub mod actions;
 pub mod tool;
 
 // Re-export config from schema
 pub use crate::config::BrowserConfig;
-pub use manager::{BrowserManager, global_browser_manager};
-pub use snapshot::{PageSnapshot, ElementRef};
 pub use actions::BrowserAction;
+pub use manager::{global_browser_manager, BrowserManager};
+pub use snapshot::{ElementRef, PageSnapshot};
 pub use tool::BrowserTool;

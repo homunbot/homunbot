@@ -142,17 +142,12 @@ impl SkillRegistry {
         let skill_md_path = skill_dir.join("SKILL.md");
         let content = tokio::fs::read_to_string(&skill_md_path)
             .await
-            .with_context(|| {
-                format!("Failed to read {}", skill_md_path.display())
-            })?;
+            .with_context(|| format!("Failed to read {}", skill_md_path.display()))?;
 
         let (meta, _) = parse_skill_md(&content)?;
 
         // Validate name matches directory
-        let dir_name = skill_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let dir_name = skill_dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if meta.name != dir_name {
             tracing::warn!(
                 skill = %meta.name,
@@ -200,7 +195,9 @@ impl SkillRegistry {
                 skill.meta.name, skill.meta.description
             ));
         }
-        summary.push_str("\nTo use a skill, reference it by name. The full instructions will be loaded.");
+        summary.push_str(
+            "\nTo use a skill, reference it by name. The full instructions will be loaded.",
+        );
         summary
     }
 
@@ -241,14 +238,12 @@ fn parse_skill_md(content: &str) -> Result<(SkillMetadata, String)> {
     let matter = gray_matter::Matter::<gray_matter::engine::YAML>::new();
     let parsed = matter.parse(content);
 
-    let data = parsed
-        .data
-        .context("SKILL.md has no YAML frontmatter")?;
+    let data = parsed.data.context("SKILL.md has no YAML frontmatter")?;
 
     // Convert gray_matter's Pod to serde_json::Value, then deserialize
     let json_value: serde_json::Value = data.into();
-    let meta: SkillMetadata = serde_json::from_value(json_value)
-        .context("Failed to parse SKILL.md frontmatter")?;
+    let meta: SkillMetadata =
+        serde_json::from_value(json_value).context("Failed to parse SKILL.md frontmatter")?;
 
     // Validate required fields
     if meta.name.is_empty() {
@@ -260,7 +255,6 @@ fn parse_skill_md(content: &str) -> Result<(SkillMetadata, String)> {
 
     Ok((meta, parsed.content))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -417,7 +411,10 @@ metadata: {"clawdbot":{"emoji":"🎮","requires":{"bins":["gog"]},"install":[{"i
 
         // Check that metadata is parsed as an object, not a string
         let metadata = meta.metadata.expect("metadata should be Some");
-        println!("metadata: {}", serde_json::to_string_pretty(&metadata).unwrap());
+        println!(
+            "metadata: {}",
+            serde_json::to_string_pretty(&metadata).unwrap()
+        );
         println!("metadata type is_object: {}", metadata.is_object());
         println!("metadata type is_string: {}", metadata.is_string());
 

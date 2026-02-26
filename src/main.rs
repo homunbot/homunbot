@@ -44,7 +44,11 @@ use crate::tools::RememberTool;
 use crate::browser::BrowserTool;
 
 #[derive(Parser)]
-#[command(name = "homun", version, about = "🧪 The digital homunculus that lives in your computer")]
+#[command(
+    name = "homun",
+    version,
+    about = "🧪 The digital homunculus that lives in your computer"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -323,11 +327,9 @@ fn create_provider(config: &Config) -> Result<Arc<dyn provider::Provider>> {
     // Get API key from secure storage (encrypted)
     let api_key = if provider_config.api_key == "***ENCRYPTED***" {
         // Retrieve from secure storage
-        let secrets = storage::global_secrets()
-            .context("Failed to access secure storage")?;
+        let secrets = storage::global_secrets().context("Failed to access secure storage")?;
         let secret_key = storage::SecretKey::provider_api_key(provider_name);
-        secrets.get(&secret_key)?
-            .unwrap_or_default()
+        secrets.get(&secret_key)?.unwrap_or_default()
     } else if provider_config.api_key.is_empty() {
         String::new()
     } else {
@@ -369,10 +371,7 @@ fn create_provider(config: &Config) -> Result<Arc<dyn provider::Provider>> {
         Ok(Arc::new(provider))
     } else if provider_name == "ollama" {
         // Native Ollama provider (local /api/chat — NDJSON, native tool calls, think control)
-        let provider = provider::OllamaProvider::new(
-            &api_key,
-            provider_config.api_base.as_deref(),
-        );
+        let provider = provider::OllamaProvider::new(&api_key, provider_config.api_base.as_deref());
         Ok(Arc::new(provider))
     } else {
         // OpenAI-compatible provider (covers OpenRouter, OpenAI, DeepSeek, Groq, Gemini,
@@ -403,7 +402,7 @@ fn create_tool_registry(config: &Config) -> ToolRegistry {
     // Prepare permissions config for tools
     let permissions = std::sync::Arc::new(config.permissions.clone());
     let shell_permissions = std::sync::Arc::new(config.permissions.shell.clone());
-    
+
     // Initialize approval manager for command approval workflow
     tools::init_approval_manager(&config.permissions.approval);
 
@@ -415,10 +414,22 @@ fn create_tool_registry(config: &Config) -> ToolRegistry {
     )));
 
     // File tools with ACL-based permissions
-    registry.register(Box::new(ReadFileTool::with_permissions(allowed_dir.clone(), permissions.clone())));
-    registry.register(Box::new(WriteFileTool::with_permissions(allowed_dir.clone(), permissions.clone())));
-    registry.register(Box::new(EditFileTool::with_permissions(allowed_dir.clone(), permissions.clone())));
-    registry.register(Box::new(ListDirTool::with_permissions(allowed_dir, permissions)));
+    registry.register(Box::new(ReadFileTool::with_permissions(
+        allowed_dir.clone(),
+        permissions.clone(),
+    )));
+    registry.register(Box::new(WriteFileTool::with_permissions(
+        allowed_dir.clone(),
+        permissions.clone(),
+    )));
+    registry.register(Box::new(EditFileTool::with_permissions(
+        allowed_dir.clone(),
+        permissions.clone(),
+    )));
+    registry.register(Box::new(ListDirTool::with_permissions(
+        allowed_dir,
+        permissions,
+    )));
 
     // Web search tool (Brave API)
     registry.register(Box::new(WebSearchTool::new(
@@ -443,10 +454,7 @@ fn create_tool_registry(config: &Config) -> ToolRegistry {
         tracing::info!("Browser tool registered");
     }
 
-    tracing::info!(
-        tools = registry.len(),
-        "Tool registry initialized"
-    );
+    tracing::info!(tools = registry.len(), "Tool registry initialized");
 
     registry
 }
@@ -582,8 +590,7 @@ async fn main() -> Result<()> {
         if let Some(file) = log_file {
             tracing_subscriber::fmt()
                 .with_env_filter(
-                    EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| EnvFilter::new("info")),
+                    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
                 )
                 .with_writer(file)
                 .with_ansi(false)
@@ -616,13 +623,8 @@ async fn main() -> Result<()> {
             let db_for_searcher = db.clone();
             #[cfg(not(feature = "local-embeddings"))]
             let _db_for_searcher = db.clone();
-            let mut agent = agent::AgentLoop::new(
-                provider,
-                config,
-                session_manager.clone(),
-                tool_registry,
-                db,
-            );
+            let mut agent =
+                agent::AgentLoop::new(provider, config, session_manager.clone(), tool_registry, db);
 
             // Initialize memory searcher (vector + FTS5 hybrid search)
             #[cfg(feature = "local-embeddings")]
@@ -636,8 +638,13 @@ async fn main() -> Result<()> {
                 tracing::warn!(error = %e, "Failed to load skills");
             }
             if !skill_registry.is_empty() {
-                agent.set_skills_summary(skill_registry.build_prompt_summary()).await;
-                tracing::info!(skills = skill_registry.len(), "Skills loaded into agent context");
+                agent
+                    .set_skills_summary(skill_registry.build_prompt_summary())
+                    .await;
+                tracing::info!(
+                    skills = skill_registry.len(),
+                    "Skills loaded into agent context"
+                );
             }
             // Share the skill registry so skills can be activated on-demand
             let skill_registry = Arc::new(tokio::sync::RwLock::new(skill_registry));
@@ -658,8 +665,8 @@ async fn main() -> Result<()> {
             mcp_manager.shutdown().await;
         }
         Commands::Gateway => {
-            use std::sync::Arc;
             use crate::scheduler::CronScheduler;
+            use std::sync::Arc;
 
             // PID file management: kill existing instance if running
             let pid_file = Config::data_dir().join("homun.pid");
@@ -678,7 +685,10 @@ async fn main() -> Result<()> {
                                 .arg(old_pid.to_string())
                                 .output();
 
-                            tracing::info!("Sent TERM signal to existing instance (PID {})", old_pid);
+                            tracing::info!(
+                                "Sent TERM signal to existing instance (PID {})",
+                                old_pid
+                            );
 
                             // Wait for process to die (up to 5 seconds)
                             for i in 1..=10 {
@@ -688,8 +698,13 @@ async fn main() -> Result<()> {
                                     .arg("-0")
                                     .arg(old_pid.to_string())
                                     .output();
-                                if check.is_err() || check.map(|o| !o.status.success()).unwrap_or(true) {
-                                    tracing::info!("Previous instance terminated after {}ms", i * 500);
+                                if check.is_err()
+                                    || check.map(|o| !o.status.success()).unwrap_or(true)
+                                {
+                                    tracing::info!(
+                                        "Previous instance terminated after {}ms",
+                                        i * 500
+                                    );
                                     break;
                                 }
                             }
@@ -789,7 +804,10 @@ async fn main() -> Result<()> {
                     let reg = skill_registry.read().await;
                     if !reg.is_empty() {
                         a.set_skills_summary(reg.build_prompt_summary()).await;
-                        tracing::info!(skills = reg.len(), "Skills loaded into agent context (gateway)");
+                        tracing::info!(
+                            skills = reg.len(),
+                            "Skills loaded into agent context (gateway)"
+                        );
                     }
                 }
                 a.set_skill_registry(skill_registry.clone());
@@ -819,7 +837,10 @@ async fn main() -> Result<()> {
                         tracing::error!(error = %e, "Web UI server failed");
                     }
                 });
-                tracing::info!(port = web_port, "Web UI available at http://localhost:{web_port}/");
+                tracing::info!(
+                    port = web_port,
+                    "Web UI available at http://localhost:{web_port}/"
+                );
                 tracing::info!("Gateway running in setup mode. Configure a provider via Web UI.");
                 // Wait forever (or until Ctrl+C)
                 tokio::signal::ctrl_c().await?;
@@ -846,10 +867,7 @@ async fn main() -> Result<()> {
 
             // Start skill hot-reload watcher (watches ~/.homun/skills/ for changes)
             let skills_dir = config::Config::data_dir().join("skills");
-            let skill_watcher = skills::SkillWatcher::new(
-                skills_summary_handle,
-                skills_dir,
-            );
+            let skill_watcher = skills::SkillWatcher::new(skills_summary_handle, skills_dir);
             let _watcher_handle = skill_watcher.start();
 
             // Start bootstrap file hot-reload watcher (watches ~/.homun/brain/ and ~/.homun/)
@@ -863,7 +881,12 @@ async fn main() -> Result<()> {
             let _bootstrap_watcher_handle = bootstrap_watcher.start();
 
             let mut gateway = agent::Gateway::new(
-                agent, config, session_manager, cron_scheduler, cron_event_rx, db_for_web,
+                agent,
+                config,
+                session_manager,
+                cron_scheduler,
+                cron_event_rx,
+                db_for_web,
             );
             gateway.set_tool_message_rx(tool_msg_rx);
 
@@ -1071,8 +1094,8 @@ async fn main() -> Result<()> {
                 }
             }
             SkillsCommands::Info { name } => {
-                use crate::skills::SkillInstaller;
                 use crate::skills::list_skill_scripts;
+                use crate::skills::SkillInstaller;
                 match SkillInstaller::list_installed().await {
                     Ok(skills) => {
                         if let Some(skill) = skills.iter().find(|s| s.name == name) {
@@ -1126,10 +1149,20 @@ async fn main() -> Result<()> {
                     match hub.install(clawhub_slug).await {
                         Ok(result) => {
                             if result.already_existed {
-                                println!("Skill '{}' is already installed at {}", result.name, result.path.display());
-                                println!("Remove it first with: homun skills remove {}", result.name);
+                                println!(
+                                    "Skill '{}' is already installed at {}",
+                                    result.name,
+                                    result.path.display()
+                                );
+                                println!(
+                                    "Remove it first with: homun skills remove {}",
+                                    result.name
+                                );
                             } else {
-                                println!("\u{2705} Installed '{}' from ClawHub — {}", result.name, result.description);
+                                println!(
+                                    "\u{2705} Installed '{}' from ClawHub — {}",
+                                    result.name, result.description
+                                );
                                 println!("  Source: clawhub:{clawhub_slug}");
                                 println!("  Path: {}", result.path.display());
                             }
@@ -1147,10 +1180,20 @@ async fn main() -> Result<()> {
                     match installer.install(&repo).await {
                         Ok(result) => {
                             if result.already_existed {
-                                println!("Skill '{}' is already installed at {}", result.name, result.path.display());
-                                println!("Remove it first with: homun skills remove {}", result.name);
+                                println!(
+                                    "Skill '{}' is already installed at {}",
+                                    result.name,
+                                    result.path.display()
+                                );
+                                println!(
+                                    "Remove it first with: homun skills remove {}",
+                                    result.name
+                                );
                             } else {
-                                println!("\u{2705} Installed '{}' from GitHub — {}", result.name, result.description);
+                                println!(
+                                    "\u{2705} Installed '{}' from GitHub — {}",
+                                    result.name, result.description
+                                );
                                 println!("  Path: {}", result.path.display());
                             }
                         }
@@ -1187,7 +1230,11 @@ async fn main() -> Result<()> {
                     } else {
                         println!("MCP Servers:\n");
                         for (name, server) in &config.mcp.servers {
-                            let status = if server.enabled { "\u{2713}" } else { "\u{2717}" };
+                            let status = if server.enabled {
+                                "\u{2713}"
+                            } else {
+                                "\u{2717}"
+                            };
                             let detail = match server.transport.as_str() {
                                 "stdio" => {
                                     let cmd = server.command.as_deref().unwrap_or("?");
@@ -1233,7 +1280,11 @@ async fn main() -> Result<()> {
                 McpCommands::Toggle { name } => {
                     if let Some(server) = config.mcp.servers.get_mut(&name) {
                         server.enabled = !server.enabled;
-                        let state = if server.enabled { "enabled" } else { "disabled" };
+                        let state = if server.enabled {
+                            "enabled"
+                        } else {
+                            "disabled"
+                        };
                         config.save()?;
                         println!("MCP server '{name}' {state}.");
                     } else {
@@ -1242,7 +1293,7 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-        },
+        }
         Commands::Cron { command } => {
             let config = Config::load()?;
             let db = Database::open(&config.storage.resolved_path()).await?;
@@ -1270,7 +1321,12 @@ async fn main() -> Result<()> {
                         println!("{} job(s) total.", jobs.len());
                     }
                 }
-                CronCommands::Add { name, message, cron, every } => {
+                CronCommands::Add {
+                    name,
+                    message,
+                    cron,
+                    every,
+                } => {
                     let schedule = if let Some(cron_expr) = cron {
                         format!("cron:{cron_expr}")
                     } else if let Some(secs) = every {
@@ -1283,7 +1339,8 @@ async fn main() -> Result<()> {
                     };
 
                     let id = uuid::Uuid::new_v4().to_string()[..8].to_string();
-                    db.insert_cron_job(&id, &name, &message, &schedule, None).await?;
+                    db.insert_cron_job(&id, &name, &message, &schedule, None)
+                        .await?;
                     println!("Job created: id={id}, name={name}, schedule={schedule}");
                     println!("Note: Jobs run when the gateway is active (homun gateway)");
                 }
@@ -1297,7 +1354,7 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-        },
+        }
         Commands::Memory { command } => {
             let data_dir = Config::data_dir();
             match command {
@@ -1310,7 +1367,10 @@ async fn main() -> Result<()> {
                         ("MEMORY.md", data_dir.join("MEMORY.md")),
                         ("HISTORY.md", data_dir.join("HISTORY.md")),
                         ("brain/USER.md", data_dir.join("brain").join("USER.md")),
-                        ("brain/INSTRUCTIONS.md", data_dir.join("brain").join("INSTRUCTIONS.md")),
+                        (
+                            "brain/INSTRUCTIONS.md",
+                            data_dir.join("brain").join("INSTRUCTIONS.md"),
+                        ),
                         ("brain/SOUL.md", data_dir.join("brain").join("SOUL.md")),
                         ("memory.usearch", data_dir.join("memory.usearch")),
                     ];
@@ -1343,11 +1403,12 @@ async fn main() -> Result<()> {
                         println!("  memory_chunks: {chunks} rows");
 
                         let pool = db.pool();
-                        let sessions: i64 =
-                            sqlx::query_scalar::<_, i64>("SELECT COUNT(DISTINCT session_key) FROM messages")
-                                .fetch_one(pool)
-                                .await
-                                .unwrap_or(0);
+                        let sessions: i64 = sqlx::query_scalar::<_, i64>(
+                            "SELECT COUNT(DISTINCT session_key) FROM messages",
+                        )
+                        .fetch_one(pool)
+                        .await
+                        .unwrap_or(0);
                         println!("  sessions: {sessions}");
 
                         let messages: i64 =
@@ -1396,8 +1457,10 @@ async fn main() -> Result<()> {
                     for path in &files_to_delete {
                         if path.exists() {
                             std::fs::remove_file(path)?;
-                            println!("  ✓ Deleted {}", path.strip_prefix(&data_dir)
-                                .unwrap_or(path).display());
+                            println!(
+                                "  ✓ Deleted {}",
+                                path.strip_prefix(&data_dir).unwrap_or(path).display()
+                            );
                         }
                     }
 
@@ -1449,7 +1512,10 @@ async fn main() -> Result<()> {
                         user_mgr.create_user(&name).await?
                     };
                     let role = if admin { "admin" } else { "user" };
-                    println!("✅ Created user '{}' with role {} (ID: {})", name, role, user.id);
+                    println!(
+                        "✅ Created user '{}' with role {} (ID: {})",
+                        name, role, user.id
+                    );
                 }
                 UserCommands::Info { user } => {
                     let info = if user.contains('-') && user.len() == 36 {
@@ -1474,7 +1540,10 @@ async fn main() -> Result<()> {
                             if !identities.is_empty() {
                                 println!("\n  Channel Identities:");
                                 for id in identities {
-                                    let dn = id.display_name.map(|d| format!(" ({})", d)).unwrap_or_default();
+                                    let dn = id
+                                        .display_name
+                                        .map(|d| format!(" ({})", d))
+                                        .unwrap_or_default();
                                     println!("    • {}: {}{}", id.channel, id.platform_id, dn);
                                 }
                             }
@@ -1485,8 +1554,17 @@ async fn main() -> Result<()> {
                                 println!("\n  Webhook Tokens:");
                                 for t in tokens {
                                     let status = if t.enabled { "✓" } else { "✗" };
-                                    let last = t.last_used.map(|l| format!(" (last: {})", l)).unwrap_or_default();
-                                    println!("    • [{}] {} – {}{}", status, &t.token[..12], t.name, last);
+                                    let last = t
+                                        .last_used
+                                        .map(|l| format!(" (last: {})", l))
+                                        .unwrap_or_default();
+                                    println!(
+                                        "    • [{}] {} – {}{}",
+                                        status,
+                                        &t.token[..12],
+                                        t.name,
+                                        last
+                                    );
                                 }
                             }
                         }
@@ -1495,7 +1573,12 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-                UserCommands::Link { user, channel, id, display_name } => {
+                UserCommands::Link {
+                    user,
+                    channel,
+                    id,
+                    display_name,
+                } => {
                     let info = if user.contains('-') && user.len() == 36 {
                         user_mgr.get_user(&user).await?
                     } else {
@@ -1504,8 +1587,13 @@ async fn main() -> Result<()> {
 
                     match info {
                         Some(u) => {
-                            user_mgr.link_identity(&u.id, &channel, &id, display_name.as_deref()).await?;
-                            println!("✅ Linked {} identity '{}' to user '{}'", channel, id, u.username);
+                            user_mgr
+                                .link_identity(&u.id, &channel, &id, display_name.as_deref())
+                                .await?;
+                            println!(
+                                "✅ Linked {} identity '{}' to user '{}'",
+                                channel, id, u.username
+                            );
                         }
                         None => {
                             println!("❌ User not found: {}", user);
@@ -1523,7 +1611,10 @@ async fn main() -> Result<()> {
                         Some(u) => {
                             let removed = user_mgr.unlink_identity(&u.id, &channel, &id).await?;
                             if removed {
-                                println!("✅ Unlinked {} identity '{}' from user '{}'", channel, id, u.username);
+                                println!(
+                                    "✅ Unlinked {} identity '{}' from user '{}'",
+                                    channel, id, u.username
+                                );
                             } else {
                                 println!("⚠️  Identity not found");
                             }

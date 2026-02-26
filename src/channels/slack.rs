@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use reqwest::Client;
 use chrono::Utc;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
@@ -38,12 +38,16 @@ impl SlackChannel {
         if self.config.allow_from.is_empty() {
             return false; // Empty list = deny everyone by default
         }
-        self.config.allow_from.iter().any(|u| u == "*" || u == user_id)
+        self.config
+            .allow_from
+            .iter()
+            .any(|u| u == "*" || u == user_id)
     }
 
     /// Get the bot's own user ID (to ignore own messages)
     async fn get_bot_user_id(&self) -> Result<String> {
-        let resp = self.client
+        let resp = self
+            .client
             .get("https://slack.com/api/auth.test")
             .bearer_auth(&self.config.token)
             .send()
@@ -79,7 +83,8 @@ impl SlackChannel {
                 params.push(("cursor", next));
             }
 
-            let resp = self.client
+            let resp = self
+                .client
                 .get("https://slack.com/api/conversations.list")
                 .bearer_auth(&self.config.token)
                 .query(&params)
@@ -112,7 +117,8 @@ impl SlackChannel {
                 }
             }
 
-            cursor = data.response_metadata
+            cursor = data
+                .response_metadata
                 .and_then(|m| m.next_cursor)
                 .filter(|c| !c.is_empty());
 
@@ -137,7 +143,8 @@ impl SlackChannel {
             body["thread_ts"] = serde_json::json!(ts);
         }
 
-        let resp = self.client
+        let resp = self
+            .client
             .post("https://slack.com/api/chat.postMessage")
             .bearer_auth(&self.config.token)
             .json(&body)
@@ -200,9 +207,7 @@ impl Channel for SlackChannel {
         let client = self.client.clone();
         let _outbound_handle = tokio::spawn(async move {
             while let Some(msg) = outbound_rx.recv().await {
-                match send_slack_message(&client, &token, &msg.chat_id,
-&msg.content,
-None).await {
+                match send_slack_message(&client, &token, &msg.chat_id, &msg.content, None).await {
                     Ok(()) => {
                         tracing::debug!("Sent message to Slack channel {}", msg.chat_id);
                     }
@@ -222,7 +227,9 @@ None).await {
                 vec![channel_id.clone()]
             } else {
                 // Auto-discover channels every 60 seconds
-                if discovered_channels.is_empty() || last_discovery.elapsed() >= Duration::from_secs(60) {
+                if discovered_channels.is_empty()
+                    || last_discovery.elapsed() >= Duration::from_secs(60)
+                {
                     match self.list_accessible_channels().await {
                         Ok(channels) => {
                             if channels != discovered_channels {
@@ -248,10 +255,7 @@ None).await {
 
             // Poll each channel
             for channel_id in target_channels {
-                let mut params = vec![
-                    ("channel", channel_id.clone()),
-                    ("limit", "10".to_string()),
-                ];
+                let mut params = vec![("channel", channel_id.clone()), ("limit", "10".to_string())];
 
                 if let Some(last_ts) = last_ts_by_channel.get(&channel_id) {
                     if !last_ts.is_empty() {
@@ -259,7 +263,8 @@ None).await {
                     }
                 }
 
-                let resp = match self.client
+                let resp = match self
+                    .client
                     .get("https://slack.com/api/conversations.history")
                     .bearer_auth(&self.config.token)
                     .query(&params)
@@ -308,7 +313,10 @@ None).await {
 
                         // User validation
                         if !self.is_user_allowed(user) {
-                            tracing::debug!("Slack: ignoring message from unauthorized user: {}", user);
+                            tracing::debug!(
+                                "Slack: ignoring message from unauthorized user: {}",
+                                user
+                            );
                             continue;
                         }
 

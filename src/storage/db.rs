@@ -18,8 +18,9 @@ impl Database {
     pub async fn open(path: &Path) -> Result<Self> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create database directory {}", parent.display()))?;
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create database directory {}", parent.display())
+            })?;
         }
 
         let options = SqliteConnectOptions::new()
@@ -50,7 +51,7 @@ impl Database {
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
                 applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )"
+            )",
         )
         .execute(pool)
         .await
@@ -58,13 +59,12 @@ impl Database {
 
         // Migration 001
         let migration_name = "001_initial";
-        let already_applied: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM _migrations WHERE name = ?)"
-        )
-        .bind(migration_name)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(false);
+        let already_applied: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM _migrations WHERE name = ?)")
+                .bind(migration_name)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(false);
 
         if !already_applied {
             let sql = include_str!("../../migrations/001_initial.sql");
@@ -92,7 +92,10 @@ impl Database {
                     .execute(pool)
                     .await
                     .with_context(|| {
-                        format!("Migration failed: {}", &statement[..statement.len().min(80)])
+                        format!(
+                            "Migration failed: {}",
+                            &statement[..statement.len().min(80)]
+                        )
                     })?;
             }
 
@@ -126,13 +129,12 @@ impl Database {
 
     /// Apply a named migration if not already applied.
     async fn apply_migration(pool: &Pool<Sqlite>, name: &str, sql: &str) -> Result<()> {
-        let already_applied: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM _migrations WHERE name = ?)",
-        )
-        .bind(name)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(false);
+        let already_applied: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM _migrations WHERE name = ?)")
+                .bind(name)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(false);
 
         if already_applied {
             return Ok(());
@@ -189,17 +191,13 @@ impl Database {
     // --- Session operations ---
 
     /// Create or update a session record
-    pub async fn upsert_session(
-        &self,
-        key: &str,
-        last_consolidated: i64,
-    ) -> Result<()> {
+    pub async fn upsert_session(&self, key: &str, last_consolidated: i64) -> Result<()> {
         sqlx::query(
             "INSERT INTO sessions (key, last_consolidated)
              VALUES (?, ?)
              ON CONFLICT(key) DO UPDATE SET
                 updated_at = datetime('now'),
-                last_consolidated = excluded.last_consolidated"
+                last_consolidated = excluded.last_consolidated",
         )
         .bind(key)
         .bind(last_consolidated)
@@ -214,7 +212,7 @@ impl Database {
     pub async fn load_session(&self, key: &str) -> Result<Option<SessionRow>> {
         let row = sqlx::query_as::<_, SessionRow>(
             "SELECT key, created_at, updated_at, last_consolidated, metadata
-             FROM sessions WHERE key = ?"
+             FROM sessions WHERE key = ?",
         )
         .bind(key)
         .fetch_optional(&self.pool)
@@ -234,12 +232,11 @@ impl Database {
         content: &str,
         tools_used: &[String],
     ) -> Result<()> {
-        let tools_json = serde_json::to_string(tools_used)
-            .unwrap_or_else(|_| "[]".to_string());
+        let tools_json = serde_json::to_string(tools_used).unwrap_or_else(|_| "[]".to_string());
 
         sqlx::query(
             "INSERT INTO messages (session_key, role, content, tools_used)
-             VALUES (?, ?, ?, ?)"
+             VALUES (?, ?, ?, ?)",
         )
         .bind(session_key)
         .bind(role)
@@ -253,11 +250,7 @@ impl Database {
     }
 
     /// Load the last N messages for a session, ordered oldest-first
-    pub async fn load_messages(
-        &self,
-        session_key: &str,
-        limit: u32,
-    ) -> Result<Vec<MessageRow>> {
+    pub async fn load_messages(&self, session_key: &str, limit: u32) -> Result<Vec<MessageRow>> {
         let rows = sqlx::query_as::<_, MessageRow>(
             "SELECT id, session_key, role, content, tools_used, timestamp
              FROM (
@@ -266,7 +259,7 @@ impl Database {
                  ORDER BY id DESC
                  LIMIT ?
              ) sub
-             ORDER BY id ASC"
+             ORDER BY id ASC",
         )
         .bind(session_key)
         .bind(limit)
@@ -279,13 +272,11 @@ impl Database {
 
     /// Count messages in a session
     pub async fn count_messages(&self, session_key: &str) -> Result<i64> {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM messages WHERE session_key = ?"
-        )
-        .bind(session_key)
-        .fetch_one(&self.pool)
-        .await
-        .context("Failed to count messages")?;
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE session_key = ?")
+            .bind(session_key)
+            .fetch_one(&self.pool)
+            .await
+            .context("Failed to count messages")?;
 
         Ok(count)
     }
@@ -300,7 +291,7 @@ impl Database {
 
         sqlx::query(
             "UPDATE sessions SET last_consolidated = 0, updated_at = datetime('now')
-             WHERE key = ?"
+             WHERE key = ?",
         )
         .bind(session_key)
         .execute(&self.pool)
@@ -319,29 +310,24 @@ impl Database {
         content: &str,
         memory_type: &str,
     ) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO memories (session_key, content, memory_type) VALUES (?, ?, ?)"
-        )
-        .bind(session_key)
-        .bind(content)
-        .bind(memory_type)
-        .execute(&self.pool)
-        .await
-        .context("Failed to insert memory")?;
+        sqlx::query("INSERT INTO memories (session_key, content, memory_type) VALUES (?, ?, ?)")
+            .bind(session_key)
+            .bind(content)
+            .bind(memory_type)
+            .execute(&self.pool)
+            .await
+            .context("Failed to insert memory")?;
 
         Ok(())
     }
 
     /// Load all memories for a session (plus global memories)
-    pub async fn load_memories(
-        &self,
-        session_key: &str,
-    ) -> Result<Vec<MemoryRow>> {
+    pub async fn load_memories(&self, session_key: &str) -> Result<Vec<MemoryRow>> {
         let rows = sqlx::query_as::<_, MemoryRow>(
             "SELECT id, session_key, content, memory_type, created_at
              FROM memories
              WHERE session_key IS NULL OR session_key = ?
-             ORDER BY created_at ASC"
+             ORDER BY created_at ASC",
         )
         .bind(session_key)
         .fetch_all(&self.pool)
@@ -356,7 +342,7 @@ impl Database {
         let row: Option<(String,)> = sqlx::query_as(
             "SELECT content FROM memories
              WHERE memory_type = 'long_term' AND session_key IS NULL
-             ORDER BY created_at DESC LIMIT 1"
+             ORDER BY created_at DESC LIMIT 1",
         )
         .fetch_optional(&self.pool)
         .await
@@ -368,12 +354,10 @@ impl Database {
     /// Replace the global long-term memory (upsert pattern)
     pub async fn upsert_long_term_memory(&self, content: &str) -> Result<()> {
         // Delete old global long-term memory, then insert fresh
-        sqlx::query(
-            "DELETE FROM memories WHERE memory_type = 'long_term' AND session_key IS NULL"
-        )
-        .execute(&self.pool)
-        .await
-        .context("Failed to clear old long-term memory")?;
+        sqlx::query("DELETE FROM memories WHERE memory_type = 'long_term' AND session_key IS NULL")
+            .execute(&self.pool)
+            .await
+            .context("Failed to clear old long-term memory")?;
 
         self.insert_memory(None, content, "long_term").await
     }
@@ -391,7 +375,7 @@ impl Database {
     ) -> Result<()> {
         sqlx::query(
             "INSERT INTO cron_jobs (id, name, message, schedule, deliver_to)
-             VALUES (?, ?, ?, ?, ?)"
+             VALUES (?, ?, ?, ?, ?)",
         )
         .bind(id)
         .bind(name)
@@ -410,7 +394,7 @@ impl Database {
         let rows = sqlx::query_as::<_, CronJobRow>(
             "SELECT id, name, message, schedule, enabled, deliver_to, last_run, created_at
              FROM cron_jobs
-             ORDER BY created_at ASC"
+             ORDER BY created_at ASC",
         )
         .fetch_all(&self.pool)
         .await
@@ -421,13 +405,11 @@ impl Database {
 
     /// Update last_run timestamp for a cron job
     pub async fn update_cron_last_run(&self, id: &str) -> Result<()> {
-        sqlx::query(
-            "UPDATE cron_jobs SET last_run = datetime('now') WHERE id = ?"
-        )
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .context("Failed to update cron job last_run")?;
+        sqlx::query("UPDATE cron_jobs SET last_run = datetime('now') WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to update cron job last_run")?;
 
         Ok(())
     }
@@ -500,11 +482,7 @@ impl Database {
 
     /// Full-text search on memory chunks using FTS5 BM25 ranking.
     /// Returns `(chunk_id, bm25_score)` pairs, best matches first.
-    pub async fn fts5_search(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<(i64, f64)>> {
+    pub async fn fts5_search(&self, query: &str, limit: usize) -> Result<Vec<(i64, f64)>> {
         let rows: Vec<(i64, f64)> = sqlx::query_as(
             "SELECT rowid, rank
              FROM memory_fts
@@ -523,11 +501,10 @@ impl Database {
 
     /// Count total memory chunks.
     pub async fn count_memory_chunks(&self) -> Result<i64> {
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM memory_chunks")
-                .fetch_one(&self.pool)
-                .await
-                .context("Failed to count memory chunks")?;
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memory_chunks")
+            .fetch_one(&self.pool)
+            .await
+            .context("Failed to count memory chunks")?;
         Ok(count)
     }
 
@@ -550,14 +527,12 @@ impl Database {
 
     /// Toggle a cron job's enabled state
     pub async fn toggle_cron_job(&self, id: &str, enabled: bool) -> Result<bool> {
-        let result = sqlx::query(
-            "UPDATE cron_jobs SET enabled = ? WHERE id = ?"
-        )
-        .bind(enabled)
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .context("Failed to toggle cron job")?;
+        let result = sqlx::query("UPDATE cron_jobs SET enabled = ? WHERE id = ?")
+            .bind(enabled)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to toggle cron job")?;
 
         Ok(result.rows_affected() > 0)
     }
@@ -576,13 +551,11 @@ impl Database {
         let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
         let cutoff_str = cutoff.to_rfc3339();
 
-        let result = sqlx::query(
-            "DELETE FROM messages WHERE timestamp < ?"
-        )
-        .bind(&cutoff_str)
-        .execute(&self.pool)
-        .await
-        .context("Failed to prune old messages")?;
+        let result = sqlx::query("DELETE FROM messages WHERE timestamp < ?")
+            .bind(&cutoff_str)
+            .execute(&self.pool)
+            .await
+            .context("Failed to prune old messages")?;
 
         let deleted = result.rows_affected();
         if deleted > 0 {
@@ -607,13 +580,12 @@ impl Database {
         let cutoff_date = cutoff.format("%Y-%m-%d").to_string();
 
         // Only prune history-type chunks, keep facts and instructions
-        let result = sqlx::query(
-            "DELETE FROM memory_chunks WHERE date < ? AND memory_type = 'history'"
-        )
-        .bind(&cutoff_date)
-        .execute(&self.pool)
-        .await
-        .context("Failed to prune old memory chunks")?;
+        let result =
+            sqlx::query("DELETE FROM memory_chunks WHERE date < ? AND memory_type = 'history'")
+                .bind(&cutoff_date)
+                .execute(&self.pool)
+                .await
+                .context("Failed to prune old memory chunks")?;
 
         let deleted = result.rows_affected();
         if deleted > 0 {
@@ -686,24 +658,16 @@ impl Database {
     // ═══════════════════════════════════════════════════════════════
 
     /// Create a new user with the given ID, username, and roles.
-    pub async fn create_user(
-        &self,
-        id: &str,
-        username: &str,
-        roles: &[&str],
-    ) -> Result<()> {
-        let roles_json = serde_json::to_string(roles)
-            .unwrap_or_else(|_| "[]".to_string());
+    pub async fn create_user(&self, id: &str, username: &str, roles: &[&str]) -> Result<()> {
+        let roles_json = serde_json::to_string(roles).unwrap_or_else(|_| "[]".to_string());
 
-        sqlx::query(
-            "INSERT INTO users (id, username, roles) VALUES (?, ?, ?)"
-        )
-        .bind(id)
-        .bind(username)
-        .bind(roles_json)
-        .execute(&self.pool)
-        .await
-        .context("Failed to create user")?;
+        sqlx::query("INSERT INTO users (id, username, roles) VALUES (?, ?, ?)")
+            .bind(id)
+            .bind(username)
+            .bind(roles_json)
+            .execute(&self.pool)
+            .await
+            .context("Failed to create user")?;
 
         Ok(())
     }
@@ -712,7 +676,7 @@ impl Database {
     pub async fn load_user(&self, id: &str) -> Result<Option<UserRow>> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT id, username, roles, created_at, updated_at, metadata
-             FROM users WHERE id = ?"
+             FROM users WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -726,7 +690,7 @@ impl Database {
     pub async fn load_user_by_username(&self, username: &str) -> Result<Option<UserRow>> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT id, username, roles, created_at, updated_at, metadata
-             FROM users WHERE username = ?"
+             FROM users WHERE username = ?",
         )
         .bind(username)
         .fetch_optional(&self.pool)
@@ -740,7 +704,7 @@ impl Database {
     pub async fn load_all_users(&self) -> Result<Vec<UserRow>> {
         let rows = sqlx::query_as::<_, UserRow>(
             "SELECT id, username, roles, created_at, updated_at, metadata
-             FROM users ORDER BY created_at ASC"
+             FROM users ORDER BY created_at ASC",
         )
         .fetch_all(&self.pool)
         .await
@@ -751,17 +715,15 @@ impl Database {
 
     /// Update a user's roles.
     pub async fn update_user_roles(&self, id: &str, roles: &[&str]) -> Result<bool> {
-        let roles_json = serde_json::to_string(roles)
-            .unwrap_or_else(|_| "[]".to_string());
+        let roles_json = serde_json::to_string(roles).unwrap_or_else(|_| "[]".to_string());
 
-        let result = sqlx::query(
-            "UPDATE users SET roles = ?, updated_at = datetime('now') WHERE id = ?"
-        )
-        .bind(roles_json)
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .context("Failed to update user roles")?;
+        let result =
+            sqlx::query("UPDATE users SET roles = ?, updated_at = datetime('now') WHERE id = ?")
+                .bind(roles_json)
+                .bind(id)
+                .execute(&self.pool)
+                .await
+                .context("Failed to update user roles")?;
 
         Ok(result.rows_affected() > 0)
     }
@@ -789,7 +751,7 @@ impl Database {
     ) -> Result<()> {
         sqlx::query(
             "INSERT INTO user_identities (user_id, channel, platform_id, display_name)
-             VALUES (?, ?, ?, ?)"
+             VALUES (?, ?, ?, ?)",
         )
         .bind(user_id)
         .bind(channel)
@@ -812,7 +774,7 @@ impl Database {
             "SELECT u.id, u.username, u.roles, u.created_at, u.updated_at, u.metadata
              FROM users u
              JOIN user_identities i ON u.id = i.user_id
-             WHERE i.channel = ? AND i.platform_id = ?"
+             WHERE i.channel = ? AND i.platform_id = ?",
         )
         .bind(channel)
         .bind(platform_id)
@@ -828,7 +790,7 @@ impl Database {
         let rows = sqlx::query_as::<_, UserIdentityRow>(
             "SELECT id, user_id, channel, platform_id, display_name, created_at
              FROM user_identities WHERE user_id = ?
-             ORDER BY created_at ASC"
+             ORDER BY created_at ASC",
         )
         .bind(user_id)
         .fetch_all(&self.pool)
@@ -847,7 +809,7 @@ impl Database {
     ) -> Result<bool> {
         let result = sqlx::query(
             "DELETE FROM user_identities
-             WHERE user_id = ? AND channel = ? AND platform_id = ?"
+             WHERE user_id = ? AND channel = ? AND platform_id = ?",
         )
         .bind(user_id)
         .bind(channel)
@@ -862,21 +824,14 @@ impl Database {
     // --- Webhook tokens ---
 
     /// Create a new webhook token for a user.
-    pub async fn create_webhook_token(
-        &self,
-        token: &str,
-        user_id: &str,
-        name: &str,
-    ) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO webhook_tokens (token, user_id, name) VALUES (?, ?, ?)"
-        )
-        .bind(token)
-        .bind(user_id)
-        .bind(name)
-        .execute(&self.pool)
-        .await
-        .context("Failed to create webhook token")?;
+    pub async fn create_webhook_token(&self, token: &str, user_id: &str, name: &str) -> Result<()> {
+        sqlx::query("INSERT INTO webhook_tokens (token, user_id, name) VALUES (?, ?, ?)")
+            .bind(token)
+            .bind(user_id)
+            .bind(name)
+            .execute(&self.pool)
+            .await
+            .context("Failed to create webhook token")?;
 
         Ok(())
     }
@@ -887,7 +842,7 @@ impl Database {
             "SELECT u.id, u.username, u.roles, u.created_at, u.updated_at, u.metadata
              FROM users u
              JOIN webhook_tokens wt ON u.id = wt.user_id
-             WHERE wt.token = ? AND wt.enabled = 1"
+             WHERE wt.token = ? AND wt.enabled = 1",
         )
         .bind(token)
         .fetch_optional(&self.pool)
@@ -899,13 +854,11 @@ impl Database {
 
     /// Update the last_used timestamp for a webhook token.
     pub async fn touch_webhook_token(&self, token: &str) -> Result<()> {
-        sqlx::query(
-            "UPDATE webhook_tokens SET last_used = datetime('now') WHERE token = ?"
-        )
-        .bind(token)
-        .execute(&self.pool)
-        .await
-        .context("Failed to update webhook token last_used")?;
+        sqlx::query("UPDATE webhook_tokens SET last_used = datetime('now') WHERE token = ?")
+            .bind(token)
+            .execute(&self.pool)
+            .await
+            .context("Failed to update webhook token last_used")?;
 
         Ok(())
     }
@@ -915,7 +868,7 @@ impl Database {
         let rows = sqlx::query_as::<_, WebhookTokenRow>(
             "SELECT token, user_id, name, enabled, last_used, created_at
              FROM webhook_tokens WHERE user_id = ?
-             ORDER BY created_at DESC"
+             ORDER BY created_at DESC",
         )
         .bind(user_id)
         .fetch_all(&self.pool)
@@ -938,14 +891,12 @@ impl Database {
 
     /// Toggle a webhook token's enabled state.
     pub async fn toggle_webhook_token(&self, token: &str, enabled: bool) -> Result<bool> {
-        let result = sqlx::query(
-            "UPDATE webhook_tokens SET enabled = ? WHERE token = ?"
-        )
-        .bind(enabled)
-        .bind(token)
-        .execute(&self.pool)
-        .await
-        .context("Failed to toggle webhook token")?;
+        let result = sqlx::query("UPDATE webhook_tokens SET enabled = ? WHERE token = ?")
+            .bind(enabled)
+            .bind(token)
+            .execute(&self.pool)
+            .await
+            .context("Failed to toggle webhook token")?;
 
         Ok(result.rows_affected() > 0)
     }
@@ -1019,10 +970,10 @@ pub struct CronJobRow {
 pub struct UserRow {
     pub id: String,
     pub username: String,
-    pub roles: String,        // JSON array
+    pub roles: String, // JSON array
     pub created_at: String,
     pub updated_at: String,
-    pub metadata: String,     // JSON object
+    pub metadata: String, // JSON object
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -1179,9 +1130,15 @@ END;
         let (db, _dir) = test_db().await;
         db.upsert_session("cli:test", 0).await.unwrap();
 
-        db.insert_message("cli:test", "user", "Hello", &[]).await.unwrap();
-        db.insert_message("cli:test", "assistant", "Hi!", &[]).await.unwrap();
-        db.insert_message("cli:test", "user", "How are you?", &[]).await.unwrap();
+        db.insert_message("cli:test", "user", "Hello", &[])
+            .await
+            .unwrap();
+        db.insert_message("cli:test", "assistant", "Hi!", &[])
+            .await
+            .unwrap();
+        db.insert_message("cli:test", "user", "How are you?", &[])
+            .await
+            .unwrap();
 
         assert_eq!(db.count_messages("cli:test").await.unwrap(), 3);
 
@@ -1202,8 +1159,12 @@ END;
     async fn test_clear_messages() {
         let (db, _dir) = test_db().await;
         db.upsert_session("cli:test", 3).await.unwrap();
-        db.insert_message("cli:test", "user", "msg1", &[]).await.unwrap();
-        db.insert_message("cli:test", "assistant", "msg2", &[]).await.unwrap();
+        db.insert_message("cli:test", "user", "msg1", &[])
+            .await
+            .unwrap();
+        db.insert_message("cli:test", "assistant", "msg2", &[])
+            .await
+            .unwrap();
 
         db.clear_messages("cli:test").await.unwrap();
 
@@ -1218,7 +1179,9 @@ END;
         db.upsert_session("cli:test", 0).await.unwrap();
 
         let tools = vec!["shell".to_string(), "file".to_string()];
-        db.insert_message("cli:test", "assistant", "Done", &tools).await.unwrap();
+        db.insert_message("cli:test", "assistant", "Done", &tools)
+            .await
+            .unwrap();
 
         let msgs = db.load_messages("cli:test", 1).await.unwrap();
         assert_eq!(msgs[0].tools_used, r#"["shell","file"]"#);

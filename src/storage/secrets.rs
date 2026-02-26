@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use ring::aead::{Aad, BoundKey, Nonce, SealingKey, OpeningKey, AES_256_GCM, NonceSequence};
+use ring::aead::{Aad, BoundKey, Nonce, NonceSequence, OpeningKey, SealingKey, AES_256_GCM};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -81,8 +81,8 @@ impl std::fmt::Display for SecretKey {
 #[derive(Serialize, Deserialize)]
 struct SecretsFile {
     version: u32,
-    nonce: String,        // Base64-encoded nonce
-    ciphertext: String,   // Base64-encoded ciphertext + tag
+    nonce: String,      // Base64-encoded nonce
+    ciphertext: String, // Base64-encoded ciphertext + tag
 }
 
 /// In-memory secrets container (decrypted)
@@ -177,7 +177,7 @@ impl EncryptedSecrets {
         // Migrate from legacy location (~/Library/Application Support/homun/)
         if !new_path.exists() {
             let legacy = dirs::data_local_dir()
-                .or_else(|| dirs::data_dir())
+                .or_else(dirs::data_dir)
                 .map(|d| d.join("homun").join("secrets.enc"));
 
             if let Some(old_path) = legacy {
@@ -201,22 +201,20 @@ impl EncryptedSecrets {
     /// Ensure a master key exists (keychain or file)
     fn ensure_master_key(&self) -> Result<()> {
         match &self.backend {
-            KeyBackend::Keychain(entry) => {
-                match entry.get_password() {
-                    Ok(_) => {
-                        tracing::debug!("Master key already exists in keychain");
-                    }
-                    Err(keyring::Error::NoEntry) => {
-                        tracing::info!("Generating new master key for secrets encryption");
-                        let key = self.generate_key()?;
-                        entry
-                            .set_password(&key)
-                            .map_err(|e| SecretsError::KeychainError(e.to_string()))?;
-                        tracing::info!("Master key stored in OS keychain");
-                    }
-                    Err(e) => return Err(SecretsError::KeychainError(e.to_string()).into()),
+            KeyBackend::Keychain(entry) => match entry.get_password() {
+                Ok(_) => {
+                    tracing::debug!("Master key already exists in keychain");
                 }
-            }
+                Err(keyring::Error::NoEntry) => {
+                    tracing::info!("Generating new master key for secrets encryption");
+                    let key = self.generate_key()?;
+                    entry
+                        .set_password(&key)
+                        .map_err(|e| SecretsError::KeychainError(e.to_string()))?;
+                    tracing::info!("Master key stored in OS keychain");
+                }
+                Err(e) => return Err(SecretsError::KeychainError(e.to_string()).into()),
+            },
             KeyBackend::File(path) => {
                 if !path.exists() {
                     tracing::info!("Generating new master key (file-based)");
@@ -245,7 +243,8 @@ impl EncryptedSecrets {
     /// Generate a new random key (Base64-encoded 32 bytes)
     fn generate_key(&self) -> Result<String> {
         let mut key_bytes = [0u8; 32];
-        self.rng.fill(&mut key_bytes)
+        self.rng
+            .fill(&mut key_bytes)
             .map_err(|e| SecretsError::EncryptionError(e.to_string()))?;
         Ok(BASE64.encode(key_bytes))
     }
@@ -253,21 +252,18 @@ impl EncryptedSecrets {
     /// Get the master key from keychain or file
     fn get_master_key(&self) -> Result<Zeroizing<[u8; 32]>> {
         let key_b64 = match &self.backend {
-            KeyBackend::Keychain(entry) => {
-                entry
-                    .get_password()
-                    .map_err(|e| SecretsError::KeychainError(e.to_string()))?
-            }
-            KeyBackend::File(path) => {
-                std::fs::read_to_string(path)
-                    .with_context(|| format!("Failed to read master key from {}", path.display()))?
-                    .trim()
-                    .to_string()
-            }
+            KeyBackend::Keychain(entry) => entry
+                .get_password()
+                .map_err(|e| SecretsError::KeychainError(e.to_string()))?,
+            KeyBackend::File(path) => std::fs::read_to_string(path)
+                .with_context(|| format!("Failed to read master key from {}", path.display()))?
+                .trim()
+                .to_string(),
         };
 
         let mut key_bytes = Zeroizing::new([0u8; 32]);
-        BASE64.decode_slice(&key_b64, &mut *key_bytes)
+        BASE64
+            .decode_slice(&key_b64, &mut *key_bytes)
             .context("Failed to decode master key")?;
 
         Ok(key_bytes)
@@ -281,12 +277,12 @@ impl EncryptedSecrets {
         let data = SecretsData {
             secrets: secrets.clone(),
         };
-        let plaintext = serde_json::to_vec(&data)
-            .context("Failed to serialize secrets")?;
+        let plaintext = serde_json::to_vec(&data).context("Failed to serialize secrets")?;
 
         // Generate random nonce
         let mut nonce_bytes = [0u8; 12];
-        self.rng.fill(&mut nonce_bytes)
+        self.rng
+            .fill(&mut nonce_bytes)
             .map_err(|e| SecretsError::EncryptionError(e.to_string()))?;
 
         // Encrypt with AES-256-GCM
@@ -295,7 +291,8 @@ impl EncryptedSecrets {
         let mut sealing_key = SealingKey::new(unbound_key, SingleNonce::new(nonce_bytes));
 
         let mut ciphertext = plaintext;
-        sealing_key.seal_in_place_append_tag(Aad::empty(), &mut ciphertext)
+        sealing_key
+            .seal_in_place_append_tag(Aad::empty(), &mut ciphertext)
             .map_err(|e| SecretsError::EncryptionError(format!("{:?}", e)))?;
 
         // Create file structure
@@ -341,18 +338,19 @@ impl EncryptedSecrets {
         let master_key = self.get_master_key()?;
 
         // Read encrypted file
-        let json = std::fs::read_to_string(&self.path)
-            .context("Failed to read secrets file")?;
+        let json = std::fs::read_to_string(&self.path).context("Failed to read secrets file")?;
 
-        let file_data: SecretsFile = serde_json::from_str(&json)
-            .context("Failed to parse secrets file")?;
+        let file_data: SecretsFile =
+            serde_json::from_str(&json).context("Failed to parse secrets file")?;
 
         // Decode nonce and ciphertext
         let mut nonce_bytes = [0u8; 12];
-        BASE64.decode_slice(&file_data.nonce, &mut nonce_bytes)
+        BASE64
+            .decode_slice(&file_data.nonce, &mut nonce_bytes)
             .context("Failed to decode nonce")?;
 
-        let mut ciphertext = BASE64.decode(&file_data.ciphertext)
+        let mut ciphertext = BASE64
+            .decode(&file_data.ciphertext)
             .context("Failed to decode ciphertext")?;
 
         // Decrypt with AES-256-GCM
@@ -360,12 +358,13 @@ impl EncryptedSecrets {
             .map_err(|e| SecretsError::DecryptionError(format!("{:?}", e)))?;
         let mut opening_key = OpeningKey::new(unbound_key, SingleNonce::new(nonce_bytes));
 
-        let plaintext = opening_key.open_in_place(Aad::empty(), &mut ciphertext)
+        let plaintext = opening_key
+            .open_in_place(Aad::empty(), &mut ciphertext)
             .map_err(|e| SecretsError::DecryptionError(format!("{:?}", e)))?;
 
         // Deserialize
-        let data: SecretsData = serde_json::from_slice(plaintext)
-            .context("Failed to parse decrypted secrets")?;
+        let data: SecretsData =
+            serde_json::from_slice(plaintext).context("Failed to parse decrypted secrets")?;
 
         tracing::debug!("Loaded {} encrypted secrets", data.secrets.len());
         Ok(data.secrets)

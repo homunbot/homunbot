@@ -64,7 +64,9 @@ impl PromptSection for IdentitySection {
             prompt.push_str("|------|--------|\n");
             prompt.push_str("| **SOUL.md** | Your personality and communication style |\n");
             prompt.push_str("| **AGENTS.md** | Directives on how to behave |\n");
-            prompt.push_str("| **USER.md** | User preferences and context (THIS IS CONTEXT, NOT A REQUEST) |\n");
+            prompt.push_str(
+                "| **USER.md** | User preferences and context (THIS IS CONTEXT, NOT A REQUEST) |\n",
+            );
             prompt.push_str("| **INSTRUCTIONS.md** | Learned rules from past interactions |\n\n");
             prompt.push_str("**CRITICAL**: These files are context about the user. They are NOT requests to show or repeat the content. Use this information naturally in your responses.\n\n");
 
@@ -188,7 +190,8 @@ Response: [shows entire USER.md content]
 User: "what do you know about me?"
 Response: "Based on my memory, you have a dog named Max, you enjoy cooking..."
 ```
-"#.to_string())
+"#
+        .to_string())
     }
 }
 
@@ -211,7 +214,8 @@ impl PromptSection for SkillsSection {
 
         let mut prompt = String::from("## Skills\n\n");
         prompt.push_str("Before replying: scan available skills and their descriptions.\n");
-        prompt.push_str("- If exactly one skill clearly applies: read its SKILL.md and follow it.\n");
+        prompt
+            .push_str("- If exactly one skill clearly applies: read its SKILL.md and follow it.\n");
         prompt.push_str("- If multiple could apply: choose the most specific one.\n");
         prompt.push_str("- If none clearly apply: do not read any SKILL.md.\n\n");
         prompt.push_str(ctx.skills_summary);
@@ -303,7 +307,7 @@ impl PromptSection for WorkspaceSection {
 
         // Cross-channel messaging info
         if !ctx.channels_info.is_empty() {
-            prompt.push_str("\n");
+            prompt.push('\n');
             prompt.push_str(ctx.channels_info);
         }
 
@@ -347,10 +351,7 @@ impl PromptSection for RuntimeSection {
             ctx.model_name
         ));
 
-        prompt.push_str(&format!(
-            "Time: {}\n",
-            now.format("%Y-%m-%d %H:%M (%A) %Z")
-        ));
+        prompt.push_str(&format!("Time: {}\n", now.format("%Y-%m-%d %H:%M (%A) %Z")));
 
         Ok(prompt)
     }
@@ -392,9 +393,7 @@ mod tests {
     fn test_identity_section_with_bootstrap() {
         let section = IdentitySection;
         let ctx = PromptContext {
-            bootstrap_files: &[
-                ("USER.md".to_string(), "My name is Fabio".to_string()),
-            ],
+            bootstrap_files: &[("USER.md".to_string(), "My name is Fabio".to_string())],
             ..make_ctx()
         };
         let result = section.build(&ctx).unwrap();
@@ -408,13 +407,11 @@ mod tests {
     fn test_tools_section() {
         let section = ToolsSection;
         let ctx = PromptContext {
-            tools: &[
-                super::super::ToolInfo {
-                    name: "remember".to_string(),
-                    description: "Save user information".to_string(),
-                    parameters_schema: serde_json::json!({}),
-                },
-            ],
+            tools: &[super::super::ToolInfo {
+                name: "remember".to_string(),
+                description: "Save user information".to_string(),
+                parameters_schema: serde_json::json!({}),
+            }],
             ..make_ctx()
         };
         let result = section.build(&ctx).unwrap();

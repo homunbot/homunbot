@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use anyhow::Result;
 use tokio::sync::mpsc;
@@ -24,8 +24,8 @@ use crate::channels::DiscordChannel;
 #[cfg(feature = "channel-whatsapp")]
 use crate::channels::WhatsAppChannel;
 
-use crate::channels::SlackChannel;
-use crate::channels::Channel; // Import trait to call .start()
+use crate::channels::Channel;
+use crate::channels::SlackChannel; // Import trait to call .start()
 
 use super::AgentLoop;
 
@@ -104,7 +104,7 @@ impl Gateway {
                     }
                 }
             }
-            
+
             // Skip if no valid token
             if tg_config.token.is_empty() || tg_config.token == "***ENCRYPTED***" {
                 tracing::error!("Telegram enabled but no token found - skipping channel");
@@ -141,7 +141,7 @@ impl Gateway {
                     }
                 }
             }
-            
+
             // Skip if no valid token
             if dc_config.token.is_empty() || dc_config.token == "***ENCRYPTED***" {
                 tracing::error!("Discord enabled but no token found - skipping channel");
@@ -190,7 +190,7 @@ impl Gateway {
         // --- Start Slack channel ---
         if self.config.channels.slack.enabled {
             let mut slack_config = self.config.channels.slack.clone();
-            
+
             // Resolve token from encrypted storage if marker is present
             if slack_config.token == "***ENCRYPTED***" || slack_config.token.is_empty() {
                 if let Ok(secrets) = crate::storage::global_secrets() {
@@ -200,21 +200,21 @@ impl Gateway {
                     }
                 }
             }
-            
+
             // Skip if no valid token
             if slack_config.token.is_empty() || slack_config.token == "***ENCRYPTED***" {
                 tracing::error!("Slack enabled but no token found - skipping channel");
             } else {
                 let slack_inbound_tx = inbound_tx.clone();
                 let (slack_outbound_tx, slack_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
-                
+
                 let handle = tokio::spawn(async move {
                     let channel = crate::channels::SlackChannel::new(slack_config);
                     if let Err(e) = channel.start(slack_inbound_tx, slack_outbound_rx).await {
                         tracing::error!(error = %e, "Slack channel error");
                     }
                 });
-                
+
                 channels.push(ChannelHandle {
                     name: "slack".to_string(),
                     handle,
@@ -238,7 +238,8 @@ impl Gateway {
 
             let web_db = self.db.clone();
             let handle = tokio::spawn(async move {
-                let mut server = WebServer::new(web_config, web_inbound_tx, web_outbound_rx, web_db);
+                let mut server =
+                    WebServer::new(web_config, web_inbound_tx, web_outbound_rx, web_db);
                 server.set_stream_rx(stream_rx);
                 if let Err(e) = server.start().await {
                     tracing::error!(error = %e, "Web UI server error");
@@ -266,10 +267,14 @@ impl Gateway {
                 history_days = mem_config.history_retention_days,
                 "Running automatic memory cleanup"
             );
-            match self.db.run_memory_cleanup(
-                mem_config.conversation_retention_days,
-                mem_config.history_retention_days,
-            ).await {
+            match self
+                .db
+                .run_memory_cleanup(
+                    mem_config.conversation_retention_days,
+                    mem_config.history_retention_days,
+                )
+                .await
+            {
                 Ok(result) => {
                     if result.messages_deleted > 0 || result.chunks_deleted > 0 {
                         tracing::info!(
@@ -295,7 +300,10 @@ impl Gateway {
 
         let active = channels.len();
         let web_url = if self.config.channels.web.enabled {
-            format!(" Web UI: http://localhost:{}", self.config.channels.web.port)
+            format!(
+                " Web UI: http://localhost:{}",
+                self.config.channels.web.port
+            )
         } else {
             String::new()
         };

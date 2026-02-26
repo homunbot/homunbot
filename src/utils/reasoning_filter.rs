@@ -46,9 +46,18 @@ pub fn strip_reasoning(text: &str) -> String {
 /// Strip ## Thinking / ## Reasoning sections manually.
 fn strip_thinking_sections(text: &str) -> String {
     let thinking_headers = [
-        "## Thinking", "## Reasoning", "## Thought", "## Ragionamento",
-        "### Thinking", "### Reasoning", "### Thought", "### Ragionamento",
-        "# Thinking", "# Reasoning", "# Thought", "# Ragionamento",
+        "## Thinking",
+        "## Reasoning",
+        "## Thought",
+        "## Ragionamento",
+        "### Thinking",
+        "### Reasoning",
+        "### Thought",
+        "### Ragionamento",
+        "# Thinking",
+        "# Reasoning",
+        "# Thought",
+        "# Ragionamento",
     ];
 
     let lines: Vec<&str> = text.lines().collect();
@@ -142,8 +151,13 @@ fn strip_deepseek_reasoning(text: &str) -> String {
 /// Check if a line is a thinking start marker.
 fn is_thinking_start_marker(line: &str) -> bool {
     let markers = [
-        "Hmm,", "Let me think", "Okay,", "Alright,", "Wait,",
-        "Thinking...", "Reasoning...",
+        "Hmm,",
+        "Let me think",
+        "Okay,",
+        "Alright,",
+        "Wait,",
+        "Thinking...",
+        "Reasoning...",
     ];
     markers.iter().any(|m| line.starts_with(m))
 }
@@ -173,7 +187,9 @@ fn is_thinking_line(line: &str) -> bool {
     ];
 
     let lower = line.to_lowercase();
-    thinking_markers.iter().any(|marker| lower.starts_with(marker))
+    thinking_markers
+        .iter()
+        .any(|marker| lower.starts_with(marker))
 }
 
 /// Clean up excessive whitespace from filtered text.
@@ -215,7 +231,10 @@ pub fn has_reasoning(text: &str) -> bool {
 /// Check if text has a thinking section header.
 fn has_thinking_section(text: &str) -> bool {
     let thinking_headers = [
-        "## Thinking", "## Reasoning", "## Thought", "## Ragionamento",
+        "## Thinking",
+        "## Reasoning",
+        "## Thought",
+        "## Ragionamento",
     ];
     thinking_headers.iter().any(|h| text.contains(h))
 }

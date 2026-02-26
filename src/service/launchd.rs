@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-use super::{ServiceStatus, get_binary_path, get_home_dir};
+use super::{get_binary_path, get_home_dir, ServiceStatus};
 
 const SERVICE_NAME: &str = "ai.homun.daemon";
 const PLIST_NAME: &str = "ai.homun.daemon.plist";
@@ -161,9 +161,12 @@ pub fn start() -> Result<()> {
         .arg(&plist_file)
         .output()
         .context("Failed to start service")?;
-    
+
     if !output.status.success() {
-        anyhow::bail!("Failed to start service: {}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "Failed to start service: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     println!("Service started");
@@ -177,7 +180,7 @@ pub fn stop() -> Result<()> {
         .args(["bootout", &format!("gui/{}", uid), SERVICE_NAME])
         .output()
         .context("Failed to stop service")?;
-    
+
     // bootout returns error if service is not running, which is fine
     if output.status.success() {
         println!("Service stopped");
@@ -204,10 +207,7 @@ pub fn status() -> Result<ServiceStatus> {
         .output()
         .ok();
 
-    let running = output
-        .as_ref()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let running = output.as_ref().map(|o| o.status.success()).unwrap_or(false);
 
     // On macOS, RunAtLoad=true means it's enabled
     let enabled = installed;
@@ -216,6 +216,10 @@ pub fn status() -> Result<ServiceStatus> {
         installed,
         running,
         enabled,
-        service_file: if installed { Some(plist_file.display().to_string()) } else { None },
+        service_file: if installed {
+            Some(plist_file.display().to_string())
+        } else {
+            None
+        },
     })
 }

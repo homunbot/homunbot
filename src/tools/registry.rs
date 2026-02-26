@@ -116,12 +116,7 @@ impl ToolRegistry {
 
     /// Execute a tool by name with the given arguments.
     /// Returns error as ToolResult (not Err) for graceful LLM handling.
-    pub async fn execute(
-        &self,
-        name: &str,
-        args: Value,
-        ctx: &ToolContext,
-    ) -> ToolResult {
+    pub async fn execute(&self, name: &str, args: Value, ctx: &ToolContext) -> ToolResult {
         let tool = match self.tools.get(name) {
             Some(t) => t,
             None => {
@@ -262,7 +257,9 @@ mod tests {
     #[tokio::test]
     async fn test_execute_unknown_tool() {
         let registry = ToolRegistry::new();
-        let result = registry.execute("nope", serde_json::json!({}), &test_ctx()).await;
+        let result = registry
+            .execute("nope", serde_json::json!({}), &test_ctx())
+            .await;
         assert!(result.is_error);
         assert!(result.output.contains("Unknown tool"));
     }
@@ -272,7 +269,9 @@ mod tests {
         let mut registry = ToolRegistry::new();
         registry.register(Box::new(DummyTool));
 
-        let result = registry.execute("dummy", serde_json::json!({}), &test_ctx()).await;
+        let result = registry
+            .execute("dummy", serde_json::json!({}), &test_ctx())
+            .await;
         assert!(result.is_error);
         assert!(result.output.contains("Missing required parameter"));
     }

@@ -27,10 +27,7 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/ws/chat", get(ws_handler))
 }
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
@@ -65,9 +62,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         "type": "connected",
         "session_id": &chat_id,
     });
-    let _ = sender
-        .send(Message::Text(welcome.to_string().into()))
-        .await;
+    let _ = sender.send(Message::Text(welcome.to_string().into())).await;
 
     // Task: forward both full responses and stream chunks to WebSocket.
     // Stream chunks arrive as `type: "stream"` messages.

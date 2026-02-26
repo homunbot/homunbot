@@ -6,7 +6,10 @@ use ratatui::{
     Frame,
 };
 
-use super::app::{App, EditField, InputMode, SetupStepStatus, SkillsFocus, SkillSetupProgress, SkillsView, Tab, WhatsAppEditMode, WhatsAppField, WhatsAppStatus};
+use super::app::{
+    App, EditField, InputMode, SetupStepStatus, SkillSetupProgress, SkillsFocus, SkillsView, Tab,
+    WhatsAppEditMode, WhatsAppField, WhatsAppStatus,
+};
 
 /// Main draw function — called every frame
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -14,7 +17,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Tab bar
-            Constraint::Min(0),   // Body
+            Constraint::Min(0),    // Body
             Constraint::Length(3), // Footer
         ])
         .split(frame.area());
@@ -209,11 +212,7 @@ fn draw_providers_tab(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
 
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Providers "),
-        )
+        .block(Block::default().borders(Borders::ALL).title(" Providers "))
         .highlight_style(
             Style::default()
                 .fg(Color::Yellow)
@@ -273,9 +272,9 @@ fn draw_whatsapp_tab(frame: &mut Frame, app: &mut App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Phone number
+            Constraint::Length(3), // Phone number
             Constraint::Length(std::cmp::max(app.whatsapp_state.allow_from.len() as u16, 1) + 3), // Allow from list
-            Constraint::Min(0),    // Status / pairing code
+            Constraint::Min(0), // Status / pairing code
         ])
         .margin(1)
         .split(inner);
@@ -413,26 +412,20 @@ fn draw_whatsapp_allow_from(frame: &mut Frame, app: &App, area: Rect) {
 
 fn draw_whatsapp_status(frame: &mut Frame, app: &App, area: Rect) {
     let lines = match &app.whatsapp_state.status {
-        WhatsAppStatus::NotConfigured => vec![
-            Line::from(Span::styled(
-                "  No phone number configured. Press 'e' to enter one.",
-                Style::default().fg(Color::DarkGray),
-            )),
-        ],
-        WhatsAppStatus::ReadyToPair => vec![
-            Line::from(Span::styled(
-                "  \u{2713} Ready. Press 'p' to start pairing.",
-                Style::default().fg(Color::Green),
-            )),
-        ],
-        WhatsAppStatus::Connecting => vec![
-            Line::from(Span::styled(
-                "  \u{23f3} Connecting to WhatsApp...",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )),
-        ],
+        WhatsAppStatus::NotConfigured => vec![Line::from(Span::styled(
+            "  No phone number configured. Press 'e' to enter one.",
+            Style::default().fg(Color::DarkGray),
+        ))],
+        WhatsAppStatus::ReadyToPair => vec![Line::from(Span::styled(
+            "  \u{2713} Ready. Press 'p' to start pairing.",
+            Style::default().fg(Color::Green),
+        ))],
+        WhatsAppStatus::Connecting => vec![Line::from(Span::styled(
+            "  \u{23f3} Connecting to WhatsApp...",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ))],
         WhatsAppStatus::WaitingForCode { code, timeout_secs } => vec![
             Line::from(Span::styled(
                 "  WhatsApp \u{2192} Linked Devices \u{2192} Link a Device",
@@ -450,14 +443,12 @@ fn draw_whatsapp_status(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(Color::DarkGray),
             )),
         ],
-        WhatsAppStatus::Paired => vec![
-            Line::from(Span::styled(
-                "  \u{2705} Paired! Logging in...",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            )),
-        ],
+        WhatsAppStatus::Paired => vec![Line::from(Span::styled(
+            "  \u{2705} Paired! Logging in...",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ))],
         WhatsAppStatus::Connected => vec![
             Line::from(Span::styled(
                 "  \u{2705} WhatsApp connected!",
@@ -489,9 +480,7 @@ fn draw_whatsapp_status(frame: &mut Frame, app: &App, area: Rect) {
 // ── Skills Tab ──────────────────────────────────────────────────────
 
 fn draw_skills_tab(frame: &mut Frame, app: &mut App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Skills ");
+    let block = Block::default().borders(Borders::ALL).title(" Skills ");
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -502,7 +491,7 @@ fn draw_skills_tab(frame: &mut Frame, app: &mut App, area: Rect) {
         .constraints([
             Constraint::Length(3), // Search bar (always visible)
             Constraint::Length(2), // View tabs (Installed / Search)
-            Constraint::Min(0),   // Skill list
+            Constraint::Min(0),    // Skill list
             Constraint::Length(2), // Status bar
         ])
         .margin(1)
@@ -532,7 +521,11 @@ fn draw_skills_tab(frame: &mut Frame, app: &mut App, area: Rect) {
             Span::styled("  🔍 ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{search_text}{cursor}"),
-                Style::default().fg(if search_focused { Color::White } else { Color::DarkGray }),
+                Style::default().fg(if search_focused {
+                    Color::White
+                } else {
+                    Color::DarkGray
+                }),
             ),
             Span::styled(loading_indicator, Style::default().fg(Color::Yellow)),
         ])
@@ -553,12 +546,16 @@ fn draw_skills_tab(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // ── View tabs ──
     let installed_style = if app.skills_state.view == SkillsView::Installed {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     };
     let search_style = if app.skills_state.view == SkillsView::Search {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     };
@@ -579,11 +576,12 @@ fn draw_skills_tab(frame: &mut Frame, app: &mut App, area: Rect) {
 
     if list_items.is_empty() {
         let empty_msg = match app.skills_state.view {
-            SkillsView::Installed => "  No skills installed. Search above to find and install skills.",
+            SkillsView::Installed => {
+                "  No skills installed. Search above to find and install skills."
+            }
             SkillsView::Search => "  No results yet. Type a query above and press Enter.",
         };
-        let empty = Paragraph::new(empty_msg)
-            .style(Style::default().fg(Color::DarkGray));
+        let empty = Paragraph::new(empty_msg).style(Style::default().fg(Color::DarkGray));
         frame.render_widget(empty, chunks[2]);
     } else {
         let items: Vec<ListItem> = list_items
@@ -598,8 +596,12 @@ fn draw_skills_tab(frame: &mut Frame, app: &mut App, area: Rect) {
                 // Show stats for search results
                 let stats = if s.source != "installed" && (s.downloads > 0 || s.stars > 0) {
                     let mut parts = Vec::new();
-                    if s.stars > 0 { parts.push(format!("★{}", s.stars)); }
-                    if s.downloads > 0 { parts.push(format!("↓{}", format_count(s.downloads))); }
+                    if s.stars > 0 {
+                        parts.push(format!("★{}", s.stars));
+                    }
+                    if s.downloads > 0 {
+                        parts.push(format!("↓{}", format_count(s.downloads)));
+                    }
                     format!(" {}", parts.join(" "))
                 } else {
                     String::new()
@@ -610,8 +612,15 @@ fn draw_skills_tab(frame: &mut Frame, app: &mut App, area: Rect) {
                     s.description.clone()
                 };
                 let content = format!(
-                    " {:<28}{}{}{}", s.name, source_tag, stats,
-                    if desc.is_empty() { String::new() } else { format!(" — {desc}") }
+                    " {:<28}{}{}{}",
+                    s.name,
+                    source_tag,
+                    stats,
+                    if desc.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" — {desc}")
+                    }
                 );
                 ListItem::new(content)
             })
@@ -638,8 +647,8 @@ fn draw_skills_tab(frame: &mut Frame, app: &mut App, area: Rect) {
     } else {
         format!("{n_installed} skill(s) installed")
     };
-    let status_para = Paragraph::new(format!("  {status_line}"))
-        .style(Style::default().fg(Color::DarkGray));
+    let status_para =
+        Paragraph::new(format!("  {status_line}")).style(Style::default().fg(Color::DarkGray));
     frame.render_widget(status_para, chunks[3]);
 
     // ── Auto-setup progress popup (drawn on top) ──
@@ -663,12 +672,10 @@ fn draw_setup_progress(
 
     // Title
     let title_text = if progress.finished {
-        let all_ok = progress.steps.iter().all(|s| {
-            matches!(
-                s.status,
-                SetupStepStatus::Done | SetupStepStatus::Skipped
-            )
-        });
+        let all_ok = progress
+            .steps
+            .iter()
+            .all(|s| matches!(s.status, SetupStepStatus::Done | SetupStepStatus::Skipped));
         if all_ok {
             format!(" ✅ '{}' ready to use!", progress.skill_name)
         } else {
@@ -679,10 +686,15 @@ fn draw_setup_progress(
     };
 
     let title_color = if progress.finished {
-        let all_ok = progress.steps.iter().all(|s| {
-            matches!(s.status, SetupStepStatus::Done | SetupStepStatus::Skipped)
-        });
-        if all_ok { Color::Green } else { Color::Yellow }
+        let all_ok = progress
+            .steps
+            .iter()
+            .all(|s| matches!(s.status, SetupStepStatus::Done | SetupStepStatus::Skipped));
+        if all_ok {
+            Color::Green
+        } else {
+            Color::Yellow
+        }
     } else {
         Color::Yellow
     };
@@ -748,21 +760,16 @@ fn draw_setup_progress(
             SetupStepStatus::Manual => {
                 // If this is the step currently being edited, show input field
                 if is_inputting && skills_state.setup_input_step_idx == Some(i) {
-                    let var_name = step.detail
+                    let var_name = step
+                        .detail
                         .strip_prefix("export ")
                         .and_then(|s| s.split('=').next())
                         .unwrap_or(&step.detail);
                     let buf = &skills_state.setup_input_buffer;
                     lines.push(Line::from(vec![
                         Span::styled("      ", Style::default()),
-                        Span::styled(
-                            format!("{var_name}="),
-                            Style::default().fg(Color::Cyan),
-                        ),
-                        Span::styled(
-                            format!("{buf}\u{2588}"),
-                            Style::default().fg(Color::White),
-                        ),
+                        Span::styled(format!("{var_name}="), Style::default().fg(Color::Cyan)),
+                        Span::styled(format!("{buf}\u{2588}"), Style::default().fg(Color::White)),
                     ]));
                 } else {
                     lines.push(Line::from(Span::styled(
@@ -842,10 +849,7 @@ fn draw_mcp_tab(frame: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .map(|s| {
             let status = if s.enabled { "\u{2713}" } else { "\u{2717}" };
-            let content = format!(
-                " [{status}] {:<16} {:<8} {}",
-                s.name, s.transport, s.detail
-            );
+            let content = format!(" [{status}] {:<16} {:<8} {}", s.name, s.transport, s.detail);
             let style = if s.enabled {
                 Style::default().fg(Color::White)
             } else {

@@ -17,12 +17,7 @@ use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::RwLock;
 
 /// Bootstrap file names that the agent can edit and read.
-const BOOTSTRAP_FILES: &[&str] = &[
-    "USER.md",
-    "SOUL.md",
-    "AGENTS.md",
-    "INSTRUCTIONS.md",
-];
+const BOOTSTRAP_FILES: &[&str] = &["USER.md", "SOUL.md", "AGENTS.md", "INSTRUCTIONS.md"];
 
 /// Legacy bootstrap content (string format for backward compatibility).
 pub type BootstrapContent = Arc<RwLock<String>>;
@@ -76,7 +71,7 @@ impl BootstrapWatcher {
     /// Start watching the bootstrap directories. Returns a handle that stops on drop.
     pub fn start(self) -> WatcherHandle {
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
-        
+
         let join_handle = tokio::spawn(async move {
             if let Err(e) = self.watch_loop(stop_rx).await {
                 if !e.to_string().contains("channel closed") {
@@ -84,7 +79,7 @@ impl BootstrapWatcher {
                 }
             }
         });
-        
+
         WatcherHandle {
             stop_tx: Some(stop_tx),
             join_handle: Some(join_handle),
@@ -116,7 +111,9 @@ impl BootstrapWatcher {
                             // Check if any path is a bootstrap file
                             let relevant = event.paths.iter().any(|p| {
                                 p.file_name()
-                                    .map(|n| BOOTSTRAP_FILES.contains(&n.to_string_lossy().as_ref()))
+                                    .map(|n| {
+                                        BOOTSTRAP_FILES.contains(&n.to_string_lossy().as_ref())
+                                    })
                                     .unwrap_or(false)
                             });
                             if relevant {
@@ -257,7 +254,8 @@ mod tests {
         let content = Arc::new(RwLock::new("old content".to_string()));
         let files = Arc::new(RwLock::new(vec![("test".to_string(), "test".to_string())]));
 
-        let watcher = BootstrapWatcher::new(content.clone(), files.clone(), dir.path().to_path_buf());
+        let watcher =
+            BootstrapWatcher::new(content.clone(), files.clone(), dir.path().to_path_buf());
         watcher.reload_bootstrap_files().await.unwrap();
 
         // Empty directory produces empty content and files
@@ -279,7 +277,8 @@ mod tests {
         let content = Arc::new(RwLock::new(String::new()));
         let files = Arc::new(RwLock::new(Vec::new()));
 
-        let watcher = BootstrapWatcher::new(content.clone(), files.clone(), dir.path().to_path_buf());
+        let watcher =
+            BootstrapWatcher::new(content.clone(), files.clone(), dir.path().to_path_buf());
         watcher.reload_bootstrap_files().await.unwrap();
 
         let loaded_content = content.read().await;
@@ -302,19 +301,14 @@ mod tests {
         std::fs::create_dir(&brain_dir).unwrap();
 
         // Create USER.md in both locations
-        std::fs::write(
-            dir.path().join("USER.md"),
-            "User-placed content",
-        ).unwrap();
-        std::fs::write(
-            brain_dir.join("USER.md"),
-            "Agent-written content",
-        ).unwrap();
+        std::fs::write(dir.path().join("USER.md"), "User-placed content").unwrap();
+        std::fs::write(brain_dir.join("USER.md"), "Agent-written content").unwrap();
 
         let content = Arc::new(RwLock::new(String::new()));
         let files = Arc::new(RwLock::new(Vec::new()));
 
-        let watcher = BootstrapWatcher::new(content.clone(), files.clone(), dir.path().to_path_buf());
+        let watcher =
+            BootstrapWatcher::new(content.clone(), files.clone(), dir.path().to_path_buf());
         watcher.reload_bootstrap_files().await.unwrap();
 
         let loaded_content = content.read().await;

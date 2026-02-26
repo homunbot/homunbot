@@ -167,7 +167,10 @@ impl ClawHubInstaller {
         );
 
         // 1. Fetch SKILL.md from the monorepo (paths are lowercase)
-        let skill_md_path = format!("{}/{}/{}/SKILL.md", CLAWHUB_SKILLS_PATH, owner_lower, skill_lower);
+        let skill_md_path = format!(
+            "{}/{}/{}/SKILL.md",
+            CLAWHUB_SKILLS_PATH, owner_lower, skill_lower
+        );
         let skill_md_content = self
             .fetch_file_from_monorepo(&skill_md_path)
             .await
@@ -226,7 +229,10 @@ impl ClawHubInstaller {
 
         // Try to download any additional files (scripts/, etc.) — non-fatal if it fails
         let skill_repo_path = format!("{}/{}/{}", CLAWHUB_SKILLS_PATH, owner_lower, skill_lower);
-        if let Err(e) = self.download_extra_files(&skill_repo_path, &skill_dir).await {
+        if let Err(e) = self
+            .download_extra_files(&skill_repo_path, &skill_dir)
+            .await
+        {
             tracing::debug!(error = %e, "No extra files to download (most skills are SKILL.md only)");
         }
 
@@ -429,7 +435,11 @@ impl ClawHubInstaller {
     /// The ClawHub API doesn't support server-side text search — the `q=` parameter
     /// is ignored. We paginate through all skills and filter locally by matching
     /// query terms against slug, displayName, and summary.
-    async fn search_native_api(&self, query: &str, limit: usize) -> Result<Vec<ClawHubSearchResult>> {
+    async fn search_native_api(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<ClawHubSearchResult>> {
         let query_lower = query.to_lowercase();
         let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
 
@@ -837,8 +847,8 @@ impl ClawHubInstaller {
         let encoding = resp.encoding.unwrap_or_default();
         if encoding == "base64" {
             let cleaned = content.replace('\n', "");
-            let decoded = base64_decode(&cleaned)
-                .context("Failed to decode base64 content from ClawHub")?;
+            let decoded =
+                base64_decode(&cleaned).context("Failed to decode base64 content from ClawHub")?;
             String::from_utf8(decoded).context("ClawHub file content is not valid UTF-8")
         } else {
             Ok(content)
@@ -881,75 +891,71 @@ impl ClawHubInstaller {
         dest: &'a Path,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
-        let url = format!(
-            "https://api.github.com/repos/{}/{}/contents/{}?ref={}",
-            CLAWHUB_REPO_OWNER, CLAWHUB_REPO_NAME, repo_path, CLAWHUB_BRANCH
-        );
+            let url = format!(
+                "https://api.github.com/repos/{}/{}/contents/{}?ref={}",
+                CLAWHUB_REPO_OWNER, CLAWHUB_REPO_NAME, repo_path, CLAWHUB_BRANCH
+            );
 
-        let response = self
-            .client
-            .get(&url)
-            .header("Accept", "application/vnd.github.v3+json")
-            .send()
-            .await
-            .with_context(|| format!("Failed to list directory {} on ClawHub", repo_path))?
-            .error_for_status()
-            .with_context(|| format!("Directory {} not found on ClawHub", repo_path))?;
+            let response = self
+                .client
+                .get(&url)
+                .header("Accept", "application/vnd.github.v3+json")
+                .send()
+                .await
+                .with_context(|| format!("Failed to list directory {} on ClawHub", repo_path))?
+                .error_for_status()
+                .with_context(|| format!("Directory {} not found on ClawHub", repo_path))?;
 
-        let entries: Vec<GitHubDirEntry> = response
-            .json()
-            .await
-            .context("Failed to parse directory listing from ClawHub")?;
+            let entries: Vec<GitHubDirEntry> = response
+                .json()
+                .await
+                .context("Failed to parse directory listing from ClawHub")?;
 
-        for entry in &entries {
-            let local_path = dest.join(&entry.name);
+            for entry in &entries {
+                let local_path = dest.join(&entry.name);
 
-            match entry.entry_type.as_str() {
-                "file" => {
-                    // Download file content
-                    match self.fetch_file_from_monorepo(&entry.path).await {
-                        Ok(content) => {
-                            tokio::fs::write(&local_path, &content)
-                                .await
-                                .with_context(|| {
-                                    format!("Failed to write {}", local_path.display())
-                                })?;
-                            tracing::debug!(file = %entry.name, "Downloaded");
+                match entry.entry_type.as_str() {
+                    "file" => {
+                        // Download file content
+                        match self.fetch_file_from_monorepo(&entry.path).await {
+                            Ok(content) => {
+                                tokio::fs::write(&local_path, &content).await.with_context(
+                                    || format!("Failed to write {}", local_path.display()),
+                                )?;
+                                tracing::debug!(file = %entry.name, "Downloaded");
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    file = %entry.path,
+                                    error = %e,
+                                    "Failed to download file, skipping"
+                                );
+                            }
                         }
-                        Err(e) => {
+                    }
+                    "dir" => {
+                        // Recurse into subdirectory
+                        tokio::fs::create_dir_all(&local_path).await.ok();
+                        if let Err(e) = self.download_dir_recursive(&entry.path, &local_path).await
+                        {
                             tracing::warn!(
-                                file = %entry.path,
+                                dir = %entry.path,
                                 error = %e,
-                                "Failed to download file, skipping"
+                                "Failed to download subdirectory, skipping"
                             );
                         }
                     }
-                }
-                "dir" => {
-                    // Recurse into subdirectory
-                    tokio::fs::create_dir_all(&local_path).await.ok();
-                    if let Err(e) = self
-                        .download_dir_recursive(&entry.path, &local_path)
-                        .await
-                    {
-                        tracing::warn!(
-                            dir = %entry.path,
-                            error = %e,
-                            "Failed to download subdirectory, skipping"
+                    _ => {
+                        tracing::debug!(
+                            entry_type = %entry.entry_type,
+                            path = %entry.path,
+                            "Skipping non-file entry"
                         );
                     }
                 }
-                _ => {
-                    tracing::debug!(
-                        entry_type = %entry.entry_type,
-                        path = %entry.path,
-                        "Skipping non-file entry"
-                    );
-                }
             }
-        }
 
-        Ok(())
+            Ok(())
         }) // Box::pin
     }
 }

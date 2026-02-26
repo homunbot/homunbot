@@ -6,7 +6,7 @@
 ///
 /// This is a best-effort heuristic check — not a sandbox. It catches obvious
 /// red flags that indicate a skill might be dangerous to install.
-
+///
 /// Result of a security scan
 #[derive(Debug)]
 pub struct SecurityReport {
@@ -38,7 +38,9 @@ pub enum Severity {
 impl SecurityReport {
     /// Returns true if the skill should be blocked from installing
     pub fn is_blocked(&self) -> bool {
-        self.warnings.iter().any(|w| w.severity == Severity::Critical)
+        self.warnings
+            .iter()
+            .any(|w| w.severity == Severity::Critical)
     }
 
     /// Human-readable summary of warnings
@@ -146,7 +148,10 @@ const CRITICAL_PATTERNS: &[(&str, &str)] = &[
     ("rm -rf $home", "Attempts to delete user home directory"),
     ("mkfs.", "Attempts to format a disk"),
     ("dd if=/dev/zero", "Attempts to overwrite disk with zeros"),
-    ("dd if=/dev/random", "Attempts to overwrite disk with random data"),
+    (
+        "dd if=/dev/random",
+        "Attempts to overwrite disk with random data",
+    ),
     (":(){:|:&};:", "Fork bomb (system crash)"),
     ("chmod 777 /", "Makes entire filesystem world-writable"),
     ("> /dev/sda", "Writes directly to disk device"),
@@ -242,7 +247,10 @@ Use curl to fetch weather from wttr.in and format the output.
         let report = scan_skill_content(content);
         assert!(!report.is_blocked());
         assert!(report.score < 1.0);
-        assert!(report.warnings.iter().any(|w| w.severity == Severity::Warning));
+        assert!(report
+            .warnings
+            .iter()
+            .any(|w| w.severity == Severity::Warning));
     }
 
     #[test]

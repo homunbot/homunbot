@@ -18,7 +18,6 @@
 ///
 /// Sections can be created dynamically by the LLM.
 /// Default sections: Identity, Family, Preferences, Contacts, Context
-
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -30,7 +29,10 @@ use crate::config::Config;
 
 /// Default sections with their semantic comments
 const DEFAULT_SECTIONS: &[(&str, &str)] = &[
-    ("Identity", "Basic facts: name, birth, residence, profession, health"),
+    (
+        "Identity",
+        "Basic facts: name, birth, residence, profession, health",
+    ),
     ("Family", "Family relationships and loved ones"),
     ("Preferences", "Tastes, hobbies, interests, style"),
     ("Contacts", "Contact information: email, phone, addresses"),
@@ -90,14 +92,12 @@ impl Tool for RememberTool {
     async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolResult> {
         let key = get_string_param(&args, "key")?;
         let value = get_string_param(&args, "value")?;
-        let category = get_string_param(&args, "category")
-            .unwrap_or_else(|_| "Identity".to_string());
+        let category =
+            get_string_param(&args, "category").unwrap_or_else(|_| "Identity".to_string());
 
         // Validate key
         if key.is_empty() || key.len() > 64 {
-            return Ok(ToolResult::error(
-                "Key must be 1-64 characters"
-            ));
+            return Ok(ToolResult::error("Key must be 1-64 characters"));
         }
 
         // Normalize key: replace spaces with underscores, lowercase
@@ -111,7 +111,9 @@ impl Tool for RememberTool {
 
         // Read current content
         let current_content = if user_file.exists() {
-            tokio::fs::read_to_string(&user_file).await.unwrap_or_default()
+            tokio::fs::read_to_string(&user_file)
+                .await
+                .unwrap_or_default()
         } else {
             String::new()
         };
@@ -251,7 +253,10 @@ fn update_section(content: &str, section_header: &str, key: &str, value: &str) -
         }
 
         // Skip empty lines and comments at the start of target section
-        if in_target_section && !key_updated && (line.trim().is_empty() || line.trim().starts_with("<!--")) {
+        if in_target_section
+            && !key_updated
+            && (line.trim().is_empty() || line.trim().starts_with("<!--"))
+        {
             result.push(line.to_string());
             continue;
         }
@@ -309,7 +314,10 @@ fn update_timestamp(content: &str, timestamp: &str) -> String {
         }
         if !added {
             // No title found, add at beginning
-            new_result = format!("# User Profile\n\n> Last updated: {}\n\n{}", timestamp, result);
+            new_result = format!(
+                "# User Profile\n\n> Last updated: {}\n\n{}",
+                timestamp, result
+            );
         }
         return new_result;
     }

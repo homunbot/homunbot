@@ -63,11 +63,7 @@ impl MemoryConsolidator {
     }
 
     /// Check if consolidation is needed for a session
-    pub async fn should_consolidate(
-        &self,
-        session_key: &str,
-        memory_window: u32,
-    ) -> Result<bool> {
+    pub async fn should_consolidate(&self, session_key: &str, memory_window: u32) -> Result<bool> {
         let count = self.db.count_messages(session_key).await?;
         Ok(count > memory_window as i64)
     }
@@ -129,11 +125,21 @@ impl MemoryConsolidator {
             .iter()
             .map(|m| {
                 let tools: String = if m.tools_used != "[]" {
-                    format!(" [tools: {}]", m.tools_used.trim_matches(|c| c == '[' || c == ']' || c == '"'))
+                    format!(
+                        " [tools: {}]",
+                        m.tools_used
+                            .trim_matches(|c| c == '[' || c == ']' || c == '"')
+                    )
                 } else {
                     String::new()
                 };
-                format!("[{}] {}{}: {}", m.timestamp, m.role.to_uppercase(), tools, m.content)
+                format!(
+                    "[{}] {}{}: {}",
+                    m.timestamp,
+                    m.role.to_uppercase(),
+                    tools,
+                    m.content
+                )
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -143,14 +149,14 @@ impl MemoryConsolidator {
 
         // Load existing instructions for deduplication
         let instructions_path = self.data_dir.join("brain/INSTRUCTIONS.md");
-        let existing_instructions = std::fs::read_to_string(&instructions_path)
-            .unwrap_or_default();
+        let existing_instructions = std::fs::read_to_string(&instructions_path).unwrap_or_default();
 
         // Load existing vault keys for deduplication (not values, for security)
         let existing_vault_keys: Vec<String> = match crate::storage::global_secrets() {
             Ok(secrets) => {
                 // Get all keys with vault. prefix
-                secrets.list_keys()
+                secrets
+                    .list_keys()
                     .into_iter()
                     .filter(|k| k.starts_with("vault."))
                     .collect()
@@ -207,9 +213,8 @@ impl MemoryConsolidator {
             match crate::storage::global_secrets() {
                 Ok(secrets) => {
                     for entry in &parsed.vault_entries {
-                        let key = crate::storage::SecretKey::custom(
-                            &format!("vault.{}", entry.key),
-                        );
+                        let key =
+                            crate::storage::SecretKey::custom(&format!("vault.{}", entry.key));
 
                         // Check if value already exists (deduplication)
                         match secrets.get(&key) {
@@ -297,7 +302,8 @@ impl MemoryConsolidator {
 
         // --- 2. Save learned instructions to INSTRUCTIONS.md ---
         // DEDUPLICATION: Skip instructions similar to existing ones
-        let new_instructions = deduplicate_instructions(&parsed.instructions, &existing_instructions);
+        let new_instructions =
+            deduplicate_instructions(&parsed.instructions, &existing_instructions);
         let instructions_learned = new_instructions.len();
         if !new_instructions.is_empty() {
             tracing::info!(
@@ -315,8 +321,7 @@ impl MemoryConsolidator {
         }
 
         // --- 4. Update MEMORY.md + DB if memory changed ---
-        let memory_updated = !memory_update.is_empty()
-            && memory_update != current_memory;
+        let memory_updated = !memory_update.is_empty() && memory_update != current_memory;
         if memory_updated {
             self.save_memory_md(&memory_update)?;
             self.db.upsert_long_term_memory(&memory_update).await?;
@@ -349,13 +354,7 @@ impl MemoryConsolidator {
         if memory_updated {
             let chunk_id = self
                 .db
-                .insert_memory_chunk(
-                    &today,
-                    session_key,
-                    "memory",
-                    &memory_update,
-                    "fact",
-                )
+                .insert_memory_chunk(&today, session_key, "memory", &memory_update, "fact")
                 .await?;
             new_chunk_ids.push((chunk_id, memory_update.clone()));
         }
@@ -364,7 +363,13 @@ impl MemoryConsolidator {
         for instruction in &parsed.instructions {
             let chunk_id = self
                 .db
-                .insert_memory_chunk(&today, session_key, "instruction", instruction, "instruction")
+                .insert_memory_chunk(
+                    &today,
+                    session_key,
+                    "instruction",
+                    instruction,
+                    "instruction",
+                )
                 .await?;
             new_chunk_ids.push((chunk_id, instruction.clone()));
         }
@@ -401,14 +406,15 @@ impl MemoryConsolidator {
     /// Load MEMORY.md content
     pub fn load_memory_md(&self) -> Option<String> {
         let path = self.data_dir.join("MEMORY.md");
-        std::fs::read_to_string(&path).ok().filter(|s| !s.trim().is_empty())
+        std::fs::read_to_string(&path)
+            .ok()
+            .filter(|s| !s.trim().is_empty())
     }
 
     /// Save MEMORY.md (overwrite)
     fn save_memory_md(&self, content: &str) -> Result<()> {
         let path = self.data_dir.join("MEMORY.md");
-        std::fs::create_dir_all(&self.data_dir)
-            .context("Failed to create data directory")?;
+        std::fs::create_dir_all(&self.data_dir).context("Failed to create data directory")?;
         std::fs::write(&path, content)
             .with_context(|| format!("Failed to write {}", path.display()))?;
         tracing::info!(path = %path.display(), "Updated MEMORY.md");
@@ -419,8 +425,7 @@ impl MemoryConsolidator {
     /// Each consolidation appends to the day's file, creating human-readable logs.
     pub fn save_daily_md(&self, entry: &str) -> Result<()> {
         let memory_dir = self.data_dir.join("memory");
-        std::fs::create_dir_all(&memory_dir)
-            .context("Failed to create memory/ directory")?;
+        std::fs::create_dir_all(&memory_dir).context("Failed to create memory/ directory")?;
 
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let path = memory_dir.join(format!("{today}.md"));
@@ -450,8 +455,7 @@ impl MemoryConsolidator {
 
         let brain_dir = self.data_dir.join("brain");
         let path = brain_dir.join("INSTRUCTIONS.md");
-        std::fs::create_dir_all(&brain_dir)
-            .context("Failed to create brain directory")?;
+        std::fs::create_dir_all(&brain_dir).context("Failed to create brain directory")?;
 
         use std::fs::OpenOptions;
         use std::io::Write;
@@ -478,8 +482,7 @@ impl MemoryConsolidator {
     /// Append an entry to HISTORY.md
     fn append_history_md(&self, entry: &str) -> Result<()> {
         let path = self.data_dir.join("HISTORY.md");
-        std::fs::create_dir_all(&self.data_dir)
-            .context("Failed to create data directory")?;
+        std::fs::create_dir_all(&self.data_dir).context("Failed to create data directory")?;
 
         use std::fs::OpenOptions;
         use std::io::Write;
@@ -656,7 +659,7 @@ fn parse_consolidation_response_v2(response: &str) -> ConsolidationResponseV2 {
 
 /// Filter out tool call blocks from text.
 /// Some LLMs try to call tools despite being told not to.
-fn filter_tool_calls<'a>(text: &'a str) -> &'a str {
+fn filter_tool_calls(text: &str) -> &str {
     // Check if this looks like a tool call attempt
     if text.contains("[TOOL_CALL]") || text.contains("<tool_call") {
         // Try to find a valid JSON object in the text
@@ -690,9 +693,12 @@ fn extract_json_from_mixed(text: &str) -> Option<String> {
 
 /// Deduplicate instructions by filtering out those similar to existing ones.
 /// Uses simple word overlap heuristic: if >70% of words overlap, consider it a duplicate.
-fn deduplicate_instructions(new_instructions: &[String], existing_instructions: &str) -> Vec<String> {
+fn deduplicate_instructions(
+    new_instructions: &[String],
+    existing_instructions: &str,
+) -> Vec<String> {
     use std::collections::HashSet;
-    
+
     // Parse existing instructions into word sets for comparison
     let existing_word_sets: Vec<HashSet<String>> = existing_instructions
         .lines()
@@ -713,13 +719,17 @@ fn deduplicate_instructions(new_instructions: &[String], existing_instructions: 
                 .split_whitespace()
                 .map(|w| w.trim_matches(|c| "!.,;:".contains(c)).to_string())
                 .collect();
-            
+
             // Check against all existing instructions
             for existing in &existing_word_sets {
                 let intersection = instr_words.intersection(existing).count();
                 let union = instr_words.union(existing).count();
-                let similarity = if union == 0 { 0.0 } else { intersection as f64 / union as f64 };
-                
+                let similarity = if union == 0 {
+                    0.0
+                } else {
+                    intersection as f64 / union as f64
+                };
+
                 if similarity > 0.7 {
                     tracing::debug!(
                         instruction = %instr,
@@ -751,7 +761,10 @@ mod tests {
         assert!(parsed.history_entry.contains("Rust"));
         assert!(parsed.memory_update.contains("vault://aws_password"));
         assert_eq!(parsed.instructions.len(), 1);
-        assert_eq!(parsed.instructions[0], "Always run clippy before committing");
+        assert_eq!(
+            parsed.instructions[0],
+            "Always run clippy before committing"
+        );
         assert_eq!(parsed.vault_entries.len(), 1);
         assert_eq!(parsed.vault_entries[0].key, "aws_password");
         assert_eq!(parsed.vault_entries[0].value, "s3cret123");
@@ -855,10 +868,14 @@ That's my analysis."#;
         let new = vec![
             "Usa Telegram per comunicare con l'utente".to_string(),
             "Usa Telegram come canale preferito".to_string(), // Similar but different
-            "Salva i dati nel vault".to_string(), // Completely different
+            "Salva i dati nel vault".to_string(),             // Completely different
         ];
         let result = deduplicate_instructions(&new, existing);
-        assert_eq!(result.len(), 2, "Should keep 2 instructions (1 similar but different, 1 new)");
+        assert_eq!(
+            result.len(),
+            2,
+            "Should keep 2 instructions (1 similar but different, 1 new)"
+        );
         assert!(result.iter().any(|i| i.contains("vault")));
     }
 

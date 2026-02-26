@@ -86,15 +86,11 @@ impl SkillWatcher {
                         // Only react to content-relevant events
                         if matches!(
                             event.kind,
-                            EventKind::Create(_)
-                                | EventKind::Modify(_)
-                                | EventKind::Remove(_)
+                            EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
                         ) {
                             // Check if any path is a SKILL.md or a directory change
                             let relevant = event.paths.iter().any(|p| {
-                                p.file_name()
-                                    .map(|n| n == "SKILL.md")
-                                    .unwrap_or(false)
+                                p.file_name().map(|n| n == "SKILL.md").unwrap_or(false)
                                     || p.is_dir()
                             });
                             if relevant {

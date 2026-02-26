@@ -1,15 +1,15 @@
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
 use tokio::sync::{mpsc, Mutex};
+use wa_rs::bot::Bot;
+use wa_rs::store::SqliteStore;
 use wa_rs_core::proto_helpers::MessageExt;
 use wa_rs_core::types::events::Event;
 use wa_rs_proto::whatsapp as wa;
-use wa_rs::bot::Bot;
-use wa_rs::store::SqliteStore;
 use wa_rs_tokio_transport::TokioWebSocketTransportFactory;
 use wa_rs_ureq_http::UreqHttpClient;
 
@@ -91,7 +91,12 @@ impl WhatsAppChannel {
         let backend = Arc::new(
             SqliteStore::new(&db_path.to_string_lossy())
                 .await
-                .with_context(|| format!("Failed to create WhatsApp SQLite store at {}", db_path.display()))?,
+                .with_context(|| {
+                    format!(
+                        "Failed to create WhatsApp SQLite store at {}",
+                        db_path.display()
+                    )
+                })?,
         );
 
         // Transport
@@ -210,10 +215,7 @@ impl WhatsAppChannel {
         let client = bot.client();
 
         // Run the bot
-        let bot_handle = bot
-            .run()
-            .await
-            .context("Failed to start WhatsApp bot")?;
+        let bot_handle = bot.run().await.context("Failed to start WhatsApp bot")?;
 
         // Spawn outbound message loop
         let outbound_client = client.clone();
@@ -372,9 +374,7 @@ async fn handle_message(
             || sender_alt_id
                 .as_ref()
                 .is_some_and(|alt| allow_from.contains(alt))
-            || chat_user
-                .as_ref()
-                .is_some_and(|cu| allow_from.contains(cu));
+            || chat_user.as_ref().is_some_and(|cu| allow_from.contains(cu));
 
         if !authorized {
             tracing::warn!(

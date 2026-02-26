@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-use super::{ServiceStatus, get_binary_path, get_home_dir};
+use super::{get_binary_path, get_home_dir, ServiceStatus};
 
 const SERVICE_NAME: &str = "homun";
 
@@ -73,9 +73,12 @@ pub fn install() -> Result<()> {
         .args(["--user", "daemon-reload"])
         .output()
         .context("Failed to run systemctl --user daemon-reload")?;
-    
+
     if !output.status.success() {
-        anyhow::bail!("systemctl daemon-reload failed: {}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "systemctl daemon-reload failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     // Enable the service
@@ -83,9 +86,12 @@ pub fn install() -> Result<()> {
         .args(["--user", "enable", SERVICE_NAME])
         .output()
         .context("Failed to enable service")?;
-    
+
     if !output.status.success() {
-        anyhow::bail!("Failed to enable service: {}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "Failed to enable service: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     tracing::info!("Homun service installed successfully");
@@ -112,8 +118,9 @@ pub fn uninstall() -> Result<()> {
 
     // Remove service file
     if service_file.exists() {
-        fs::remove_file(&service_file)
-            .with_context(|| format!("Failed to remove service file: {}", service_file.display()))?;
+        fs::remove_file(&service_file).with_context(|| {
+            format!("Failed to remove service file: {}", service_file.display())
+        })?;
     }
 
     // Reload systemd daemon
@@ -137,9 +144,12 @@ pub fn start() -> Result<()> {
         .args(["--user", "start", SERVICE_NAME])
         .output()
         .context("Failed to start service")?;
-    
+
     if !output.status.success() {
-        anyhow::bail!("Failed to start service: {}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "Failed to start service: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     println!("Service started");
@@ -152,9 +162,12 @@ pub fn stop() -> Result<()> {
         .args(["--user", "stop", SERVICE_NAME])
         .output()
         .context("Failed to stop service")?;
-    
+
     if !output.status.success() {
-        anyhow::bail!("Failed to stop service: {}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "Failed to stop service: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     println!("Service stopped");
@@ -189,6 +202,10 @@ pub fn status() -> Result<ServiceStatus> {
         installed,
         running,
         enabled,
-        service_file: if installed { Some(service_file.display().to_string()) } else { None },
+        service_file: if installed {
+            Some(service_file.display().to_string())
+        } else {
+            None
+        },
     })
 }

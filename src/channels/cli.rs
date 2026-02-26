@@ -27,7 +27,9 @@ impl CliChannel {
 
     /// One-shot mode: send a message and return the response
     pub async fn one_shot(&self, message: &str) -> Result<String> {
-        self.agent.process_message(message, &self.session_key, "cli", "local").await
+        self.agent
+            .process_message(message, &self.session_key, "cli", "local")
+            .await
     }
 
     /// Interactive REPL mode
@@ -77,7 +79,11 @@ impl CliChannel {
             }
 
             // Process message
-            match self.agent.process_message(input, &self.session_key, "cli", "local").await {
+            match self
+                .agent
+                .process_message(input, &self.session_key, "cli", "local")
+                .await
+            {
                 Ok(response) => {
                     println!("\nhomun> {}\n", response);
                 }

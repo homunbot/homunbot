@@ -170,7 +170,9 @@ impl PageState {
     /// Get network request by URL pattern
     pub fn filter_network(&self, url_pattern: Option<&str>) -> Vec<&NetworkRequest> {
         match url_pattern {
-            Some(pattern) => self.network.iter()
+            Some(pattern) => self
+                .network
+                .iter()
                 .filter(|r| r.url.contains(pattern))
                 .collect(),
             None => self.network.iter().collect(),
@@ -289,10 +291,18 @@ impl BrowserManager {
     }
 
     /// Get network requests for a chat_id.
-    pub async fn get_network_requests(&self, chat_id: &str, url_filter: Option<&str>) -> Vec<NetworkRequest> {
+    pub async fn get_network_requests(
+        &self,
+        chat_id: &str,
+        url_filter: Option<&str>,
+    ) -> Vec<NetworkRequest> {
         let states = self.page_states.lock().await;
         match states.get(chat_id) {
-            Some(state) => state.filter_network(url_filter).into_iter().cloned().collect(),
+            Some(state) => state
+                .filter_network(url_filter)
+                .into_iter()
+                .cloned()
+                .collect(),
             None => Vec::new(),
         }
     }
@@ -364,8 +374,12 @@ impl BrowserManager {
         );
 
         // Create profile directory
-        std::fs::create_dir_all(&user_data_dir)
-            .with_context(|| format!("Failed to create browser profile dir: {}", user_data_dir.display()))?;
+        std::fs::create_dir_all(&user_data_dir).with_context(|| {
+            format!(
+                "Failed to create browser profile dir: {}",
+                user_data_dir.display()
+            )
+        })?;
 
         // Build browser config with STEALTH settings to avoid bot detection
         let mut chrome_config = ChromeConfig::builder()
@@ -594,7 +608,10 @@ impl BrowserManager {
                                     message: message.to_string(),
                                     timestamp: timestamp.to_string(),
                                     url: msg.get("url").and_then(|v| v.as_str()).map(String::from),
-                                    line: msg.get("line").and_then(|v| v.as_i64()).map(|i| i as i32),
+                                    line: msg
+                                        .get("line")
+                                        .and_then(|v| v.as_i64())
+                                        .map(|i| i as i32),
                                 };
 
                                 self.add_console_message(chat_id, console_msg).await;
@@ -611,10 +628,16 @@ impl BrowserManager {
                             ) {
                                 let page_error = PageError {
                                     message: message.to_string(),
-                                    stack: err.get("stack").and_then(|v| v.as_str()).map(String::from),
+                                    stack: err
+                                        .get("stack")
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from),
                                     timestamp: timestamp.to_string(),
                                     url: err.get("url").and_then(|v| v.as_str()).map(String::from),
-                                    line: err.get("line").and_then(|v| v.as_i64()).map(|i| i as i32),
+                                    line: err
+                                        .get("line")
+                                        .and_then(|v| v.as_i64())
+                                        .map(|i| i as i32),
                                 };
 
                                 self.add_page_error(chat_id, page_error).await;
@@ -648,7 +671,8 @@ impl BrowserManager {
             .collect();
 
         // Track which profiles had pages removed
-        let mut affected_profiles: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut affected_profiles: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
 
         for key in keys_to_remove {
             if let Some(page) = pages.remove(&key) {
@@ -755,18 +779,25 @@ impl BrowserManager {
 
     /// Close a tab by its target ID (uses default profile).
     pub async fn close_tab_by_target_id(&self, target_id: &str) -> Result<()> {
-        self.close_tab_by_target_id_for_profile(target_id, None).await
+        self.close_tab_by_target_id_for_profile(target_id, None)
+            .await
     }
 
     /// Close a tab by its target ID for a specific profile.
-    pub async fn close_tab_by_target_id_for_profile(&self, target_id: &str, profile_name: Option<&str>) -> Result<()> {
+    pub async fn close_tab_by_target_id_for_profile(
+        &self,
+        target_id: &str,
+        profile_name: Option<&str>,
+    ) -> Result<()> {
         let browser = self.ensure_browser(profile_name).await?;
 
         let close_cmd = chromiumoxide::cdp::browser_protocol::target::CloseTargetParams {
             target_id: target_id.to_string().into(),
         };
 
-        browser.execute(close_cmd).await
+        browser
+            .execute(close_cmd)
+            .await
             .context("Failed to close tab via CDP")?;
 
         tracing::info!(target_id = %target_id, "Tab closed");
@@ -782,10 +813,14 @@ impl BrowserManager {
     pub async fn list_tabs_for_profile(&self, profile_name: Option<&str>) -> Result<Vec<TabInfo>> {
         let browser = self.ensure_browser(profile_name).await?;
 
-        let targets_result = browser.execute(GetTargetsParams::default()).await
+        let targets_result = browser
+            .execute(GetTargetsParams::default())
+            .await
             .context("Failed to get browser targets")?;
 
-        let tabs: Vec<TabInfo> = targets_result.result.target_infos
+        let tabs: Vec<TabInfo> = targets_result
+            .result
+            .target_infos
             .into_iter()
             .filter(|t| t.r#type == "page")
             .map(|t| TabInfo {
@@ -805,22 +840,32 @@ impl BrowserManager {
     }
 
     /// Open a new tab for a specific profile.
-    pub async fn open_tab_for_profile(&self, url: Option<&str>, profile_name: Option<&str>) -> Result<TabInfo> {
+    pub async fn open_tab_for_profile(
+        &self,
+        url: Option<&str>,
+        profile_name: Option<&str>,
+    ) -> Result<TabInfo> {
         let browser = self.ensure_browser(profile_name).await?;
 
         let target_url = url.unwrap_or("about:blank");
-        let page = browser.new_page(target_url).await
+        let page = browser
+            .new_page(target_url)
+            .await
             .context("Failed to create new tab")?;
 
         let target_id: String = page.target_id().clone().into();
 
-        let page_url = page.url().await
+        let page_url = page
+            .url()
+            .await
             .ok()
             .flatten()
             .map(|u| u.to_string())
             .unwrap_or_else(|| target_url.to_string());
 
-        let title = page.get_title().await
+        let title = page
+            .get_title()
+            .await
             .ok()
             .flatten()
             .unwrap_or_else(|| "New Tab".to_string());
@@ -839,21 +884,30 @@ impl BrowserManager {
     }
 
     /// Focus/switch to a specific tab for a profile.
-    pub async fn focus_tab_for_profile(&self, target_id: &str, profile_name: Option<&str>) -> Result<()> {
+    pub async fn focus_tab_for_profile(
+        &self,
+        target_id: &str,
+        profile_name: Option<&str>,
+    ) -> Result<()> {
         let browser = self.ensure_browser(profile_name).await?;
 
         let tabs = self.list_tabs_for_profile(profile_name).await?;
         let target_exists = tabs.iter().any(|t| t.target_id == target_id);
 
         if !target_exists {
-            return Err(anyhow::anyhow!("Tab with target_id '{}' not found", target_id));
+            return Err(anyhow::anyhow!(
+                "Tab with target_id '{}' not found",
+                target_id
+            ));
         }
 
         let activate_cmd = chromiumoxide::cdp::browser_protocol::target::ActivateTargetParams {
             target_id: target_id.to_string().into(),
         };
 
-        browser.execute(activate_cmd).await
+        browser
+            .execute(activate_cmd)
+            .await
             .context("Failed to activate tab via CDP")?;
 
         tracing::info!(target_id = %target_id, "Tab focused");
@@ -899,11 +953,19 @@ impl BrowserManager {
                     Ok(mut browser) => {
                         match tokio::time::timeout(
                             std::time::Duration::from_secs(5),
-                            browser.close()
-                        ).await {
-                            Ok(Ok(_)) => tracing::info!(profile = %profile, "Browser closed gracefully"),
-                            Ok(Err(e)) => tracing::warn!(profile = %profile, error = %e, "Browser close returned error"),
-                            Err(_) => tracing::warn!(profile = %profile, "Browser close timed out after 5s"),
+                            browser.close(),
+                        )
+                        .await
+                        {
+                            Ok(Ok(_)) => {
+                                tracing::info!(profile = %profile, "Browser closed gracefully")
+                            }
+                            Ok(Err(e)) => {
+                                tracing::warn!(profile = %profile, error = %e, "Browser close returned error")
+                            }
+                            Err(_) => {
+                                tracing::warn!(profile = %profile, "Browser close timed out after 5s")
+                            }
                         }
                     }
                     Err(arc) => {

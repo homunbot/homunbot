@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::Result;
 use tokio::sync::{mpsc, Mutex};
@@ -74,10 +74,7 @@ impl SubagentManager {
         let cid = chat_id.to_string();
 
         tokio::spawn(async move {
-            let result = match agent
-                .process_message(&msg, &session_key, &ch, &cid)
-                .await
-            {
+            let result = match agent.process_message(&msg, &session_key, &ch, &cid).await {
                 Ok(text) => SubagentResult {
                     task_id: task_id_clone.clone(),
                     task_description: description.clone(),

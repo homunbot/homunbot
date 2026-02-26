@@ -123,13 +123,21 @@ impl ApprovalManager {
             chat_id: chat_id.to_string(),
             created_at: Utc::now().to_rfc3339(),
         };
-        self.pending_approvals.lock().unwrap().insert(id.clone(), pending);
+        self.pending_approvals
+            .lock()
+            .unwrap()
+            .insert(id.clone(), pending);
         id
     }
 
     /// Get all pending approvals
     pub fn get_pending(&self) -> Vec<PendingApproval> {
-        self.pending_approvals.lock().unwrap().values().cloned().collect()
+        self.pending_approvals
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect()
     }
 
     /// Get a specific pending approval by ID
@@ -157,7 +165,12 @@ impl ApprovalManager {
     pub fn deny(&self, id: &str) -> Result<(), String> {
         let mut pending = self.pending_approvals.lock().unwrap();
         if let Some(req) = pending.remove(id) {
-            self.record_decision(&req.tool_name, &req.arguments, ApprovalDecision::No, &req.channel);
+            self.record_decision(
+                &req.tool_name,
+                &req.arguments,
+                ApprovalDecision::No,
+                &req.channel,
+            );
             Ok(())
         } else {
             Err(format!("Pending approval not found: {}", id))
@@ -173,7 +186,10 @@ impl ApprovalManager {
         channel: &str,
     ) {
         if decision == ApprovalDecision::Always {
-            self.session_allowlist.lock().unwrap().insert(tool_name.to_string());
+            self.session_allowlist
+                .lock()
+                .unwrap()
+                .insert(tool_name.to_string());
         }
         let entry = ApprovalLogEntry {
             timestamp: Utc::now().to_rfc3339(),
@@ -201,7 +217,7 @@ impl ApprovalManager {
     /// If not approved, creates a pending approval request.
     pub fn check_command(&self, command: &str, channel: &str, chat_id: &str) -> ApprovalResponse {
         let base_cmd = command.split_whitespace().next().unwrap_or("");
-        
+
         if !self.needs_approval(base_cmd) {
             return ApprovalResponse {
                 approved: true,
@@ -235,18 +251,17 @@ impl Default for ApprovalManager {
 
 fn summarize_args(args: &serde_json::Value) -> String {
     match args {
-        serde_json::Value::Object(map) => {
-            map.iter()
-                .map(|(k, v)| {
-                    let val = match v {
-                        serde_json::Value::String(s) => truncate(s, 80),
-                        other => truncate(&other.to_string(), 80),
-                    };
-                    format!("{}: {}", k, val)
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        }
+        serde_json::Value::Object(map) => map
+            .iter()
+            .map(|(k, v)| {
+                let val = match v {
+                    serde_json::Value::String(s) => truncate(s, 80),
+                    other => truncate(&other.to_string(), 80),
+                };
+                format!("{}: {}", k, val)
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
         other => truncate(&other.to_string(), 120),
     }
 }

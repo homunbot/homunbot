@@ -5,8 +5,8 @@ use ratatui::widgets::ListState;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::config::Config;
 use crate::config::dotpath;
+use crate::config::Config;
 
 use super::event::Event;
 
@@ -21,7 +21,13 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 5] = [Tab::Settings, Tab::Providers, Tab::WhatsApp, Tab::Skills, Tab::Mcp];
+    pub const ALL: [Tab; 5] = [
+        Tab::Settings,
+        Tab::Providers,
+        Tab::WhatsApp,
+        Tab::Skills,
+        Tab::Mcp,
+    ];
 
     pub fn title(&self) -> &'static str {
         match self {
@@ -199,11 +205,7 @@ impl ProvidersState {
                 } else {
                     "***".to_string()
                 };
-                let api_base = pc
-                    .api_base
-                    .as_deref()
-                    .unwrap_or("(default)")
-                    .to_string();
+                let api_base = pc.api_base.as_deref().unwrap_or("(default)").to_string();
                 let is_active = active_provider.as_deref() == Some(name);
 
                 ProviderInfo {
@@ -401,7 +403,10 @@ impl McpState {
         if !servers.is_empty() {
             list_state.select(Some(0));
         }
-        Self { list_state, servers }
+        Self {
+            list_state,
+            servers,
+        }
     }
 
     pub fn refresh(&mut self, config: &Config) {
@@ -614,7 +619,9 @@ impl App {
                 self.skills_state.installed = entries;
                 self.skills_state.loading = false;
                 self.skills_state.status_message.clear();
-                if self.skills_state.view == SkillsView::Installed && !self.skills_state.installed.is_empty() {
+                if self.skills_state.view == SkillsView::Installed
+                    && !self.skills_state.installed.is_empty()
+                {
                     self.skills_state.list_state.select(Some(0));
                 }
             }
@@ -731,9 +738,7 @@ impl App {
         let key = self.settings_state.edit_key.clone();
         let value = self.settings_state.edit_buffer.clone();
 
-        if !value.is_empty()
-            && dotpath::config_set(&mut self.config, &key, &value).is_ok()
-        {
+        if !value.is_empty() && dotpath::config_set(&mut self.config, &key, &value).is_ok() {
             self.config_modified = true;
             self.settings_state.refresh(&self.config);
             self.providers_state.refresh(&self.config);
@@ -1002,7 +1007,8 @@ impl App {
     fn start_whatsapp_pairing(&mut self) {
         // Need a phone number
         if self.whatsapp_state.phone_input.is_empty() {
-            self.whatsapp_state.status = WhatsAppStatus::Error("Enter a phone number first".to_string());
+            self.whatsapp_state.status =
+                WhatsAppStatus::Error("Enter a phone number first".to_string());
             return;
         }
 
@@ -1013,7 +1019,8 @@ impl App {
         let event_tx = match &self.event_tx {
             Some(tx) => tx.clone(),
             None => {
-                self.whatsapp_state.status = WhatsAppStatus::Error("Internal error: no event sender".to_string());
+                self.whatsapp_state.status =
+                    WhatsAppStatus::Error("Internal error: no event sender".to_string());
                 return;
             }
         };
@@ -1084,10 +1091,17 @@ impl App {
         if let Some(progress) = &self.skills_state.setup_progress {
             if progress.finished {
                 // Check if user pressed Enter on a Manual step to provide value
-                let has_manual = progress.steps.iter().any(|s| matches!(s.status, SetupStepStatus::Manual));
+                let has_manual = progress
+                    .steps
+                    .iter()
+                    .any(|s| matches!(s.status, SetupStepStatus::Manual));
                 if has_manual && key.code == KeyCode::Enter {
                     // Find the first Manual step and start editing it
-                    if let Some(idx) = progress.steps.iter().position(|s| matches!(s.status, SetupStepStatus::Manual)) {
+                    if let Some(idx) = progress
+                        .steps
+                        .iter()
+                        .position(|s| matches!(s.status, SetupStepStatus::Manual))
+                    {
                         self.skills_state.setup_input_step_idx = Some(idx);
                         self.skills_state.setup_input_buffer.clear();
                         self.skills_state.focus = SkillsFocus::SetupInput;
@@ -1202,14 +1216,22 @@ impl App {
             // '1'/'2' to switch views
             KeyCode::Char('1') => {
                 self.skills_state.view = SkillsView::Installed;
-                self.skills_state.list_state.select(
-                    if self.skills_state.installed.is_empty() { None } else { Some(0) }
-                );
+                self.skills_state
+                    .list_state
+                    .select(if self.skills_state.installed.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
             }
             KeyCode::Char('2') => {
                 self.skills_state.view = SkillsView::Search;
                 self.skills_state.list_state.select(
-                    if self.skills_state.search_results.is_empty() { None } else { Some(0) }
+                    if self.skills_state.search_results.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    },
                 );
             }
             // 'r' to refresh installed skills
@@ -1240,7 +1262,8 @@ impl App {
                         if let Some(step) = progress.steps.get_mut(idx) {
                             if !value.is_empty() {
                                 // Extract the env var name from the detail (format: "export VAR=<value>")
-                                let var_name = step.detail
+                                let var_name = step
+                                    .detail
                                     .strip_prefix("export ")
                                     .and_then(|s| s.split('=').next())
                                     .unwrap_or(&step.detail)
@@ -1260,14 +1283,24 @@ impl App {
                 self.skills_state.setup_input_buffer.clear();
                 self.skills_state.setup_input_step_idx = None;
                 // Check if there are more manual steps
-                let more_manual = self.skills_state.setup_progress
+                let more_manual = self
+                    .skills_state
+                    .setup_progress
                     .as_ref()
-                    .map(|p| p.steps.iter().any(|s| matches!(s.status, SetupStepStatus::Manual)))
+                    .map(|p| {
+                        p.steps
+                            .iter()
+                            .any(|s| matches!(s.status, SetupStepStatus::Manual))
+                    })
                     .unwrap_or(false);
                 if more_manual {
                     // Find next manual step
                     if let Some(progress) = &self.skills_state.setup_progress {
-                        if let Some(next_idx) = progress.steps.iter().position(|s| matches!(s.status, SetupStepStatus::Manual)) {
+                        if let Some(next_idx) = progress
+                            .steps
+                            .iter()
+                            .position(|s| matches!(s.status, SetupStepStatus::Manual))
+                        {
                             self.skills_state.setup_input_step_idx = Some(next_idx);
                             self.skills_state.focus = SkillsFocus::SetupInput;
                             return;
@@ -1529,7 +1562,10 @@ fn parse_skill_requirements(
                             .or_else(|| step.get("formula"))
                             .and_then(|v| v.as_str())
                             .map(|p| format!("pip install {p}")),
-                        _ => step.get("command").and_then(|v| v.as_str()).map(String::from),
+                        _ => step
+                            .get("command")
+                            .and_then(|v| v.as_str())
+                            .map(String::from),
                     };
                     if let Some(cmd) = command {
                         install_commands.push((label, cmd));
@@ -1640,11 +1676,7 @@ async fn run_auto_setup(
             let install_cmd = reqs.install_commands.iter().find(|(_, cmd)| {
                 // Match: the command installs something that provides this binary
                 // Heuristic: check if the binary name appears in the command
-                cmd.contains(bin)
-                    || reqs
-                        .install_commands
-                        .iter()
-                        .any(|(_, c)| c.contains(bin))
+                cmd.contains(bin) || reqs.install_commands.iter().any(|(_, c)| c.contains(bin))
             });
 
             if let Some((_label, cmd)) = install_cmd.or_else(|| reqs.install_commands.first()) {
@@ -1792,10 +1824,10 @@ async fn run_whatsapp_pairing(
 ) -> anyhow::Result<()> {
     use wa_rs::bot::Bot;
     use wa_rs::store::SqliteStore;
-    use wa_rs_tokio_transport::TokioWebSocketTransportFactory;
-    use wa_rs_ureq_http::UreqHttpClient;
     use wa_rs_core::types::events::Event as WaEvent;
     use wa_rs_proto::whatsapp as wa;
+    use wa_rs_tokio_transport::TokioWebSocketTransportFactory;
+    use wa_rs_ureq_http::UreqHttpClient;
 
     // Ensure parent directory exists
     if let Some(parent) = db_path.parent() {
@@ -1932,7 +1964,11 @@ mod tests {
         config.providers.anthropic.api_key = "sk-ant-test-123456789".to_string();
 
         let state = ProvidersState::new(&config);
-        let anthropic = state.providers.iter().find(|p| p.name == "anthropic").unwrap();
+        let anthropic = state
+            .providers
+            .iter()
+            .find(|p| p.name == "anthropic")
+            .unwrap();
         assert!(anthropic.configured);
         assert!(anthropic.api_key_masked.starts_with("sk-ant"));
     }

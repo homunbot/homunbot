@@ -334,7 +334,10 @@ impl ExfilFilter {
                 });
 
                 // Redact in the text
-                redacted = pattern.regex.replace_all(&redacted, &pattern.replacement).to_string();
+                redacted = pattern
+                    .regex
+                    .replace_all(&redacted, &pattern.replacement)
+                    .to_string();
             }
         }
 

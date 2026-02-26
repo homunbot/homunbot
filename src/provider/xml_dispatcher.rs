@@ -14,7 +14,9 @@ pub struct ParsedResponse {
 }
 
 pub fn build_tools_prompt(tools: &[ToolDefinition]) -> String {
-    if tools.is_empty() { return String::new(); }
+    if tools.is_empty() {
+        return String::new();
+    }
 
     let mut p = String::from("\n\n## Tool Use Protocol\n\n");
     p.push_str("To use a tool, wrap a JSON object in <tool_call_call> tags:\n\n");
@@ -22,19 +24,35 @@ pub fn build_tools_prompt(tools: &[ToolDefinition]) -> String {
     p.push_str("### Available Tools\n\n");
 
     for t in tools {
-        p.push_str(&format!("**{}**: {}\n", &t.function.name, escape_xml(&t.function.description)));
-        if let Some(props) = t.function.parameters.get("properties").and_then(|v| v.as_object()) {
-            let req: Vec<_> = t.function.parameters.get("required")
+        p.push_str(&format!(
+            "**{}**: {}\n",
+            &t.function.name,
+            escape_xml(&t.function.description)
+        ));
+        if let Some(props) = t
+            .function
+            .parameters
+            .get("properties")
+            .and_then(|v| v.as_object())
+        {
+            let req: Vec<_> = t
+                .function
+                .parameters
+                .get("required")
                 .and_then(|r| r.as_array())
                 .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
                 .unwrap_or_default();
             p.push_str("  Parameters:\n");
             for (n, s) in props {
                 let d = s.get("description").and_then(|d| d.as_str()).unwrap_or("");
-                let m = if req.contains(&n.as_str()) { " (required)" } else { "" };
+                let m = if req.contains(&n.as_str()) {
+                    " (required)"
+                } else {
+                    ""
+                };
                 p.push_str(&format!("    - {}{}: {}\n", n, m, escape_xml(d)));
             }
-            p.push_str("\n");
+            p.push('\n');
         }
     }
 
@@ -61,12 +79,14 @@ pub fn parse_response(text: &str) -> ParsedResponse {
         // Find the next special block (thinking or tool call)
         let think_pos = find_tag(rem, "<think&gt;");
         let tool_info = find_tool_start(rem);
-        
+
         // Determine which comes first
         let next = match (think_pos, tool_info) {
             (Some(tp), Some((_, _, tool_pos))) if tp < tool_pos => "think",
             (Some(_), None) => "think",
-            (Some(_), Some((_, _, tool_pos))) if think_pos.unwrap_or(usize::MAX) > tool_pos => "tool",
+            (Some(_), Some((_, _, tool_pos))) if think_pos.unwrap_or(usize::MAX) > tool_pos => {
+                "tool"
+            }
             (None, Some(_)) => "tool",
             (None, None) => {
                 // No more special blocks, add remaining text
@@ -95,7 +115,7 @@ pub fn parse_response(text: &str) -> ParsedResponse {
                     result.content.push_str(before);
                 }
             }
-            
+
             // Extract thinking content
             let after_open = &rem[pos + 7..]; // Skip "<think&gt;"
             if let Some(end_pos) = find_tag(after_open, "</think&gt;") {
@@ -129,14 +149,14 @@ pub fn parse_response(text: &str) -> ParsedResponse {
                     result.content.push_str(before);
                 }
             }
-            
+
             let after = pos + start.len();
             if let Some(e) = rem[after..].find(end) {
-                let json = rem[after..after+e].trim();
+                let json = rem[after..after + e].trim();
                 if let Some(tc) = parse_json(json, &mut tool_cnt) {
                     result.tool_calls.push(tc);
                 }
-                rem = &rem[after+e+end.len()..];
+                rem = &rem[after + e + end.len()..];
             } else {
                 break;
             }
@@ -173,17 +193,29 @@ fn find_tool_start(t: &str) -> Option<(&'static str, &'static str, usize)> {
 fn parse_json(s: &str, cnt: &mut u32) -> Option<ToolCallRequest> {
     let s = if serde_json::from_str::<serde_json::Value>(s).is_err() {
         super::openai_compat::repair_json_public(s)
-    } else { s.to_string() };
+    } else {
+        s.to_string()
+    };
     let obj: serde_json::Value = serde_json::from_str(&s).ok()?;
     let name = obj.get("name")?.as_str()?.to_string();
-    let args = obj.get("arguments").or_else(|| obj.get("parameters"))
-        .cloned().unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+    let args = obj
+        .get("arguments")
+        .or_else(|| obj.get("parameters"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
     *cnt += 1;
-    Some(ToolCallRequest { id: format!("xml_{}", cnt), name, arguments: args })
+    Some(ToolCallRequest {
+        id: format!("xml_{}", cnt),
+        name,
+        arguments: args,
+    })
 }
 
 fn escape_xml(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 #[cfg(test)]

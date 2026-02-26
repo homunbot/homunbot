@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use futures::StreamExt as _;
 use super::traits::*;
+use futures::StreamExt as _;
 
 /// OpenAI-compatible provider — covers OpenRouter, Ollama, OpenAI, DeepSeek, Groq,
 /// and any API that implements the OpenAI chat completions format.
@@ -70,36 +70,36 @@ impl OpenAICompatProvider {
 fn default_api_base(provider_name: &str) -> String {
     match provider_name {
         // Primary providers
-        "openai"    => "https://api.openai.com/v1".to_string(),
-        "openrouter"=> "https://openrouter.ai/api/v1".to_string(),
-        "gemini"    => "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
+        "openai" => "https://api.openai.com/v1".to_string(),
+        "openrouter" => "https://openrouter.ai/api/v1".to_string(),
+        "gemini" => "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
         // Local providers
-        "ollama"    => "http://localhost:11434/v1".to_string(),
+        "ollama" => "http://localhost:11434/v1".to_string(),
         "ollama_cloud" => "https://ollama.com/v1".to_string(),
-        "vllm"      => "http://localhost:8000/v1".to_string(),
+        "vllm" => "http://localhost:8000/v1".to_string(),
         // Cloud providers (OpenAI-compatible)
-        "deepseek"  => "https://api.deepseek.com/v1".to_string(),
-        "groq"      => "https://api.groq.com/openai/v1".to_string(),
-        "mistral"   => "https://api.mistral.ai/v1".to_string(),
-        "xai"       => "https://api.x.ai/v1".to_string(),
-        "together"  => "https://api.together.xyz/v1".to_string(),
+        "deepseek" => "https://api.deepseek.com/v1".to_string(),
+        "groq" => "https://api.groq.com/openai/v1".to_string(),
+        "mistral" => "https://api.mistral.ai/v1".to_string(),
+        "xai" => "https://api.x.ai/v1".to_string(),
+        "together" => "https://api.together.xyz/v1".to_string(),
         "fireworks" => "https://api.fireworks.ai/inference/v1".to_string(),
-        "perplexity"=> "https://api.perplexity.ai".to_string(),
-        "cohere"    => "https://api.cohere.ai/compatibility/v1".to_string(),
-        "venice"    => "https://api.venice.ai/api/v1".to_string(),
+        "perplexity" => "https://api.perplexity.ai".to_string(),
+        "cohere" => "https://api.cohere.ai/compatibility/v1".to_string(),
+        "venice" => "https://api.venice.ai/api/v1".to_string(),
         // Gateways/aggregators
-        "aihubmix"  => "https://aihubmix.com/v1".to_string(),
-        "vercel"    => "https://api.vercel.ai/v1".to_string(),
-        "cloudflare"=> "https://gateway.ai.cloudflare.com/v1".to_string(),
-        "copilot"   => "https://api.githubcopilot.com".to_string(),
-        "bedrock"   => "https://bedrock-runtime.us-east-1.amazonaws.com".to_string(),
+        "aihubmix" => "https://aihubmix.com/v1".to_string(),
+        "vercel" => "https://api.vercel.ai/v1".to_string(),
+        "cloudflare" => "https://gateway.ai.cloudflare.com/v1".to_string(),
+        "copilot" => "https://api.githubcopilot.com".to_string(),
+        "bedrock" => "https://bedrock-runtime.us-east-1.amazonaws.com".to_string(),
         // Chinese providers
-        "minimax"   => "https://api.minimax.chat/v1".to_string(),
+        "minimax" => "https://api.minimax.chat/v1".to_string(),
         "dashscope" => "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
-        "moonshot"  => "https://api.moonshot.cn/v1".to_string(),
-        "zhipu"     => "https://open.bigmodel.cn/api/paas/v4".to_string(),
+        "moonshot" => "https://api.moonshot.cn/v1".to_string(),
+        "zhipu" => "https://open.bigmodel.cn/api/paas/v4".to_string(),
         // Fallback
-        _           => "https://api.openai.com/v1".to_string(),
+        _ => "https://api.openai.com/v1".to_string(),
     }
 }
 
@@ -227,7 +227,11 @@ impl Provider for OpenAICompatProvider {
             max_tokens: Some(request.max_tokens.max(1)),
             temperature: Some(request.temperature),
             tools: request.tools,
-            tool_choice: if has_tools { Some("auto".to_string()) } else { None },
+            tool_choice: if has_tools {
+                Some("auto".to_string())
+            } else {
+                None
+            },
             stream: None,
         };
 
@@ -252,14 +256,17 @@ impl Provider for OpenAICompatProvider {
             "Sending chat request to OpenAI-compatible provider"
         );
 
-        let response = req
-            .json(&body)
-            .send()
-            .await
-            .with_context(|| format!("Failed to send request to {} (provider: {})", url, self.provider_name))?;
+        let response = req.json(&body).send().await.with_context(|| {
+            format!(
+                "Failed to send request to {} (provider: {})",
+                url, self.provider_name
+            )
+        })?;
 
         let status = response.status();
-        let response_text = response.text().await
+        let response_text = response
+            .text()
+            .await
             .context("Failed to read response body")?;
 
         if !status.is_success() {
@@ -308,11 +315,14 @@ impl Provider for OpenAICompatProvider {
 
         let finish_reason = choice.finish_reason.unwrap_or_else(|| "stop".to_string());
 
-        let usage = api_response.usage.map(|u| Usage {
-            prompt_tokens: u.prompt_tokens,
-            completion_tokens: u.completion_tokens,
-            total_tokens: u.total_tokens,
-        }).unwrap_or_default();
+        let usage = api_response
+            .usage
+            .map(|u| Usage {
+                prompt_tokens: u.prompt_tokens,
+                completion_tokens: u.completion_tokens,
+                total_tokens: u.total_tokens,
+            })
+            .unwrap_or_default();
 
         Ok(ChatResponse {
             content: choice.message.content,
@@ -362,7 +372,12 @@ impl Provider for OpenAICompatProvider {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Provider {} streaming error: HTTP {}: {}", self.provider_name, status, text);
+            anyhow::bail!(
+                "Provider {} streaming error: HTTP {}: {}",
+                self.provider_name,
+                status,
+                text
+            );
         }
 
         // Read SSE stream — accumulate text content and tool call deltas.
@@ -392,12 +407,14 @@ impl Provider for OpenAICompatProvider {
                     if data.trim() == "[DONE]" {
                         // Only send done if we were streaming text (not tool calls)
                         if tc_acc.is_empty() {
-                            let _ = tx.send(StreamChunk { 
-                                delta: String::new(), 
-                                done: true, 
-                                event_type: None,
-                                tool_call_data: None,
-                            }).await;
+                            let _ = tx
+                                .send(StreamChunk {
+                                    delta: String::new(),
+                                    done: true,
+                                    event_type: None,
+                                    tool_call_data: None,
+                                })
+                                .await;
                         }
                         break;
                     }
@@ -408,21 +425,23 @@ impl Provider for OpenAICompatProvider {
                             if let Some(ref delta) = choice.delta.content {
                                 if !delta.is_empty() {
                                     full_content.push_str(delta);
-                                    let _ = tx.send(StreamChunk {
-                                        delta: delta.clone(),
-                                        done: false,
-                                        event_type: None,
-                                        tool_call_data: None,
-                                    }).await;
+                                    let _ = tx
+                                        .send(StreamChunk {
+                                            delta: delta.clone(),
+                                            done: false,
+                                            event_type: None,
+                                            tool_call_data: None,
+                                        })
+                                        .await;
                                 }
                             }
 
                             // Tool call deltas → accumulate
                             if let Some(ref tool_calls) = choice.delta.tool_calls {
                                 for tc_delta in tool_calls {
-                                    let entry = tc_acc
-                                        .entry(tc_delta.index)
-                                        .or_insert_with(|| (String::new(), String::new(), String::new()));
+                                    let entry = tc_acc.entry(tc_delta.index).or_insert_with(|| {
+                                        (String::new(), String::new(), String::new())
+                                    });
 
                                     if let Some(ref func) = tc_delta.function {
                                         if let Some(ref name) = func.name {
@@ -441,12 +460,14 @@ impl Provider for OpenAICompatProvider {
                             if let Some(ref reason) = choice.finish_reason {
                                 finish_reason = reason.clone();
                                 if tc_acc.is_empty() {
-                                    let _ = tx.send(StreamChunk { 
-                                        delta: String::new(), 
-                                        done: true, 
-                                        event_type: None,
-                                        tool_call_data: None,
-                                    }).await;
+                                    let _ = tx
+                                        .send(StreamChunk {
+                                            delta: String::new(),
+                                            done: true,
+                                            event_type: None,
+                                            tool_call_data: None,
+                                        })
+                                        .await;
                                 }
                             }
                         }
@@ -462,17 +483,29 @@ impl Provider for OpenAICompatProvider {
             indices.sort();
             for idx in indices {
                 let (id, name, raw_args) = tc_acc.remove(&idx).unwrap();
-                let id = if id.is_empty() { format!("call_{idx}") } else { id };
+                let id = if id.is_empty() {
+                    format!("call_{idx}")
+                } else {
+                    id
+                };
                 let args_str = repair_json(&raw_args);
                 let arguments: serde_json::Value =
                     serde_json::from_str(&args_str).unwrap_or(serde_json::json!({}));
-                tool_calls.push(ToolCallRequest { id, name, arguments });
+                tool_calls.push(ToolCallRequest {
+                    id,
+                    name,
+                    arguments,
+                });
             }
             finish_reason = "tool_calls".to_string();
         }
 
         Ok(ChatResponse {
-            content: if full_content.is_empty() { None } else { Some(full_content) },
+            content: if full_content.is_empty() {
+                None
+            } else {
+                Some(full_content)
+            },
             tool_calls,
             finish_reason,
             usage: Usage::default(),
@@ -492,6 +525,7 @@ impl Provider for OpenAICompatProvider {
 /// - Unquoted keys: `{key: "value"}`
 /// - Trailing text after JSON: `{"key": "value"} and some other text`
 /// - Missing closing braces: `{"key": "value"`
+///
 /// Public wrapper for use by xml_dispatcher
 pub(crate) fn repair_json_public(input: &str) -> String {
     repair_json(input)
@@ -563,19 +597,29 @@ mod tests {
 
     #[test]
     fn test_resolve_model_openrouter() {
-        let provider = OpenAICompatProvider::new("key", "https://openrouter.ai/api/v1", "openrouter", HashMap::new());
-        assert_eq!(provider.resolve_model("anthropic/claude-sonnet-4-20250514"), "anthropic/claude-sonnet-4-20250514");
+        let provider = OpenAICompatProvider::new(
+            "key",
+            "https://openrouter.ai/api/v1",
+            "openrouter",
+            HashMap::new(),
+        );
+        assert_eq!(
+            provider.resolve_model("anthropic/claude-sonnet-4-20250514"),
+            "anthropic/claude-sonnet-4-20250514"
+        );
     }
 
     #[test]
     fn test_resolve_model_strip_prefix() {
-        let provider = OpenAICompatProvider::new("key", "https://api.openai.com/v1", "openai", HashMap::new());
+        let provider =
+            OpenAICompatProvider::new("key", "https://api.openai.com/v1", "openai", HashMap::new());
         assert_eq!(provider.resolve_model("openai/gpt-4"), "gpt-4");
     }
 
     #[test]
     fn test_resolve_model_no_prefix() {
-        let provider = OpenAICompatProvider::new("key", "http://localhost:11434/v1", "ollama", HashMap::new());
+        let provider =
+            OpenAICompatProvider::new("key", "http://localhost:11434/v1", "ollama", HashMap::new());
         assert_eq!(provider.resolve_model("llama3"), "llama3");
     }
 

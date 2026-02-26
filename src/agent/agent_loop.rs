@@ -1,19 +1,17 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use tokio::sync::{mpsc, RwLock};
 
 use crate::bus::OutboundMessage;
 use crate::config::Config;
-use crate::provider::{
-    ChatMessage, ChatRequest, Provider, ToolCallFunction, ToolCallSerialized,
-};
 use crate::provider::xml_dispatcher;
+use crate::provider::{ChatMessage, ChatRequest, Provider, ToolCallFunction, ToolCallSerialized};
 use crate::security::{redact, redact_vault_values};
 use crate::session::SessionManager;
-use crate::storage::Database;
 use crate::skills::loader::SkillRegistry;
+use crate::storage::Database;
 use crate::tools::{ToolContext, ToolRegistry};
 
 use super::context::ContextBuilder;
@@ -26,7 +24,6 @@ use super::memory_search::MemorySearcher;
 
 #[cfg(not(feature = "local-embeddings"))]
 struct MemorySearcher;
-
 
 /// Core agent loop — full ReAct pattern with tool calling:
 /// reason → act → observe → loop (max N iterations).
@@ -78,12 +75,13 @@ impl AgentLoop {
         // Determine if XML tool dispatch should be used
         // This considers: provider setting > global setting > auto-detect for Ollama
         let model = &config.agent.model;
-        let provider_name = config.resolve_provider(model)
+        let provider_name = config
+            .resolve_provider(model)
             .map(|(name, _)| name)
             .unwrap_or("unknown");
-        
+
         let use_xml_dispatch = config.should_use_xml_dispatch(provider_name, model);
-        
+
         if use_xml_dispatch {
             tracing::info!(
                 model = %model,
@@ -142,6 +140,7 @@ impl AgentLoop {
 
     /// Get both bootstrap handles for the BootstrapWatcher.
     /// Returns (legacy_content, new_files) handles.
+    #[allow(clippy::type_complexity)]
     pub fn bootstrap_handles(&self) -> (Arc<RwLock<String>>, Arc<RwLock<Vec<(String, String)>>>) {
         self.context.bootstrap_handles()
     }
@@ -176,7 +175,8 @@ impl AgentLoop {
         channel: &str,
         chat_id: &str,
     ) -> Result<String> {
-        self.process_message_inner(content, session_key, channel, chat_id, None).await
+        self.process_message_inner(content, session_key, channel, chat_id, None)
+            .await
     }
 
     /// Process a message with optional streaming output.
@@ -189,7 +189,8 @@ impl AgentLoop {
         chat_id: &str,
         stream_tx: mpsc::Sender<crate::provider::StreamChunk>,
     ) -> Result<String> {
-        self.process_message_inner(content, session_key, channel, chat_id, Some(stream_tx)).await
+        self.process_message_inner(content, session_key, channel, chat_id, Some(stream_tx))
+            .await
     }
 
     async fn process_message_inner(
@@ -276,11 +277,14 @@ impl AgentLoop {
 
         // Convert tool definitions to ToolInfo for the new prompt system
         let tool_infos: Vec<crate::agent::ToolInfo> = if xml_mode && has_tools {
-            tool_defs.iter().map(|td| crate::agent::ToolInfo {
-                name: td.function.name.clone(),
-                description: td.function.description.clone(),
-                parameters_schema: td.function.parameters.clone(),
-            }).collect()
+            tool_defs
+                .iter()
+                .map(|td| crate::agent::ToolInfo {
+                    name: td.function.name.clone(),
+                    description: td.function.description.clone(),
+                    parameters_schema: td.function.parameters.clone(),
+                })
+                .collect()
         } else {
             Vec::new()
         };
@@ -288,7 +292,9 @@ impl AgentLoop {
         // Build messages with tools integrated into the prompt (for XML mode)
         // or without tools (for native tool calling mode)
         let mut messages = if xml_mode {
-            self.context.build_messages_with_tools(&history, content, &tool_infos).await
+            self.context
+                .build_messages_with_tools(&history, content, &tool_infos)
+                .await
         } else {
             self.context.build_messages(&history, content).await
         };
@@ -323,7 +329,11 @@ impl AgentLoop {
             // chat_stream. It handles both text and tool calls in the SSE
             // stream. Text deltas are forwarded to the client in real-time;
             // tool call deltas are accumulated and returned in ChatResponse.
-            let api_tools = if xml_mode { Vec::new() } else { tool_defs.clone() };
+            let api_tools = if xml_mode {
+                Vec::new()
+            } else {
+                tool_defs.clone()
+            };
             let use_streaming = stream_tx.is_some();
 
             let request = ChatRequest {
@@ -350,12 +360,18 @@ impl AgentLoop {
                         tracing::warn!(error = ?e, "Streaming failed, falling back to non-streaming");
                         let request2 = ChatRequest {
                             messages: messages.clone(),
-                            tools: if xml_mode { Vec::new() } else { tool_defs.clone() },
+                            tools: if xml_mode {
+                                Vec::new()
+                            } else {
+                                tool_defs.clone()
+                            },
                             model: self.config.agent.model.clone(),
                             max_tokens: self.config.agent.max_tokens,
                             temperature: self.config.agent.temperature,
                         };
-                        self.provider.chat(request2).await
+                        self.provider
+                            .chat(request2)
+                            .await
                             .context("Non-streaming fallback also failed")?
                     }
                 }
@@ -426,7 +442,11 @@ impl AgentLoop {
                             "Parsed tool calls from XML in LLM response"
                         );
                         crate::provider::ChatResponse {
-                            content: if clean_text.is_empty() { None } else { Some(clean_text) },
+                            content: if clean_text.is_empty() {
+                                None
+                            } else {
+                                Some(clean_text)
+                            },
                             tool_calls: xml_calls,
                             finish_reason: "tool_calls".to_string(),
                             usage: response.usage,
@@ -479,16 +499,18 @@ impl AgentLoop {
 
                     // Notify frontend that a tool is being called
                     if let Some(ref tx) = stream_tx {
-                        let _ = tx.send(crate::provider::StreamChunk {
-                            delta: tool_call.name.clone(),
-                            done: false,
-                            event_type: Some("tool_start".to_string()),
-                            tool_call_data: Some(crate::provider::ToolCallData {
-                                id: tool_call.id.clone(),
-                                name: tool_call.name.clone(),
-                                arguments: tool_call.arguments.clone(),
-                            }),
-                        }).await;
+                        let _ = tx
+                            .send(crate::provider::StreamChunk {
+                                delta: tool_call.name.clone(),
+                                done: false,
+                                event_type: Some("tool_start".to_string()),
+                                tool_call_data: Some(crate::provider::ToolCallData {
+                                    id: tool_call.id.clone(),
+                                    name: tool_call.name.clone(),
+                                    arguments: tool_call.arguments.clone(),
+                                }),
+                            })
+                            .await;
                     }
 
                     // --- OBSERVE: Execute and add result ---
@@ -521,12 +543,14 @@ impl AgentLoop {
 
                     // Notify frontend that tool execution finished
                     if let Some(ref tx) = stream_tx {
-                        let _ = tx.send(crate::provider::StreamChunk {
-                            delta: tool_call.name.clone(),
-                            done: false,
-                            event_type: Some("tool_end".to_string()),
-                            tool_call_data: None,
-                        }).await;
+                        let _ = tx
+                            .send(crate::provider::StreamChunk {
+                                delta: tool_call.name.clone(),
+                                done: false,
+                                event_type: Some("tool_end".to_string()),
+                                tool_call_data: None,
+                            })
+                            .await;
                     }
 
                     messages.push(ChatMessage::tool_result(
@@ -545,7 +569,7 @@ impl AgentLoop {
             } else {
                 // No tool calls → check for hallucination before accepting as final
                 let response_text = response.content.clone().unwrap_or_default();
-                
+
                 // Verify that claimed actions were actually executed
                 match verify_actions(&response_text, &tools_used) {
                     VerificationResult::Verified => {
@@ -553,12 +577,14 @@ impl AgentLoop {
                         if !use_streaming {
                             if let Some(ref tx) = stream_tx {
                                 if let Some(ref text) = response.content {
-                                    let _ = tx.send(crate::provider::StreamChunk {
-                                        delta: text.clone(),
-                                        done: true,
-                                        event_type: None,
-                                        tool_call_data: None,
-                                    }).await;
+                                    let _ = tx
+                                        .send(crate::provider::StreamChunk {
+                                            delta: text.clone(),
+                                            done: true,
+                                            event_type: None,
+                                            tool_call_data: None,
+                                        })
+                                        .await;
                                 }
                             }
                         }
@@ -577,13 +603,13 @@ impl AgentLoop {
                             expected_tool = %expected_tool,
                             "LLM claimed action without calling tool — injecting verification prompt"
                         );
-                        
+
                         // Add the LLM's response to messages (so it sees what it said)
                         messages.push(ChatMessage::assistant(&response_text));
-                        
+
                         // Inject verification prompt
                         messages.push(ChatMessage::user(&verification_prompt));
-                        
+
                         // Continue the loop — LLM must now actually use the tool
                         continue;
                     }
@@ -591,9 +617,8 @@ impl AgentLoop {
             }
         }
 
-        let response_text = final_content.unwrap_or_else(|| {
-            "(max iterations reached without final response)".to_string()
-        });
+        let response_text = final_content
+            .unwrap_or_else(|| "(max iterations reached without final response)".to_string());
 
         // Apply exfiltration filter to prevent secret leaks in output
         // This scans the response for API keys, tokens, passwords, etc.
@@ -704,7 +729,10 @@ impl AgentLoop {
                     "Memory consolidation threshold reached, spawning background task"
                 );
                 tokio::spawn(async move {
-                    match memory.consolidate(&session_key, window, provider.as_ref(), &model).await {
+                    match memory
+                        .consolidate(&session_key, window, provider.as_ref(), &model)
+                        .await
+                    {
                         Ok(result) => {
                             tracing::info!(
                                 session = %session_key,
@@ -749,7 +777,8 @@ impl AgentLoop {
                                             }
                                         }
 
-                                        if let Err(e) = s.engine_mut().index_chunk(*chunk_id, text) {
+                                        if let Err(e) = s.engine_mut().index_chunk(*chunk_id, text)
+                                        {
                                             tracing::warn!(
                                                 chunk_id,
                                                 error = %e,

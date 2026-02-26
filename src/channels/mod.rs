@@ -1,6 +1,6 @@
 mod cli;
-mod traits;
 pub mod slack;
+mod traits;
 
 #[cfg(feature = "channel-telegram")]
 pub mod telegram;

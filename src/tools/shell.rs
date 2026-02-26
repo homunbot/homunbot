@@ -152,13 +152,11 @@ impl ShellTool {
         // Pre-compile regex patterns at construction time
         let deny_regex = DENY_REGEX_PATTERNS
             .iter()
-            .filter_map(|pat| {
-                match regex::Regex::new(pat) {
-                    Ok(re) => Some(re),
-                    Err(e) => {
-                        tracing::warn!(pattern = %pat, error = %e, "Invalid deny regex pattern");
-                        None
-                    }
+            .filter_map(|pat| match regex::Regex::new(pat) {
+                Ok(re) => Some(re),
+                Err(e) => {
+                    tracing::warn!(pattern = %pat, error = %e, "Invalid deny regex pattern");
+                    None
                 }
             })
             .collect();
@@ -166,13 +164,21 @@ impl ShellTool {
         // Get OS-specific profile
         let os_profile = shell_perms.map(|p| {
             #[cfg(target_os = "macos")]
-            { p.macos.clone() }
+            {
+                p.macos.clone()
+            }
             #[cfg(target_os = "linux")]
-            { p.linux.clone() }
+            {
+                p.linux.clone()
+            }
             #[cfg(target_os = "windows")]
-            { p.windows.clone() }
+            {
+                p.windows.clone()
+            }
             #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-            { p.linux.clone() }
+            {
+                p.linux.clone()
+            }
         });
 
         Self {
@@ -217,9 +223,7 @@ impl ShellTool {
 
     /// Layer 4: Check if command tries to escape workspace
     fn escapes_workspace(command: &str) -> bool {
-        command.contains("../")
-            || command.contains("..\\")
-            || command.contains("cd /")
+        command.contains("../") || command.contains("..\\") || command.contains("cd /")
     }
 
     /// Full safety check — returns None if safe, Some(reason) if blocked
@@ -233,9 +237,7 @@ impl ShellTool {
 
         // Layer 2: Regex deny
         if let Some(pattern) = self.matches_deny_regex(command) {
-            return Some(format!(
-                "BLOCKED (dangerous pattern detected): {pattern}"
-            ));
+            return Some(format!("BLOCKED (dangerous pattern detected): {pattern}"));
         }
 
         // Layer 3: Risky commands
@@ -347,8 +349,8 @@ impl Tool for ShellTool {
 
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let command = get_string_param(&args, "command")?;
-        let working_dir = get_optional_string(&args, "working_dir")
-            .unwrap_or_else(|| ctx.workspace.clone());
+        let working_dir =
+            get_optional_string(&args, "working_dir").unwrap_or_else(|| ctx.workspace.clone());
 
         // Multi-layer safety check
         if let Some(reason) = self.check_safety(&command) {
@@ -517,12 +519,20 @@ mod tests {
         // rm -r -f /
         let args = serde_json::json!({"command": "rm -r -f /var"});
         let result = tool.execute(args, &test_ctx()).await.unwrap();
-        assert!(result.is_error, "rm -r -f should be blocked: {}", result.output);
+        assert!(
+            result.is_error,
+            "rm -r -f should be blocked: {}",
+            result.output
+        );
 
         // rm -fr /
         let args = serde_json::json!({"command": "rm -fr /etc"});
         let result = tool.execute(args, &test_ctx()).await.unwrap();
-        assert!(result.is_error, "rm -fr should be blocked: {}", result.output);
+        assert!(
+            result.is_error,
+            "rm -fr should be blocked: {}",
+            result.output
+        );
     }
 
     #[tokio::test]

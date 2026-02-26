@@ -16,6 +16,9 @@ bridge/dist/
 # Claude Code
 .claude/
 
+# Factory (droid specs)
+.factory/
+
 # OS
 .DS_Store
 Thumbs.db

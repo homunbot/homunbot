@@ -56,13 +56,10 @@ pub async fn execute_skill_script(
     cmd.stderr(std::process::Stdio::piped());
 
     // Set timeout
-    let output = tokio::time::timeout(
-        Duration::from_secs(timeout_secs),
-        cmd.output(),
-    )
-    .await
-    .with_context(|| format!("Script '{}' timed out after {}s", script_name, timeout_secs))?
-    .with_context(|| format!("Failed to execute script '{}'", script_name))?;
+    let output = tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output())
+        .await
+        .with_context(|| format!("Script '{}' timed out after {}s", script_name, timeout_secs))?
+        .with_context(|| format!("Failed to execute script '{}'", script_name))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -153,7 +150,6 @@ impl ScriptOutput {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,7 +184,9 @@ mod tests {
         std::fs::create_dir(&scripts_dir).unwrap();
         std::fs::write(scripts_dir.join("test.sh"), "echo 'hello from skill'").unwrap();
 
-        let result = execute_skill_script(dir.path(), "test.sh", &[], 10).await.unwrap();
+        let result = execute_skill_script(dir.path(), "test.sh", &[], 10)
+            .await
+            .unwrap();
         assert!(result.success);
         assert!(result.stdout.contains("hello from skill"));
     }

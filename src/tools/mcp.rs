@@ -56,9 +56,7 @@ impl McpPeer {
 
     async fn call_tool(&self, name: &str, args: Value) -> Result<String> {
         let guard = self.service.read().await;
-        let service = guard
-            .as_ref()
-            .context("MCP server connection closed")?;
+        let service = guard.as_ref().context("MCP server connection closed")?;
 
         let arguments = args.as_object().cloned();
 
@@ -164,9 +162,7 @@ pub struct McpManager {
 impl McpManager {
     /// Connect to all enabled MCP servers from config.
     /// Returns the manager and a list of Tool trait objects to register.
-    pub async fn start(
-        servers: &HashMap<String, McpServerConfig>,
-    ) -> (Self, Vec<Box<dyn Tool>>) {
+    pub async fn start(servers: &HashMap<String, McpServerConfig>) -> (Self, Vec<Box<dyn Tool>>) {
         let mut peers = Vec::new();
         let mut tools: Vec<Box<dyn Tool>> = Vec::new();
         let mut server_infos = Vec::new();
@@ -204,8 +200,7 @@ impl McpManager {
                             .to_string();
                         // input_schema is Arc<JsonObject> (Arc<Map<String, Value>>)
                         // Convert to Value::Object for our Tool trait
-                        let input_schema =
-                            Value::Object(mcp_tool.input_schema.as_ref().clone());
+                        let input_schema = Value::Object(mcp_tool.input_schema.as_ref().clone());
 
                         tools.push(Box::new(McpClientTool {
                             tool_name,
@@ -232,7 +227,10 @@ impl McpManager {
             }
         }
 
-        let manager = Self { peers, server_infos };
+        let manager = Self {
+            peers,
+            server_infos,
+        };
         (manager, tools)
     }
 
@@ -278,21 +276,20 @@ async fn connect_stdio(
         .collect();
     let args = config.args.clone();
 
-    let transport = TokioChildProcess::new(
-        Command::new(cmd).configure(move |c| {
-            for arg in &args {
-                c.arg(arg);
-            }
-            for (k, v) in &env_vars {
-                c.env(k, v);
-            }
-        }),
-    )
+    let transport = TokioChildProcess::new(Command::new(cmd).configure(move |c| {
+        for arg in &args {
+            c.arg(arg);
+        }
+        for (k, v) in &env_vars {
+            c.env(k, v);
+        }
+    }))
     .with_context(|| format!("Failed to spawn MCP server '{name}': {cmd}"))?;
 
     // Connect and perform MCP initialization handshake
     // () implements ClientHandler with default client info
-    let service = ().serve(transport)
+    let service = ()
+        .serve(transport)
         .await
         .with_context(|| format!("MCP initialization failed for server '{name}'"))?;
 

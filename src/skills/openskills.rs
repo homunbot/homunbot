@@ -5,7 +5,6 @@
 ///
 /// Inspired by ZeroClaw's Open Skills integration, but uses GitHub API
 /// instead of `git clone` to avoid adding git2 as a dependency.
-
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -104,7 +103,9 @@ impl OpenSkillsSource {
 
         // Fetch SKILL.md
         let path = format!("{}/{}/SKILL.md", SKILLS_PATH, dir_name);
-        let content = self.fetch_file(&path).await
+        let content = self
+            .fetch_file(&path)
+            .await
             .with_context(|| format!("Skill '{}' not found in Open Skills repo", dir_name))?;
 
         // Security check
@@ -139,7 +140,9 @@ impl OpenSkillsSource {
 
         // Write source marker
         let source = format!("openskills:{}\n", dir_name);
-        tokio::fs::write(skill_dir.join(".openskills-source"), source).await.ok();
+        tokio::fs::write(skill_dir.join(".openskills-source"), source)
+            .await
+            .ok();
 
         tracing::info!(
             skill = %meta.name,
@@ -177,7 +180,8 @@ impl OpenSkillsSource {
             .entries
             .iter()
             .filter(|e| {
-                let haystack = format!("{} {} {}", e.dir_name, e.name, e.description).to_lowercase();
+                let haystack =
+                    format!("{} {} {}", e.dir_name, e.name, e.description).to_lowercase();
                 terms.iter().all(|t| haystack.contains(t))
             })
             .take(limit)
@@ -295,12 +299,26 @@ impl OpenSkillsSource {
         let cache_path = Self::cache_path();
         let data = match tokio::fs::read_to_string(&cache_path).await {
             Ok(d) => d,
-            Err(_) => return CacheStatus { cached: false, stale: true, skill_count: 0, age_secs: 0 },
+            Err(_) => {
+                return CacheStatus {
+                    cached: false,
+                    stale: true,
+                    skill_count: 0,
+                    age_secs: 0,
+                }
+            }
         };
 
         let cache: CatalogCache = match serde_json::from_str(&data) {
             Ok(c) => c,
-            Err(_) => return CacheStatus { cached: false, stale: true, skill_count: 0, age_secs: 0 },
+            Err(_) => {
+                return CacheStatus {
+                    cached: false,
+                    stale: true,
+                    skill_count: 0,
+                    age_secs: 0,
+                }
+            }
         };
 
         let now = std::time::SystemTime::now()
@@ -333,7 +351,11 @@ impl OpenSkillsSource {
             .with_context(|| format!("Failed to fetch {} from Open Skills", path))?;
 
         if !response.status().is_success() {
-            anyhow::bail!("File {} not found in Open Skills (HTTP {})", path, response.status());
+            anyhow::bail!(
+                "File {} not found in Open Skills (HTTP {})",
+                path,
+                response.status()
+            );
         }
 
         response

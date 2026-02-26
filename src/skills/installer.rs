@@ -68,8 +68,15 @@ impl SkillInstaller {
         };
 
         // 2. Fetch SKILL.md to validate and get skill name
-        let skill_md_content = self.fetch_file(&owner, &repo, &branch, "SKILL.md").await
-            .with_context(|| format!("No SKILL.md found in {}/{}. Is this an Agent Skill?", owner, repo))?;
+        let skill_md_content = self
+            .fetch_file(&owner, &repo, &branch, "SKILL.md")
+            .await
+            .with_context(|| {
+                format!(
+                    "No SKILL.md found in {}/{}. Is this an Agent Skill?",
+                    owner, repo
+                )
+            })?;
 
         // Security scan before installing
         let security_report = super::security::scan_skill_content(&skill_md_content);
@@ -112,7 +119,8 @@ impl SkillInstaller {
         }
 
         // 4. Download and extract the repo
-        self.download_and_extract(&owner, &repo, &branch, &skill_dir).await?;
+        self.download_and_extract(&owner, &repo, &branch, &skill_dir)
+            .await?;
 
         tracing::info!(
             skill = %skill_name,
@@ -174,7 +182,8 @@ impl SkillInstaller {
                         match parse_skill_md_public(c) {
                             Ok((meta, _)) => (meta.name, meta.description),
                             Err(_) => {
-                                let dir_name = path.file_name()
+                                let dir_name = path
+                                    .file_name()
                                     .and_then(|n| n.to_str())
                                     .unwrap_or("unknown")
                                     .to_string();
@@ -182,7 +191,8 @@ impl SkillInstaller {
                             }
                         }
                     } else {
-                        let dir_name = path.file_name()
+                        let dir_name = path
+                            .file_name()
                             .and_then(|n| n.to_str())
                             .unwrap_or("unknown")
                             .to_string();
@@ -207,7 +217,8 @@ impl SkillInstaller {
     /// Get the default branch of a GitHub repo
     async fn get_default_branch(&self, owner: &str, repo: &str) -> Result<String> {
         let url = format!("https://api.github.com/repos/{}/{}", owner, repo);
-        let resp: GitHubRepo = self.client
+        let resp: GitHubRepo = self
+            .client
             .get(&url)
             .header("User-Agent", "homun")
             .header("Accept", "application/vnd.github.v3+json")
@@ -224,13 +235,20 @@ impl SkillInstaller {
     }
 
     /// Fetch a single file from the repo via GitHub Contents API
-    async fn fetch_file(&self, owner: &str, repo: &str, git_ref: &str, path: &str) -> Result<String> {
+    async fn fetch_file(
+        &self,
+        owner: &str,
+        repo: &str,
+        git_ref: &str,
+        path: &str,
+    ) -> Result<String> {
         let url = format!(
             "https://api.github.com/repos/{}/{}/contents/{}?ref={}",
             owner, repo, path, git_ref
         );
 
-        let resp: GitHubContent = self.client
+        let resp: GitHubContent = self
+            .client
             .get(&url)
             .header("User-Agent", "homun")
             .header("Accept", "application/vnd.github.v3+json")
@@ -243,17 +261,15 @@ impl SkillInstaller {
             .await
             .context("Failed to parse GitHub content response")?;
 
-        let content = resp.content
-            .context("No content in GitHub response")?;
+        let content = resp.content.context("No content in GitHub response")?;
 
         let encoding = resp.encoding.unwrap_or_default();
         if encoding == "base64" {
             // GitHub returns base64-encoded content with newlines
             let cleaned = content.replace('\n', "");
-            let decoded = base64_decode(&cleaned)
-                .context("Failed to decode base64 content from GitHub")?;
-            String::from_utf8(decoded)
-                .context("GitHub file content is not valid UTF-8")
+            let decoded =
+                base64_decode(&cleaned).context("Failed to decode base64 content from GitHub")?;
+            String::from_utf8(decoded).context("GitHub file content is not valid UTF-8")
         } else {
             Ok(content)
         }
@@ -272,7 +288,8 @@ impl SkillInstaller {
             owner, repo, git_ref
         );
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("User-Agent", "homun")
             .header("Accept", "application/vnd.github.v3+json")
@@ -282,11 +299,14 @@ impl SkillInstaller {
             .error_for_status()
             .with_context(|| format!("Failed to download tarball: {}/{}", owner, repo))?;
 
-        let bytes = response.bytes().await
+        let bytes = response
+            .bytes()
+            .await
             .context("Failed to read tarball bytes")?;
 
         // Create a temporary directory for extraction
-        let tmp_dir = dest.parent()
+        let tmp_dir = dest
+            .parent()
             .unwrap_or_else(|| Path::new("/tmp"))
             .join(format!(".tmp-{}-{}", owner, repo));
 
@@ -294,7 +314,8 @@ impl SkillInstaller {
         if tmp_dir.exists() {
             tokio::fs::remove_dir_all(&tmp_dir).await.ok();
         }
-        tokio::fs::create_dir_all(&tmp_dir).await
+        tokio::fs::create_dir_all(&tmp_dir)
+            .await
             .context("Failed to create temp directory")?;
 
         // Extract tarball (gzip-compressed tar)
@@ -306,22 +327,21 @@ impl SkillInstaller {
 
         // Ensure parent exists
         if let Some(parent) = dest.parent() {
-            tokio::fs::create_dir_all(parent).await
+            tokio::fs::create_dir_all(parent)
+                .await
                 .context("Failed to create skills directory")?;
         }
 
         // Move extracted content to final destination
-        tokio::fs::rename(&extracted_dir, dest)
-            .await
-            .or_else(|_| {
-                // rename can fail across filesystems, fall back to copy
-                let src = extracted_dir.clone();
-                let dst = dest.to_path_buf();
-                // Use blocking copy since we need recursive dir copy
-                std::thread::spawn(move || copy_dir_recursive(&src, &dst))
-                    .join()
-                    .map_err(|_| anyhow::anyhow!("Copy thread panicked"))?
-            })?;
+        tokio::fs::rename(&extracted_dir, dest).await.or_else(|_| {
+            // rename can fail across filesystems, fall back to copy
+            let src = extracted_dir.clone();
+            let dst = dest.to_path_buf();
+            // Use blocking copy since we need recursive dir copy
+            std::thread::spawn(move || copy_dir_recursive(&src, &dst))
+                .join()
+                .map_err(|_| anyhow::anyhow!("Copy thread panicked"))?
+        })?;
 
         // Clean up tmp dir
         tokio::fs::remove_dir_all(&tmp_dir).await.ok();
@@ -355,7 +375,8 @@ fn parse_repo_spec(spec: &str) -> Result<(String, String, Option<String>)> {
         (spec, None)
     };
 
-    let (owner, repo) = repo_part.split_once('/')
+    let (owner, repo) = repo_part
+        .split_once('/')
         .context("Invalid repo format. Expected: owner/repo or owner/repo@ref")?;
 
     if owner.is_empty() || repo.is_empty() {
@@ -413,12 +434,14 @@ fn extract_tarball(data: &[u8], dest: &Path) -> Result<()> {
     // Decompress gzip
     let mut decoder = flate2::read::GzDecoder::new(data);
     let mut decompressed = Vec::new();
-    decoder.read_to_end(&mut decompressed)
+    decoder
+        .read_to_end(&mut decompressed)
         .context("Failed to decompress gzip tarball")?;
 
     // Parse tar
     let mut archive = tar::Archive::new(decompressed.as_slice());
-    archive.unpack(dest)
+    archive
+        .unpack(dest)
         .context("Failed to extract tar archive")?;
 
     Ok(())
@@ -426,7 +449,8 @@ fn extract_tarball(data: &[u8], dest: &Path) -> Result<()> {
 
 /// Find the first directory inside a directory (GitHub tarballs extract into owner-repo-sha/)
 async fn find_extracted_dir(parent: &Path) -> Result<PathBuf> {
-    let mut entries = tokio::fs::read_dir(parent).await
+    let mut entries = tokio::fs::read_dir(parent)
+        .await
         .context("Failed to read extraction directory")?;
 
     while let Ok(Some(entry)) = entries.next_entry().await {
@@ -454,14 +478,18 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
         if src_path.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
         } else {
-            std::fs::copy(&src_path, &dst_path)
-                .with_context(|| format!("Failed to copy {} to {}", src_path.display(), dst_path.display()))?;
+            std::fs::copy(&src_path, &dst_path).with_context(|| {
+                format!(
+                    "Failed to copy {} to {}",
+                    src_path.display(),
+                    dst_path.display()
+                )
+            })?;
         }
     }
 
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -6,8 +6,8 @@
 
 use anyhow::{Context, Result};
 
-mod systemd;
 mod launchd;
+mod systemd;
 
 /// Install homun as a user service (auto-start at boot)
 pub fn install() -> Result<()> {
@@ -121,9 +121,17 @@ pub struct ServiceStatus {
 impl std::fmt::Display for ServiceStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Service Status:")?;
-        writeln!(f, "  Installed: {}", if self.installed { "yes" } else { "no" })?;
+        writeln!(
+            f,
+            "  Installed: {}",
+            if self.installed { "yes" } else { "no" }
+        )?;
         writeln!(f, "  Running: {}", if self.running { "yes" } else { "no" })?;
-        writeln!(f, "  Enabled (auto-start): {}", if self.enabled { "yes" } else { "no" })?;
+        writeln!(
+            f,
+            "  Enabled (auto-start): {}",
+            if self.enabled { "yes" } else { "no" }
+        )?;
         if let Some(ref path) = self.service_file {
             writeln!(f, "  Service file: {}", path)?;
         }
@@ -133,8 +141,7 @@ impl std::fmt::Display for ServiceStatus {
 
 /// Get the path to the homun binary
 fn get_binary_path() -> Result<std::path::PathBuf> {
-    std::env::current_exe()
-        .context("Failed to get current executable path")
+    std::env::current_exe().context("Failed to get current executable path")
 }
 
 /// Get the user's home directory

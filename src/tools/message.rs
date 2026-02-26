@@ -67,7 +67,7 @@ impl Tool for MessageTool {
                 // CLI mode or no channel available — just log it
                 tracing::info!(content = %content, "MessageTool: no channel available, message not delivered");
                 return Ok(ToolResult::success(
-                    "Message noted (no active channel to deliver to)"
+                    "Message noted (no active channel to deliver to)",
                 ));
             }
         };

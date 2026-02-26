@@ -111,7 +111,8 @@ impl TwoFactorConfig {
     pub fn record_failed_attempt(&mut self) {
         self.failed_attempts += 1;
         if self.failed_attempts >= MAX_FAILED_ATTEMPTS {
-            self.locked_until = Some(chrono::Utc::now() + chrono::Duration::seconds(LOCKOUT_DURATION_SECS as i64));
+            self.locked_until =
+                Some(chrono::Utc::now() + chrono::Duration::seconds(LOCKOUT_DURATION_SECS as i64));
         }
     }
 
@@ -253,8 +254,8 @@ impl TwoFactorStorage {
         let encrypted = std::fs::read_to_string(&self.path)
             .with_context(|| format!("Failed to read 2fa config from {}", self.path.display()))?;
 
-        let config: TwoFactorConfig = serde_json::from_str(&encrypted)
-            .context("Failed to parse 2fa config")?;
+        let config: TwoFactorConfig =
+            serde_json::from_str(&encrypted).context("Failed to parse 2fa config")?;
 
         Ok(config)
     }
@@ -268,8 +269,8 @@ impl TwoFactorStorage {
         }
 
         // For now, store as JSON (TODO: encrypt with same master key as secrets.enc)
-        let json = serde_json::to_string_pretty(config)
-            .context("Failed to serialize 2fa config")?;
+        let json =
+            serde_json::to_string_pretty(config).context("Failed to serialize 2fa config")?;
 
         // Write atomically
         let temp_path = self.path.with_extension("tmp");
@@ -293,15 +294,17 @@ impl TwoFactorStorage {
     /// Delete the 2FA configuration
     pub fn delete(&self) -> Result<()> {
         if self.path.exists() {
-            std::fs::remove_file(&self.path)
-                .with_context(|| format!("Failed to delete 2fa config at {}", self.path.display()))?;
+            std::fs::remove_file(&self.path).with_context(|| {
+                format!("Failed to delete 2fa config at {}", self.path.display())
+            })?;
         }
         Ok(())
     }
 }
 
 /// Global 2FA session manager (lazy-initialized)
-static SESSION_MANAGER: std::sync::OnceLock<Arc<TwoFactorSessionManager>> = std::sync::OnceLock::new();
+static SESSION_MANAGER: std::sync::OnceLock<Arc<TwoFactorSessionManager>> =
+    std::sync::OnceLock::new();
 
 /// Get the global session manager
 pub fn global_session_manager() -> Arc<TwoFactorSessionManager> {

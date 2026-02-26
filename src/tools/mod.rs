@@ -1,27 +1,30 @@
+pub mod approval;
+pub mod cron;
+pub mod file;
+pub mod mcp;
+pub mod message;
 pub mod registry;
 pub mod shell;
-pub mod file;
-pub mod web;
-pub mod cron;
 pub mod spawn;
-pub mod message;
-pub mod mcp;
 pub mod vault;
-pub mod approval;
+pub mod web;
 
 #[cfg(feature = "local-embeddings")]
 pub mod remember;
 
+pub use approval::{
+    global_approval_manager, init_approval_manager, ApprovalDecision, ApprovalId, ApprovalLogEntry,
+    ApprovalManager, ApprovalResponse, PendingApproval,
+};
+pub use cron::CronTool;
+pub use file::{EditFileTool, ListDirTool, ReadFileTool, WriteFileTool};
+pub use mcp::{McpManager, McpServerInfo};
+pub use message::MessageTool;
 pub use registry::{Tool, ToolContext, ToolRegistry, ToolResult};
 pub use shell::ShellTool;
-pub use file::{ReadFileTool, WriteFileTool, EditFileTool, ListDirTool};
-pub use web::{WebSearchTool, WebFetchTool};
-pub use cron::CronTool;
 pub use spawn::SpawnTool;
-pub use message::MessageTool;
-pub use mcp::{McpManager, McpServerInfo};
 pub use vault::VaultTool;
-pub use approval::{ApprovalManager, ApprovalDecision, ApprovalResponse, ApprovalLogEntry, PendingApproval, ApprovalId, init_approval_manager, global_approval_manager};
+pub use web::{WebFetchTool, WebSearchTool};
 
 #[cfg(feature = "local-embeddings")]
 pub use remember::RememberTool;

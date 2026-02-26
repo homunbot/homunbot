@@ -44,9 +44,9 @@ impl EmbeddingEngine {
             dimensions: EMBEDDING_DIM,
             metric: MetricKind::Cos,
             quantization: ScalarKind::F32,
-            connectivity: 16,       // HNSW connectivity parameter (M)
-            expansion_add: 128,     // ef_construction
-            expansion_search: 64,   // ef_search
+            connectivity: 16,     // HNSW connectivity parameter (M)
+            expansion_add: 128,   // ef_construction
+            expansion_search: 64, // ef_search
             multi: false,
         };
 
@@ -155,7 +155,11 @@ impl EmbeddingEngine {
     ///
     /// Distance threshold: 0.0 = identical, 0.15 ≈ 85% similarity for cosine.
     /// Use 0.15 for strict dedup, 0.25 for looser matching.
-    pub fn find_similar(&mut self, text: &str, distance_threshold: f32) -> Result<Option<(i64, f32)>> {
+    pub fn find_similar(
+        &mut self,
+        text: &str,
+        distance_threshold: f32,
+    ) -> Result<Option<(i64, f32)>> {
         if self.count == 0 {
             return Ok(None);
         }
@@ -173,8 +177,7 @@ impl EmbeddingEngine {
     pub fn save(&self) -> Result<()> {
         // Ensure parent directory exists
         if let Some(parent) = self.index_path.parent() {
-            std::fs::create_dir_all(parent)
-                .context("Failed to create data directory for index")?;
+            std::fs::create_dir_all(parent).context("Failed to create data directory for index")?;
         }
 
         self.index

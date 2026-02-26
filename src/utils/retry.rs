@@ -114,8 +114,7 @@ impl RetryConfig {
 
     /// Calculate delay with a seed for deterministic jitter (useful for testing)
     pub fn delay_for_attempt_with_jitter(&self, attempt: u32, seed: u64) -> Duration {
-        let base_delay = self.initial_delay.as_secs_f64()
-            * self.multiplier.powi(attempt as i32);
+        let base_delay = self.initial_delay.as_secs_f64() * self.multiplier.powi(attempt as i32);
 
         let capped_delay = base_delay.min(self.max_delay.as_secs_f64());
 
@@ -125,8 +124,8 @@ impl RetryConfig {
             let jitter_range = capped_delay * self.jitter_factor;
             // Simple hash-like computation for deterministic "randomness"
             let pseudo_random = ((seed.wrapping_mul(attempt as u64 + 1)) % 1000) as f64 / 1000.0;
-            let jitter_amount = (pseudo_random - 0.5) * 2.0 * jitter_range; // -jitter_range to +jitter_range
-            jitter_amount
+            // -jitter_range to +jitter_range
+            (pseudo_random - 0.5) * 2.0 * jitter_range
         } else {
             0.0
         };
@@ -167,15 +166,11 @@ pub trait RetryableError: std::fmt::Display {
         {
             RetryDecision::WaitForNetwork
         }
-        // Rate limiting - should retry with backoff
+        // Rate limiting or server errors - should retry with backoff
         else if err_str.contains("429")
             || err_str.contains("rate limit")
             || err_str.contains("too many requests")
-        {
-            RetryDecision::Retry
-        }
-        // Server errors - might be temporary
-        else if err_str.contains("500")
+            || err_str.contains("500")
             || err_str.contains("502")
             || err_str.contains("503")
             || err_str.contains("504")
@@ -490,7 +485,11 @@ mod tests {
         assert!(result.is_err());
         // With max_retries: 2, we have 3 total attempts (1 initial + 2 retries)
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("3 retries"), "Error message was: {}", err_msg);
+        assert!(
+            err_msg.contains("3 retries"),
+            "Error message was: {}",
+            err_msg
+        );
     }
 
     #[tokio::test]

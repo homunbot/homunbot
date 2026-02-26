@@ -304,10 +304,7 @@ mod tests {
         assert_eq!(coerce_value("true"), Value::Bool(true));
         assert_eq!(coerce_value("false"), Value::Bool(false));
         assert_eq!(coerce_value("42"), Value::Number(42.into()));
-        assert_eq!(
-            coerce_value("hello"),
-            Value::String("hello".to_string())
-        );
+        assert_eq!(coerce_value("hello"), Value::String("hello".to_string()));
     }
 
     #[test]

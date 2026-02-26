@@ -1,10 +1,10 @@
-mod traits;
-mod openai_compat;
 mod anthropic;
 mod ollama;
+mod openai_compat;
+mod traits;
 pub mod xml_dispatcher;
 
-pub use traits::*;
-pub use openai_compat::OpenAICompatProvider;
 pub use anthropic::AnthropicProvider;
 pub use ollama::OllamaProvider;
+pub use openai_compat::OpenAICompatProvider;
+pub use traits::*;

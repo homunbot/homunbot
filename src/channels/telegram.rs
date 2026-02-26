@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use reqwest_011 as reqwest;  // Use reqwest 0.11 for teloxide compatibility
 use reqwest::Client;
+use reqwest_011 as reqwest; // Use reqwest 0.11 for teloxide compatibility
 use teloxide::prelude::*;
 use teloxide::types::ParseMode;
 use teloxide::update_listeners::Polling;
@@ -49,7 +49,11 @@ impl TelegramChannel {
 
         // Log token status (masked for security)
         let token_preview = if self.config.token.len() > 10 {
-            format!("{}...{}", &self.config.token[..6], &self.config.token[self.config.token.len()-4..])
+            format!(
+                "{}...{}",
+                &self.config.token[..6],
+                &self.config.token[self.config.token.len() - 4..]
+            )
         } else {
             "[too short]".to_string()
         };
@@ -64,21 +68,19 @@ impl TelegramChannel {
         // Spawn outbound message dispatcher
         let bot_for_outbound = bot.clone();
         let outbound_rx = Arc::new(Mutex::new(outbound_rx));
-        let outbound_handle = tokio::spawn(Self::outbound_loop(
-            bot_for_outbound,
-            outbound_rx,
-        ));
+        let outbound_handle = tokio::spawn(Self::outbound_loop(bot_for_outbound, outbound_rx));
 
         // Set up message handler with long polling
-        let handler = Update::filter_message().endpoint(
-            move |bot: Bot, msg: Message, inbound_tx: mpsc::Sender<InboundMessage>| {
-                let allow_from = allow_from.clone();
-                let allow_all = allow_all;
-                async move {
-                    Self::handle_message(bot, msg, &inbound_tx, &allow_from, allow_all).await
-                }
-            },
-        );
+        let handler =
+            Update::filter_message().endpoint(
+                move |bot: Bot, msg: Message, inbound_tx: mpsc::Sender<InboundMessage>| {
+                    let allow_from = allow_from.clone();
+                    let allow_all = allow_all;
+                    async move {
+                        Self::handle_message(bot, msg, &inbound_tx, &allow_from, allow_all).await
+                    }
+                },
+            );
 
         // Configure polling with:
         // - Extended timeout (60s) for slow connections
@@ -214,10 +216,7 @@ impl TelegramChannel {
     }
 
     /// Outbound loop: receive agent responses and send to Telegram
-    async fn outbound_loop(
-        bot: Bot,
-        outbound_rx: Arc<Mutex<mpsc::Receiver<OutboundMessage>>>,
-    ) {
+    async fn outbound_loop(bot: Bot, outbound_rx: Arc<Mutex<mpsc::Receiver<OutboundMessage>>>) {
         let mut rx = outbound_rx.lock().await;
 
         while let Some(msg) = rx.recv().await {
@@ -420,9 +419,7 @@ fn split_message(text: &str, max_len: usize) -> Vec<String> {
         }
 
         // Try to split at a newline before the limit
-        let split_at = remaining[..max_len]
-            .rfind('\n')
-            .unwrap_or(max_len);
+        let split_at = remaining[..max_len].rfind('\n').unwrap_or(max_len);
 
         let (chunk, rest) = remaining.split_at(split_at);
         chunks.push(chunk.to_string());
@@ -502,10 +499,7 @@ mod tests {
 
     #[test]
     fn test_markdown_to_html_escapes_html() {
-        assert_eq!(
-            markdown_to_html("a < b & c > d"),
-            "a &lt; b &amp; c &gt; d"
-        );
+        assert_eq!(markdown_to_html("a < b & c > d"), "a &lt; b &amp; c &gt; d");
     }
 
     #[test]

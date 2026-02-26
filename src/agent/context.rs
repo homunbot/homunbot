@@ -59,9 +59,7 @@ impl ContextBuilder {
         let (bootstrap_content, bootstrap_files) = Self::load_bootstrap_files(&data_dir);
 
         Self {
-            workspace: Config::workspace_dir()
-                .to_string_lossy()
-                .to_string(),
+            workspace: Config::workspace_dir().to_string_lossy().to_string(),
             skills_summary: Arc::new(RwLock::new(String::new())),
             bootstrap_content: Arc::new(RwLock::new(bootstrap_content)),
             bootstrap_files: Arc::new(RwLock::new(bootstrap_files)),
@@ -123,7 +121,7 @@ impl ContextBuilder {
     pub async fn reload_bootstrap_files(&self) {
         let data_dir = Config::data_dir();
         let (content, files) = Self::load_bootstrap_files(&data_dir);
-        
+
         {
             let mut guard = self.bootstrap_content.write().await;
             *guard = content;
@@ -132,7 +130,7 @@ impl ContextBuilder {
             let mut guard = self.bootstrap_files.write().await;
             *guard = files;
         }
-        
+
         tracing::info!("Reloaded bootstrap files");
     }
 
@@ -162,6 +160,7 @@ impl ContextBuilder {
     }
 
     /// Get both handles for the BootstrapWatcher (convenience method).
+    #[allow(clippy::type_complexity)]
     pub fn bootstrap_handles(&self) -> (Arc<RwLock<String>>, Arc<RwLock<Vec<(String, String)>>>) {
         (self.bootstrap_content.clone(), self.bootstrap_files.clone())
     }
@@ -257,7 +256,8 @@ impl ContextBuilder {
         history: &[ChatMessage],
         user_message: &str,
     ) -> Vec<ChatMessage> {
-        self.build_messages_with_tools(history, user_message, &[]).await
+        self.build_messages_with_tools(history, user_message, &[])
+            .await
     }
 
     /// Build messages with tool definitions included in the prompt.
@@ -270,7 +270,9 @@ impl ContextBuilder {
         let mut messages = Vec::with_capacity(history.len() + 2);
 
         // System prompt with tools
-        messages.push(ChatMessage::system(&self.build_system_prompt_with_tools(tools).await));
+        messages.push(ChatMessage::system(
+            &self.build_system_prompt_with_tools(tools).await,
+        ));
 
         // Conversation history
         messages.extend_from_slice(history);
@@ -300,13 +302,11 @@ mod tests {
     async fn test_build_system_prompt_with_tools() {
         let config = Config::default();
         let ctx = ContextBuilder::new(&config);
-        let tools = vec![
-            ToolInfo {
-                name: "remember".to_string(),
-                description: "Save user info".to_string(),
-                parameters_schema: serde_json::json!({}),
-            },
-        ];
+        let tools = vec![ToolInfo {
+            name: "remember".to_string(),
+            description: "Save user info".to_string(),
+            parameters_schema: serde_json::json!({}),
+        }];
         let prompt = ctx.build_system_prompt_with_tools(&tools).await;
 
         assert!(prompt.contains("remember"));
@@ -337,7 +337,8 @@ mod tests {
 
     #[test]
     fn test_bootstrap_files_from_nonexistent_dir() {
-        let (content, files) = ContextBuilder::load_bootstrap_files(std::path::Path::new("/nonexistent"));
+        let (content, files) =
+            ContextBuilder::load_bootstrap_files(std::path::Path::new("/nonexistent"));
         assert!(content.is_empty());
         assert!(files.is_empty());
     }
@@ -366,7 +367,7 @@ mod tests {
         assert!(content.contains("friendly and witty"));
         assert!(content.contains("User Context"));
         assert!(content.contains("Fabio"));
-        
+
         // Check new format
         assert_eq!(files.len(), 2);
         assert!(files.iter().any(|(n, _)| n == "SOUL.md"));

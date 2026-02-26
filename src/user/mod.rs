@@ -7,9 +7,11 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::storage::{Database, UserRow, UserIdentityRow, WebhookTokenRow};
+use crate::storage::{Database, UserIdentityRow, UserRow, WebhookTokenRow};
 
-pub use crate::storage::{UserRow as User, UserIdentityRow as UserIdentity, WebhookTokenRow as WebhookToken};
+pub use crate::storage::{
+    UserIdentityRow as UserIdentity, UserRow as User, WebhookTokenRow as WebhookToken,
+};
 
 /// User roles for permission checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,9 +45,12 @@ impl Role {
         use Role::*;
         matches!(
             (self, required),
-            (Admin, Admin) | (Admin, User) | (Admin, Guest) |
-            (User, User) | (User, Guest) |
-            (Guest, Guest)
+            (Admin, Admin)
+                | (Admin, User)
+                | (Admin, Guest)
+                | (User, User)
+                | (User, Guest)
+                | (Guest, Guest)
         )
     }
 }
@@ -61,13 +66,10 @@ pub struct UserInfo {
 impl UserInfo {
     /// Parse from a database row.
     pub fn from_row(row: &UserRow) -> Result<Self> {
-        let roles: Vec<String> = serde_json::from_str(&row.roles)
-            .unwrap_or_else(|_| vec!["user".to_string()]);
+        let roles: Vec<String> =
+            serde_json::from_str(&row.roles).unwrap_or_else(|_| vec!["user".to_string()]);
 
-        let roles: Vec<Role> = roles
-            .iter()
-            .filter_map(|r| Role::from_str(r))
-            .collect();
+        let roles: Vec<Role> = roles.iter().filter_map(|r| Role::from_str(r)).collect();
 
         // Default to "user" role if none parsed
         let roles = if roles.is_empty() {
@@ -152,7 +154,10 @@ impl UserManager {
         channel: &str,
         platform_id: &str,
     ) -> Result<Option<UserInfo>> {
-        let row = self.db.lookup_user_by_identity(channel, platform_id).await?;
+        let row = self
+            .db
+            .lookup_user_by_identity(channel, platform_id)
+            .await?;
         match row {
             Some(r) => Ok(Some(UserInfo::from_row(&r)?)),
             None => Ok(None),
@@ -180,7 +185,9 @@ impl UserManager {
         platform_id: &str,
         display_name: Option<&str>,
     ) -> Result<()> {
-        self.db.add_user_identity(user_id, channel, platform_id, display_name).await
+        self.db
+            .add_user_identity(user_id, channel, platform_id, display_name)
+            .await
     }
 
     /// Unlink a channel identity from a user.
@@ -190,7 +197,9 @@ impl UserManager {
         channel: &str,
         platform_id: &str,
     ) -> Result<bool> {
-        self.db.remove_user_identity(user_id, channel, platform_id).await
+        self.db
+            .remove_user_identity(user_id, channel, platform_id)
+            .await
     }
 
     /// Create a webhook token for a user.
@@ -204,7 +213,7 @@ impl UserManager {
     /// List all users.
     pub async fn list_users(&self) -> Result<Vec<UserInfo>> {
         let rows = self.db.load_all_users().await?;
-        rows.iter().map(|r| UserInfo::from_row(r)).collect()
+        rows.iter().map(UserInfo::from_row).collect()
     }
 
     /// Update user roles.

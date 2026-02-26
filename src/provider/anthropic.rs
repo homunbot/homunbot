@@ -149,9 +149,7 @@ fn convert_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<AnthropicM
             "user" => {
                 anthropic_msgs.push(AnthropicMessage {
                     role: "user".to_string(),
-                    content: AnthropicContent::Text(
-                        msg.content.clone().unwrap_or_default(),
-                    ),
+                    content: AnthropicContent::Text(msg.content.clone().unwrap_or_default()),
                 });
             }
             "assistant" => {
@@ -168,9 +166,8 @@ fn convert_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<AnthropicM
 
                     // Add tool_use blocks
                     for tc in tool_calls {
-                        let input: serde_json::Value =
-                            serde_json::from_str(&tc.function.arguments)
-                                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                        let input: serde_json::Value = serde_json::from_str(&tc.function.arguments)
+                            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
                         blocks.push(ContentBlock::ToolUse {
                             id: tc.id.clone(),
                             name: tc.function.name.clone(),
@@ -185,9 +182,7 @@ fn convert_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<AnthropicM
                 } else {
                     anthropic_msgs.push(AnthropicMessage {
                         role: "assistant".to_string(),
-                        content: AnthropicContent::Text(
-                            msg.content.clone().unwrap_or_default(),
-                        ),
+                        content: AnthropicContent::Text(msg.content.clone().unwrap_or_default()),
                     });
                 }
             }
@@ -219,9 +214,7 @@ fn convert_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<AnthropicM
                 // Unknown role — treat as user
                 anthropic_msgs.push(AnthropicMessage {
                     role: "user".to_string(),
-                    content: AnthropicContent::Text(
-                        msg.content.clone().unwrap_or_default(),
-                    ),
+                    content: AnthropicContent::Text(msg.content.clone().unwrap_or_default()),
                 });
             }
         }
@@ -319,7 +312,9 @@ impl Provider for AnthropicProvider {
             .with_context(|| format!("Failed to send request to Anthropic API at {}", url))?;
 
         let status = response.status();
-        let response_text = response.text().await
+        let response_text = response
+            .text()
+            .await
             .context("Failed to read Anthropic response body")?;
 
         if !status.is_success() {
@@ -392,13 +387,19 @@ mod tests {
     #[test]
     fn test_resolve_model_strip_prefix() {
         let provider = AnthropicProvider::new("key", None, HashMap::new());
-        assert_eq!(provider.resolve_model("anthropic/claude-sonnet-4-20250514"), "claude-sonnet-4-20250514");
+        assert_eq!(
+            provider.resolve_model("anthropic/claude-sonnet-4-20250514"),
+            "claude-sonnet-4-20250514"
+        );
     }
 
     #[test]
     fn test_resolve_model_no_prefix() {
         let provider = AnthropicProvider::new("key", None, HashMap::new());
-        assert_eq!(provider.resolve_model("claude-sonnet-4-20250514"), "claude-sonnet-4-20250514");
+        assert_eq!(
+            provider.resolve_model("claude-sonnet-4-20250514"),
+            "claude-sonnet-4-20250514"
+        );
     }
 
     #[test]

@@ -23,14 +23,11 @@ impl SessionManager {
     }
 
     /// Add a message to a session (creates session if needed)
-    pub async fn add_message(
-        &self,
-        session_key: &str,
-        role: &str,
-        content: &str,
-    ) -> Result<()> {
+    pub async fn add_message(&self, session_key: &str, role: &str, content: &str) -> Result<()> {
         self.db.upsert_session(session_key, 0).await?;
-        self.db.insert_message(session_key, role, content, &[]).await
+        self.db
+            .insert_message(session_key, role, content, &[])
+            .await
     }
 
     /// Add a message with tools_used metadata
@@ -42,7 +39,9 @@ impl SessionManager {
         tools_used: &[String],
     ) -> Result<()> {
         self.db.upsert_session(session_key, 0).await?;
-        self.db.insert_message(session_key, role, content, tools_used).await
+        self.db
+            .insert_message(session_key, role, content, tools_used)
+            .await
     }
 
     /// Get the last N messages as ChatMessage for the LLM

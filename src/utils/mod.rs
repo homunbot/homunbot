@@ -3,8 +3,8 @@
 pub mod reasoning_filter;
 pub mod retry;
 
-pub use reasoning_filter::{strip_reasoning, has_reasoning, extract_reasoning};
+pub use reasoning_filter::{extract_reasoning, has_reasoning, strip_reasoning};
 pub use retry::{
-    is_network_online, set_network_online, retry_with_backoff, retry_with_condition,
-    RetryConfig, RetryDecision, RetryableError, RetryWrapper,
+    is_network_online, retry_with_backoff, retry_with_condition, set_network_online, RetryConfig,
+    RetryDecision, RetryWrapper, RetryableError,
 };

@@ -15,30 +15,67 @@
 //! - ref=e1 → getByRole("button", {name: "Search"})
 
 use anyhow::{Context, Result};
-use chromiumoxide::cdp::browser_protocol::accessibility::{GetFullAxTreeParams, AxNode, AxValue};
+use chromiumoxide::cdp::browser_protocol::accessibility::{AxNode, AxValue, GetFullAxTreeParams};
 use chromiumoxide::page::Page;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 /// Interactive roles that should always have refs
 const INTERACTIVE_ROLES: &[&str] = &[
-    "button", "link", "textbox", "checkbox", "radio", "combobox",
-    "listbox", "menuitem", "menuitemcheckbox", "menuitemradio",
-    "option", "searchbox", "slider", "spinbutton", "switch", "tab",
+    "button",
+    "link",
+    "textbox",
+    "checkbox",
+    "radio",
+    "combobox",
+    "listbox",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "option",
+    "searchbox",
+    "slider",
+    "spinbutton",
+    "switch",
+    "tab",
     "treeitem",
 ];
 
 /// Content roles that should have refs if they have names
 const CONTENT_ROLES: &[&str] = &[
-    "heading", "cell", "gridcell", "columnheader", "rowheader",
-    "listitem", "article", "region", "main", "navigation", "img",
+    "heading",
+    "cell",
+    "gridcell",
+    "columnheader",
+    "rowheader",
+    "listitem",
+    "article",
+    "region",
+    "main",
+    "navigation",
+    "img",
 ];
 
 /// Structural roles (skipped in compact mode)
 const STRUCTURAL_ROLES: &[&str] = &[
-    "generic", "group", "list", "table", "row", "rowgroup",
-    "grid", "treegrid", "menu", "menubar", "toolbar", "tablist",
-    "tree", "directory", "document", "application", "presentation", "none",
+    "generic",
+    "group",
+    "list",
+    "table",
+    "row",
+    "rowgroup",
+    "grid",
+    "treegrid",
+    "menu",
+    "menubar",
+    "toolbar",
+    "tablist",
+    "tree",
+    "directory",
+    "document",
+    "application",
+    "presentation",
+    "none",
 ];
 
 /// Options for snapshot generation
@@ -151,7 +188,10 @@ impl PageSnapshot {
         let text_snapshot = Self::format_accessibility_tree(&url, &title, &description, &elements);
 
         // Calculate stats
-        let interactive = elements.iter().filter(|e| INTERACTIVE_ROLES.contains(&e.role.as_str())).count();
+        let interactive = elements
+            .iter()
+            .filter(|e| INTERACTIVE_ROLES.contains(&e.role.as_str()))
+            .count();
         let stats = SnapshotStats {
             total: elements.len(),
             interactive,
@@ -204,7 +244,7 @@ impl PageSnapshot {
         // Build node lookup
         let by_id: HashMap<String, &AxNode> = nodes
             .iter()
-            .filter_map(|n| Some((n.node_id.as_ref().to_string(), n)))
+            .map(|n| (n.node_id.as_ref().to_string(), n))
             .collect();
 
         // Find root (node that is not referenced as child)
@@ -309,7 +349,14 @@ impl PageSnapshot {
                 let ref_id = format!("e{}", ref_counter);
 
                 // Track role+name for nth assignment
-                let key = (role_lower.clone(), if name.is_empty() { None } else { Some(name.clone()) });
+                let key = (
+                    role_lower.clone(),
+                    if name.is_empty() {
+                        None
+                    } else {
+                        Some(name.clone())
+                    },
+                );
                 let count = role_name_counts.entry(key.clone()).or_insert(0);
                 *count += 1;
                 let nth = if *count > 1 { Some(*count - 1) } else { None };
@@ -317,7 +364,11 @@ impl PageSnapshot {
                 // Create role ref
                 let role_ref = RoleRef {
                     role: role_lower.clone(),
-                    name: if name.is_empty() { None } else { Some(name.clone()) },
+                    name: if name.is_empty() {
+                        None
+                    } else {
+                        Some(name.clone())
+                    },
                     nth,
                 };
                 role_refs.insert(ref_id.clone(), role_ref.clone());
@@ -366,11 +417,7 @@ impl PageSnapshot {
     }
 
     /// Generate a CSS selector for the element (fallback for role-based)
-    fn generate_selector(
-        role: &str,
-        name: &str,
-        nth: Option<usize>,
-    ) -> String {
+    fn generate_selector(role: &str, name: &str, nth: Option<usize>) -> String {
         // Try to build a role-based selector first
         let base_selector: String = match role {
             "button" => "button".to_string(),
@@ -470,7 +517,10 @@ impl PageSnapshot {
             } else {
                 // Escape quotes in name
                 let escaped_name = el.name.replace('"', "'");
-                let mut line = format!("{}- {} \"{}\" [ref={}", indent, el.role, escaped_name, el.ref_id);
+                let mut line = format!(
+                    "{}- {} \"{}\" [ref={}",
+                    indent, el.role, escaped_name, el.ref_id
+                );
 
                 // Add nth for duplicates
                 if let Some(nth) = el.role_ref.nth {
@@ -529,7 +579,11 @@ mod tests {
             name: "Submit".to_string(),
             selector: "#submit".to_string(),
             depth: 0,
-            role_ref: RoleRef { role: "button".to_string(), name: Some("Submit".to_string()), nth: None },
+            role_ref: RoleRef {
+                role: "button".to_string(),
+                name: Some("Submit".to_string()),
+                nth: None,
+            },
         };
         assert_eq!(format!("{}", el), "- button \"Submit\" [ref=e1]");
     }
@@ -542,7 +596,11 @@ mod tests {
             name: String::new(),
             selector: "img.hero".to_string(),
             depth: 0,
-            role_ref: RoleRef { role: "img".to_string(), name: None, nth: None },
+            role_ref: RoleRef {
+                role: "img".to_string(),
+                name: None,
+                nth: None,
+            },
         };
         assert_eq!(format!("{}", el), "- img [ref=e2]");
     }
@@ -586,14 +644,56 @@ mod tests {
     #[test]
     fn test_accessibility_tree_format() {
         let mut role_refs = HashMap::new();
-        role_refs.insert("e1".to_string(), RoleRef { role: "button".to_string(), name: Some("Login".to_string()), nth: None });
-        role_refs.insert("e2".to_string(), RoleRef { role: "textbox".to_string(), name: Some("Email".to_string()), nth: None });
-        role_refs.insert("e3".to_string(), RoleRef { role: "link".to_string(), name: Some("Help".to_string()), nth: None });
+        role_refs.insert(
+            "e1".to_string(),
+            RoleRef {
+                role: "button".to_string(),
+                name: Some("Login".to_string()),
+                nth: None,
+            },
+        );
+        role_refs.insert(
+            "e2".to_string(),
+            RoleRef {
+                role: "textbox".to_string(),
+                name: Some("Email".to_string()),
+                nth: None,
+            },
+        );
+        role_refs.insert(
+            "e3".to_string(),
+            RoleRef {
+                role: "link".to_string(),
+                name: Some("Help".to_string()),
+                nth: None,
+            },
+        );
 
         let elements = vec![
-            ElementRef { ref_id: "e1".to_string(), role: "button".to_string(), name: "Login".to_string(), selector: "#login".to_string(), depth: 0, role_ref: role_refs["e1"].clone() },
-            ElementRef { ref_id: "e2".to_string(), role: "textbox".to_string(), name: "Email".to_string(), selector: "#email".to_string(), depth: 1, role_ref: role_refs["e2"].clone() },
-            ElementRef { ref_id: "e3".to_string(), role: "link".to_string(), name: "Help".to_string(), selector: "a.help".to_string(), depth: 0, role_ref: role_refs["e3"].clone() },
+            ElementRef {
+                ref_id: "e1".to_string(),
+                role: "button".to_string(),
+                name: "Login".to_string(),
+                selector: "#login".to_string(),
+                depth: 0,
+                role_ref: role_refs["e1"].clone(),
+            },
+            ElementRef {
+                ref_id: "e2".to_string(),
+                role: "textbox".to_string(),
+                name: "Email".to_string(),
+                selector: "#email".to_string(),
+                depth: 1,
+                role_ref: role_refs["e2"].clone(),
+            },
+            ElementRef {
+                ref_id: "e3".to_string(),
+                role: "link".to_string(),
+                name: "Help".to_string(),
+                selector: "a.help".to_string(),
+                depth: 0,
+                role_ref: role_refs["e3"].clone(),
+            },
         ];
 
         let description = Some("A sample site".to_string());
@@ -611,7 +711,11 @@ mod tests {
             elements,
             role_refs,
             text_snapshot,
-            stats: SnapshotStats { total: 3, interactive: 3, with_refs: 3 },
+            stats: SnapshotStats {
+                total: 3,
+                interactive: 3,
+                with_refs: 3,
+            },
         };
 
         let formatted = snapshot.to_llm_format();

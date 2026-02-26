@@ -57,8 +57,8 @@ mod totp;
 mod two_factor;
 
 pub use exfiltration::{
-    scan, redact, global_filter, init_global_filter,
-    Detection, ExfilConfig, ExfilFilter, ScanResult, Severity,
+    global_filter, init_global_filter, redact, scan, Detection, ExfilConfig, ExfilFilter,
+    ScanResult, Severity,
 };
 pub use vault_leak::redact_vault_values;
 

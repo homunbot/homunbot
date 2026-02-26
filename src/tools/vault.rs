@@ -18,12 +18,10 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::security::{
-    global_session_manager, TotpManager, TwoFactorConfig, TwoFactorStorage,
-};
+use crate::security::{global_session_manager, TotpManager, TwoFactorConfig, TwoFactorStorage};
 use crate::storage::{global_secrets, SecretKey};
 
-use super::registry::{Tool, ToolContext, ToolResult, get_string_param, get_optional_string};
+use super::registry::{get_optional_string, get_string_param, Tool, ToolContext, ToolResult};
 
 /// Vault prefix for user secrets (namespaced away from provider/channel keys)
 const VAULT_PREFIX: &str = "vault.";
@@ -72,7 +70,9 @@ impl VaultTool {
 
         // Check lockout
         if config.is_locked_out() {
-            return Ok(Err("Too many failed attempts. Please wait a few minutes.".to_string()));
+            return Ok(Err(
+                "Too many failed attempts. Please wait a few minutes.".to_string()
+            ));
         }
 
         // Verify code
@@ -95,10 +95,7 @@ impl VaultTool {
             config.record_failed_attempt();
             TwoFactorStorage::new()?.save(&config)?;
 
-            tracing::warn!(
-                attempts = config.failed_attempts,
-                "2FA verification failed"
-            );
+            tracing::warn!(attempts = config.failed_attempts, "2FA verification failed");
             Ok(Err(format!(
                 "Invalid code. {} attempts remaining.",
                 MAX_FAILED_ATTEMPTS.saturating_sub(config.failed_attempts)

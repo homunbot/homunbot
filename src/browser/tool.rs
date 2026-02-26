@@ -18,13 +18,20 @@ use crate::security::{global_session_manager, TwoFactorStorage};
 use crate::storage::{global_secrets, SecretKey};
 
 use super::actions::{BrowserAction, WaitType};
-use super::manager::{global_browser_manager, ConsoleMessage, PageError, ConsoleLevel, HttpMethod, NetworkRequest};
+use super::manager::{
+    global_browser_manager, ConsoleLevel, ConsoleMessage, HttpMethod, NetworkRequest, PageError,
+};
 use super::snapshot::{PageSnapshot, RoleRef};
 
-use crate::tools::registry::{Tool, ToolContext, ToolResult, get_string_param, get_optional_string, get_optional_bool};
+use crate::tools::registry::{
+    get_optional_bool, get_optional_string, get_string_param, Tool, ToolContext, ToolResult,
+};
 
 /// Global cache for role_refs per chat_id (persists across snapshots)
-static ROLE_REFS_CACHE: std::sync::OnceLock<Arc<RwLock<HashMap<String, HashMap<String, RoleRef>>>>> = std::sync::OnceLock::new();
+#[allow(clippy::type_complexity)]
+static ROLE_REFS_CACHE: std::sync::OnceLock<
+    Arc<RwLock<HashMap<String, HashMap<String, RoleRef>>>>,
+> = std::sync::OnceLock::new();
 
 fn get_role_refs_cache() -> Arc<RwLock<HashMap<String, HashMap<String, RoleRef>>>> {
     ROLE_REFS_CACHE
@@ -62,12 +69,18 @@ impl BrowserTool {
     ///
     /// Uses JavaScript to find elements by their ARIA role and accessible name.
     /// This is more robust for SPAs than CSS selectors.
-    async fn find_element_by_role(&self, page: &Page, ref_id: &str, chat_id: &str) -> Result<String> {
+    async fn find_element_by_role(
+        &self,
+        page: &Page,
+        ref_id: &str,
+        chat_id: &str,
+    ) -> Result<String> {
         // Get cached role_refs
-        let role_refs = self.get_cached_role_refs(chat_id).await
-            .ok_or_else(|| anyhow::anyhow!(
+        let role_refs = self.get_cached_role_refs(chat_id).await.ok_or_else(|| {
+            anyhow::anyhow!(
                 "No cached role_refs for this session. Take a snapshot first to get element refs."
-            ))?;
+            )
+        })?;
 
         let role_ref = role_refs.get(ref_id)
             .ok_or_else(|| anyhow::anyhow!(
@@ -216,9 +229,7 @@ impl BrowserTool {
             .await
             .context("Failed to find element by role")?;
 
-        let selector: Option<String> = result
-            .into_value()
-            .context("Failed to parse selector")?;
+        let selector: Option<String> = result.into_value().context("Failed to parse selector")?;
 
         selector.ok_or_else(|| anyhow::anyhow!(
             "Element '{}' (role={}, name={}) not found on page. The page may have changed - take a new snapshot.",
@@ -227,7 +238,11 @@ impl BrowserTool {
     }
 
     /// Resolve a vault:// reference to its actual value.
-    async fn resolve_vault_reference(&self, text: &str, session_id: Option<&str>) -> Option<Result<String>> {
+    async fn resolve_vault_reference(
+        &self,
+        text: &str,
+        session_id: Option<&str>,
+    ) -> Option<Result<String>> {
         if !text.starts_with("vault://") {
             return None;
         }
@@ -272,14 +287,11 @@ impl BrowserTool {
     /// Execute navigate action.
     async fn execute_navigate(&self, page: &Page, url: &str, timeout_secs: u64) -> Result<String> {
         // Use tokio::time::timeout for navigation
-        let result = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            async {
-                page.goto(url).await?;
-                // Wait for navigation to complete properly
-                page.wait_for_navigation().await
-            }
-        )
+        let result = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
+            page.goto(url).await?;
+            // Wait for navigation to complete properly
+            page.wait_for_navigation().await
+        })
         .await
         .context("Navigation timeout")?;
 
@@ -294,7 +306,13 @@ impl BrowserTool {
     /// Optionally takes a screenshot for the UI gallery.
     /// Caches role_refs for later element resolution.
     /// Collects console messages and errors from the page.
-    async fn execute_snapshot(&self, page: &Page, chat_id: &str, take_screenshot: bool, screenshot_dir: &std::path::Path) -> Result<PageSnapshot> {
+    async fn execute_snapshot(
+        &self,
+        page: &Page,
+        chat_id: &str,
+        take_screenshot: bool,
+        screenshot_dir: &std::path::Path,
+    ) -> Result<PageSnapshot> {
         // Collect console messages and errors from the page
         let manager = global_browser_manager();
         manager.collect_page_messages(page, chat_id).await;
@@ -303,7 +321,8 @@ impl BrowserTool {
         let snapshot = PageSnapshot::from_page(page).await?;
 
         // Cache role_refs for role-based element resolution
-        self.cache_role_refs(chat_id, snapshot.role_refs.clone()).await;
+        self.cache_role_refs(chat_id, snapshot.role_refs.clone())
+            .await;
 
         // Optionally take a screenshot for UI display (not for vision analysis)
         if take_screenshot {
@@ -338,15 +357,13 @@ impl BrowserTool {
 
         // Wait for potential navigation/page change
         // Use a short timeout since not all clicks trigger navigation
-        let _ = tokio::time::timeout(
-            Duration::from_millis(1000),
-            page.wait_for_navigation()
-        ).await;
+        let _ = tokio::time::timeout(Duration::from_millis(1000), page.wait_for_navigation()).await;
 
         Ok(format!("Clicked element [{}]", ref_id))
     }
 
     /// Execute type action.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_type(
         &self,
         page: &Page,
@@ -404,17 +421,29 @@ impl BrowserTool {
         if submit {
             element.press_key("Enter").await?;
             // Wait for navigation to complete (search results, form submission, etc.)
-            let _ = tokio::time::timeout(
-                Duration::from_secs(5),
-                page.wait_for_navigation()
-            ).await;
+            let _ = tokio::time::timeout(Duration::from_secs(5), page.wait_for_navigation()).await;
         }
 
-        Ok(format!("Typed into element [{}] (length: {}){}", ref_id, actual_text.len(), if submit { " and submitted (page loaded)" } else { "" }))
+        Ok(format!(
+            "Typed into element [{}] (length: {}){}",
+            ref_id,
+            actual_text.len(),
+            if submit {
+                " and submitted (page loaded)"
+            } else {
+                ""
+            }
+        ))
     }
 
     /// Execute select action.
-    async fn execute_select(&self, page: &Page, ref_id: &str, option: &str, chat_id: &str) -> Result<String> {
+    async fn execute_select(
+        &self,
+        page: &Page,
+        ref_id: &str,
+        option: &str,
+        chat_id: &str,
+    ) -> Result<String> {
         let selector = self.find_element_by_role(page, ref_id, chat_id).await?;
 
         // Use JavaScript to select option
@@ -440,14 +469,23 @@ impl BrowserTool {
         let success: bool = result.into_value()?;
 
         if !success {
-            return Err(anyhow::anyhow!("Option '{}' not found in select element", option));
+            return Err(anyhow::anyhow!(
+                "Option '{}' not found in select element",
+                option
+            ));
         }
 
         Ok(format!("Selected '{}' in element [{}]", option, ref_id))
     }
 
     /// Execute wait action.
-    async fn execute_wait(&self, page: &Page, wait_type: WaitType, value: &str, timeout_secs: u64) -> Result<String> {
+    async fn execute_wait(
+        &self,
+        page: &Page,
+        wait_type: WaitType,
+        value: &str,
+        timeout_secs: u64,
+    ) -> Result<String> {
         let timeout = Duration::from_secs(timeout_secs);
         let start = std::time::Instant::now();
 
@@ -472,35 +510,32 @@ impl BrowserTool {
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 }
             }
-            WaitType::Text => {
-                loop {
-                    let js = r#"(function() { return document.body ? document.body.innerText : ""; })();"#;
-                    let result = page.evaluate(js).await?;
-                    let content: String = result.into_value()?;
+            WaitType::Text => loop {
+                let js =
+                    r#"(function() { return document.body ? document.body.innerText : ""; })();"#;
+                let result = page.evaluate(js).await?;
+                let content: String = result.into_value()?;
 
-                    if content.contains(value) {
-                        return Ok(format!("Text found: {}", value));
-                    }
+                if content.contains(value) {
+                    return Ok(format!("Text found: {}", value));
+                }
 
-                    if start.elapsed() > timeout {
-                        return Err(anyhow::anyhow!("Wait for text timed out"));
-                    }
-                    tokio::time::sleep(Duration::from_millis(200)).await;
+                if start.elapsed() > timeout {
+                    return Err(anyhow::anyhow!("Wait for text timed out"));
                 }
-            }
-            WaitType::Url => {
-                loop {
-                    if let Some(url) = page.url().await? {
-                        if url.to_string().contains(value) {
-                            return Ok(format!("URL matched: {}", value));
-                        }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            },
+            WaitType::Url => loop {
+                if let Some(url) = page.url().await? {
+                    if url.to_string().contains(value) {
+                        return Ok(format!("URL matched: {}", value));
                     }
-                    if start.elapsed() > timeout {
-                        return Err(anyhow::anyhow!("Wait for URL timed out"));
-                    }
-                    tokio::time::sleep(Duration::from_millis(200)).await;
                 }
-            }
+                if start.elapsed() > timeout {
+                    return Err(anyhow::anyhow!("Wait for URL timed out"));
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            },
             WaitType::Time => {
                 let secs: u64 = value.parse().unwrap_or(1);
                 tokio::time::sleep(Duration::from_secs(secs)).await;
@@ -509,7 +544,8 @@ impl BrowserTool {
             WaitType::Visible => {
                 // Wait for element (ref_id) to be visible
                 loop {
-                    let js = format!(r#"
+                    let js = format!(
+                        r#"
                         (function() {{
                             const el = document.querySelector("[data-ref='{}'], [aria-label*='{}']");
                             if (!el) return false;
@@ -519,7 +555,9 @@ impl BrowserTool {
                                    style.opacity !== '0' &&
                                    el.offsetParent !== null;
                         }})();
-                    "#, value, value);
+                    "#,
+                        value, value
+                    );
                     let result = page.evaluate(js.as_str()).await?;
                     let visible: bool = result.into_value()?;
 
@@ -536,7 +574,8 @@ impl BrowserTool {
             WaitType::Hidden => {
                 // Wait for element (ref_id) to be hidden
                 loop {
-                    let js = format!(r#"
+                    let js = format!(
+                        r#"
                         (function() {{
                             const el = document.querySelector("[data-ref='{}'], [aria-label*='{}']");
                             if (!el) return true;  // Not in DOM = hidden
@@ -546,7 +585,9 @@ impl BrowserTool {
                                    style.opacity === '0' ||
                                    el.offsetParent === null;
                         }})();
-                    "#, value, value);
+                    "#,
+                        value, value
+                    );
                     let result = page.evaluate(js.as_str()).await?;
                     let hidden: bool = result.into_value()?;
 
@@ -563,13 +604,16 @@ impl BrowserTool {
             WaitType::Enabled => {
                 // Wait for element (ref_id) to be enabled
                 loop {
-                    let js = format!(r#"
+                    let js = format!(
+                        r#"
                         (function() {{
                             const el = document.querySelector("[data-ref='{}'], [aria-label*='{}']");
                             if (!el) return false;
                             return !el.disabled;
                         }})();
-                    "#, value, value);
+                    "#,
+                        value, value
+                    );
                     let result = page.evaluate(js.as_str()).await?;
                     let enabled: bool = result.into_value()?;
 
@@ -619,7 +663,12 @@ impl BrowserTool {
     }
 
     /// Execute screenshot action.
-    async fn execute_screenshot(&self, page: &Page, full_page: bool, screenshot_dir: &std::path::Path) -> Result<String> {
+    async fn execute_screenshot(
+        &self,
+        page: &Page,
+        full_page: bool,
+        screenshot_dir: &std::path::Path,
+    ) -> Result<String> {
         std::fs::create_dir_all(screenshot_dir)?;
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
         let filename = format!("screenshot_{}.png", timestamp);
@@ -653,7 +702,10 @@ impl BrowserTool {
             .context("JavaScript execution failed")?;
 
         let value: Value = result.into_value().context("Failed to parse result")?;
-        Ok(format!("Result: {}", serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())))
+        Ok(format!(
+            "Result: {}",
+            serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
+        ))
     }
 
     /// Execute scroll action.
@@ -663,7 +715,12 @@ impl BrowserTool {
             "down" => (0, 500),
             "top" => (0, -100000),
             "bottom" => (0, 100000),
-            _ => return Err(anyhow::anyhow!("Invalid scroll direction: {}. Use up, down, top, or bottom.", direction)),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Invalid scroll direction: {}. Use up, down, top, or bottom.",
+                    direction
+                ))
+            }
         };
 
         let js = format!("window.scrollBy({}, {});", x, y);
@@ -711,16 +768,20 @@ impl BrowserTool {
         let filtered_console: Vec<&ConsoleMessage> = if level_filter == "all" {
             state.console.iter().collect()
         } else {
-            state.console.iter().filter(|m| {
-                let msg_level = match m.level {
-                    ConsoleLevel::Log => "log",
-                    ConsoleLevel::Warn => "warn",
-                    ConsoleLevel::Error => "error",
-                    ConsoleLevel::Info => "info",
-                    ConsoleLevel::Debug => "debug",
-                };
-                msg_level == level_filter
-            }).collect()
+            state
+                .console
+                .iter()
+                .filter(|m| {
+                    let msg_level = match m.level {
+                        ConsoleLevel::Log => "log",
+                        ConsoleLevel::Warn => "warn",
+                        ConsoleLevel::Error => "error",
+                        ConsoleLevel::Info => "info",
+                        ConsoleLevel::Debug => "debug",
+                    };
+                    msg_level == level_filter
+                })
+                .collect()
         };
 
         // Build output
@@ -730,16 +791,12 @@ impl BrowserTool {
         if !state.errors.is_empty() && (level_filter == "all" || level_filter == "error") {
             output.push_str("🚨 **Page Errors:**\n\n");
             for err in &state.errors {
-                output.push_str(&format!(
-                    "❌ {} {}\n",
-                    err.timestamp,
-                    err.message
-                ));
+                output.push_str(&format!("❌ {} {}\n", err.timestamp, err.message));
                 if let Some(ref stack) = err.stack {
                     output.push_str(&format!("   Stack: {}\n", stack));
                 }
             }
-            output.push_str("\n");
+            output.push('\n');
         }
 
         // Show console messages
@@ -753,12 +810,7 @@ impl BrowserTool {
                     ConsoleLevel::Debug => "🔍",
                     ConsoleLevel::Log => "📝",
                 };
-                output.push_str(&format!(
-                    "{} [{}] {}\n",
-                    emoji,
-                    msg.timestamp,
-                    msg.message
-                ));
+                output.push_str(&format!("{} [{}] {}\n", emoji, msg.timestamp, msg.message));
             }
         }
 
@@ -897,14 +949,17 @@ impl BrowserTool {
         let element = self.find_element_by_role(page, ref_id, chat_id).await?;
 
         // Verify it's a file input
-        let js = format!(r#"
+        let js = format!(
+            r#"
             (function() {{
                 const el = {element};
                 if (!el) return {{ success: false, error: "Element not found" }};
                 if (el.type !== "file") return {{ success: false, error: "Not a file input" }};
                 return {{ success: true }};
             }})();
-        "#, element = element);
+        "#,
+            element = element
+        );
 
         let check_result = page.evaluate(js.as_str()).await?;
         let check: serde_json::Value = check_result.into_value()?;
@@ -931,13 +986,15 @@ impl BrowserTool {
 
         // Use JavaScript to set the file via DataTransfer API (works for webkit)
         // This simulates a user selecting a file
-        let file_name = path.file_name()
+        let file_name = path
+            .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "file".to_string());
 
         // For chromiumoxide, we need to use the CDP approach
         // First, intercept file chooser, then click the input
-        let intercept_js = format!(r#"
+        let intercept_js = format!(
+            r#"
             (function() {{
                 const el = {element};
                 // Store the file path for the next interaction
@@ -953,10 +1010,11 @@ impl BrowserTool {
         page.evaluate(intercept_js.as_str()).await?;
 
         // Use CDP to set file input files
-        use chromiumoxide::cdp::browser_protocol::dom::{SetFileInputFilesParams, NodeId};
+        use chromiumoxide::cdp::browser_protocol::dom::{NodeId, SetFileInputFilesParams};
 
         // Get a unique selector for the element
-        let find_node_js = format!(r##"
+        let find_node_js = format!(
+            r##"
             (function() {{
                 const el = {element};
                 if (el.id) return "#" + el.id;
@@ -964,7 +1022,9 @@ impl BrowserTool {
                 el.setAttribute("id", tempId);
                 return "#" + tempId;
             }})();
-        "##, element = element);
+        "##,
+            element = element
+        );
 
         let selector_result = page.evaluate(find_node_js.as_str()).await?;
         let selector: String = selector_result.into_value()?;
@@ -982,7 +1042,8 @@ impl BrowserTool {
         // Actually, let's try using CDP Input.setInterceptDrags and Page.handleFileChooser
         // But the simplest that works is to use the hidden file input trick
 
-        let result_js = format!(r#"
+        let result_js = format!(
+            r#"
             (function() {{
                 const input = document.querySelector("{selector}");
                 if (!input) return {{ success: false, error: "Input not found" }};
@@ -1025,8 +1086,8 @@ impl BrowserTool {
         print_background: bool,
         landscape: bool,
     ) -> Result<String> {
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
         use chromiumoxide::cdp::browser_protocol::page::PrintToPdfParams;
-        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
         // Default output path
         let path = output_path
@@ -1040,7 +1101,11 @@ impl BrowserTool {
             })
             .unwrap_or_else(|| {
                 let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                format!("{}/Downloads/page-{}.pdf", home, chrono::Utc::now().format("%Y%m%d-%H%M%S"))
+                format!(
+                    "{}/Downloads/page-{}.pdf",
+                    home,
+                    chrono::Utc::now().format("%Y%m%d-%H%M%S")
+                )
             });
 
         // Build PDF params
@@ -1065,14 +1130,17 @@ impl BrowserTool {
         };
 
         // Generate PDF via CDP
-        let result = page.execute(params).await
+        let result = page
+            .execute(params)
+            .await
             .context("Failed to generate PDF")?;
 
         // Get base64 data (Binary type, not Option)
         let base64_data = &result.result.data;
 
         // Decode and save
-        let pdf_data = BASE64.decode(base64_data)
+        let pdf_data = BASE64
+            .decode(base64_data)
             .context("Failed to decode PDF data")?;
 
         // Ensure parent directory exists
@@ -1084,9 +1152,7 @@ impl BrowserTool {
         std::fs::write(&path, pdf_data)
             .with_context(|| format!("Failed to write PDF to {}", path))?;
 
-        let file_size = std::fs::metadata(&path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
 
         Ok(format!(
             "📄 PDF saved: {} ({:.1} KB)",
@@ -1132,7 +1198,8 @@ impl BrowserTool {
 
                 let resource_type = req.resource_type.as_deref().unwrap_or("?");
 
-                let duration_str = req.duration_ms
+                let duration_str = req
+                    .duration_ms
                     .map(|d| format!("{:.0}ms", d))
                     .unwrap_or_else(|| "-".to_string());
 
@@ -1145,13 +1212,21 @@ impl BrowserTool {
 
                 output.push_str(&format!(
                     "[{}] {:>3} {:>4} {} {} {}\n",
-                    status_str, method_str, resource_type, duration_str, url_display,
-                    req.error.as_ref().map(|e| format!("❌ {}", e)).unwrap_or_default()
+                    status_str,
+                    method_str,
+                    resource_type,
+                    duration_str,
+                    url_display,
+                    req.error
+                        .as_ref()
+                        .map(|e| format!("❌ {}", e))
+                        .unwrap_or_default()
                 ));
             }
 
             // Summary stats
-            let by_status: std::collections::HashMap<i32, usize> = requests.iter()
+            let by_status: std::collections::HashMap<i32, usize> = requests
+                .iter()
                 .filter_map(|r| r.status)
                 .fold(std::collections::HashMap::new(), |mut acc, s| {
                     *acc.entry(s).or_insert(0) += 1;
@@ -1206,7 +1281,8 @@ impl BrowserTool {
         };
 
         // Use CDP Input.dispatchKeyEvent
-        let js = format!(r#"
+        let js = format!(
+            r#"
             (function() {{
                 const key = "{}";
                 const keyCodeMap = {{
@@ -1233,7 +1309,9 @@ impl BrowserTool {
 
                 return {{ pressed: true, key: key }};
             }})();
-        "#, key_normalized.replace("\"", "\\\""));
+        "#,
+            key_normalized.replace("\"", "\\\"")
+        );
 
         page.evaluate(js.as_str()).await?;
         Ok(format!("⌨️ Pressed key: {}", key_normalized))
@@ -1248,12 +1326,17 @@ impl BrowserTool {
         chat_id: &str,
     ) -> Result<String> {
         // Find source element
-        let source_element = self.find_element_by_role(page, source_ref_id, chat_id).await?;
+        let source_element = self
+            .find_element_by_role(page, source_ref_id, chat_id)
+            .await?;
 
         // Find target element
-        let target_element = self.find_element_by_role(page, target_ref_id, chat_id).await?;
+        let target_element = self
+            .find_element_by_role(page, target_ref_id, chat_id)
+            .await?;
 
-        let js = format!(r#"
+        let js = format!(
+            r#"
             (function() {{
                 const source = {source};
                 const target = {target};
@@ -1331,13 +1414,19 @@ impl BrowserTool {
 
                 return {{ success: true }};
             }})();
-        "#, source = source_element, target = target_element);
+        "#,
+            source = source_element,
+            target = target_element
+        );
 
         let result = page.evaluate(js.as_str()).await?;
         let drag_result: serde_json::Value = result.into_value()?;
 
         if drag_result["success"].as_bool().unwrap_or(false) {
-            Ok(format!("🖱️ Dragged element {} to {}", source_ref_id, target_ref_id))
+            Ok(format!(
+                "🖱️ Dragged element {} to {}",
+                source_ref_id, target_ref_id
+            ))
         } else {
             Err(anyhow::anyhow!(
                 "Drag failed: {}",
@@ -1375,7 +1464,8 @@ impl BrowserTool {
             let element = self.find_element_by_role(page, ref_id, chat_id).await?;
 
             // Set value via JavaScript
-            let js = format!(r#"
+            let js = format!(
+                r#"
                 (function() {{
                     const el = {element};
                     if (!el) return {{ success: false, error: "Element not found" }};
@@ -1405,7 +1495,10 @@ impl BrowserTool {
                 }})();
             "#,
                 element = element,
-                value = resolved_value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+                value = resolved_value
+                    .replace("\\", "\\\\")
+                    .replace("\"", "\\\"")
+                    .replace("\n", "\\n")
             );
 
             let result = page.evaluate(js.as_str()).await?;
@@ -1433,19 +1526,22 @@ impl BrowserTool {
         let params = SetDeviceMetricsOverrideParams::new(
             width as i64,
             height as i64,
-            1.0,  // device_scale_factor
+            1.0,   // device_scale_factor
             false, // mobile
         );
 
         page.execute(params).await?;
 
         // Also resize window via JavaScript (for visual consistency)
-        let js = format!(r#"
+        let js = format!(
+            r#"
             (function() {{
                 window.resizeTo({}, {});
                 return {{ width: window.innerWidth, height: window.innerHeight }};
             }})();
-        "#, width, height);
+        "#,
+            width, height
+        );
 
         let _ = page.evaluate(js.as_str()).await;
 
@@ -1455,10 +1551,16 @@ impl BrowserTool {
     /// Execute dialog action - handle alert/confirm/prompt dialogs.
     ///
     /// This sets up a handler BEFORE the dialog appears, or handles an existing dialog.
-    async fn execute_dialog(&self, page: &Page, accept: bool, prompt_text: Option<&str>) -> Result<String> {
+    async fn execute_dialog(
+        &self,
+        page: &Page,
+        accept: bool,
+        prompt_text: Option<&str>,
+    ) -> Result<String> {
         // Register a one-time dialog handler via JavaScript
         // This will handle the next dialog that appears
-        let js = format!(r#"
+        let js = format!(
+            r#"
             (function() {{
                 // Store previous handlers
                 const _prevAlert = window.alert;
@@ -1508,7 +1610,10 @@ impl BrowserTool {
             .map(|t| format!(" with text \"{}\"", t))
             .unwrap_or_default();
 
-        Ok(format!("🔔 Dialog handler set: will {} dialogs{}", action, text_info))
+        Ok(format!(
+            "🔔 Dialog handler set: will {} dialogs{}",
+            action, text_info
+        ))
     }
 }
 
@@ -1714,7 +1819,7 @@ impl Tool for BrowserTool {
         let manager = global_browser_manager();
         if !manager.is_enabled() {
             return Ok(ToolResult::error(
-                "Browser automation is disabled. Enable it in config with [browser] enabled = true"
+                "Browser automation is disabled. Enable it in config with [browser] enabled = true",
             ));
         }
 
@@ -1738,22 +1843,40 @@ impl Tool for BrowserTool {
         // Actions that modify page state and need automatic snapshot afterward
         let needs_auto_snapshot = matches!(
             action_str.as_str(),
-            "navigate" | "click" | "type" | "select" | "accept_privacy" | "scroll" |
-            "hover" | "back" | "forward" | "press" | "drag" | "fill" | "dialog"
+            "navigate"
+                | "click"
+                | "type"
+                | "select"
+                | "accept_privacy"
+                | "scroll"
+                | "hover"
+                | "back"
+                | "forward"
+                | "press"
+                | "drag"
+                | "fill"
+                | "dialog"
         );
 
         // Actions that are themselves snapshot-related (don't auto-snapshot)
-        let is_snapshot_action = matches!(action_str.as_str(), "snapshot" | "screenshot" | "console" | "tabs");
+        let is_snapshot_action = matches!(
+            action_str.as_str(),
+            "snapshot" | "screenshot" | "console" | "tabs"
+        );
 
         // Dispatch action
         let result = match action_str.as_str() {
             "navigate" => {
                 let url = get_string_param(&args, "url")?;
-                self.execute_navigate(&page, &url, config.navigation_timeout_secs).await
+                self.execute_navigate(&page, &url, config.navigation_timeout_secs)
+                    .await
             }
             "snapshot" => {
                 let screenshot = get_optional_bool(&args, "screenshot").unwrap_or(false);
-                match self.execute_snapshot(&page, &ctx.chat_id, screenshot, &config.screenshot_path()).await {
+                match self
+                    .execute_snapshot(&page, &ctx.chat_id, screenshot, &config.screenshot_path())
+                    .await
+                {
                     Ok(snapshot) => Ok(snapshot.to_llm_format()),
                     Err(e) => Err(e),
                 }
@@ -1767,12 +1890,22 @@ impl Tool for BrowserTool {
                 let text = get_string_param(&args, "text")?;
                 let submit = get_optional_bool(&args, "submit").unwrap_or(false);
                 let slowly = get_optional_bool(&args, "slowly").unwrap_or(false);
-                self.execute_type(&page, &ref_id, &text, submit, slowly, session_id.as_deref(), &ctx.chat_id).await
+                self.execute_type(
+                    &page,
+                    &ref_id,
+                    &text,
+                    submit,
+                    slowly,
+                    session_id.as_deref(),
+                    &ctx.chat_id,
+                )
+                .await
             }
             "select" => {
                 let ref_id = get_string_param(&args, "ref_id")?;
                 let option = get_string_param(&args, "option")?;
-                self.execute_select(&page, &ref_id, &option, &ctx.chat_id).await
+                self.execute_select(&page, &ref_id, &option, &ctx.chat_id)
+                    .await
             }
             "wait" => {
                 let wait_type_str = get_string_param(&args, "wait_type")?;
@@ -1788,11 +1921,13 @@ impl Tool for BrowserTool {
                     "network_idle" => WaitType::NetworkIdle,
                     other => return Ok(ToolResult::error(format!("Invalid wait_type: {}", other))),
                 };
-                self.execute_wait(&page, wait_type, &value, config.action_timeout_secs).await
+                self.execute_wait(&page, wait_type, &value, config.action_timeout_secs)
+                    .await
             }
             "screenshot" => {
                 let full_page = get_optional_bool(&args, "full_page").unwrap_or(false);
-                self.execute_screenshot(&page, full_page, &config.screenshot_path()).await
+                self.execute_screenshot(&page, full_page, &config.screenshot_path())
+                    .await
             }
             "evaluate" => {
                 let code = get_string_param(&args, "code")?;
@@ -1814,85 +1949,91 @@ impl Tool for BrowserTool {
                 let target_id = get_optional_string(&args, "target_id");
                 if let Some(tid) = target_id {
                     // Close a specific tab by target_id
-                    manager.close_tab_by_target_id_for_profile(&tid, profile.as_deref()).await?;
+                    manager
+                        .close_tab_by_target_id_for_profile(&tid, profile.as_deref())
+                        .await?;
                     Ok(format!("Tab {} closed", tid))
                 } else {
                     // Close the current chat's page (and browser if no other pages)
                     let profile_name = profile.as_deref().unwrap_or("default");
-                    manager.close_page_for_profile(&ctx.chat_id, profile_name).await?;
+                    manager
+                        .close_page_for_profile(&ctx.chat_id, profile_name)
+                        .await?;
 
                     // Check if browser is still running
                     let browser_closed = !manager.is_profile_running(profile_name).await;
                     if browser_closed {
-                        return Ok(ToolResult::success("✅ Browser closed completely. All resources freed.".to_string()));
+                        return Ok(ToolResult::success(
+                            "✅ Browser closed completely. All resources freed.".to_string(),
+                        ));
                     } else {
-                        return Ok(ToolResult::success("✅ Page closed. Browser still running with other tabs.".to_string()));
+                        return Ok(ToolResult::success(
+                            "✅ Page closed. Browser still running with other tabs.".to_string(),
+                        ));
                     }
                 }
             }
-            "tabs" => {
-                match manager.list_tabs_for_profile(profile.as_deref()).await {
-                    Ok(tabs) => {
-                        if tabs.is_empty() {
-                            Ok("No open tabs found.".to_string())
-                        } else {
-                            let mut output = String::from("📋 Open Tabs:\n\n");
-                            for (i, tab) in tabs.iter().enumerate() {
-                                let attached_marker = if tab.attached { "✓" } else { " " };
-                                let url_display = if tab.url.len() > 50 {
-                                    format!("{}...", &tab.url[..47])
-                                } else {
-                                    tab.url.clone()
-                                };
-                                let title_display = if tab.title.len() > 40 {
-                                    format!("{}...", &tab.title[..37])
-                                } else {
-                                    tab.title.clone()
-                                };
-                                output.push_str(&format!(
-                                    "{} [{}] {} - \"{}\"\n   Target ID: {}\n\n",
-                                    attached_marker,
-                                    i + 1,
-                                    url_display,
-                                    title_display,
-                                    tab.target_id
-                                ));
-                            }
-                            output.push_str("Use 'focus_tab' with target_id to switch to a tab.\n");
-                            output.push_str("Use 'close' with target_id to close a specific tab.\n");
-                            Ok(output)
+            "tabs" => match manager.list_tabs_for_profile(profile.as_deref()).await {
+                Ok(tabs) => {
+                    if tabs.is_empty() {
+                        Ok("No open tabs found.".to_string())
+                    } else {
+                        let mut output = String::from("📋 Open Tabs:\n\n");
+                        for (i, tab) in tabs.iter().enumerate() {
+                            let attached_marker = if tab.attached { "✓" } else { " " };
+                            let url_display = if tab.url.len() > 50 {
+                                format!("{}...", &tab.url[..47])
+                            } else {
+                                tab.url.clone()
+                            };
+                            let title_display = if tab.title.len() > 40 {
+                                format!("{}...", &tab.title[..37])
+                            } else {
+                                tab.title.clone()
+                            };
+                            output.push_str(&format!(
+                                "{} [{}] {} - \"{}\"\n   Target ID: {}\n\n",
+                                attached_marker,
+                                i + 1,
+                                url_display,
+                                title_display,
+                                tab.target_id
+                            ));
                         }
+                        output.push_str("Use 'focus_tab' with target_id to switch to a tab.\n");
+                        output.push_str("Use 'close' with target_id to close a specific tab.\n");
+                        Ok(output)
                     }
-                    Err(e) => Err(e),
                 }
-            }
+                Err(e) => Err(e),
+            },
             "open_tab" => {
                 let url = get_optional_string(&args, "url");
-                match manager.open_tab_for_profile(url.as_deref(), profile.as_deref()).await {
-                    Ok(tab_info) => {
-                        Ok(format!(
-                            "📑 Opened new tab:\n   URL: {}\n   Title: {}\n   Target ID: {}",
-                            tab_info.url, tab_info.title, tab_info.target_id
-                        ))
-                    }
+                match manager
+                    .open_tab_for_profile(url.as_deref(), profile.as_deref())
+                    .await
+                {
+                    Ok(tab_info) => Ok(format!(
+                        "📑 Opened new tab:\n   URL: {}\n   Title: {}\n   Target ID: {}",
+                        tab_info.url, tab_info.title, tab_info.target_id
+                    )),
                     Err(e) => Err(e),
                 }
             }
             "focus_tab" => {
                 let target_id = get_string_param(&args, "target_id")?;
-                match manager.focus_tab_for_profile(&target_id, profile.as_deref()).await {
-                    Ok(()) => {
-                        Ok(format!(
-                            "🎯 Switched to tab with target_id: {}",
-                            target_id
-                        ))
-                    }
+                match manager
+                    .focus_tab_for_profile(&target_id, profile.as_deref())
+                    .await
+                {
+                    Ok(()) => Ok(format!("🎯 Switched to tab with target_id: {}", target_id)),
                     Err(e) => Err(e),
                 }
             }
             "console" => {
                 let clear = get_optional_bool(&args, "clear").unwrap_or(false);
-                let level = get_optional_string(&args, "level").unwrap_or_else(|| "all".to_string());
+                let level =
+                    get_optional_string(&args, "level").unwrap_or_else(|| "all".to_string());
                 self.execute_console(&ctx.chat_id, clear, &level).await
             }
             "scroll" => {
@@ -1903,9 +2044,7 @@ impl Tool for BrowserTool {
                 let ref_id = get_string_param(&args, "ref_id")?;
                 self.execute_hover(&page, &ref_id, &ctx.chat_id).await
             }
-            "accept_privacy" => {
-                self.execute_accept_privacy(&page).await
-            }
+            "accept_privacy" => self.execute_accept_privacy(&page).await,
             "press" => {
                 let key = get_string_param(&args, "key")?;
                 self.execute_press(&page, &key).await
@@ -1913,39 +2052,55 @@ impl Tool for BrowserTool {
             "drag" => {
                 let source_ref_id = get_string_param(&args, "source_ref_id")?;
                 let target_ref_id = get_string_param(&args, "target_ref_id")?;
-                self.execute_drag(&page, &source_ref_id, &target_ref_id, &ctx.chat_id).await
+                self.execute_drag(&page, &source_ref_id, &target_ref_id, &ctx.chat_id)
+                    .await
             }
             "fill" => {
-                let fields_value = args.get("fields").and_then(|v| v.as_array())
+                let fields_value = args
+                    .get("fields")
+                    .and_then(|v| v.as_array())
                     .ok_or_else(|| anyhow::anyhow!("Missing or invalid 'fields' parameter"))?;
 
                 let mut fields = Vec::new();
                 for field in fields_value {
-                    let ref_id = field.get("ref_id").and_then(|v| v.as_str())
+                    let ref_id = field
+                        .get("ref_id")
+                        .and_then(|v| v.as_str())
                         .ok_or_else(|| anyhow::anyhow!("Missing ref_id in field"))?;
-                    let value = field.get("value").and_then(|v| v.as_str())
+                    let value = field
+                        .get("value")
+                        .and_then(|v| v.as_str())
                         .ok_or_else(|| anyhow::anyhow!("Missing value in field"))?;
                     fields.push((ref_id.to_string(), value.to_string()));
                 }
 
-                self.execute_fill(&page, &fields, session_id.as_deref(), &ctx.chat_id).await
+                self.execute_fill(&page, &fields, session_id.as_deref(), &ctx.chat_id)
+                    .await
             }
             "resize" => {
-                let width = args.get("width").and_then(|v| v.as_u64())
-                    .ok_or_else(|| anyhow::anyhow!("Missing or invalid 'width' parameter"))? as u32;
-                let height = args.get("height").and_then(|v| v.as_u64())
-                    .ok_or_else(|| anyhow::anyhow!("Missing or invalid 'height' parameter"))? as u32;
+                let width = args
+                    .get("width")
+                    .and_then(|v| v.as_u64())
+                    .ok_or_else(|| anyhow::anyhow!("Missing or invalid 'width' parameter"))?
+                    as u32;
+                let height = args
+                    .get("height")
+                    .and_then(|v| v.as_u64())
+                    .ok_or_else(|| anyhow::anyhow!("Missing or invalid 'height' parameter"))?
+                    as u32;
                 self.execute_resize(&page, width, height).await
             }
             "dialog" => {
                 let accept = get_optional_bool(&args, "accept").unwrap_or(true);
                 let prompt_text = get_optional_string(&args, "prompt_text");
-                self.execute_dialog(&page, accept, prompt_text.as_deref()).await
+                self.execute_dialog(&page, accept, prompt_text.as_deref())
+                    .await
             }
             "upload" => {
                 let ref_id = get_string_param(&args, "ref_id")?;
                 let file_path = get_string_param(&args, "file_path")?;
-                self.execute_upload(&page, &ref_id, &file_path, &ctx.chat_id).await
+                self.execute_upload(&page, &ref_id, &file_path, &ctx.chat_id)
+                    .await
             }
             "pdf" => {
                 let path = get_optional_string(&args, "path");
@@ -1953,21 +2108,39 @@ impl Tool for BrowserTool {
                 let height = args.get("height").and_then(|v| v.as_f64());
                 let print_background = get_optional_bool(&args, "print_background").unwrap_or(true);
                 let landscape = get_optional_bool(&args, "landscape").unwrap_or(false);
-                self.execute_pdf(&page, path.as_deref(), width, height, print_background, landscape).await
+                self.execute_pdf(
+                    &page,
+                    path.as_deref(),
+                    width,
+                    height,
+                    print_background,
+                    landscape,
+                )
+                .await
             }
             "network" => {
                 let clear = get_optional_bool(&args, "clear").unwrap_or(false);
                 let url_filter = get_optional_string(&args, "url_filter");
-                self.execute_network(&ctx.chat_id, clear, url_filter.as_deref()).await
+                self.execute_network(&ctx.chat_id, clear, url_filter.as_deref())
+                    .await
             }
             "shutdown" => {
                 // Close all pages and shutdown browser completely
                 match manager.shutdown().await {
-                    Ok(()) => return Ok(ToolResult::success("🛑 Browser shutdown complete. All resources freed.".to_string())),
+                    Ok(()) => {
+                        return Ok(ToolResult::success(
+                            "🛑 Browser shutdown complete. All resources freed.".to_string(),
+                        ))
+                    }
                     Err(e) => return Ok(ToolResult::error(format!("Shutdown failed: {}", e))),
                 }
             }
-            other => return Ok(ToolResult::error(format!("Unknown browser action: {}", other))),
+            other => {
+                return Ok(ToolResult::error(format!(
+                    "Unknown browser action: {}",
+                    other
+                )))
+            }
         };
 
         // Combine action result with automatic snapshot if needed
@@ -1979,7 +2152,10 @@ impl Tool for BrowserTool {
                     let mut combined = action_output;
                     combined.push_str("\n\n--- Auto-snapshot after action ---\n");
 
-                    match self.execute_snapshot(&page, &ctx.chat_id, false, &config.screenshot_path()).await {
+                    match self
+                        .execute_snapshot(&page, &ctx.chat_id, false, &config.screenshot_path())
+                        .await
+                    {
                         Ok(snapshot) => {
                             combined.push_str(&snapshot.to_llm_format());
                         }

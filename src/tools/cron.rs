@@ -68,7 +68,8 @@ impl Tool for CronTool {
     }
 
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
-        let action = args.get("action")
+        let action = args
+            .get("action")
             .and_then(|v| v.as_str())
             .unwrap_or("list");
 
@@ -106,12 +107,18 @@ impl CronTool {
 
         // Auto-set deliver_to from the originating channel if not explicitly provided.
         // This ensures cron responses are sent back to the user on the same channel.
-        let explicit_deliver = args.get("deliver_to").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let deliver_to = explicit_deliver.unwrap_or_else(|| {
-            format!("{}:{}", ctx.channel, ctx.chat_id)
-        });
+        let explicit_deliver = args
+            .get("deliver_to")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let deliver_to =
+            explicit_deliver.unwrap_or_else(|| format!("{}:{}", ctx.channel, ctx.chat_id));
 
-        match self.scheduler.add_job(name, message, schedule, Some(&deliver_to)).await {
+        match self
+            .scheduler
+            .add_job(name, message, schedule, Some(&deliver_to))
+            .await
+        {
             Ok(id) => ToolResult::success(format!(
                 "Job created: id={id}, name={name}, schedule={schedule}, deliver_to={deliver_to}"
             )),

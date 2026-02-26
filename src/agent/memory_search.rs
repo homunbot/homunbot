@@ -64,7 +64,11 @@ impl MemorySearcher {
         let vector_results = self.engine.search(query, CANDIDATES_PER_SOURCE)?;
 
         // Try FTS5 search, but gracefully handle failures
-        let fts_results = match self.db.fts5_search(&sanitize_fts5_query(query), CANDIDATES_PER_SOURCE).await {
+        let fts_results = match self
+            .db
+            .fts5_search(&sanitize_fts5_query(query), CANDIDATES_PER_SOURCE)
+            .await
+        {
             Ok(results) => results,
             Err(e) => {
                 tracing::debug!(
@@ -98,12 +102,8 @@ impl MemorySearcher {
             .filter_map(|(id, score)| {
                 chunk_map.get(&id).map(|chunk| {
                     // Apply temporal decay based on chunk age
-                    let decayed_score = apply_temporal_decay(
-                        score,
-                        &chunk.date,
-                        now,
-                        DEFAULT_HALF_LIFE_DAYS,
-                    );
+                    let decayed_score =
+                        apply_temporal_decay(score, &chunk.date, now, DEFAULT_HALF_LIFE_DAYS);
                     SearchResult {
                         chunk: chunk.clone(),
                         score: decayed_score,
@@ -114,7 +114,11 @@ impl MemorySearcher {
 
         // Re-sort by decayed score (highest first)
         let mut results = results;
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         Ok(results)
     }
@@ -182,7 +186,7 @@ fn sanitize_fts5_query(query: &str) -> String {
                 || *c == '.'
                 || *c == ','
                 || (*c >= 'à' && *c <= 'ÿ')  // Accented lowercase
-                || (*c >= 'À' && *c <= 'ß')  // Accented uppercase
+                || (*c >= 'À' && *c <= 'ß') // Accented uppercase
         })
         .collect();
 
@@ -236,7 +240,7 @@ fn rrf_merge(
 /// Inspired by OpenClaw's temporal-decay.ts implementation.
 fn apply_temporal_decay(
     score: f64,
-    chunk_date: &str,  // Format: YYYY-MM-DD
+    chunk_date: &str, // Format: YYYY-MM-DD
     now: chrono::DateTime<chrono::Utc>,
     half_life_days: f64,
 ) -> f64 {
@@ -356,25 +360,41 @@ mod tests {
         let now = chrono::Utc::now();
         let today = now.format("%Y-%m-%d").to_string();
         let score = apply_temporal_decay(1.0, &today, now, 30.0);
-        assert!(score > 0.99, "Fresh content should have score > 0.99, got {}", score);
+        assert!(
+            score > 0.99,
+            "Fresh content should have score > 0.99, got {}",
+            score
+        );
     }
 
     #[test]
     fn test_temporal_decay_half_life() {
         // Content at half_life should have 50% score
         let now = chrono::Utc::now();
-        let thirty_days_ago = (now - chrono::Duration::days(30)).format("%Y-%m-%d").to_string();
+        let thirty_days_ago = (now - chrono::Duration::days(30))
+            .format("%Y-%m-%d")
+            .to_string();
         let score = apply_temporal_decay(1.0, &thirty_days_ago, now, 30.0);
-        assert!((score - 0.5).abs() < 0.05, "Half-life content should have score ~0.5, got {}", score);
+        assert!(
+            (score - 0.5).abs() < 0.05,
+            "Half-life content should have score ~0.5, got {}",
+            score
+        );
     }
 
     #[test]
     fn test_temporal_decay_double_half_life() {
         // Content at 2x half_life should have 25% score
         let now = chrono::Utc::now();
-        let sixty_days_ago = (now - chrono::Duration::days(60)).format("%Y-%m-%d").to_string();
+        let sixty_days_ago = (now - chrono::Duration::days(60))
+            .format("%Y-%m-%d")
+            .to_string();
         let score = apply_temporal_decay(1.0, &sixty_days_ago, now, 30.0);
-        assert!((score - 0.25).abs() < 0.05, "2x half-life content should have score ~0.25, got {}", score);
+        assert!(
+            (score - 0.25).abs() < 0.05,
+            "2x half-life content should have score ~0.25, got {}",
+            score
+        );
     }
 
     #[test]
@@ -389,7 +409,9 @@ mod tests {
     fn test_temporal_decay_future_date() {
         // Future date should return original score (no decay)
         let now = chrono::Utc::now();
-        let tomorrow = (now + chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
+        let tomorrow = (now + chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
         let score = apply_temporal_decay(1.0, &tomorrow, now, 30.0);
         assert_eq!(score, 1.0, "Future date should not decay");
     }

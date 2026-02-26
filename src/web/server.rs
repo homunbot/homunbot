@@ -26,7 +26,9 @@ pub struct AppState {
     /// Stream sessions: chat_id → sender for real-time stream chunks and tool events.
     /// Used to deliver incremental text as the LLM generates it,
     /// plus tool_start/tool_end notifications.
-    pub stream_sessions: tokio::sync::RwLock<std::collections::HashMap<String, mpsc::Sender<super::ws::WsStreamEvent>>>,
+    pub stream_sessions: tokio::sync::RwLock<
+        std::collections::HashMap<String, mpsc::Sender<super::ws::WsStreamEvent>>,
+    >,
     /// Database handle — used by memory/vault API endpoints.
     /// `None` in setup-only mode (no agent, just config UI).
     pub db: Option<Database>,

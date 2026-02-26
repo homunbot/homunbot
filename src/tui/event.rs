@@ -78,8 +78,7 @@ impl EventHandler {
 
                     if let Some(CrosstermEvent::Key(key)) = evt {
                         // Only handle key press events (not release/repeat)
-                        if key.kind == KeyEventKind::Press
-                            && poll_tx.send(Event::Key(key)).is_err()
+                        if key.kind == KeyEventKind::Press && poll_tx.send(Event::Key(key)).is_err()
                         {
                             break; // Channel closed
                         }
@@ -93,7 +92,11 @@ impl EventHandler {
             }
         });
 
-        Self { rx, tx, _task: task }
+        Self {
+            rx,
+            tx,
+            _task: task,
+        }
     }
 
     /// Get a clone of the event sender for injecting events from external tasks.

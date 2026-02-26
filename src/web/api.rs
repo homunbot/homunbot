@@ -20,69 +20,141 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/v1/skills", get(list_skills))
         .route("/v1/skills/search", get(search_skills))
         .route("/v1/skills/install", axum::routing::post(install_skill))
-        .route("/v1/skills/{name}", get(get_skill_detail).delete(delete_skill))
+        .route(
+            "/v1/skills/{name}",
+            get(get_skill_detail).delete(delete_skill),
+        )
         .route("/v1/skills/catalog/status", get(catalog_status))
         .route("/v1/skills/catalog/counts", get(catalog_counts))
-        .route("/v1/skills/catalog/refresh", axum::routing::post(catalog_refresh))
+        .route(
+            "/v1/skills/catalog/refresh",
+            axum::routing::post(catalog_refresh),
+        )
         .route("/v1/providers", get(list_providers))
-        .route("/v1/providers/configure", axum::routing::post(configure_provider))
-        .route("/v1/providers/activate", axum::routing::post(activate_provider))
-        .route("/v1/providers/deactivate", axum::routing::post(deactivate_provider))
+        .route(
+            "/v1/providers/configure",
+            axum::routing::post(configure_provider),
+        )
+        .route(
+            "/v1/providers/activate",
+            axum::routing::post(activate_provider),
+        )
+        .route(
+            "/v1/providers/deactivate",
+            axum::routing::post(deactivate_provider),
+        )
         .route("/v1/providers/models", get(list_all_models))
         .route("/v1/providers/ollama/models", get(list_ollama_models))
-        .route("/v1/providers/ollama-cloud/models", get(list_ollama_cloud_models))
+        .route(
+            "/v1/providers/ollama-cloud/models",
+            get(list_ollama_cloud_models),
+        )
         // --- Channels ---
         .route("/v1/channels/{name}", get(get_channel))
-        .route("/v1/channels/configure", axum::routing::post(configure_channel))
-        .route("/v1/channels/deactivate", axum::routing::post(deactivate_channel))
+        .route(
+            "/v1/channels/configure",
+            axum::routing::post(configure_channel),
+        )
+        .route(
+            "/v1/channels/deactivate",
+            axum::routing::post(deactivate_channel),
+        )
         .route("/v1/channels/test", axum::routing::post(test_channel))
         .route("/v1/channels/whatsapp/pair", get(ws_whatsapp_pair))
         // --- Webhook Ingress ---
         .route("/v1/webhook/{token}", axum::routing::post(webhook_ingress))
         // --- Account ---
         .route("/v1/account", get(get_account))
-        .route("/v1/account/identities", get(list_identities).post(add_identity))
-        .route("/v1/account/identities/{channel}/{platform_id}", axum::routing::delete(remove_identity))
+        .route(
+            "/v1/account/identities",
+            get(list_identities).post(add_identity),
+        )
+        .route(
+            "/v1/account/identities/{channel}/{platform_id}",
+            axum::routing::delete(remove_identity),
+        )
         .route("/v1/account/tokens", get(list_tokens).post(create_token))
-        .route("/v1/account/tokens/{token}", axum::routing::delete(delete_token).post(toggle_token))
+        .route(
+            "/v1/account/tokens/{token}",
+            axum::routing::delete(delete_token).post(toggle_token),
+        )
         // --- Memory ---
         .route("/v1/memory/stats", get(memory_stats))
-        .route("/v1/memory/content", get(get_memory_file).put(put_memory_file))
+        .route(
+            "/v1/memory/content",
+            get(get_memory_file).put(put_memory_file),
+        )
         .route("/v1/memory/search", get(search_memory))
         .route("/v1/memory/history", get(get_memory_history))
-        .route("/v1/memory/instructions", get(get_instructions).put(put_instructions))
+        .route(
+            "/v1/memory/instructions",
+            get(get_instructions).put(put_instructions),
+        )
         .route("/v1/memory/daily", get(list_daily_files))
         .route("/v1/memory/daily/{date}", get(get_daily_file))
-        .route("/v1/memory/cleanup", axum::routing::post(run_memory_cleanup))
+        .route(
+            "/v1/memory/cleanup",
+            axum::routing::post(run_memory_cleanup),
+        )
         // --- Chat ---
-        .route("/v1/chat/history", get(chat_history).delete(clear_chat_history))
+        .route(
+            "/v1/chat/history",
+            get(chat_history).delete(clear_chat_history),
+        )
         .route("/v1/chat/compact", axum::routing::post(compact_chat))
         // --- Vault ---
         .route("/v1/vault", get(list_vault_keys).post(set_vault_secret))
-        .route("/v1/vault/{key}/reveal", axum::routing::post(reveal_vault_secret))
-        .route("/v1/vault/{key}", axum::routing::delete(delete_vault_secret))
+        .route(
+            "/v1/vault/{key}/reveal",
+            axum::routing::post(reveal_vault_secret),
+        )
+        .route(
+            "/v1/vault/{key}",
+            axum::routing::delete(delete_vault_secret),
+        )
         // --- Vault 2FA ---
         .route("/v1/vault/2fa/status", get(get_2fa_status))
         .route("/v1/vault/2fa/setup", axum::routing::post(setup_2fa))
-        .route("/v1/vault/2fa/confirm", axum::routing::post(confirm_2fa_setup))
+        .route(
+            "/v1/vault/2fa/confirm",
+            axum::routing::post(confirm_2fa_setup),
+        )
         .route("/v1/vault/2fa/verify", axum::routing::post(verify_2fa))
         .route("/v1/vault/2fa/disable", axum::routing::post(disable_2fa))
-        .route("/v1/vault/2fa/recovery", axum::routing::post(get_recovery_codes))
-        .route("/v1/vault/2fa/settings", axum::routing::patch(update_2fa_settings))
+        .route(
+            "/v1/vault/2fa/recovery",
+            axum::routing::post(get_recovery_codes),
+        )
+        .route(
+            "/v1/vault/2fa/settings",
+            axum::routing::patch(update_2fa_settings),
+        )
         // --- Permissions ---
         .route("/v1/permissions", get(get_permissions).put(put_permissions))
         .route("/v1/permissions/acl", axum::routing::post(add_acl_entry))
-        .route("/v1/permissions/acl/{idx}", axum::routing::delete(delete_acl_entry))
-        .route("/v1/permissions/test", axum::routing::post(test_path_permission))
+        .route(
+            "/v1/permissions/acl/{idx}",
+            axum::routing::delete(delete_acl_entry),
+        )
+        .route(
+            "/v1/permissions/test",
+            axum::routing::post(test_path_permission),
+        )
         .route("/v1/permissions/presets", get(get_permission_presets))
         .route("/v1/permissions/browse", get(browse_directories))
         // --- Approvals (P0-4) ---
         .route("/v1/approvals", get(list_approvals))
         .route("/v1/approvals/pending", get(list_pending_approvals))
         .route("/v1/approvals/audit", get(get_approval_audit_log))
-        .route("/v1/approvals/{id}/approve", axum::routing::post(approve_request))
+        .route(
+            "/v1/approvals/{id}/approve",
+            axum::routing::post(approve_request),
+        )
         .route("/v1/approvals/{id}/deny", axum::routing::post(deny_request))
-        .route("/v1/approvals/config", get(get_approval_config).put(put_approval_config));
+        .route(
+            "/v1/approvals/config",
+            get(get_approval_config).put(put_approval_config),
+        );
 
     // --- Browser (optional) ---
     #[cfg(feature = "browser")]
@@ -233,9 +305,13 @@ async fn patch_config(
     let mut config = state.config.read().await.clone();
     crate::config::dotpath::config_set(&mut config, &patch.key, &patch.value)
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-    state.save_config(config).await
+    state
+        .save_config(config)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(serde_json::json!({"ok": true, "key": patch.key, "value": patch.value})))
+    Ok(Json(
+        serde_json::json!({"ok": true, "key": patch.key, "value": patch.value}),
+    ))
 }
 
 // --- Skills ---
@@ -336,9 +412,7 @@ struct SkillSearchResultView {
     stars: u64,
 }
 
-async fn search_skills(
-    Query(params): Query<SkillSearchQuery>,
-) -> Json<Vec<SkillSearchResultView>> {
+async fn search_skills(Query(params): Query<SkillSearchQuery>) -> Json<Vec<SkillSearchResultView>> {
     let query = params.q.trim().to_string();
     if query.len() < 2 {
         return Json(Vec::new());
@@ -563,7 +637,9 @@ async fn catalog_counts() -> Json<CatalogCountsResponse> {
         .ok()
         .and_then(|c| {
             #[derive(Deserialize)]
-            struct Cache { entries: Vec<serde_json::Value> }
+            struct Cache {
+                entries: Vec<serde_json::Value>,
+            }
             serde_json::from_str::<Cache>(&c).ok()
         })
         .map(|c| c.entries.len())
@@ -575,7 +651,9 @@ async fn catalog_counts() -> Json<CatalogCountsResponse> {
         .ok()
         .and_then(|c| {
             #[derive(Deserialize)]
-            struct Cache { entries: Vec<serde_json::Value> }
+            struct Cache {
+                entries: Vec<serde_json::Value>,
+            }
             serde_json::from_str::<Cache>(&c).ok()
         })
         .map(|c| c.entries.len())
@@ -585,7 +663,11 @@ async fn catalog_counts() -> Json<CatalogCountsResponse> {
     // (GitHub has millions of repos, we indicate "∞" on the client)
     let github = 0; // client will show "GitHub" without a number
 
-    Json(CatalogCountsResponse { clawhub, github, openskills })
+    Json(CatalogCountsResponse {
+        clawhub,
+        github,
+        openskills,
+    })
 }
 
 // --- Skill detail ---
@@ -614,10 +696,8 @@ fn strip_frontmatter(md: &str) -> &str {
 
 /// Render markdown to HTML using pulldown-cmark.
 fn render_md_to_html(md: &str) -> String {
-    use pulldown_cmark::{Parser, Options, html};
-    let opts = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS;
+    use pulldown_cmark::{html, Options, Parser};
+    let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let parser = Parser::new_ext(md, opts);
     let mut html_output = String::new();
     html::push_html(&mut html_output, parser);
@@ -650,7 +730,11 @@ async fn get_skill_detail(Path(name): Path<String>) -> Result<Json<SkillDetailVi
             let desc_idx = lines.iter().position(|l| l.starts_with("description:"))?;
             let after_colon = lines[desc_idx].trim_start_matches("description:").trim();
 
-            if after_colon == "|" || after_colon == ">" || after_colon == "|+" || after_colon == ">-" {
+            if after_colon == "|"
+                || after_colon == ">"
+                || after_colon == "|+"
+                || after_colon == ">-"
+            {
                 // YAML multiline block scalar: collect indented continuation lines
                 let mut parts = Vec::new();
                 for line in &lines[desc_idx + 1..] {
@@ -660,7 +744,11 @@ async fn get_skill_detail(Path(name): Path<String>) -> Result<Json<SkillDetailVi
                         break;
                     }
                 }
-                let sep = if after_colon.starts_with('>') { " " } else { "\n" };
+                let sep = if after_colon.starts_with('>') {
+                    " "
+                } else {
+                    "\n"
+                };
                 Some(parts.join(sep))
             } else {
                 // Inline value
@@ -729,7 +817,8 @@ async fn list_providers(State(state): State<Arc<AppState>>) -> Json<Vec<Provider
                 let has_encrypted_key = match &secrets {
                     Some(s) => {
                         let key = crate::storage::SecretKey::provider_api_key(name);
-                        let result: std::result::Result<Option<String>, anyhow::Error> = s.get(&key);
+                        let result: std::result::Result<Option<String>, anyhow::Error> =
+                            s.get(&key);
                         matches!(result, Ok(Some(_)))
                     }
                     None => false,
@@ -740,10 +829,9 @@ async fn list_providers(State(state): State<Arc<AppState>>) -> Json<Vec<Provider
                 // 2. Has custom base URL, OR
                 // 3. Is a no-key provider (ollama, vllm, custom) AND is currently active
                 let is_no_key_provider = matches!(name, "ollama" | "vllm" | "custom");
-                let is_active = current_active.as_deref() == Some(name);
-                let configured = has_encrypted_key
-                    || pc.api_base.is_some()
-                    || (is_no_key_provider && is_active);
+                let is_active = current_active == Some(name);
+                let configured =
+                    has_encrypted_key || pc.api_base.is_some() || (is_no_key_provider && is_active);
 
                 ProviderView {
                     name: name.to_string(),
@@ -785,22 +873,33 @@ async fn configure_provider(
     // Update API key in SECURE STORAGE (encrypted)
     if let Some(key) = &req.api_key {
         // Store API key in encrypted secrets storage
-        let secrets = crate::storage::global_secrets()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let secrets =
+            crate::storage::global_secrets().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let secret_key = crate::storage::SecretKey::provider_api_key(&req.name);
-        secrets.set(&secret_key, key)
+        secrets
+            .set(&secret_key, key)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         // Store a marker in config (not the actual key)
-        provider.api_key = if key.is_empty() { String::new() } else { "***ENCRYPTED***".to_string() };
+        provider.api_key = if key.is_empty() {
+            String::new()
+        } else {
+            "***ENCRYPTED***".to_string()
+        };
     }
 
     // Update base URL in regular config (not sensitive)
     if let Some(base) = &req.api_base {
-        provider.api_base = if base.is_empty() { None } else { Some(base.clone()) };
+        provider.api_base = if base.is_empty() {
+            None
+        } else {
+            Some(base.clone())
+        };
     }
 
-    state.save_config(config).await
+    state
+        .save_config(config)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(ProviderConfigResponse {
@@ -900,7 +999,9 @@ async fn activate_provider(
     }
 
     config.agent.model = model.clone();
-    state.save_config(config).await
+    state
+        .save_config(config)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(ActivateProviderResponse {
@@ -936,22 +1037,28 @@ async fn deactivate_provider(
     // Clear the provider config completely
     if let Some(pc) = config.providers.get_mut(&req.name) {
         pc.api_key = String::new();
-        pc.api_base = None;  // Clear base URL for ALL providers
+        pc.api_base = None; // Clear base URL for ALL providers
     }
 
     // If this was the active provider, clear the model to force re-selection
-    let current_provider = config.resolve_provider(&config.agent.model)
+    let current_provider = config
+        .resolve_provider(&config.agent.model)
         .map(|(n, _)| n.to_string());
     if current_provider.as_deref() == Some(req.name.as_str()) {
         config.agent.model = String::new();
     }
 
-    state.save_config(config).await
+    state
+        .save_config(config)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(DeactivateResponse {
         ok: true,
-        message: format!("Provider '{}' deactivated and credentials removed", req.name),
+        message: format!(
+            "Provider '{}' deactivated and credentials removed",
+            req.name
+        ),
     }))
 }
 
@@ -985,10 +1092,7 @@ fn cloud_models_for(provider: &str) -> &'static [&'static str] {
             "openrouter/meta-llama/llama-3.3-70b-instruct",
         ],
         // Cloud providers
-        "deepseek" => &[
-            "deepseek/deepseek-chat",
-            "deepseek/deepseek-reasoner",
-        ],
+        "deepseek" => &["deepseek/deepseek-chat", "deepseek/deepseek-reasoner"],
         "groq" => &[
             "groq/llama-3.3-70b-versatile",
             "groq/llama-3.1-8b-instant",
@@ -999,9 +1103,7 @@ fn cloud_models_for(provider: &str) -> &'static [&'static str] {
             "mistral/mistral-small-latest",
             "mistral/codestral-latest",
         ],
-        "xai" => &[
-            "xai/grok-beta",
-        ],
+        "xai" => &["xai/grok-beta"],
         "together" => &[
             "together/meta-llama/Llama-3.3-70B-Instruct-Turbo",
             "together/mistralai/Mixtral-8x7B-Instruct-v0.1",
@@ -1010,37 +1112,16 @@ fn cloud_models_for(provider: &str) -> &'static [&'static str] {
             "fireworks/accounts/fireworks/models/llama-v3p3-70b-instruct",
             "fireworks/accounts/fireworks/models/qwen2p5-72b-instruct",
         ],
-        "perplexity" => &[
-            "perplexity/sonar-pro",
-            "perplexity/sonar-reasoning-pro",
-        ],
-        "cohere" => &[
-            "cohere/command-r-plus",
-            "cohere/command-r",
-        ],
-        "venice" => &[
-            "venice/llama-3.3-70b",
-        ],
+        "perplexity" => &["perplexity/sonar-pro", "perplexity/sonar-reasoning-pro"],
+        "cohere" => &["cohere/command-r-plus", "cohere/command-r"],
+        "venice" => &["venice/llama-3.3-70b"],
         // Gateways
-        "aihubmix" => &[
-            "aihubmix/claude-sonnet-4",
-        ],
-        "vercel" => &[
-            "vercel/claude-3-5-sonnet",
-        ],
-        "cloudflare" => &[
-            "cloudflare/@cf/meta/llama-3.3-70b-instruct",
-        ],
-        "copilot" => &[
-            "copilot/gpt-4o",
-        ],
-        "bedrock" => &[
-            "bedrock/anthropic.claude-3-sonnet",
-        ],
-        "ollama_cloud" => &[
-            "ollama_cloud/llama3.3",
-            "ollama_cloud/mistral",
-        ],
+        "aihubmix" => &["aihubmix/claude-sonnet-4"],
+        "vercel" => &["vercel/claude-3-5-sonnet"],
+        "cloudflare" => &["cloudflare/@cf/meta/llama-3.3-70b-instruct"],
+        "copilot" => &["copilot/gpt-4o"],
+        "bedrock" => &["bedrock/anthropic.claude-3-sonnet"],
+        "ollama_cloud" => &["ollama_cloud/llama3.3", "ollama_cloud/mistral"],
         // Chinese providers
         "moonshot" => &["moonshot/moonshot-v1-8k"],
         "zhipu" => &["zhipu/glm-4"],
@@ -1148,7 +1229,7 @@ async fn list_all_models(State(state): State<Arc<AppState>>) -> Json<AllModelsRe
 
         let display = display_name_for(name);
         for model_id in cloud_models_for(name) {
-            let short = model_id.split('/').last().unwrap_or(model_id);
+            let short = model_id.split('/').next_back().unwrap_or(model_id);
             models.push(ModelEntry {
                 provider: name.to_string(),
                 model: model_id.to_string(),
@@ -1183,9 +1264,7 @@ struct OllamaModelsResponse {
     error: Option<String>,
 }
 
-async fn list_ollama_models(
-    State(state): State<Arc<AppState>>,
-) -> Json<OllamaModelsResponse> {
+async fn list_ollama_models(State(state): State<Arc<AppState>>) -> Json<OllamaModelsResponse> {
     let config = state.config.read().await;
 
     // Get Ollama base URL — strip /v1 suffix since native API doesn't use it
@@ -1263,7 +1342,10 @@ async fn list_ollama_models(
         Err(e) => Json(OllamaModelsResponse {
             ok: false,
             models: vec![],
-            error: Some(format!("Cannot connect to Ollama: {}. Is Ollama running?", e)),
+            error: Some(format!(
+                "Cannot connect to Ollama: {}. Is Ollama running?",
+                e
+            )),
         }),
     }
 }
@@ -1430,9 +1512,11 @@ async fn get_channel(
         if token.len() <= 4 {
             return "••••".to_string();
         }
-        format!("{}{}",
+        format!(
+            "{}{}",
             "•".repeat(token.len().min(20) - 4),
-            &token[token.len() - 4..])
+            &token[token.len() - 4..]
+        )
     }
 
     // Resolve real token from encrypted storage for masking
@@ -1535,7 +1619,8 @@ async fn configure_channel(
                     let secrets = crate::storage::global_secrets()
                         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
                     let key = crate::storage::SecretKey::channel_token("telegram");
-                    secrets.set(&key, token)
+                    secrets
+                        .set(&key, token)
                         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
                     config.channels.telegram.token = "***ENCRYPTED***".to_string();
                 }
@@ -1551,7 +1636,8 @@ async fn configure_channel(
                     let secrets = crate::storage::global_secrets()
                         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
                     let key = crate::storage::SecretKey::channel_token("discord");
-                    secrets.set(&key, token)
+                    secrets
+                        .set(&key, token)
                         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
                     config.channels.discord.token = "***ENCRYPTED***".to_string();
                 }
@@ -1570,7 +1656,8 @@ async fn configure_channel(
                     let secrets = crate::storage::global_secrets()
                         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
                     let key = crate::storage::SecretKey::channel_token("slack");
-                    secrets.set(&key, token)
+                    secrets
+                        .set(&key, token)
                         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
                     config.channels.slack.token = "***ENCRYPTED***".to_string();
                 }
@@ -1607,7 +1694,9 @@ async fn configure_channel(
         _ => return Err(StatusCode::BAD_REQUEST),
     }
 
-    state.save_config(config).await
+    state
+        .save_config(config)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(ChannelConfigResponse {
@@ -1661,7 +1750,9 @@ async fn deactivate_channel(
         _ => return Err(StatusCode::BAD_REQUEST),
     }
 
-    state.save_config(config).await
+    state
+        .save_config(config)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(ChannelConfigResponse {
@@ -1690,7 +1781,11 @@ async fn test_channel(
         "telegram" => {
             // Get token: use provided one, or fall back to stored one
             let token = if let Some(t) = &req.token {
-                if !t.is_empty() { Some(t.clone()) } else { None }
+                if !t.is_empty() {
+                    Some(t.clone())
+                } else {
+                    None
+                }
             } else {
                 None
             };
@@ -1730,8 +1825,12 @@ async fn test_channel(
 
                     match resp.json::<TgResponse>().await {
                         Ok(tg) if tg.ok => {
-                            let name = tg.result
-                                .map(|u| u.username.unwrap_or_else(|| u.first_name.unwrap_or_default()))
+                            let name = tg
+                                .result
+                                .map(|u| {
+                                    u.username
+                                        .unwrap_or_else(|| u.first_name.unwrap_or_default())
+                                })
                                 .unwrap_or_default();
                             Json(ChannelTestResponse {
                                 ok: true,
@@ -1848,7 +1947,8 @@ async fn handle_whatsapp_pairing(socket: WebSocket, state: Arc<AppState>) {
                         }
                     }
                 }
-                let err = serde_json::json!({"type": "error", "message": "Send {\"phone\": \"number\"}"});
+                let err =
+                    serde_json::json!({"type": "error", "message": "Send {\"phone\": \"number\"}"});
                 let _ = ws_sender.send(Message::Text(err.to_string().into())).await;
             }
             Some(Ok(Message::Close(_))) | None => return,
@@ -1883,10 +1983,8 @@ async fn handle_whatsapp_pairing(socket: WebSocket, state: Arc<AppState>) {
     let bot_handle = {
         let pair_phone = phone.clone();
         let db_path_str = db_path.to_string_lossy().to_string();
-        let event_tx = _event_tx;  // Use the sender
-        tokio::spawn(async move {
-            run_whatsapp_pair_bot(pair_phone, db_path_str, event_tx).await
-        })
+        let event_tx = _event_tx; // Use the sender
+        tokio::spawn(async move { run_whatsapp_pair_bot(pair_phone, db_path_str, event_tx).await })
     };
 
     #[cfg(not(feature = "channel-whatsapp"))]
@@ -1960,10 +2058,10 @@ async fn run_whatsapp_pair_bot(
 ) {
     use wa_rs::bot::Bot;
     use wa_rs::store::SqliteStore;
-    use wa_rs_tokio_transport::TokioWebSocketTransportFactory;
-    use wa_rs_ureq_http::UreqHttpClient;
     use wa_rs_core::types::events::Event as WaEvent;
     use wa_rs_proto::whatsapp as wa;
+    use wa_rs_tokio_transport::TokioWebSocketTransportFactory;
+    use wa_rs_ureq_http::UreqHttpClient;
 
     let backend = match SqliteStore::new(&db_path).await {
         Ok(store) => Arc::new(store),
@@ -2054,9 +2152,7 @@ struct MemoryStatsResponse {
     has_instructions_md: bool,
 }
 
-async fn memory_stats(
-    State(state): State<Arc<AppState>>,
-) -> Json<MemoryStatsResponse> {
+async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<MemoryStatsResponse> {
     let data_dir = crate::config::Config::data_dir();
 
     let chunk_count = match state.db.as_ref() {
@@ -2068,11 +2164,7 @@ async fn memory_stats(
         .map(|entries| {
             entries
                 .filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.path()
-                        .extension()
-                        .is_some_and(|ext| ext == "md")
-                })
+                .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
                 .count()
         })
         .unwrap_or(0);
@@ -2117,8 +2209,12 @@ async fn run_memory_cleanup(
     // Use request overrides or config defaults
     let config = state.config.read().await;
     let mem_config = &config.memory;
-    let conv_days = req.conversation_retention_days.unwrap_or(mem_config.conversation_retention_days);
-    let hist_days = req.history_retention_days.unwrap_or(mem_config.history_retention_days);
+    let conv_days = req
+        .conversation_retention_days
+        .unwrap_or(mem_config.conversation_retention_days);
+    let hist_days = req
+        .history_retention_days
+        .unwrap_or(mem_config.history_retention_days);
     drop(config); // Release lock before DB operation
 
     match db.run_memory_cleanup(conv_days, hist_days).await {
@@ -2160,7 +2256,11 @@ async fn get_memory_file(
         "instructions" => {
             // Prefer brain/ location, fall back to legacy data_dir
             let new_path = brain_dir.join("INSTRUCTIONS.md");
-            if new_path.exists() { new_path } else { data_dir.join("INSTRUCTIONS.md") }
+            if new_path.exists() {
+                new_path
+            } else {
+                data_dir.join("INSTRUCTIONS.md")
+            }
         }
         _ => return Err(StatusCode::BAD_REQUEST),
     };
@@ -2203,7 +2303,10 @@ async fn put_memory_file(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(Json(OkResponse { ok: true, message: None }))
+    Ok(Json(OkResponse {
+        ok: true,
+        message: None,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -2326,7 +2429,11 @@ async fn get_instructions() -> Json<InstructionsResponse> {
     let data_dir = crate::config::Config::data_dir();
     let brain_path = data_dir.join("brain").join("INSTRUCTIONS.md");
     let legacy_path = data_dir.join("INSTRUCTIONS.md");
-    let path = if brain_path.exists() { brain_path } else { legacy_path };
+    let path = if brain_path.exists() {
+        brain_path
+    } else {
+        legacy_path
+    };
 
     let content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
     let instructions: Vec<String> = content
@@ -2370,11 +2477,21 @@ async fn put_instructions(
         .collect::<Vec<_>>()
         .join("\n");
 
-    tokio::fs::write(&path, if content.is_empty() { String::new() } else { format!("{content}\n") })
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    tokio::fs::write(
+        &path,
+        if content.is_empty() {
+            String::new()
+        } else {
+            format!("{content}\n")
+        },
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(Json(OkResponse { ok: true, message: None }))
+    Ok(Json(OkResponse {
+        ok: true,
+        message: None,
+    }))
 }
 
 #[derive(Serialize)]
@@ -2408,9 +2525,7 @@ struct DailyFileResponse {
     content: String,
 }
 
-async fn get_daily_file(
-    Path(date): Path<String>,
-) -> Result<Json<DailyFileResponse>, StatusCode> {
+async fn get_daily_file(Path(date): Path<String>) -> Result<Json<DailyFileResponse>, StatusCode> {
     // Validate date format to prevent path traversal
     if !date.chars().all(|c| c.is_ascii_digit() || c == '-') || date.len() != 10 {
         return Err(StatusCode::BAD_REQUEST);
@@ -2441,8 +2556,8 @@ struct VaultKeysResponse {
 }
 
 async fn list_vault_keys() -> Result<Json<VaultKeysResponse>, StatusCode> {
-    let secrets = crate::storage::global_secrets()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let secrets =
+        crate::storage::global_secrets().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let all = secrets
         .load()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -2467,7 +2582,10 @@ async fn set_vault_secret(
 ) -> Result<Json<OkResponse>, StatusCode> {
     // Validate key: lowercase alphanumeric + underscore only
     if req.key.is_empty()
-        || !req.key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        || !req
+            .key
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
     {
         return Ok(Json(OkResponse {
             ok: false,
@@ -2475,14 +2593,17 @@ async fn set_vault_secret(
         }));
     }
 
-    let secrets = crate::storage::global_secrets()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let secrets =
+        crate::storage::global_secrets().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let secret_key = crate::storage::SecretKey::custom(&format!("vault.{}", req.key));
     secrets
         .set(&secret_key, &req.value)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(Json(OkResponse { ok: true, message: None }))
+    Ok(Json(OkResponse {
+        ok: true,
+        message: None,
+    }))
 }
 
 #[derive(Serialize)]
@@ -2555,7 +2676,9 @@ async fn reveal_vault_secret(
             ok: false,
             key: key.clone(),
             value: None,
-            message: Some("Two-factor authentication required. Provide 'code' or 'session_id'.".to_string()),
+            message: Some(
+                "Two-factor authentication required. Provide 'code' or 'session_id'.".to_string(),
+            ),
             requires_2fa: Some(true),
         }));
     }
@@ -2564,8 +2687,8 @@ async fn reveal_vault_secret(
 }
 
 async fn do_reveal_secret(key: &str) -> Result<Json<RevealResponse>, StatusCode> {
-    let secrets = crate::storage::global_secrets()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let secrets =
+        crate::storage::global_secrets().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let secret_key = crate::storage::SecretKey::custom(&format!("vault.{key}"));
 
     match secrets.get(&secret_key) {
@@ -2587,18 +2710,19 @@ async fn do_reveal_secret(key: &str) -> Result<Json<RevealResponse>, StatusCode>
     }
 }
 
-async fn delete_vault_secret(
-    Path(key): Path<String>,
-) -> Result<Json<OkResponse>, StatusCode> {
-    let secrets = crate::storage::global_secrets()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+async fn delete_vault_secret(Path(key): Path<String>) -> Result<Json<OkResponse>, StatusCode> {
+    let secrets =
+        crate::storage::global_secrets().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let secret_key = crate::storage::SecretKey::custom(&format!("vault.{key}"));
 
     secrets
         .delete(&secret_key)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(Json(OkResponse { ok: true, message: None }))
+    Ok(Json(OkResponse {
+        ok: true,
+        message: None,
+    }))
 }
 
 // ─── Vault 2FA ──────────────────────────────────────────────────
@@ -2627,10 +2751,12 @@ struct TwoFaStatusResponse {
 }
 
 async fn get_2fa_status() -> Result<Json<TwoFaStatusResponse>, StatusCode> {
-    let storage = crate::security::TwoFactorStorage::new()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let storage =
+        crate::security::TwoFactorStorage::new().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let config = storage.load().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let config = storage
+        .load()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(TwoFaStatusResponse {
         enabled: config.enabled,
@@ -2639,7 +2765,11 @@ async fn get_2fa_status() -> Result<Json<TwoFaStatusResponse>, StatusCode> {
         } else {
             None
         },
-        account: if config.enabled { Some(config.account.clone()) } else { None },
+        account: if config.enabled {
+            Some(config.account.clone())
+        } else {
+            None
+        },
         session_timeout_secs: config.session_timeout_secs,
         recovery_codes_remaining: config.recovery_codes.len(),
     }))
@@ -2657,7 +2787,9 @@ async fn setup_2fa() -> Result<Json<TwoFaSetupResponse>, StatusCode> {
 
     // Check if already enabled
     let storage = TwoFactorStorage::new().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let config = storage.load().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let config = storage
+        .load()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if config.enabled {
         return Err(StatusCode::BAD_REQUEST);
@@ -2674,10 +2806,12 @@ async fn setup_2fa() -> Result<Json<TwoFaSetupResponse>, StatusCode> {
     let account = format!("{}@{}", username, hostname);
 
     // Create TOTP manager for QR generation
-    let manager = TotpManager::new(&secret, &account)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let manager =
+        TotpManager::new(&secret, &account).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let qr_image = manager.generate_qr_base64().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let qr_image = manager
+        .generate_qr_base64()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let qr_url = manager.get_url();
 
     // Generate recovery codes
@@ -2760,7 +2894,9 @@ async fn confirm_2fa_setup(
     config.recovery_codes = pending.recovery_codes.clone();
 
     let storage = TwoFactorStorage::new().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    storage.save(&config).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    storage
+        .save(&config)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Clear pending setup
     *PENDING_2FA_SETUP.lock().unwrap() = None;
@@ -2796,7 +2932,9 @@ async fn verify_2fa(
     use crate::security::{global_session_manager, TotpManager, TwoFactorStorage};
 
     let storage = TwoFactorStorage::new().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let mut config = storage.load().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut config = storage
+        .load()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if !config.enabled {
         return Ok(Json(Verify2FaResponse {
@@ -2818,11 +2956,10 @@ async fn verify_2fa(
     }
 
     // Verify code
-    let manager = TotpManager::new(&config.totp_secret, &config.account)
-        .map_err(|e| {
-            tracing::error!("Failed to create TotpManager: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let manager = TotpManager::new(&config.totp_secret, &config.account).map_err(|e| {
+        tracing::error!("Failed to create TotpManager: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     tracing::debug!(
         code = %req.code,
@@ -2837,7 +2974,9 @@ async fn verify_2fa(
 
         // Reset failed attempts
         config.reset_failed_attempts();
-        storage.save(&config).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        storage
+            .save(&config)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         Ok(Json(Verify2FaResponse {
             ok: true,
@@ -2848,7 +2987,9 @@ async fn verify_2fa(
     } else {
         // Record failed attempt
         config.record_failed_attempt();
-        storage.save(&config).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        storage
+            .save(&config)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         Ok(Json(Verify2FaResponse {
             ok: false,
@@ -2867,13 +3008,13 @@ struct Disable2FaRequest {
     code: String,
 }
 
-async fn disable_2fa(
-    Json(req): Json<Disable2FaRequest>,
-) -> Result<Json<OkResponse>, StatusCode> {
+async fn disable_2fa(Json(req): Json<Disable2FaRequest>) -> Result<Json<OkResponse>, StatusCode> {
     use crate::security::{TotpManager, TwoFactorStorage};
 
     let storage = TwoFactorStorage::new().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let mut config = storage.load().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut config = storage
+        .load()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if !config.enabled {
         return Ok(Json(OkResponse {
@@ -2896,7 +3037,9 @@ async fn disable_2fa(
 
     if !manager.verify(&req.code) {
         config.record_failed_attempt();
-        storage.save(&config).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        storage
+            .save(&config)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         return Ok(Json(OkResponse {
             ok: false,
@@ -2908,11 +3051,16 @@ async fn disable_2fa(
     config.enabled = false;
     config.totp_secret = String::new();
     config.recovery_codes = Vec::new();
-    storage.save(&config).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    storage
+        .save(&config)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     tracing::info!("2FA disabled");
 
-    Ok(Json(OkResponse { ok: true, message: None }))
+    Ok(Json(OkResponse {
+        ok: true,
+        message: None,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -2945,7 +3093,9 @@ async fn get_recovery_codes(
     }
 
     let storage = TwoFactorStorage::new().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let config = storage.load().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let config = storage
+        .load()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if !config.enabled {
         return Ok(Json(RecoveryCodesResponse {
@@ -2983,7 +3133,9 @@ async fn update_2fa_settings(
     }
 
     let storage = TwoFactorStorage::new().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let mut config = storage.load().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut config = storage
+        .load()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if !config.enabled {
         return Ok(Json(OkResponse {
@@ -2995,7 +3147,7 @@ async fn update_2fa_settings(
     // Update settings
     if let Some(timeout) = req.session_timeout_secs {
         // Validate: between 1 minute and 1 hour
-        if timeout < 60 || timeout > 3600 {
+        if !(60..=3600).contains(&timeout) {
             return Ok(Json(OkResponse {
                 ok: false,
                 message: Some("session_timeout_secs must be between 60 and 3600".to_string()),
@@ -3004,9 +3156,14 @@ async fn update_2fa_settings(
         config.session_timeout_secs = timeout;
     }
 
-    storage.save(&config).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    storage
+        .save(&config)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(Json(OkResponse { ok: true, message: None }))
+    Ok(Json(OkResponse {
+        ok: true,
+        message: None,
+    }))
 }
 
 // ─── Chat History ──────────────────────────────────────────────
@@ -3058,51 +3215,52 @@ async fn clear_chat_history(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<OkResponse>, StatusCode> {
     let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    
+
     db.clear_messages("web:default")
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    Ok(Json(OkResponse { 
-        ok: true, 
-        message: Some("Chat history cleared".to_string()) 
+
+    Ok(Json(OkResponse {
+        ok: true,
+        message: Some("Chat history cleared".to_string()),
     }))
 }
 
 /// Compact chat conversation (trigger memory consolidation)
-async fn compact_chat(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<OkResponse>, StatusCode> {
+async fn compact_chat(State(state): State<Arc<AppState>>) -> Result<Json<OkResponse>, StatusCode> {
     let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    
+
     // Check if there are enough messages to consolidate
-    let count = db.count_messages("web:default")
+    let count = db
+        .count_messages("web:default")
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
+
     if count < 10 {
-        return Ok(Json(OkResponse { 
-            ok: false, 
-            message: Some("Not enough messages to compact (need at least 10)".to_string()) 
+        return Ok(Json(OkResponse {
+            ok: false,
+            message: Some("Not enough messages to compact (need at least 10)".to_string()),
         }));
     }
-    
+
     // Trigger consolidation by resetting the last_consolidated counter
     // The agent loop will handle the actual consolidation on next message
     db.upsert_session("web:default", 0)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    Ok(Json(OkResponse { 
-        ok: true, 
-        message: Some("Conversation will be compacted on next message".to_string()) 
+
+    Ok(Json(OkResponse {
+        ok: true,
+        message: Some("Conversation will be compacted on next message".to_string()),
     }))
 }
 
 // ─── Permissions API ─────────────────────────────────────────────
 
 /// Get current permissions configuration
-async fn get_permissions(State(state): State<Arc<AppState>>) -> Json<crate::config::PermissionsConfig> {
+async fn get_permissions(
+    State(state): State<Arc<AppState>>,
+) -> Json<crate::config::PermissionsConfig> {
     let config = state.config.read().await;
     Json(config.permissions.clone())
 }
@@ -3114,13 +3272,13 @@ async fn put_permissions(
 ) -> Result<Json<crate::config::PermissionsConfig>, StatusCode> {
     let mut config = state.config.write().await;
     config.permissions = perms;
-    
+
     // Save to file
     if let Err(e) = config.save() {
         tracing::error!("Failed to save permissions config: {}", e);
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    
+
     Ok(Json(config.permissions.clone()))
 }
 
@@ -3141,24 +3299,28 @@ async fn add_acl_entry(
     Json(req): Json<AddAclRequest>,
 ) -> Result<Json<Vec<crate::config::AclEntry>>, StatusCode> {
     let mut config = state.config.write().await;
-    
+
     let entry = crate::config::AclEntry {
         path: req.path,
-        entry_type: if req.entry_type.is_empty() { "allow".to_string() } else { req.entry_type },
+        entry_type: if req.entry_type.is_empty() {
+            "allow".to_string()
+        } else {
+            req.entry_type
+        },
         permissions: crate::config::PathPermissions {
             read: crate::config::PermissionValue::Bool(req.read),
             write: crate::config::PermissionValue::Bool(req.write),
             delete: crate::config::PermissionValue::Bool(req.delete),
         },
     };
-    
+
     config.permissions.acl.push(entry);
-    
+
     if let Err(e) = config.save() {
         tracing::error!("Failed to save ACL entry: {}", e);
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    
+
     Ok(Json(config.permissions.acl.clone()))
 }
 
@@ -3168,16 +3330,16 @@ async fn delete_acl_entry(
     Path(idx): Path<usize>,
 ) -> Result<Json<Vec<crate::config::AclEntry>>, StatusCode> {
     let mut config = state.config.write().await;
-    
+
     if idx < config.permissions.acl.len() {
         config.permissions.acl.remove(idx);
-        
+
         if let Err(e) = config.save() {
             tracing::error!("Failed to save after ACL delete: {}", e);
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     }
-    
+
     Ok(Json(config.permissions.acl.clone()))
 }
 
@@ -3199,9 +3361,9 @@ async fn test_path_permission(
     State(state): State<Arc<AppState>>,
     Json(req): Json<TestPathRequest>,
 ) -> Json<TestPathResponse> {
-    use std::path::PathBuf;
     use crate::tools::file::{check_path_permission, FileOp, PermissionResult};
-    
+    use std::path::PathBuf;
+
     let config = state.config.read().await;
     let path = PathBuf::from(&req.path);
     let op = match req.operation.as_str() {
@@ -3210,9 +3372,9 @@ async fn test_path_permission(
         "delete" => FileOp::Delete,
         _ => FileOp::Read,
     };
-    
+
     let result = check_path_permission(&path, op, Some(&config.permissions), None);
-    
+
     let response = match result {
         PermissionResult::Allowed => TestPathResponse {
             allowed: true,
@@ -3230,7 +3392,7 @@ async fn test_path_permission(
             needs_confirmation: true,
         },
     };
-    
+
     Json(response)
 }
 
@@ -3242,15 +3404,20 @@ struct PermissionPreset {
 }
 
 /// Get available permission presets
+#[allow(clippy::field_reassign_with_default)]
 async fn get_permission_presets() -> Json<Vec<PermissionPreset>> {
-    use crate::config::{DefaultPermissions, PermissionMode, PermissionValue, PathPermissions};
-    
+    use crate::config::{DefaultPermissions, PathPermissions, PermissionMode, PermissionValue};
+
     let mut presets = Vec::new();
-    
+
     // Developer preset
     let mut dev = crate::config::PermissionsConfig::default();
     dev.mode = PermissionMode::Acl;
-    dev.default = DefaultPermissions { read: true, write: true, delete: false };
+    dev.default = DefaultPermissions {
+        read: true,
+        write: true,
+        delete: false,
+    };
     dev.acl.push(crate::config::AclEntry {
         path: "~/**".to_string(),
         entry_type: "allow".to_string(),
@@ -3265,11 +3432,15 @@ async fn get_permission_presets() -> Json<Vec<PermissionPreset>> {
         description: "Full access to home directory with confirmation on delete".to_string(),
         config: dev,
     });
-    
+
     // Restricted preset
     let mut restricted = crate::config::PermissionsConfig::default();
     restricted.mode = PermissionMode::Acl;
-    restricted.default = DefaultPermissions { read: false, write: false, delete: false };
+    restricted.default = DefaultPermissions {
+        read: false,
+        write: false,
+        delete: false,
+    };
     restricted.acl = vec![
         crate::config::AclEntry {
             path: "~/.homun/workspace/**".to_string(),
@@ -3304,11 +3475,15 @@ async fn get_permission_presets() -> Json<Vec<PermissionPreset>> {
         description: "Only workspace, brain, and memory directories".to_string(),
         config: restricted,
     });
-    
+
     // Paranoid preset
     let mut paranoid = crate::config::PermissionsConfig::default();
     paranoid.mode = PermissionMode::Acl;
-    paranoid.default = DefaultPermissions { read: false, write: false, delete: false };
+    paranoid.default = DefaultPermissions {
+        read: false,
+        write: false,
+        delete: false,
+    };
     paranoid.acl = vec![
         crate::config::AclEntry {
             path: "~/**".to_string(),
@@ -3334,7 +3509,7 @@ async fn get_permission_presets() -> Json<Vec<PermissionPreset>> {
         description: "Deny all by default, only brain with confirmation".to_string(),
         config: paranoid,
     });
-    
+
     Json(presets)
 }
 
@@ -3364,20 +3539,20 @@ async fn browse_directories(
     Query(q): Query<BrowseQuery>,
 ) -> Result<Json<BrowseResult>, StatusCode> {
     use std::fs;
-    
+
     let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"));
-    
+
     // Resolve the requested path
     let current = match q.path {
         Some(ref p) if !p.is_empty() => {
-            let expanded = if p.starts_with("~/") {
-                home.join(&p[2..])
+            let expanded = if let Some(stripped) = p.strip_prefix("~/") {
+                home.join(stripped)
             } else if p == "~" {
                 home.clone()
             } else {
                 std::path::PathBuf::from(p)
             };
-            
+
             // Canonicalize if exists, otherwise use as-is
             if expanded.exists() {
                 expanded.canonicalize().unwrap_or(expanded)
@@ -3387,7 +3562,7 @@ async fn browse_directories(
         }
         _ => home.clone(),
     };
-    
+
     // Get parent path
     let parent = current.parent().map(|p| {
         if p == home {
@@ -3396,7 +3571,7 @@ async fn browse_directories(
             p.to_string_lossy().to_string()
         }
     });
-    
+
     // List directory entries
     let mut entries = Vec::new();
     if current.is_dir() {
@@ -3404,7 +3579,7 @@ async fn browse_directories(
             for entry in read_dir.filter_map(|e| e.ok()) {
                 let path = entry.path();
                 let name = entry.file_name().to_string_lossy().to_string();
-                
+
                 // Only show directories and hidden check
                 if path.is_dir() && !name.starts_with('.') {
                     let display_path = if path.starts_with(&home) {
@@ -3412,7 +3587,7 @@ async fn browse_directories(
                     } else {
                         path.to_string_lossy().to_string()
                     };
-                    
+
                     entries.push(BrowseEntry {
                         name,
                         path: display_path,
@@ -3422,18 +3597,21 @@ async fn browse_directories(
             }
         }
     }
-    
+
     // Sort by name
     entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    
+
     let current_display = if current == home {
         "~".to_string()
     } else if current.starts_with(&home) {
-        format!("~/{}", current.strip_prefix(&home).unwrap().to_string_lossy())
+        format!(
+            "~/{}",
+            current.strip_prefix(&home).unwrap().to_string_lossy()
+        )
     } else {
         current.to_string_lossy().to_string()
     };
-    
+
     Ok(Json(BrowseResult {
         current_path: current_display,
         parent_path: parent,
@@ -3507,18 +3685,15 @@ async fn webhook_ingress(
         }
     };
 
-    let user = db
-        .lookup_user_by_webhook_token(&token)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(WebhookError {
-                    error: "database_error",
-                    message: e.to_string(),
-                }),
-            )
-        })?;
+    let user = db.lookup_user_by_webhook_token(&token).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(WebhookError {
+                error: "database_error",
+                message: e.to_string(),
+            }),
+        )
+    })?;
 
     let user = match user {
         Some(u) => u,
@@ -3537,7 +3712,9 @@ async fn webhook_ingress(
     let _ = db.touch_webhook_token(&token).await;
 
     // Build session key: webhook:{conversation_id}
-    let conversation_id = body.conversation_id.unwrap_or_else(|| "default".to_string());
+    let conversation_id = body
+        .conversation_id
+        .unwrap_or_else(|| "default".to_string());
     let session_key = format!("webhook:{}", conversation_id);
 
     // Create inbound message
@@ -3634,11 +3811,19 @@ async fn get_account(
 ) -> Result<Json<Option<AccountResponse>>, (StatusCode, Json<serde_json::Value>)> {
     let db = match &state.db {
         Some(db) => db,
-        None => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database not available"})))),
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Database not available"})),
+            ))
+        }
     };
 
     let users = db.load_all_users().await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
     })?;
 
     // Return the first user (owner)
@@ -3662,12 +3847,20 @@ async fn list_identities(
 ) -> Result<Json<Vec<IdentityResponse>>, (StatusCode, Json<serde_json::Value>)> {
     let db = match &state.db {
         Some(db) => db,
-        None => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database not available"})))),
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Database not available"})),
+            ))
+        }
     };
 
     // Get owner user ID
     let users = db.load_all_users().await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
     })?;
 
     let owner = match users.into_iter().next() {
@@ -3676,7 +3869,10 @@ async fn list_identities(
     };
 
     let identities = db.load_user_identities(&owner.id).await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
     })?;
 
     let response: Vec<IdentityResponse> = identities
@@ -3699,17 +3895,30 @@ async fn add_identity(
 ) -> Result<Json<IdentityResponse>, (StatusCode, Json<serde_json::Value>)> {
     let db = match &state.db {
         Some(db) => db,
-        None => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database not available"})))),
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Database not available"})),
+            ))
+        }
     };
 
     // Get owner user ID
     let users = db.load_all_users().await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
     })?;
 
     let owner = match users.into_iter().next() {
         Some(u) => u,
-        None => return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "No owner user found. Create one first."})))),
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "No owner user found. Create one first."})),
+            ))
+        }
     };
 
     db.add_user_identity(
@@ -3720,7 +3929,10 @@ async fn add_identity(
     )
     .await
     .map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
     })?;
 
     Ok(Json(IdentityResponse {
@@ -3738,27 +3950,49 @@ async fn remove_identity(
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     let db = match &state.db {
         Some(db) => db,
-        None => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database not available"})))),
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Database not available"})),
+            ))
+        }
     };
 
     // Get owner user ID
     let users = db.load_all_users().await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
     })?;
 
     let owner = match users.into_iter().next() {
         Some(u) => u,
-        None => return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "No owner user found"})))),
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "No owner user found"})),
+            ))
+        }
     };
 
-    let removed = db.remove_user_identity(&owner.id, &channel, &platform_id).await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
-    })?;
+    let removed = db
+        .remove_user_identity(&owner.id, &channel, &platform_id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
 
     if removed {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Identity not found"}))))
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Identity not found"})),
+        ))
     }
 }
 
@@ -3768,12 +4002,20 @@ async fn list_tokens(
 ) -> Result<Json<Vec<TokenResponse>>, (StatusCode, Json<serde_json::Value>)> {
     let db = match &state.db {
         Some(db) => db,
-        None => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database not available"})))),
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Database not available"})),
+            ))
+        }
     };
 
     // Get owner user ID
     let users = db.load_all_users().await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
     })?;
 
     let owner = match users.into_iter().next() {
@@ -3782,7 +4024,10 @@ async fn list_tokens(
     };
 
     let tokens = db.load_webhook_tokens(&owner.id).await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
     })?;
 
     let response: Vec<TokenResponse> = tokens
@@ -3806,25 +4051,43 @@ async fn create_token(
 ) -> Result<Json<TokenResponse>, (StatusCode, Json<serde_json::Value>)> {
     let db = match &state.db {
         Some(db) => db,
-        None => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database not available"})))),
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Database not available"})),
+            ))
+        }
     };
 
     // Get owner user ID
     let users = db.load_all_users().await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
     })?;
 
     let owner = match users.into_iter().next() {
         Some(u) => u,
-        None => return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "No owner user found. Create one first."})))),
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "No owner user found. Create one first."})),
+            ))
+        }
     };
 
     // Generate token
     let token = format!("wh_{}", uuid::Uuid::new_v4().simple());
 
-    db.create_webhook_token(&token, &owner.id, &body.name).await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
-    })?;
+    db.create_webhook_token(&token, &owner.id, &body.name)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
 
     Ok(Json(TokenResponse {
         token,
@@ -3842,17 +4105,28 @@ async fn delete_token(
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     let db = match &state.db {
         Some(db) => db,
-        None => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database not available"})))),
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Database not available"})),
+            ))
+        }
     };
 
     let removed = db.delete_webhook_token(&token).await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
     })?;
 
     if removed {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Token not found"}))))
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Token not found"})),
+        ))
     }
 }
 
@@ -3863,7 +4137,12 @@ async fn toggle_token(
 ) -> Result<Json<TokenResponse>, (StatusCode, Json<serde_json::Value>)> {
     let db = match &state.db {
         Some(db) => db,
-        None => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Database not available"})))),
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Database not available"})),
+            ))
+        }
     };
 
     // Get current state and toggle
@@ -3871,12 +4150,21 @@ async fn toggle_token(
     let current = tokens.iter().find(|t| t.token == token);
     let new_enabled = current.map(|t| !t.enabled).unwrap_or(false);
 
-    let updated = db.toggle_webhook_token(&token, new_enabled).await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()})))
-    })?;
+    let updated = db
+        .toggle_webhook_token(&token, new_enabled)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
 
     if !updated {
-        return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Token not found"}))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Token not found"})),
+        ));
     }
 
     Ok(Json(TokenResponse {
@@ -3898,9 +4186,7 @@ struct BrowserTestResponse {
 
 /// Test if browser can be launched
 #[cfg(feature = "browser")]
-async fn test_browser(
-    State(state): State<Arc<AppState>>,
-) -> Json<BrowserTestResponse> {
+async fn test_browser(State(state): State<Arc<AppState>>) -> Json<BrowserTestResponse> {
     let config = state.config.read().await;
 
     if !config.browser.enabled {
@@ -3980,11 +4266,9 @@ struct ApprovalConfigRequest {
 
 /// List all approvals (pending + summary)
 /// GET /api/v1/approvals
-async fn list_approvals(
-    State(_state): State<Arc<AppState>>,
-) -> Json<serde_json::Value> {
+async fn list_approvals(State(_state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let mgr = crate::tools::global_approval_manager();
-    
+
     match mgr {
         Some(m) => {
             let pending = m.get_pending();
@@ -4001,7 +4285,7 @@ async fn list_approvals(
             "error": "Approval manager not initialized",
             "pending": [],
             "pending_count": 0,
-        }))
+        })),
     }
 }
 
@@ -4011,10 +4295,10 @@ async fn list_pending_approvals(
     State(_state): State<Arc<AppState>>,
 ) -> Json<PendingApprovalsResponse> {
     let mgr = crate::tools::global_approval_manager();
-    
+
     let pending = mgr.map(|m| m.get_pending()).unwrap_or_default();
     let count = pending.len();
-    
+
     Json(PendingApprovalsResponse { pending, count })
 }
 
@@ -4024,10 +4308,10 @@ async fn get_approval_audit_log(
     State(_state): State<Arc<AppState>>,
 ) -> Json<ApprovalAuditResponse> {
     let mgr = crate::tools::global_approval_manager();
-    
+
     let log = mgr.map(|m| m.audit_log()).unwrap_or_default();
     let count = log.len();
-    
+
     Json(ApprovalAuditResponse { log, count })
 }
 
@@ -4039,27 +4323,25 @@ async fn approve_request(
     Json(body): Json<ApprovalActionRequest>,
 ) -> Result<Json<ApprovalActionResponse>, (StatusCode, Json<ApprovalActionResponse>)> {
     let mgr = crate::tools::global_approval_manager();
-    
+
     match mgr {
-        Some(m) => {
-            match m.approve(&id, body.always) {
-                Ok(()) => Ok(Json(ApprovalActionResponse {
-                    success: true,
-                    message: if body.always {
-                        "Approved and added to session allowlist".to_string()
-                    } else {
-                        "Approved for this session".to_string()
-                    },
-                })),
-                Err(e) => Err((
-                    StatusCode::NOT_FOUND,
-                    Json(ApprovalActionResponse {
-                        success: false,
-                        message: e,
-                    }),
-                )),
-            }
-        }
+        Some(m) => match m.approve(&id, body.always) {
+            Ok(()) => Ok(Json(ApprovalActionResponse {
+                success: true,
+                message: if body.always {
+                    "Approved and added to session allowlist".to_string()
+                } else {
+                    "Approved for this session".to_string()
+                },
+            })),
+            Err(e) => Err((
+                StatusCode::NOT_FOUND,
+                Json(ApprovalActionResponse {
+                    success: false,
+                    message: e,
+                }),
+            )),
+        },
         None => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApprovalActionResponse {
@@ -4077,23 +4359,21 @@ async fn deny_request(
     State(_state): State<Arc<AppState>>,
 ) -> Result<Json<ApprovalActionResponse>, (StatusCode, Json<ApprovalActionResponse>)> {
     let mgr = crate::tools::global_approval_manager();
-    
+
     match mgr {
-        Some(m) => {
-            match m.deny(&id) {
-                Ok(()) => Ok(Json(ApprovalActionResponse {
-                    success: true,
-                    message: "Request denied".to_string(),
-                })),
-                Err(e) => Err((
-                    StatusCode::NOT_FOUND,
-                    Json(ApprovalActionResponse {
-                        success: false,
-                        message: e,
-                    }),
-                )),
-            }
-        }
+        Some(m) => match m.deny(&id) {
+            Ok(()) => Ok(Json(ApprovalActionResponse {
+                success: true,
+                message: "Request denied".to_string(),
+            })),
+            Err(e) => Err((
+                StatusCode::NOT_FOUND,
+                Json(ApprovalActionResponse {
+                    success: false,
+                    message: e,
+                }),
+            )),
+        },
         None => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApprovalActionResponse {
@@ -4106,12 +4386,10 @@ async fn deny_request(
 
 /// Get approval configuration
 /// GET /api/v1/approvals/config
-async fn get_approval_config(
-    State(state): State<Arc<AppState>>,
-) -> Json<ApprovalConfigResponse> {
+async fn get_approval_config(State(state): State<Arc<AppState>>) -> Json<ApprovalConfigResponse> {
     let config = state.config.read().await;
     let mgr = crate::tools::global_approval_manager();
-    
+
     Json(ApprovalConfigResponse {
         level: format!("{:?}", config.permissions.approval.level).to_lowercase(),
         auto_approve: config.permissions.approval.auto_approve.clone(),
@@ -4127,34 +4405,42 @@ async fn put_approval_config(
     Json(body): Json<ApprovalConfigRequest>,
 ) -> Result<Json<ApprovalConfigResponse>, (StatusCode, String)> {
     use crate::config::AutonomyLevel;
-    
+
     let mut config = state.config.write().await;
-    
+
     if let Some(level) = body.level {
         let level = match level.to_lowercase().as_str() {
             "full" => AutonomyLevel::Full,
             "supervised" => AutonomyLevel::Supervised,
             "readonly" | "read_only" => AutonomyLevel::ReadOnly,
-            _ => return Err((StatusCode::BAD_REQUEST, format!("Invalid autonomy level: {}", level))),
+            _ => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid autonomy level: {}", level),
+                ))
+            }
         };
         config.permissions.approval.level = level;
     }
-    
+
     if let Some(auto_approve) = body.auto_approve {
         config.permissions.approval.auto_approve = auto_approve;
     }
-    
+
     if let Some(always_ask) = body.always_ask {
         config.permissions.approval.always_ask = always_ask;
     }
-    
+
     // Save config
     if let Err(e) = config.save() {
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save config: {}", e)));
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to save config: {}", e),
+        ));
     }
-    
+
     let mgr = crate::tools::global_approval_manager();
-    
+
     Ok(Json(ApprovalConfigResponse {
         level: format!("{:?}", config.permissions.approval.level).to_lowercase(),
         auto_approve: config.permissions.approval.auto_approve.clone(),

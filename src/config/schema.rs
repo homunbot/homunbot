@@ -28,7 +28,10 @@ impl Config {
         if path.exists() {
             Self::load_from(&path)
         } else {
-            tracing::warn!("Config file not found at {}, using defaults", path.display());
+            tracing::warn!(
+                "Config file not found at {}, using defaults",
+                path.display()
+            );
             Ok(Self::default())
         }
     }
@@ -51,11 +54,11 @@ impl Config {
     /// Save config to a specific path
     pub fn save_to(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create config directory {}", parent.display()))?;
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create config directory {}", parent.display())
+            })?;
         }
-        let content = toml::to_string_pretty(self)
-            .context("Failed to serialize config")?;
+        let content = toml::to_string_pretty(self).context("Failed to serialize config")?;
         std::fs::write(path, content)
             .with_context(|| format!("Failed to write config to {}", path.display()))?;
         Ok(())
@@ -185,22 +188,42 @@ impl Config {
 
         // --- 1. Direct keyword matching (ordered by specificity) ---
         let keyword_providers: &[(&[&str], &str, &ProviderConfig)] = &[
-            (&["anthropic/", "claude"],           "anthropic",  &self.providers.anthropic),
-            (&["openai/", "gpt-", "o1-", "o3-"],  "openai",     &self.providers.openai),
-            (&["mistral/", "mixtral", "codestral"], "mistral",  &self.providers.mistral),
-            (&["deepseek"],                       "deepseek",   &self.providers.deepseek),
-            (&["groq/"],                          "groq",       &self.providers.groq),
-            (&["gemini"],                         "gemini",     &self.providers.gemini),
-            (&["xai/", "grok"],                   "xai",        &self.providers.xai),
-            (&["together/"],                      "together",   &self.providers.together),
-            (&["fireworks/"],                     "fireworks",  &self.providers.fireworks),
-            (&["perplexity/", "sonar"],           "perplexity", &self.providers.perplexity),
-            (&["cohere/", "command"],             "cohere",     &self.providers.cohere),
-            (&["venice/"],                        "venice",     &self.providers.venice),
-            (&["minimax"],                        "minimax",    &self.providers.minimax),
-            (&["dashscope/", "qwen"],             "dashscope",  &self.providers.dashscope),
-            (&["moonshot", "kimi"],               "moonshot",   &self.providers.moonshot),
-            (&["zhipu/", "glm"],                  "zhipu",      &self.providers.zhipu),
+            (
+                &["anthropic/", "claude"],
+                "anthropic",
+                &self.providers.anthropic,
+            ),
+            (
+                &["openai/", "gpt-", "o1-", "o3-"],
+                "openai",
+                &self.providers.openai,
+            ),
+            (
+                &["mistral/", "mixtral", "codestral"],
+                "mistral",
+                &self.providers.mistral,
+            ),
+            (&["deepseek"], "deepseek", &self.providers.deepseek),
+            (&["groq/"], "groq", &self.providers.groq),
+            (&["gemini"], "gemini", &self.providers.gemini),
+            (&["xai/", "grok"], "xai", &self.providers.xai),
+            (&["together/"], "together", &self.providers.together),
+            (&["fireworks/"], "fireworks", &self.providers.fireworks),
+            (
+                &["perplexity/", "sonar"],
+                "perplexity",
+                &self.providers.perplexity,
+            ),
+            (&["cohere/", "command"], "cohere", &self.providers.cohere),
+            (&["venice/"], "venice", &self.providers.venice),
+            (&["minimax"], "minimax", &self.providers.minimax),
+            (
+                &["dashscope/", "qwen"],
+                "dashscope",
+                &self.providers.dashscope,
+            ),
+            (&["moonshot", "kimi"], "moonshot", &self.providers.moonshot),
+            (&["zhipu/", "glm"], "zhipu", &self.providers.zhipu),
         ];
 
         for (keywords, name, config) in keyword_providers {
@@ -449,16 +472,36 @@ impl ProvidersConfig {
     pub fn known_names() -> &'static [&'static str] {
         &[
             // Primary
-            "anthropic", "openai", "openrouter", "gemini",
+            "anthropic",
+            "openai",
+            "openrouter",
+            "gemini",
             // Local
-            "ollama", "ollama_cloud", "vllm", "custom",
+            "ollama",
+            "ollama_cloud",
+            "vllm",
+            "custom",
             // Cloud
-            "deepseek", "groq", "mistral", "xai", "together",
-            "fireworks", "perplexity", "cohere", "venice",
+            "deepseek",
+            "groq",
+            "mistral",
+            "xai",
+            "together",
+            "fireworks",
+            "perplexity",
+            "cohere",
+            "venice",
             // Gateways
-            "aihubmix", "vercel", "cloudflare", "copilot", "bedrock",
+            "aihubmix",
+            "vercel",
+            "cloudflare",
+            "copilot",
+            "bedrock",
             // Chinese
-            "minimax", "dashscope", "moonshot", "zhipu",
+            "minimax",
+            "dashscope",
+            "moonshot",
+            "zhipu",
         ]
     }
 }
@@ -572,8 +615,6 @@ pub struct ChannelsConfig {
     pub slack: SlackConfig,
 }
 
-
-
 impl ChannelsConfig {
     /// Return a list of enabled channels with their default chat IDs.
     /// Used to inject cross-channel routing info into the agent's system prompt.
@@ -593,10 +634,14 @@ impl ChannelsConfig {
             channels.push(("whatsapp".to_string(), jid));
         }
 
-        if self.discord.enabled && !self.discord.token.is_empty()
+        if self.discord.enabled
+            && !self.discord.token.is_empty()
             && !self.discord.default_channel_id.is_empty()
         {
-            channels.push(("discord".to_string(), self.discord.default_channel_id.clone()));
+            channels.push((
+                "discord".to_string(),
+                self.discord.default_channel_id.clone(),
+            ));
         }
 
         channels
@@ -739,10 +784,10 @@ pub struct MemoryConfig {
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
-            conversation_retention_days: 30,   // Keep messages for 30 days
-            history_retention_days: 365,       // Keep history for 1 year
-            daily_archive_months: 3,           // Archive daily files after 3 months
-            auto_cleanup: false,               // Don't auto-cleanup by default
+            conversation_retention_days: 30, // Keep messages for 30 days
+            history_retention_days: 365,     // Keep history for 1 year
+            daily_archive_months: 3,         // Archive daily files after 3 months
+            auto_cleanup: false,             // Don't auto-cleanup by default
         }
     }
 }
@@ -750,21 +795,16 @@ impl Default for MemoryConfig {
 // --- Permissions Config ---
 
 /// Permission mode for file access control
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum PermissionMode {
     /// No restrictions (except hardcoded blocks)
     Open,
     /// Only workspace + brain + memory directories
+    #[default]
     Workspace,
     /// Full ACL-based control
     Acl,
-}
-
-impl Default for PermissionMode {
-    fn default() -> Self {
-        Self::Workspace
-    }
 }
 
 /// Permission value - can be boolean or require confirmation
@@ -866,11 +906,18 @@ impl OsShellProfile {
             blocked_commands: match os {
                 "macos" => vec!["launchctl load".to_string(), "defaults delete".to_string()],
                 "linux" => vec!["systemctl --now disable".to_string()],
-                "windows" => vec!["reg delete".to_string(), "powershell -encodedcommand".to_string()],
+                "windows" => vec![
+                    "reg delete".to_string(),
+                    "powershell -encodedcommand".to_string(),
+                ],
                 _ => vec![],
             },
             allowed_commands: vec![],
-            shell: if os == "windows" { Some("powershell".to_string()) } else { None },
+            shell: if os == "windows" {
+                Some("powershell".to_string())
+            } else {
+                None
+            },
         }
     }
 }
@@ -904,34 +951,37 @@ impl ShellPermissions {
     /// Get the profile for the current OS
     pub fn current(&self) -> &OsShellProfile {
         #[cfg(target_os = "macos")]
-        { &self.macos }
+        {
+            &self.macos
+        }
         #[cfg(target_os = "linux")]
-        { &self.linux }
+        {
+            &self.linux
+        }
         #[cfg(target_os = "windows")]
-        { &self.windows }
+        {
+            &self.windows
+        }
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-        { &self.linux }
+        {
+            &self.linux
+        }
     }
 }
 
 // --- Approval Config (P0-4: Command Allowlist) ---
 
 /// Autonomy level for tool execution
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AutonomyLevel {
     /// Full autonomy - all tools execute without prompts
+    #[default]
     Full,
     /// Supervised - prompts for non-whitelisted tools
     Supervised,
     /// ReadOnly - only read-only tools allowed
     ReadOnly,
-}
-
-impl Default for AutonomyLevel {
-    fn default() -> Self {
-        Self::Full  // Default to full autonomy - approval workflow is opt-in
-    }
 }
 
 /// Approval configuration for shell commands
@@ -953,7 +1003,7 @@ pub struct ApprovalConfig {
 impl Default for ApprovalConfig {
     fn default() -> Self {
         Self {
-            level: AutonomyLevel::Full,  // Default to full autonomy - approval workflow is opt-in
+            level: AutonomyLevel::Full, // Default to full autonomy - approval workflow is opt-in
             // Safe commands that don't need approval
             auto_approve: vec![
                 "ls".to_string(),
@@ -1260,7 +1310,9 @@ impl BrowserConfig {
             }
         }
         // Default: use profile name as subdirectory
-        Config::data_dir().join("browser-profiles").join(profile_name)
+        Config::data_dir()
+            .join("browser-profiles")
+            .join(profile_name)
     }
 
     /// Get a profile by name, or the default profile
@@ -1322,7 +1374,10 @@ impl BrowserConfig {
                 vec![]
             };
 
-            candidates.iter().find(|p| std::path::Path::new(p).exists()).map(std::path::PathBuf::from)
+            candidates
+                .iter()
+                .find(|p| std::path::Path::new(p).exists())
+                .map(std::path::PathBuf::from)
         }
     }
 }
@@ -1359,7 +1414,9 @@ api_key = "sk-or-test"
     fn test_resolve_provider_anthropic() {
         let mut config = Config::default();
         config.providers.anthropic.api_key = "sk-ant-test".to_string();
-        let (name, _) = config.resolve_provider("anthropic/claude-sonnet-4-20250514").unwrap();
+        let (name, _) = config
+            .resolve_provider("anthropic/claude-sonnet-4-20250514")
+            .unwrap();
         assert_eq!(name, "anthropic");
     }
 

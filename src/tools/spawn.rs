@@ -55,13 +55,15 @@ impl Tool for SpawnTool {
     }
 
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
-        let action = args.get("action")
+        let action = args
+            .get("action")
             .and_then(|v| v.as_str())
             .unwrap_or("list");
 
         let result = match action {
             "spawn" => {
-                let description = args.get("description")
+                let description = args
+                    .get("description")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Background task");
                 let message = match args.get("message").and_then(|v| v.as_str()) {
@@ -69,7 +71,11 @@ impl Tool for SpawnTool {
                     None => return Ok(ToolResult::error("Missing 'message' parameter")),
                 };
 
-                match self.manager.spawn(description, message, &ctx.channel, &ctx.chat_id).await {
+                match self
+                    .manager
+                    .spawn(description, message, &ctx.channel, &ctx.chat_id)
+                    .await
+                {
                     Ok(task_id) => ToolResult::success(format!(
                         "Background task spawned: id={task_id}, description={description}"
                     )),
@@ -88,9 +94,7 @@ impl Tool for SpawnTool {
                     ToolResult::success(output)
                 }
             }
-            _ => ToolResult::error(format!(
-                "Unknown action: {action}. Use 'spawn' or 'list'."
-            )),
+            _ => ToolResult::error(format!("Unknown action: {action}. Use 'spawn' or 'list'.")),
         };
 
         Ok(result)

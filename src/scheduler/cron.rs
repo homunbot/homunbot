@@ -54,10 +54,7 @@ impl CronScheduler {
             *jobs = db_jobs;
         }
 
-        tracing::info!(
-            total_jobs = enabled_count,
-            "Cron scheduler loaded jobs"
-        );
+        tracing::info!(total_jobs = enabled_count, "Cron scheduler loaded jobs");
 
         let scheduler = self.clone();
         let handle = tokio::spawn(async move {
@@ -94,7 +91,9 @@ impl CronScheduler {
                     // Check if enough time has passed since last run
                     match &job.last_run {
                         Some(last) => {
-                            if let Ok(last_time) = chrono::NaiveDateTime::parse_from_str(last, "%Y-%m-%d %H:%M:%S") {
+                            if let Ok(last_time) =
+                                chrono::NaiveDateTime::parse_from_str(last, "%Y-%m-%d %H:%M:%S")
+                            {
                                 let last_utc = last_time.and_utc();
                                 (now - last_utc).num_seconds() >= secs as i64
                             } else {
@@ -110,7 +109,9 @@ impl CronScheduler {
                 }
                 ScheduleKind::At(target) => {
                     // One-time: fire if we're past the target time and never run
-                    if let Ok(target_time) = chrono::NaiveDateTime::parse_from_str(&target, "%Y-%m-%dT%H:%M:%S") {
+                    if let Ok(target_time) =
+                        chrono::NaiveDateTime::parse_from_str(&target, "%Y-%m-%dT%H:%M:%S")
+                    {
                         let target_utc = target_time.and_utc();
                         now >= target_utc && job.last_run.is_none()
                     } else {
@@ -168,7 +169,9 @@ impl CronScheduler {
         deliver_to: Option<&str>,
     ) -> Result<String> {
         let id = uuid::Uuid::new_v4().to_string()[..8].to_string();
-        self.db.insert_cron_job(&id, name, message, schedule, deliver_to).await?;
+        self.db
+            .insert_cron_job(&id, name, message, schedule, deliver_to)
+            .await?;
         self.reload().await?;
         tracing::info!(id = %id, name = %name, schedule = %schedule, "Cron job added");
         Ok(id)
@@ -193,9 +196,9 @@ impl CronScheduler {
 // --- Schedule parsing ---
 
 enum ScheduleKind {
-    Every(u64),     // seconds
-    Cron(String),   // cron expression
-    At(String),     // ISO timestamp
+    Every(u64),   // seconds
+    Cron(String), // cron expression
+    At(String),   // ISO timestamp
     Unknown,
 }
 

@@ -64,7 +64,8 @@ impl Tool for WebSearchTool {
 
         if self.api_key.is_empty() {
             return Ok(ToolResult::error(
-                "Brave Search API key not configured. Set it in [tools.web_search] api_key".to_string(),
+                "Brave Search API key not configured. Set it in [tools.web_search] api_key"
+                    .to_string(),
             ));
         }
 
@@ -95,13 +96,19 @@ impl Tool for WebSearchTool {
 
         let body: BraveSearchResponse = match response.json().await {
             Ok(b) => b,
-            Err(e) => return Ok(ToolResult::error(format!("Failed to parse search response: {e}"))),
+            Err(e) => {
+                return Ok(ToolResult::error(format!(
+                    "Failed to parse search response: {e}"
+                )))
+            }
         };
 
         let results = body.web.map(|w| w.results).unwrap_or_default();
 
         if results.is_empty() {
-            return Ok(ToolResult::success(format!("No results found for: {query}")));
+            return Ok(ToolResult::success(format!(
+                "No results found for: {query}"
+            )));
         }
 
         let mut output = format!("Results for: {query}\n");
@@ -218,7 +225,11 @@ impl Tool for WebFetchTool {
 
         let body = match response.text().await {
             Ok(t) => t,
-            Err(e) => return Ok(ToolResult::error(format!("Failed to read response body: {e}"))),
+            Err(e) => {
+                return Ok(ToolResult::error(format!(
+                    "Failed to read response body: {e}"
+                )))
+            }
         };
 
         // Strip HTML tags (basic — for a proper solution we'd use a crate like `scraper`)
@@ -300,7 +311,11 @@ fn strip_html_tags(html: &str) -> String {
         if !in_tag {
             // Handle HTML entities
             if chars[i] == '&' {
-                let entity: String = chars[i..].iter().take(10).take_while(|c| **c != ';').collect();
+                let entity: String = chars[i..]
+                    .iter()
+                    .take(10)
+                    .take_while(|c| **c != ';')
+                    .collect();
                 let entity_with_semi = format!("{entity};");
                 let decoded = match entity_with_semi.as_str() {
                     "&amp;" => "&",

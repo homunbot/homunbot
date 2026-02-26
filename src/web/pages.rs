@@ -45,7 +45,6 @@ const ICON_PHONE: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="current
 /// Logo icon — serves the SVG logotype via <img> tag.
 const LOGO_ICON: &str = r#"<div class="logo-icon" title="HOMUN"></div>"#;
 
-
 /// Build the sidebar navigation HTML
 fn sidebar(active: &str) -> String {
     // Settings submenu (only visible when settings is active)
@@ -115,7 +114,11 @@ fn sidebar(active: &str) -> String {
         skills_active = if active == "skills" { " active" } else { "" },
         memory_active = if active == "memory" { " active" } else { "" },
         vault_active = if active == "vault" { " active" } else { "" },
-        perms_active = if active == "permissions" { " active" } else { "" },
+        perms_active = if active == "permissions" {
+            " active"
+        } else {
+            ""
+        },
         approvals_active = if active == "approvals" { " active" } else { "" },
         account_active = if active == "account" { " active" } else { "" },
         settings_active = if active == "settings" { " active" } else { "" },
@@ -295,7 +298,13 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         no_model_warning = no_model_warning,
     );
 
-    Html(page_html("Dashboard", "dashboard", &body, &["dashboard.js"])).into_response()
+    Html(page_html(
+        "Dashboard",
+        "dashboard",
+        &body,
+        &["dashboard.js"],
+    ))
+    .into_response()
 }
 
 // ─── Settings ───────────────────────────────────────────────────
@@ -587,16 +596,52 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
         conversation_retention_days = config.memory.conversation_retention_days,
         history_retention_days = config.memory.history_retention_days,
         daily_archive_months = config.memory.daily_archive_months,
-        auto_cleanup_checked = if config.memory.auto_cleanup { "checked" } else { "" },
-        browser_enabled_checked = if config.browser.enabled { "checked" } else { "" },
-        browser_headless_checked = if config.browser.headless { "checked" } else { "" },
-        browser_type_chromium = if config.browser.browser_type == "chromium" { "selected" } else { "" },
-        browser_type_firefox = if config.browser.browser_type == "firefox" { "selected" } else { "" },
-        browser_type_webkit = if config.browser.browser_type == "webkit" { "selected" } else { "" },
+        auto_cleanup_checked = if config.memory.auto_cleanup {
+            "checked"
+        } else {
+            ""
+        },
+        browser_enabled_checked = if config.browser.enabled {
+            "checked"
+        } else {
+            ""
+        },
+        browser_headless_checked = if config.browser.headless {
+            "checked"
+        } else {
+            ""
+        },
+        browser_type_chromium = if config.browser.browser_type == "chromium" {
+            "selected"
+        } else {
+            ""
+        },
+        browser_type_firefox = if config.browser.browser_type == "firefox" {
+            "selected"
+        } else {
+            ""
+        },
+        browser_type_webkit = if config.browser.browser_type == "webkit" {
+            "selected"
+        } else {
+            ""
+        },
         action_timeout_secs = config.browser.action_timeout_secs,
-        theme_system = if config.ui.theme == "system" { "selected" } else { "" },
-        theme_light = if config.ui.theme == "light" { "selected" } else { "" },
-        theme_dark = if config.ui.theme == "dark" { "selected" } else { "" },
+        theme_system = if config.ui.theme == "system" {
+            "selected"
+        } else {
+            ""
+        },
+        theme_light = if config.ui.theme == "light" {
+            "selected"
+        } else {
+            ""
+        },
+        theme_dark = if config.ui.theme == "dark" {
+            "selected"
+        } else {
+            ""
+        },
         providers_html = providers_html,
         channels_html = build_channels_cards_html(&config),
         no_model_warning = no_model_warning,
@@ -729,7 +774,10 @@ async fn skills_page() -> Html<String> {
     let source_chips_html = if source_chips.is_empty() {
         String::new()
     } else {
-        format!(r#"<div class="skill-source-chips" id="source-chips">{}</div>"#, source_chips.join(""))
+        format!(
+            r#"<div class="skill-source-chips" id="source-chips">{}</div>"#,
+            source_chips.join("")
+        )
     };
 
     let body = format!(
@@ -842,9 +890,11 @@ async fn memory_page(State(state): State<Arc<AppState>>) -> Html<String> {
         None => 0,
     };
     let daily_count = std::fs::read_dir(data_dir.join("memory"))
-        .map(|e| e.filter_map(|f| f.ok()).filter(|f| {
-            f.path().extension().map_or(false, |ext| ext == "md")
-        }).count())
+        .map(|e| {
+            e.filter_map(|f| f.ok())
+                .filter(|f| f.path().extension().is_some_and(|ext| ext == "md"))
+                .count()
+        })
         .unwrap_or(0);
     let has_memory = data_dir.join("MEMORY.md").exists();
     let has_instructions = data_dir.join("brain").join("INSTRUCTIONS.md").exists()
@@ -957,12 +1007,23 @@ async fn memory_page(State(state): State<Arc<AppState>>) -> Html<String> {
         </main>"#,
         chunk_count = chunk_count,
         daily_count = daily_count,
-        file_count = [has_memory, has_instructions].iter().filter(|&&v| v).count(),
+        file_count = [has_memory, has_instructions]
+            .iter()
+            .filter(|&&v| v)
+            .count(),
         file_detail = {
             let mut parts = Vec::new();
-            if has_memory { parts.push("MEMORY.md"); }
-            if has_instructions { parts.push("INSTRUCTIONS.md"); }
-            if parts.is_empty() { "no files yet".to_string() } else { parts.join(" + ") }
+            if has_memory {
+                parts.push("MEMORY.md");
+            }
+            if has_instructions {
+                parts.push("INSTRUCTIONS.md");
+            }
+            if parts.is_empty() {
+                "no files yet".to_string()
+            } else {
+                parts.join(" + ")
+            }
         },
     );
 
@@ -1162,7 +1223,8 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
     };
     let acl_count = config.permissions.acl.len();
 
-    let body = format!(r#"<main class="content">
+    let body = format!(
+        r#"<main class="content">
             <div class="content-inner">
                 <div class="page-header">
                     <div class="page-title-group">
@@ -1410,12 +1472,29 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
         </div>"#,
         mode = mode,
         acl_count = acl_count,
-        default_read_checked = if config.permissions.default.read { "checked" } else { "" },
-        default_write_checked = if config.permissions.default.write { "checked" } else { "" },
-        default_delete_checked = if config.permissions.default.delete { "checked" } else { "" },
+        default_read_checked = if config.permissions.default.read {
+            "checked"
+        } else {
+            ""
+        },
+        default_write_checked = if config.permissions.default.write {
+            "checked"
+        } else {
+            ""
+        },
+        default_delete_checked = if config.permissions.default.delete {
+            "checked"
+        } else {
+            ""
+        },
     );
 
-    Html(page_html("Permissions", "permissions", &body, &["permissions.js"]))
+    Html(page_html(
+        "Permissions",
+        "permissions",
+        &body,
+        &["permissions.js"],
+    ))
 }
 
 // ─── Helpers ────────────────────────────────────────────────────
@@ -1488,13 +1567,38 @@ fn build_providers_html(config: &crate::config::Config) -> String {
     fn get_provider_meta(name: &str) -> (&'static str, &'static str, bool, bool) {
         match name {
             // Primary providers (fixed URLs)
-            "anthropic" => ("Anthropic", "Claude API (claude-3.5-sonnet, claude-opus, etc.)", true, false),
+            "anthropic" => (
+                "Anthropic",
+                "Claude API (claude-3.5-sonnet, claude-opus, etc.)",
+                true,
+                false,
+            ),
             "openai" => ("OpenAI", "GPT-4, GPT-4o, o1, o3 series", true, false),
-            "openrouter" => ("OpenRouter", "Access to 200+ models via unified API", true, false),
-            "gemini" => ("Google Gemini", "Gemini 1.5 Pro, Gemini 2.0 Flash", true, false),
+            "openrouter" => (
+                "OpenRouter",
+                "Access to 200+ models via unified API",
+                true,
+                false,
+            ),
+            "gemini" => (
+                "Google Gemini",
+                "Gemini 1.5 Pro, Gemini 2.0 Flash",
+                true,
+                false,
+            ),
             // Local/cloud providers
-            "ollama" => ("Ollama (local)", "Run models locally (llama3, mistral, etc.)", false, true),
-            "ollama_cloud" => ("Ollama Cloud", "Hosted Ollama models with API key", true, false),
+            "ollama" => (
+                "Ollama (local)",
+                "Run models locally (llama3, mistral, etc.)",
+                false,
+                true,
+            ),
+            "ollama_cloud" => (
+                "Ollama Cloud",
+                "Hosted Ollama models with API key",
+                true,
+                false,
+            ),
             "vllm" => ("vLLM", "Self-hosted vLLM server", false, true),
             "custom" => ("Custom", "Any OpenAI-compatible API endpoint", false, true),
             // Cloud providers (all have fixed URLs)
@@ -1512,7 +1616,12 @@ fn build_providers_html(config: &crate::config::Config) -> String {
             "vercel" => ("Vercel AI", "Vercel AI Gateway", true, false),
             "cloudflare" => ("Cloudflare AI", "Cloudflare AI Gateway", true, false),
             "copilot" => ("GitHub Copilot", "GitHub Copilot API", true, false),
-            "bedrock" => ("AWS Bedrock", "Amazon Bedrock foundation models", true, false),
+            "bedrock" => (
+                "AWS Bedrock",
+                "Amazon Bedrock foundation models",
+                true,
+                false,
+            ),
             // Chinese providers (fixed URLs)
             "minimax" => ("MiniMax", "MiniMax AI models", true, false),
             "dashscope" => ("DashScope", "Alibaba Qwen models", true, false),
@@ -1854,7 +1963,8 @@ async fn approvals_page(State(state): State<Arc<AppState>>) -> Html<String> {
     let level = format!("{:?}", config.permissions.approval.level).to_lowercase();
     drop(config);
 
-    let body = format!(r#"
+    let body = format!(
+        r#"
         <main class="main">
             <div class="page-header">
                 <h1>Approvals</h1>
@@ -1921,7 +2031,11 @@ async fn approvals_page(State(state): State<Arc<AppState>>) -> Html<String> {
             </div>
         </main>"#,
         full_selected = if level == "full" { "selected" } else { "" },
-        supervised_selected = if level == "supervised" { "selected" } else { "" },
+        supervised_selected = if level == "supervised" {
+            "selected"
+        } else {
+            ""
+        },
         readonly_selected = if level == "readonly" { "selected" } else { "" },
     );
 

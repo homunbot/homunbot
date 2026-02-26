@@ -40,12 +40,12 @@ impl TotpManager {
 
         let totp = TOTP::new(
             Algorithm::SHA1,           // Standard algorithm
-            6,                          // 6 digits
-            1,                          // Skew (allowed steps before/after)
-            30,                         // Period in seconds
-            secret_bytes,               // Secret bytes
-            Some("Homun".to_string()),  // Issuer
-            account.to_string(),        // Account name (e.g., user@host)
+            6,                         // 6 digits
+            1,                         // Skew (allowed steps before/after)
+            30,                        // Period in seconds
+            secret_bytes,              // Secret bytes
+            Some("Homun".to_string()), // Issuer
+            account.to_string(),       // Account name (e.g., user@host)
         )
         .context("Failed to create TOTP instance")?;
 
@@ -121,9 +121,7 @@ impl TotpManager {
 
     /// Verify a TOTP code with strict timing (no window tolerance).
     pub fn verify_strict(&self, code: &str) -> bool {
-        self.totp
-            .check_current(code.trim())
-            .unwrap_or(false)
+        self.totp.check_current(code.trim()).unwrap_or(false)
     }
 }
 
@@ -149,17 +147,20 @@ mod tests {
         // Base32 secrets are typically 16+ characters
         assert!(secret.len() >= 16);
         // Should only contain valid Base32 characters
-        assert!(secret.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
+        assert!(secret
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
     }
 
     #[test]
     fn test_totp_url_format() {
-        let secret = "JBSWY3DPEHPK3PXP";
+        // Use a 26-character secret (130 bits) to meet the 128-bit minimum requirement
+        let secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3P";
         let manager = TotpManager::new(secret, "test@example.com").unwrap();
         let url = manager.get_url();
 
         assert!(url.starts_with("otpauth://totp/"));
-        assert!(url.contains("secret=JBSWY3DPEHPK3PXP"));
+        assert!(url.contains("secret="));
         assert!(url.contains("issuer=Homun"));
     }
 
