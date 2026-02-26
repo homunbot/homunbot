@@ -39,6 +39,7 @@ channel-telegram = ["dep:teloxide", "dep:reqwest-011"]
 channel-discord = ["dep:serenity"]
 channel-whatsapp = ["dep:wa-rs", "dep:wa-rs-sqlite-storage", "dep:wa-rs-tokio-transport", 
                     "dep:wa-rs-ureq-http", "dep:wa-rs-core", "dep:wa-rs-proto", "dep:futures-util"]
+channel-email = ["dep:lettre", "dep:mail-parser", "dep:async-imap", "dep:tokio-rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
 channel-webhook = []  # Built-in, uses axum
 
 # === Providers (optional enhancements) ===
@@ -52,7 +53,7 @@ vault-2fa = ["dep:totp-rs", "dep:rand"]
 
 # === Meta Features ===
 gateway = ["cli", "web-ui", "file-tools", "shell-tool", "web-tools", "cron-tool", "message-tool",
-           "channel-telegram", "channel-discord", "channel-whatsapp", "channel-webhook",
+           "channel-telegram", "channel-discord", "channel-whatsapp", "channel-email", "channel-webhook",
            "providers-openai-compat", "local-embeddings", "mcp"]
 
 full = ["gateway", "browser", "vault-2fa"]
@@ -168,6 +169,14 @@ rmcp = { version = "0.15", features = ["client", "transport-child-process"], opt
 # --- Vault 2FA ---
 totp-rs = { version = "5", features = ["qr"], optional = true }
 rand = { version = "0.8", optional = true }
+
+# --- Email channel ---
+lettre = { version = "0.11", optional = true, default-features = false, features = ["builder", "smtp-transport", "rustls-tls"] }
+mail-parser = { version = "0.11", optional = true }
+async-imap = { version = "0.11", optional = true, default-features = false, features = ["runtime-tokio"] }
+tokio-rustls = { version = "0.26", optional = true }
+rustls-pki-types = { version = "1", optional = true }
+webpki-roots = { version = "0.26", optional = true }
 
 # --- Skill installer (archive extraction) ---
 flate2 = "1"

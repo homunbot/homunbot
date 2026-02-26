@@ -24,6 +24,9 @@ use crate::channels::DiscordChannel;
 #[cfg(feature = "channel-whatsapp")]
 use crate::channels::WhatsAppChannel;
 
+#[cfg(feature = "channel-email")]
+use crate::channels::EmailChannel;
+
 use crate::channels::Channel;
 use crate::channels::SlackChannel; // Import trait to call .start()
 
@@ -221,6 +224,34 @@ impl Gateway {
                     outbound_tx: slack_outbound_tx,
                 });
                 tracing::info!("Slack channel started");
+            }
+        }
+
+        // --- Start Email channel ---
+        #[cfg(feature = "channel-email")]
+        if self.config.channels.email.enabled {
+            let email_config = self.config.channels.email.clone();
+
+            // Skip if not properly configured
+            if !email_config.is_configured() {
+                tracing::error!("Email enabled but not configured - skipping channel");
+            } else {
+                let email_inbound_tx = inbound_tx.clone();
+                let (email_outbound_tx, email_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
+
+                let handle = tokio::spawn(async move {
+                    let channel = EmailChannel::new(email_config);
+                    if let Err(e) = channel.start(email_inbound_tx, email_outbound_rx).await {
+                        tracing::error!(error = %e, "Email channel error");
+                    }
+                });
+
+                channels.push(ChannelHandle {
+                    name: "email".to_string(),
+                    handle,
+                    outbound_tx: email_outbound_tx,
+                });
+                tracing::info!("Email channel started");
             }
         }
 

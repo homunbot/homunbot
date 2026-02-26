@@ -1580,6 +1580,35 @@ async fn get_channel(
                 "port": config.channels.web.port,
             })
         }
+        "email" => {
+            // Check if password is encrypted
+            let has_password = if config.channels.email.password == "***ENCRYPTED***" {
+                if let Ok(secrets) = crate::storage::global_secrets() {
+                    let key = crate::storage::SecretKey::channel_token("email");
+                    matches!(secrets.get(&key), Ok(Some(_)))
+                } else {
+                    false
+                }
+            } else {
+                !config.channels.email.password.is_empty()
+            };
+            serde_json::json!({
+                "name": "email",
+                "enabled": config.channels.email.enabled,
+                "configured": config.is_channel_configured("email"),
+                "imap_host": config.channels.email.imap_host,
+                "imap_port": config.channels.email.imap_port,
+                "imap_folder": config.channels.email.imap_folder,
+                "smtp_host": config.channels.email.smtp_host,
+                "smtp_port": config.channels.email.smtp_port,
+                "smtp_tls": config.channels.email.smtp_tls,
+                "username": config.channels.email.username,
+                "has_password": has_password,
+                "from_address": config.channels.email.from_address,
+                "idle_timeout_secs": config.channels.email.idle_timeout_secs,
+                "allow_from": config.channels.email.allow_from,
+            })
+        }
         _ => return Err(StatusCode::NOT_FOUND),
     };
 
@@ -1597,6 +1626,17 @@ struct ChannelConfigRequest {
     port: Option<u16>,
     auth_token: Option<String>,
     default_channel_id: Option<String>,
+    // Email-specific fields
+    imap_host: Option<String>,
+    imap_port: Option<u16>,
+    imap_folder: Option<String>,
+    smtp_host: Option<String>,
+    smtp_port: Option<u16>,
+    smtp_tls: Option<bool>,
+    username: Option<String>,
+    password: Option<String>,
+    from_address: Option<String>,
+    idle_timeout_secs: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -1691,6 +1731,54 @@ async fn configure_channel(
             }
             // Web is always enabled
         }
+        "email" => {
+            // IMAP settings
+            if let Some(imap_host) = &req.imap_host {
+                config.channels.email.imap_host = imap_host.clone();
+            }
+            if let Some(imap_port) = req.imap_port {
+                config.channels.email.imap_port = imap_port;
+            }
+            if let Some(imap_folder) = &req.imap_folder {
+                config.channels.email.imap_folder = imap_folder.clone();
+            }
+            // SMTP settings
+            if let Some(smtp_host) = &req.smtp_host {
+                config.channels.email.smtp_host = smtp_host.clone();
+            }
+            if let Some(smtp_port) = req.smtp_port {
+                config.channels.email.smtp_port = smtp_port;
+            }
+            if let Some(smtp_tls) = req.smtp_tls {
+                config.channels.email.smtp_tls = smtp_tls;
+            }
+            // Credentials
+            if let Some(username) = &req.username {
+                config.channels.email.username = username.clone();
+            }
+            if let Some(password) = &req.password {
+                if !password.is_empty() {
+                    // Store password in encrypted storage
+                    let secrets = crate::storage::global_secrets()
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    let key = crate::storage::SecretKey::channel_token("email");
+                    secrets
+                        .set(&key, password)
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    config.channels.email.password = "***ENCRYPTED***".to_string();
+                }
+            }
+            if let Some(from_address) = &req.from_address {
+                config.channels.email.from_address = from_address.clone();
+            }
+            if let Some(idle_timeout_secs) = req.idle_timeout_secs {
+                config.channels.email.idle_timeout_secs = idle_timeout_secs;
+            }
+            if let Some(allow_from) = &req.allow_from {
+                config.channels.email.allow_from = allow_from.clone();
+            }
+            config.channels.email.enabled = true;
+        }
         _ => return Err(StatusCode::BAD_REQUEST),
     }
 
@@ -1715,7 +1803,7 @@ async fn deactivate_channel(
     Json(req): Json<ChannelDeactivateRequest>,
 ) -> Result<Json<ChannelConfigResponse>, StatusCode> {
     // Remove token from encrypted storage
-    if matches!(req.name.as_str(), "telegram" | "discord") {
+    if matches!(req.name.as_str(), "telegram" | "discord" | "slack" | "email") {
         if let Ok(secrets) = crate::storage::global_secrets() {
             let key = crate::storage::SecretKey::channel_token(&req.name);
             let _ = secrets.delete(&key);
@@ -1746,6 +1834,17 @@ async fn deactivate_channel(
                 ok: false,
                 message: "Web UI cannot be deactivated".to_string(),
             }));
+        }
+        "slack" => {
+            config.channels.slack.enabled = false;
+            config.channels.slack.token = String::new();
+            config.channels.slack.channel_id = String::new();
+            config.channels.slack.allow_from.clear();
+        }
+        "email" => {
+            config.channels.email.enabled = false;
+            config.channels.email.password = String::new();
+            config.channels.email.allow_from.clear();
         }
         _ => return Err(StatusCode::BAD_REQUEST),
     }

@@ -171,6 +171,17 @@ impl Config {
                 !self.channels.whatsapp.phone_number.is_empty()
                     && self.channels.whatsapp.resolved_db_path().exists()
             }
+            "email" => {
+                // Check vault for password, then config
+                let has_password = if let Ok(secrets) = crate::storage::global_secrets() {
+                    let key = crate::storage::SecretKey::channel_token("email");
+                    matches!(secrets.get(&key), Ok(Some(_)))
+                } else {
+                    false
+                };
+                self.channels.email.is_configured()
+                    || (has_password && !self.channels.email.imap_host.is_empty())
+            }
             "web" => true, // Always configured
             _ => false,
         }
@@ -605,6 +616,65 @@ pub struct SlackConfig {
     pub allow_from: Vec<String>,
 }
 
+/// Email channel configuration (IMAP + SMTP)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EmailConfig {
+    pub enabled: bool,
+    /// IMAP server hostname
+    pub imap_host: String,
+    /// IMAP server port (default: 993 for TLS)
+    pub imap_port: u16,
+    /// IMAP folder to poll (default: INBOX)
+    pub imap_folder: String,
+    /// SMTP server hostname
+    pub smtp_host: String,
+    /// SMTP server port (default: 465 for TLS)
+    pub smtp_port: u16,
+    /// Use TLS for SMTP (default: true)
+    pub smtp_tls: bool,
+    /// Email username for authentication
+    pub username: String,
+    /// Email password (use ***ENCRYPTED*** to store in vault)
+    pub password: String,
+    /// From address for outgoing emails
+    pub from_address: String,
+    /// IDLE timeout in seconds before re-establishing connection (default: 1740 = 29 minutes)
+    /// RFC 2177 recommends clients restart IDLE every 29 minutes
+    pub idle_timeout_secs: u64,
+    /// Allowed sender addresses/domains (empty = deny all, ["*"] = allow all)
+    pub allow_from: Vec<String>,
+}
+
+impl Default for EmailConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            imap_host: String::new(),
+            imap_port: 993,
+            imap_folder: "INBOX".to_string(),
+            smtp_host: String::new(),
+            smtp_port: 465,
+            smtp_tls: true,
+            username: String::new(),
+            password: String::new(),
+            from_address: String::new(),
+            idle_timeout_secs: 1740, // 29 minutes per RFC 2177
+            allow_from: Vec::new(),
+        }
+    }
+}
+
+impl EmailConfig {
+    /// Check if email channel is properly configured
+    pub fn is_configured(&self) -> bool {
+        !self.imap_host.is_empty()
+            && !self.smtp_host.is_empty()
+            && !self.username.is_empty()
+            && !self.password.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChannelsConfig {
@@ -613,6 +683,7 @@ pub struct ChannelsConfig {
     pub discord: DiscordConfig,
     pub web: WebConfig,
     pub slack: SlackConfig,
+    pub email: EmailConfig,
 }
 
 impl ChannelsConfig {
@@ -642,6 +713,11 @@ impl ChannelsConfig {
                 "discord".to_string(),
                 self.discord.default_channel_id.clone(),
             ));
+        }
+
+        if self.email.enabled && self.email.is_configured() {
+            // Use from_address as the chat_id for email
+            channels.push(("email".to_string(), self.email.from_address.clone()));
         }
 
         channels

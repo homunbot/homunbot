@@ -11,6 +11,9 @@ pub mod discord;
 #[cfg(feature = "channel-whatsapp")]
 pub mod whatsapp;
 
+#[cfg(feature = "channel-email")]
+pub mod email;
+
 pub use cli::CliChannel;
 pub use slack::SlackChannel;
 
@@ -22,5 +25,8 @@ pub use discord::DiscordChannel;
 
 #[cfg(feature = "channel-whatsapp")]
 pub use whatsapp::WhatsAppChannel;
+
+#[cfg(feature = "channel-email")]
+pub use email::EmailChannel;
 
 pub use traits::Channel;

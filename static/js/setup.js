@@ -549,6 +549,9 @@ if (chModal && channelCards.length > 0) {
     const chAllowGroup = document.getElementById('ch-allow-from-group');
     const chDiscordGroup = document.getElementById('ch-discord-channel-group');
     const chSlackGroup = document.getElementById('ch-slack-channel-group');
+    const chEmailImapGroup = document.getElementById('ch-email-imap-group');
+    const chEmailSmtpGroup = document.getElementById('ch-email-smtp-group');
+    const chEmailCredsGroup = document.getElementById('ch-email-credentials-group');
     const chWebHostGroup = document.getElementById('ch-web-host-group');
     const chWebPortGroup = document.getElementById('ch-web-port-group');
     const chWaPairing = document.getElementById('ch-wa-pairing');
@@ -586,6 +589,14 @@ if (chModal && channelCards.length > 0) {
             'Click "Start Pairing" \u2014 you will receive an 8-digit code',
             'Open WhatsApp \u2192 Linked Devices \u2192 Link a Device',
             'Select "Link with phone number" and enter the code',
+        ],
+        email: [
+            'Enter IMAP server (e.g., imap.gmail.com)',
+            'Enter SMTP server (e.g., smtp.gmail.com)',
+            'For Gmail: enable 2FA and create an App Password',
+            'Enter your email address as username',
+            'Paste the App Password (not your regular password)',
+            'Add allowed senders (emails or domains like @company.com)',
         ],
         web: [],
     };
@@ -661,6 +672,10 @@ if (chModal && channelCards.length > 0) {
         if (chAllowGroup) chAllowGroup.style.display = (currentChannel !== 'web') ? 'block' : 'none';
         if (chDiscordGroup) chDiscordGroup.style.display = currentChannel === 'discord' ? 'block' : 'none';
         if (chSlackGroup) chSlackGroup.style.display = currentChannel === 'slack' ? 'block' : 'none';
+        // Email fields
+        if (chEmailImapGroup) chEmailImapGroup.style.display = currentChannel === 'email' ? 'block' : 'none';
+        if (chEmailSmtpGroup) chEmailSmtpGroup.style.display = currentChannel === 'email' ? 'block' : 'none';
+        if (chEmailCredsGroup) chEmailCredsGroup.style.display = currentChannel === 'email' ? 'block' : 'none';
         if (chWebHostGroup) chWebHostGroup.style.display = isWeb ? 'block' : 'none';
         if (chWebPortGroup) chWebPortGroup.style.display = isWeb ? 'block' : 'none';
         if (chWaPairing) chWaPairing.style.display = 'none';
@@ -730,6 +745,35 @@ if (chModal && channelCards.length > 0) {
                 }
                 if (data.port) {
                     document.getElementById('ch-web-port').value = data.port;
+                }
+                // Email fields
+                if (data.imap_host) {
+                    var imapHost = document.getElementById('ch-email-imap-host');
+                    if (imapHost) imapHost.value = data.imap_host;
+                }
+                if (data.imap_port) {
+                    var imapPort = document.getElementById('ch-email-imap-port');
+                    if (imapPort) imapPort.value = data.imap_port;
+                }
+                if (data.smtp_host) {
+                    var smtpHost = document.getElementById('ch-email-smtp-host');
+                    if (smtpHost) smtpHost.value = data.smtp_host;
+                }
+                if (data.smtp_port) {
+                    var smtpPort = document.getElementById('ch-email-smtp-port');
+                    if (smtpPort) smtpPort.value = data.smtp_port;
+                }
+                if (data.username) {
+                    var emailUser = document.getElementById('ch-email-username');
+                    if (emailUser) emailUser.value = data.username;
+                }
+                if (data.has_password) {
+                    var emailPass = document.getElementById('ch-email-password');
+                    if (emailPass) emailPass.placeholder = '•••••••• (stored encrypted)';
+                }
+                if (data.from_address) {
+                    var emailFrom = document.getElementById('ch-email-from');
+                    if (emailFrom) emailFrom.value = data.from_address;
                 }
             })
             .catch(function() { /* silently use card data fallback */ });
@@ -808,6 +852,29 @@ if (chModal && channelCards.length > 0) {
             }
             if (chSlackGroup.style.display !== 'none') {
                 payload.default_channel_id = document.getElementById('ch-slack-channel').value.trim();
+            }
+            // Email fields
+            if (chEmailImapGroup && chEmailImapGroup.style.display !== 'none') {
+                var imapHost = document.getElementById('ch-email-imap-host');
+                var imapPort = document.getElementById('ch-email-imap-port');
+                if (imapHost) payload.imap_host = imapHost.value.trim();
+                if (imapPort && imapPort.value) payload.imap_port = parseInt(imapPort.value, 10);
+                var imapFolder = document.getElementById('ch-email-imap-folder');
+                if (imapFolder && imapFolder.value) payload.imap_folder = imapFolder.value.trim();
+            }
+            if (chEmailSmtpGroup && chEmailSmtpGroup.style.display !== 'none') {
+                var smtpHost = document.getElementById('ch-email-smtp-host');
+                var smtpPort = document.getElementById('ch-email-smtp-port');
+                if (smtpHost) payload.smtp_host = smtpHost.value.trim();
+                if (smtpPort && smtpPort.value) payload.smtp_port = parseInt(smtpPort.value, 10);
+            }
+            if (chEmailCredsGroup && chEmailCredsGroup.style.display !== 'none') {
+                var emailUser = document.getElementById('ch-email-username');
+                var emailPass = document.getElementById('ch-email-password');
+                var emailFrom = document.getElementById('ch-email-from');
+                if (emailUser) payload.username = emailUser.value.trim();
+                if (emailPass) payload.password = emailPass.value;
+                if (emailFrom) payload.from_address = emailFrom.value.trim();
             }
             if (chWebHostGroup.style.display !== 'none') {
                 payload.host = document.getElementById('ch-web-host').value.trim();

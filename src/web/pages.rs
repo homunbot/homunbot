@@ -41,6 +41,7 @@ const ICON_TELEGRAM: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="curr
 const ICON_DISCORD: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3C5 3 3 3.5 2 5c-1.5 3-.5 7.5 1 9.5.5.5 1.5 1.5 3 1.5s2-1 3-1 1.5 1 3 1 2.5-1 3-1.5c1.5-2 2.5-6.5 1-9.5-1-1.5-3-2-4.5-2"/><circle cx="6.5" cy="10" r="1"/><circle cx="11.5" cy="10" r="1"/></svg>"#;
 const ICON_SLACK: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z"/><path d="M9 6a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/><path d="M15 9a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z"/><path d="M9 15a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/><path d="M6 6v3m0 3v3"/><path d="M12 6v3m0 3v3"/><path d="M6 6h3m3 0h3"/><path d="M6 12h3m3 0h3"/></svg>"#;
 const ICON_PHONE: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="1" width="10" height="16" rx="2"/><line x1="9" y1="14" x2="9" y2="14"/></svg>"#;
+const ICON_EMAIL: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="16" height="12" rx="2"/><path d="M1 5l8 5 8-5"/></svg>"#;
 
 /// Logo icon — serves the SVG logotype via <img> tag.
 const LOGO_ICON: &str = r#"<div class="logo-icon" title="HOMUN"></div>"#;
@@ -565,6 +566,28 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <label for="ch-slack-channel">Channel ID</label>
                             <input type="text" id="ch-slack-channel" name="slack_channel_id" class="input">
                             <div class="form-hint">Specific channel to monitor (e.g., C1234567890). Leave empty for auto-discovery.</div>
+                        </div>
+
+                        <!-- Email channel fields -->
+                        <div class="form-group" id="ch-email-imap-group" style="display:none;">
+                            <label for="ch-email-imap-host">IMAP Server</label>
+                            <input type="text" id="ch-email-imap-host" name="imap_host" class="input" placeholder="imap.gmail.com">
+                            <input type="number" id="ch-email-imap-port" name="imap_port" class="input" placeholder="993" style="width:80px;display:inline-block;margin-left:10px;">
+                            <div class="form-hint">IMAP server and port (default: 993 for TLS)</div>
+                        </div>
+                        <div class="form-group" id="ch-email-smtp-group" style="display:none;">
+                            <label for="ch-email-smtp-host">SMTP Server</label>
+                            <input type="text" id="ch-email-smtp-host" name="smtp_host" class="input" placeholder="smtp.gmail.com">
+                            <input type="number" id="ch-email-smtp-port" name="smtp_port" class="input" placeholder="465" style="width:80px;display:inline-block;margin-left:10px;">
+                            <div class="form-hint">SMTP server and port (default: 465 for TLS)</div>
+                        </div>
+                        <div class="form-group" id="ch-email-credentials-group" style="display:none;">
+                            <label for="ch-email-username">Username</label>
+                            <input type="text" id="ch-email-username" name="email_username" class="input" placeholder="bot@example.com">
+                            <label for="ch-email-password" style="margin-top:10px;">Password</label>
+                            <input type="password" id="ch-email-password" name="email_password" class="input" placeholder="App password (stored encrypted)">
+                            <label for="ch-email-from" style="margin-top:10px;">From Address</label>
+                            <input type="text" id="ch-email-from" name="from_address" class="input" placeholder="bot@example.com">
                         </div>
 
                         <div class="form-group" id="ch-web-host-group" style="display:none;">
@@ -1510,6 +1533,9 @@ fn count_active_channels(config: &crate::config::Config) -> usize {
     if config.channels.whatsapp.enabled {
         count += 1;
     }
+    if config.channels.email.enabled {
+        count += 1;
+    }
     count
 }
 
@@ -1533,6 +1559,12 @@ fn build_channels_html(config: &crate::config::Config) -> String {
             "WhatsApp",
             config.channels.whatsapp.enabled,
             "Native",
+        ),
+        (
+            ICON_EMAIL,
+            "Email",
+            config.channels.email.enabled,
+            "IMAP/SMTP",
         ),
     ];
 
