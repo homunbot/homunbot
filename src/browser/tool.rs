@@ -1813,9 +1813,17 @@ impl Tool for BrowserTool {
                     manager.close_tab_by_target_id_for_profile(&tid, profile.as_deref()).await?;
                     Ok(format!("Tab {} closed", tid))
                 } else {
-                    // Close the current chat's page
-                    manager.close_page_for_profile(&ctx.chat_id, profile.as_deref().unwrap_or("default")).await?;
-                    return Ok(ToolResult::success("Browser page closed. Task complete.".to_string()));
+                    // Close the current chat's page (and browser if no other pages)
+                    let profile_name = profile.as_deref().unwrap_or("default");
+                    manager.close_page_for_profile(&ctx.chat_id, profile_name).await?;
+
+                    // Check if browser is still running
+                    let browser_closed = !manager.is_profile_running(profile_name).await;
+                    if browser_closed {
+                        return Ok(ToolResult::success("✅ Browser closed completely. All resources freed.".to_string()));
+                    } else {
+                        return Ok(ToolResult::success("✅ Page closed. Browser still running with other tabs.".to_string()));
+                    }
                 }
             }
             "tabs" => {

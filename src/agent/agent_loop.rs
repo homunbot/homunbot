@@ -630,6 +630,22 @@ impl AgentLoop {
             );
         }
 
+        // Auto-cleanup browser if it was used in this session
+        // This ensures the browser process is closed even if the LLM forgot to call 'close'
+        if tools_used.iter().any(|t| t == "browser") {
+            let chat_id = chat_id.to_string();
+            tokio::spawn(async move {
+                let manager = crate::browser::global_browser_manager();
+                if manager.is_running().await {
+                    tracing::info!(chat_id = %chat_id, "Auto-cleaning up browser after task completion");
+                    // Close all pages for this chat_id (across all profiles)
+                    if let Err(e) = manager.close_page(&chat_id).await {
+                        tracing::warn!(error = %e, "Failed to cleanup browser pages");
+                    }
+                }
+            });
+        }
+
         // Check if memory consolidation is needed (non-blocking background task)
         self.maybe_consolidate(session_key).await;
 

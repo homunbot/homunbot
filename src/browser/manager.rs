@@ -636,6 +636,7 @@ impl BrowserManager {
     }
 
     /// Close the page for a specific chat (closes from all profiles).
+    /// Also shuts down browsers that have no more pages.
     pub async fn close_page(&self, chat_id: &str) -> Result<()> {
         let mut pages = self.pages.lock().await;
 
@@ -646,8 +647,12 @@ impl BrowserManager {
             .cloned()
             .collect();
 
+        // Track which profiles had pages removed
+        let mut affected_profiles: std::collections::HashSet<String> = std::collections::HashSet::new();
+
         for key in keys_to_remove {
             if let Some(page) = pages.remove(&key) {
+                affected_profiles.insert(key.0.clone());
                 match Arc::try_unwrap(page) {
                     Ok(page) => {
                         if let Err(e) = page.close().await {
@@ -663,10 +668,26 @@ impl BrowserManager {
                 }
             }
         }
+
+        // Check which profiles now have no pages
+        let profiles_to_shutdown: Vec<String> = affected_profiles
+            .into_iter()
+            .filter(|profile| !pages.keys().any(|(p, _)| p == profile))
+            .collect();
+
+        drop(pages); // Release lock before shutting down
+
+        // Shut down browsers with no remaining pages
+        for profile in profiles_to_shutdown {
+            tracing::info!(profile = %profile, "No more pages for profile, shutting down browser");
+            self.shutdown_profile(&profile).await?;
+        }
+
         Ok(())
     }
 
     /// Close the page for a specific chat and profile.
+    /// If this was the last page for the profile, also closes the browser to free resources.
     pub async fn close_page_for_profile(&self, chat_id: &str, profile_name: &str) -> Result<()> {
         let page_key = (profile_name.to_string(), chat_id.to_string());
         let mut pages = self.pages.lock().await;
@@ -686,6 +707,49 @@ impl BrowserManager {
                 }
             }
         }
+
+        // Check if any pages remain for this profile
+        let has_remaining_pages = pages.keys().any(|(profile, _)| profile == profile_name);
+        drop(pages); // Release lock before shutting down
+
+        // If no more pages for this profile, shut down the browser to free resources
+        if !has_remaining_pages {
+            tracing::info!(profile = %profile_name, "No more pages for profile, shutting down browser");
+            self.shutdown_profile(profile_name).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Shut down the browser for a specific profile only.
+    pub async fn shutdown_profile(&self, profile_name: &str) -> Result<()> {
+        let mut browsers = self.browsers.write().await;
+        let mut handler_tasks = self.handler_tasks.lock().await;
+
+        if let Some((profile, browser)) = browsers.remove_entry(profile_name) {
+            tracing::info!(profile = %profile, "Shutting down browser for profile");
+
+            // Stop the handler task first
+            if let Some(task) = handler_tasks.remove(&profile) {
+                task.abort();
+                tracing::debug!(profile = %profile, "Aborted handler task");
+            }
+
+            match Arc::try_unwrap(browser) {
+                Ok(mut browser) => {
+                    if let Err(e) = browser.close().await {
+                        tracing::warn!(profile = %profile, error = %e, "Failed to close browser gracefully");
+                    } else {
+                        tracing::info!(profile = %profile, "Browser closed successfully");
+                    }
+                }
+                Err(arc) => {
+                    tracing::debug!(profile = %profile, "Browser has other references, dropping Arc");
+                    drop(arc);
+                }
+            }
+        }
+
         Ok(())
     }
 
