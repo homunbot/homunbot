@@ -17,6 +17,7 @@ pub struct Config {
     pub mcp: McpConfig,
     pub permissions: PermissionsConfig,
     pub security: SecurityConfig,
+    pub browser: BrowserConfig,
 }
 
 impl Config {
@@ -1007,6 +1008,179 @@ impl Default for ExfiltrationConfig {
 #[serde(default)]
 pub struct SecurityConfig {
     pub exfiltration: ExfiltrationConfig,
+}
+
+/// Browser automation configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BrowserConfig {
+    /// Enable browser automation
+    pub enabled: bool,
+    /// Run browser in headless mode
+    pub headless: bool,
+    /// Browser type: "chromium", "firefox", "webkit"
+    pub browser_type: String,
+    /// Path to browser executable (optional, uses system default if not set)
+    pub executable_path: String,
+    /// Timeout for browser actions in seconds
+    pub action_timeout_secs: u64,
+    /// Timeout for navigation in seconds
+    pub navigation_timeout_secs: u64,
+    /// Maximum number of elements in snapshot
+    pub snapshot_limit: usize,
+    /// Default profile to use (if not specified in action)
+    pub default_profile: String,
+    /// Named browser profiles for isolation
+    pub profiles: HashMap<String, BrowserProfile>,
+}
+
+/// A browser profile with isolated cookies, storage, and cache.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BrowserProfile {
+    /// Profile name (for display)
+    pub name: String,
+    /// Browser type override: "chromium", "firefox", "webkit" (optional)
+    pub browser_type: Option<String>,
+    /// Custom user data directory (optional, auto-generated if not set)
+    pub user_data_dir: Option<String>,
+    /// Run this profile in headless mode (overrides global setting)
+    pub headless: Option<bool>,
+    /// Proxy server URL (e.g., "http://proxy:8080")
+    pub proxy: Option<String>,
+    /// Custom user agent string
+    pub user_agent: Option<String>,
+    /// Additional browser arguments
+    pub args: Vec<String>,
+    /// Description of what this profile is for
+    pub description: Option<String>,
+}
+
+impl Default for BrowserProfile {
+    fn default() -> Self {
+        Self {
+            name: "default".to_string(),
+            browser_type: None,
+            user_data_dir: None,
+            headless: None,
+            proxy: None,
+            user_agent: None,
+            args: Vec::new(),
+            description: None,
+        }
+    }
+}
+
+impl Default for BrowserConfig {
+    fn default() -> Self {
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "default".to_string(),
+            BrowserProfile {
+                name: "Default".to_string(),
+                description: Some("Default browser profile for general automation".to_string()),
+                ..Default::default()
+            },
+        );
+
+        Self {
+            enabled: false,
+            headless: true,
+            browser_type: "chromium".to_string(),
+            executable_path: String::new(),
+            action_timeout_secs: 30,
+            navigation_timeout_secs: 30,
+            snapshot_limit: 100,
+            default_profile: "default".to_string(),
+            profiles,
+        }
+    }
+}
+
+impl BrowserConfig {
+    /// Get the screenshot directory path
+    pub fn screenshot_path(&self) -> std::path::PathBuf {
+        Config::data_dir().join("screenshots")
+    }
+
+    /// Get the browser user data directory path (for login persistence)
+    pub fn user_data_path(&self) -> std::path::PathBuf {
+        Config::data_dir().join("browser-profile")
+    }
+
+    /// Get user data path for a specific profile
+    pub fn profile_user_data_path(&self, profile_name: &str) -> std::path::PathBuf {
+        if let Some(profile) = self.profiles.get(profile_name) {
+            if let Some(ref custom_dir) = profile.user_data_dir {
+                return std::path::PathBuf::from(custom_dir);
+            }
+        }
+        // Default: use profile name as subdirectory
+        Config::data_dir().join("browser-profiles").join(profile_name)
+    }
+
+    /// Get a profile by name, or the default profile
+    pub fn get_profile(&self, name: Option<&str>) -> (&String, &BrowserProfile) {
+        let profile_name = name.unwrap_or(&self.default_profile);
+        self.profiles
+            .get_key_value(profile_name)
+            .unwrap_or_else(|| {
+                self.profiles
+                    .get_key_value(&self.default_profile)
+                    .expect("Default profile must exist")
+            })
+    }
+
+    /// List all available profile names
+    pub fn profile_names(&self) -> Vec<&String> {
+        self.profiles.keys().collect()
+    }
+
+    /// Check if a profile exists
+    pub fn has_profile(&self, name: &str) -> bool {
+        self.profiles.contains_key(name)
+    }
+
+    /// Get browser type for a profile (profile override or global default)
+    pub fn browser_type_for_profile(&self, profile_name: &str) -> &str {
+        self.profiles
+            .get(profile_name)
+            .and_then(|p| p.browser_type.as_deref())
+            .unwrap_or(&self.browser_type)
+    }
+
+    /// Get headless setting for a profile (profile override or global default)
+    pub fn headless_for_profile(&self, profile_name: &str) -> bool {
+        self.profiles
+            .get(profile_name)
+            .and_then(|p| p.headless)
+            .unwrap_or(self.headless)
+    }
+
+    /// Get the resolved executable path (or try to find Chrome)
+    pub fn resolved_executable(&self) -> Option<std::path::PathBuf> {
+        if !self.executable_path.is_empty() {
+            Some(std::path::PathBuf::from(&self.executable_path))
+        } else {
+            // Try common Chrome/Chromium paths
+            let candidates = if cfg!(target_os = "macos") {
+                vec![
+                    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+                ]
+            } else if cfg!(target_os = "linux") {
+                vec![
+                    "/usr/bin/google-chrome",
+                    "/usr/bin/chromium",
+                    "/usr/bin/chromium-browser",
+                ]
+            } else {
+                vec![]
+            };
+
+            candidates.iter().find(|p| std::path::Path::new(p).exists()).map(std::path::PathBuf::from)
+        }
+    }
 }
 
 #[cfg(test)]
