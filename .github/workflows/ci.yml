@@ -1,0 +1,242 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # =============================================================================
+  # CHECK & TEST
+  # =============================================================================
+  check:
+    name: Check & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-check-
+      
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      
+      - name: Clippy (default features)
+        run: cargo clippy -- -D warnings
+      
+      - name: Clippy (all features)
+        run: cargo clippy --all-features -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+      
+      - name: Run tests (all features)
+        run: cargo test --all-features --verbose
+
+  # =============================================================================
+  # BUILD MATRIX
+  # =============================================================================
+  build:
+    name: Build ${{ matrix.target }}
+    needs: [check, test]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS (Intel)
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            features: default
+            artifact: homun-macos-x64
+            
+          # macOS (Apple Silicon)
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            features: default
+            artifact: homun-macos-arm64
+            
+          # Linux (x64)
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            features: default
+            artifact: homun-linux-x64
+            
+          # Linux (ARM64)
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            features: default
+            artifact: homun-linux-arm64
+            
+          # Windows (x64)
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            features: default
+            artifact: homun-windows-x64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+      
+      - name: Build release
+        run: cargo build --release --features ${{ matrix.features }} --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+      
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          if [ "${{ matrix.os }}" == "windows-latest" ]; then
+            cp target/${{ matrix.target }}/release/homun.exe artifacts/${{ matrix.artifact }}
+          else
+            cp target/${{ matrix.target }}/release/homun artifacts/${{ matrix.artifact }}
+            chmod +x artifacts/${{ matrix.artifact }}
+          fi
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: artifacts/${{ matrix.artifact }}
+          retention-days: 7
+
+  # =============================================================================
+  # RELEASE
+  # =============================================================================
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Display structure of downloaded files
+        run: ls -la artifacts/
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/homun-macos-x64/homun-macos-x64
+            artifacts/homun-macos-arm64/homun-macos-arm64
+            artifacts/homun-linux-x64/homun-linux-x64
+            artifacts/homun-linux-arm64/homun-linux-arm64
+            artifacts/homun-windows-x64.exe/homun-windows-x64.exe
+
+  # =============================================================================
+  # FEATURE FLAGS TEST
+  # =============================================================================
+  feature-test:
+    name: Test Features
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - ""
+          - "cli"
+          - "web-ui"
+          - "gateway"
+          - "full"
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-features-${{ matrix.features }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-features-
+      
+      - name: Build with features
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo build --release --no-default-features
+          else
+            cargo build --release --features "${{ matrix.features }}"
+          fi
+      
+      - name: Check binary size
+        shell: bash
+        run: |
+          if [ -f target/release/homun ]; then
+            SIZE=$(ls -lh target/release/homun | awk '{print $5}')
+            echo "Binary size with features '${{ matrix.features }}': $SIZE"
+          fi

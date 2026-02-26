@@ -6,7 +6,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use chrono::Utc;
-use futures_util::{SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 
 use crate::bus::InboundMessage;

@@ -1,11 +1,24 @@
 mod cli;
-pub mod discord;
+mod traits;
+
+#[cfg(feature = "channel-telegram")]
 pub mod telegram;
-pub mod traits;
+
+#[cfg(feature = "channel-discord")]
+pub mod discord;
+
+#[cfg(feature = "channel-whatsapp")]
 pub mod whatsapp;
 
 pub use cli::CliChannel;
-pub use discord::DiscordChannel;
+
+#[cfg(feature = "channel-telegram")]
 pub use telegram::TelegramChannel;
-pub use traits::Channel;
+
+#[cfg(feature = "channel-discord")]
+pub use discord::DiscordChannel;
+
+#[cfg(feature = "channel-whatsapp")]
 pub use whatsapp::WhatsAppChannel;
+
+pub use traits::Channel;

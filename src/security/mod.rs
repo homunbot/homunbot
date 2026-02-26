@@ -48,16 +48,24 @@
 //! - **Exfiltration detection** for API keys, tokens, passwords
 
 mod exfiltration;
-mod totp;
-mod two_factor;
 mod vault_leak;
+
+#[cfg(feature = "vault-2fa")]
+mod totp;
+
+#[cfg(feature = "vault-2fa")]
+mod two_factor;
 
 pub use exfiltration::{
     scan, redact, global_filter, init_global_filter,
     Detection, ExfilConfig, ExfilFilter, ScanResult, Severity,
 };
 pub use vault_leak::redact_vault_values;
+
+#[cfg(feature = "vault-2fa")]
 pub use totp::{generate_recovery_codes, TotpError, TotpManager};
+
+#[cfg(feature = "vault-2fa")]
 pub use two_factor::{
     global_session_manager, TwoFactorConfig, TwoFactorSession, TwoFactorSessionManager,
     TwoFactorStorage,

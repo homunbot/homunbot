@@ -892,6 +892,7 @@ impl App {
                 }
             }
             KeyCode::Char('p') => {
+                #[cfg(feature = "channel-whatsapp")]
                 self.start_whatsapp_pairing();
             }
             KeyCode::Char('x') => {
@@ -997,6 +998,7 @@ impl App {
     }
 
     /// Start the WhatsApp pairing process in a background task
+    #[cfg(feature = "channel-whatsapp")]
     fn start_whatsapp_pairing(&mut self) {
         // Need a phone number
         if self.whatsapp_state.phone_input.is_empty() {
@@ -1782,6 +1784,7 @@ async fn run_shell_command(cmd: &str) -> Result<String, String> {
 ///
 /// This connects to WhatsApp, requests a pairing code, and sends
 /// status events back to the TUI via the event channel.
+#[cfg(feature = "channel-whatsapp")]
 async fn run_whatsapp_pairing(
     phone: String,
     db_path: std::path::PathBuf,

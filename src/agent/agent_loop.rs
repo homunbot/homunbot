@@ -18,8 +18,14 @@ use crate::tools::{ToolContext, ToolRegistry};
 
 use super::context::ContextBuilder;
 use super::memory::MemoryConsolidator;
-use super::memory_search::MemorySearcher;
 use super::verifier::{verify_actions, VerificationResult};
+
+// Conditional memory searcher type - dummy when feature not enabled
+#[cfg(feature = "local-embeddings")]
+use super::memory_search::MemorySearcher;
+
+#[cfg(not(feature = "local-embeddings"))]
+struct MemorySearcher;
 
 
 /// Core agent loop — full ReAct pattern with tool calling:
@@ -44,6 +50,7 @@ pub struct AgentLoop {
     skill_registry: Option<Arc<RwLock<SkillRegistry>>>,
     /// Optional memory searcher for retrieving relevant past context.
     /// Arc-wrapped so it can be shared with background consolidation tasks.
+    /// Only functional with `local-embeddings` feature - dummy otherwise.
     memory_searcher: Option<Arc<tokio::sync::Mutex<MemorySearcher>>>,
     /// Set to true when the model doesn't support native function calling.
     /// Auto-detected on first error — tools are then injected into the system
@@ -142,6 +149,8 @@ impl AgentLoop {
     /// Set the memory searcher for vector + FTS5 hybrid search.
     /// When set, each user message triggers a search for relevant past memories
     /// that are injected into the system prompt as Layer 3.5.
+    /// Only available with `local-embeddings` feature.
+    #[cfg(feature = "local-embeddings")]
     pub fn set_memory_searcher(&mut self, searcher: MemorySearcher) {
         self.memory_searcher = Some(Arc::new(tokio::sync::Mutex::new(searcher)));
     }
@@ -198,6 +207,8 @@ impl AgentLoop {
             .await?;
 
         // Search for relevant past memories and inject into context (Layer 3.5)
+        // Only available with local-embeddings feature
+        #[cfg(feature = "local-embeddings")]
         if let Some(ref searcher_mutex) = self.memory_searcher {
             let mut searcher = searcher_mutex.lock().await;
             match searcher.search(content, 5).await {
@@ -632,6 +643,7 @@ impl AgentLoop {
 
         // Auto-cleanup browser if it was used in this session
         // This ensures the browser process is closed even if the LLM forgot to call 'close'
+        #[cfg(feature = "browser")]
         if tools_used.iter().any(|t| t == "browser") {
             let chat_id = chat_id.to_string();
             tokio::spawn(async move {
@@ -680,6 +692,7 @@ impl AgentLoop {
         let model = self.config.agent.model.clone();
         let provider = self.provider.clone();
         let session_key = session_key.to_string();
+        #[cfg(feature = "local-embeddings")]
         let searcher = self.memory_searcher.clone();
 
         // Check if needed (quick DB query)
@@ -703,6 +716,8 @@ impl AgentLoop {
                             );
 
                             // Index new chunks in HNSW vector index (with deduplication)
+                            // Only available with local-embeddings feature
+                            #[cfg(feature = "local-embeddings")]
                             if !result.new_chunks.is_empty() {
                                 if let Some(searcher_mutex) = searcher {
                                     let mut s = searcher_mutex.lock().await;

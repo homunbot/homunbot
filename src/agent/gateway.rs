@@ -5,13 +5,28 @@ use anyhow::Result;
 use tokio::sync::mpsc;
 
 use crate::bus::{InboundMessage, OutboundMessage, StreamMessage};
-use crate::channels::{DiscordChannel, TelegramChannel, WhatsAppChannel};
 use crate::config::Config;
 use crate::scheduler::{CronEvent, CronScheduler};
 use crate::session::SessionManager;
 use crate::storage::Database;
 use crate::utils::strip_reasoning;
+
+#[cfg(feature = "web-ui")]
 use crate::web::WebServer;
+
+// Conditional channel imports
+#[cfg(feature = "channel-telegram")]
+use crate::channels::TelegramChannel;
+
+#[cfg(feature = "channel-discord")]
+use crate::channels::DiscordChannel;
+
+#[cfg(feature = "channel-whatsapp")]
+use crate::channels::WhatsAppChannel;
+#[cfg(feature = "channel-discord")]
+use crate::channels::DiscordChannel;
+#[cfg(feature = "channel-whatsapp")]
+use crate::channels::WhatsAppChannel;
 
 use super::AgentLoop;
 
@@ -78,6 +93,7 @@ impl Gateway {
         let mut channels: Vec<ChannelHandle> = Vec::new();
 
         // --- Start Telegram channel ---
+        #[cfg(feature = "channel-telegram")]
         if self.config.channels.telegram.enabled {
             let mut tg_config = self.config.channels.telegram.clone();
             // Resolve token from encrypted storage if marker is present
@@ -111,6 +127,7 @@ impl Gateway {
         }
 
         // --- Start Discord channel ---
+        #[cfg(feature = "channel-discord")]
         if self.config.channels.discord.enabled {
             let mut dc_config = self.config.channels.discord.clone();
             // Resolve token from encrypted storage if marker is present
@@ -144,6 +161,7 @@ impl Gateway {
         }
 
         // --- Start WhatsApp channel ---
+        #[cfg(feature = "channel-whatsapp")]
         if self.config.channels.whatsapp.enabled {
             let wa_config = self.config.channels.whatsapp.clone();
             let wa_inbound_tx = inbound_tx.clone();
@@ -165,6 +183,7 @@ impl Gateway {
         }
 
         // --- Start Web UI server ---
+        #[cfg(feature = "web-ui")]
         if self.config.channels.web.enabled {
             let web_config = self.config.clone();
             let web_inbound_tx = inbound_tx.clone();

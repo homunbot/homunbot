@@ -6,13 +6,13 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
 use axum::routing::get;
 use axum::Router;
-use futures_util::{SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use super::server::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
-    Router::new()
+    let api_router = Router::new()
         .route("/health", get(health))
         .route("/v1/status", get(status))
         .route("/v1/config", get(get_config))
@@ -75,7 +75,13 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/v1/permissions/acl/{idx}", axum::routing::delete(delete_acl_entry))
         .route("/v1/permissions/test", axum::routing::post(test_path_permission))
         .route("/v1/permissions/presets", get(get_permission_presets))
-        .route("/v1/permissions/browse", get(browse_directories))
+        .route("/v1/permissions/browse", get(browse_directories));
+
+    // --- Browser (optional) ---
+    #[cfg(feature = "browser")]
+    let api_router = api_router.route("/v1/browser/test", axum::routing::post(test_browser));
+
+    api_router
 }
 
 // --- Health check ---
@@ -1086,6 +1092,7 @@ struct AllModelsResponse {
     ok: bool,
     models: Vec<ModelEntry>,
     current: String,
+    vision_model: String,
     ollama_configured: bool,
     ollama_cloud_configured: bool,
 }
@@ -1093,6 +1100,7 @@ struct AllModelsResponse {
 async fn list_all_models(State(state): State<Arc<AppState>>) -> Json<AllModelsResponse> {
     let config = state.config.read().await;
     let current_model = config.agent.model.clone();
+    let vision_model = config.agent.vision_model.clone();
     let secrets = crate::storage::global_secrets().ok();
 
     let mut models = Vec::new();
@@ -1146,6 +1154,7 @@ async fn list_all_models(State(state): State<Arc<AppState>>) -> Json<AllModelsRe
         ok: true,
         models,
         current: current_model,
+        vision_model,
         ollama_configured,
         ollama_cloud_configured,
     })
@@ -1842,13 +1851,21 @@ async fn handle_whatsapp_pairing(socket: WebSocket, state: Arc<AppState>) {
     // Note: wa-rs now handles stale sessions internally — when with_pair_code() is set,
     // it clears the device identity so the handshake uses registration instead of login.
     // Bridge events from wa-rs callback → mpsc → WebSocket
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<serde_json::Value>(16);
+    let (_event_tx, mut event_rx) = tokio::sync::mpsc::channel::<serde_json::Value>(16);
 
-    let pair_phone = phone.clone();
-    let db_path_str = db_path.to_string_lossy().to_string();
+    #[cfg(feature = "channel-whatsapp")]
+    let bot_handle = {
+        let pair_phone = phone.clone();
+        let db_path_str = db_path.to_string_lossy().to_string();
+        let event_tx = _event_tx;  // Use the sender
+        tokio::spawn(async move {
+            run_whatsapp_pair_bot(pair_phone, db_path_str, event_tx).await
+        })
+    };
 
-    let bot_handle = tokio::spawn(async move {
-        run_whatsapp_pair_bot(pair_phone, db_path_str, event_tx).await
+    #[cfg(not(feature = "channel-whatsapp"))]
+    let bot_handle = tokio::spawn(async {
+        // WhatsApp not available without channel-whatsapp feature
     });
 
     // Step 4: Forward events to WebSocket
@@ -1909,6 +1926,7 @@ async fn handle_whatsapp_pairing(socket: WebSocket, state: Arc<AppState>) {
 
 /// Run the wa-rs bot for pairing, sending events back via the channel.
 /// This mirrors the TUI's `run_whatsapp_pairing()` logic.
+#[cfg(feature = "channel-whatsapp")]
 async fn run_whatsapp_pair_bot(
     phone: String,
     db_path: String,
@@ -3842,4 +3860,41 @@ async fn toggle_token(
         last_used: current.and_then(|t| t.last_used.clone()),
         created_at: current.map(|t| t.created_at.clone()).unwrap_or_default(),
     }))
+}
+
+// ─── Browser ─────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct BrowserTestResponse {
+    success: bool,
+    message: String,
+}
+
+/// Test if browser can be launched
+#[cfg(feature = "browser")]
+async fn test_browser(
+    State(state): State<Arc<AppState>>,
+) -> Json<BrowserTestResponse> {
+    let config = state.config.read().await;
+
+    if !config.browser.enabled {
+        return Json(BrowserTestResponse {
+            success: false,
+            message: "Browser automation is disabled in configuration".to_string(),
+        });
+    }
+
+    // Try to get the browser manager and test it
+    let manager = crate::browser::global_browser_manager();
+
+    match manager.test_connection().await {
+        Ok(()) => Json(BrowserTestResponse {
+            success: true,
+            message: "Browser launched successfully".to_string(),
+        }),
+        Err(e) => Json(BrowserTestResponse {
+            success: false,
+            message: format!("Failed to launch browser: {}", e),
+        }),
+    }
 }

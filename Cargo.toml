@@ -13,16 +13,60 @@ categories = ["command-line-utilities"]
 name = "homun"
 path = "src/main.rs"
 
+# =============================================================================
+# FEATURE FLAGS
+# =============================================================================
+# 
+# Build variants:
+#   cargo build --release                              # Core (~15MB)
+#   cargo build --release --features gateway            # Gateway (~40MB)
+#   cargo build --release --features full               # Full (~50MB)
+#
+[features]
+default = ["cli", "web-ui", "file-tools", "shell-tool", "web-tools", "cron-tool", "message-tool", "vault-2fa", "mcp"]
+
+# === Core Features ===
+cli = ["dep:clap", "dep:ratatui", "dep:crossterm"]
+web-ui = ["dep:axum", "dep:tower", "dep:tower-http", "dep:rust-embed", "dep:mime_guess", "dep:pulldown-cmark"]
+file-tools = []
+shell-tool = ["dep:regex"]
+web-tools = []
+cron-tool = []
+message-tool = []
+
+# === Channels (optional) ===
+channel-telegram = ["dep:teloxide", "dep:reqwest-011"]
+channel-discord = ["dep:serenity"]
+channel-whatsapp = ["dep:wa-rs", "dep:wa-rs-sqlite-storage", "dep:wa-rs-tokio-transport", 
+                    "dep:wa-rs-ureq-http", "dep:wa-rs-core", "dep:wa-rs-proto", "dep:futures-util"]
+channel-webhook = []  # Built-in, uses axum
+
+# === Providers (optional enhancements) ===
+providers-openai-compat = ["dep:eventsource-stream", "dep:pin-project-lite"]
+
+# === Advanced Features ===
+local-embeddings = ["dep:fastembed", "dep:usearch"]
+browser = ["dep:chromiumoxide"]
+mcp = ["dep:rmcp"]
+vault-2fa = ["dep:totp-rs", "dep:rand"]
+
+# === Meta Features ===
+gateway = ["cli", "web-ui", "file-tools", "shell-tool", "web-tools", "cron-tool", "message-tool",
+           "channel-telegram", "channel-discord", "channel-whatsapp", "channel-webhook",
+           "providers-openai-compat", "local-embeddings", "mcp"]
+
+full = ["gateway", "browser", "vault-2fa"]
+
 [dependencies]
-# Async runtime
+# =============================================================================
+# CORE DEPENDENCIES (always required)
+# =============================================================================
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 futures = "0.3"
 
-# HTTP
+# HTTP client (for providers and tools)
 reqwest = { version = "0.12", features = ["json", "stream"] }
-# Teloxide uses reqwest 0.11, so we need a separate instance for the Telegram client
-reqwest-011 = { package = "reqwest", version = "0.11", features = ["json"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -31,9 +75,6 @@ toml = "0.8"
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
-
-# CLI
-clap = { version = "4", features = ["derive"] }
 
 # Logging
 tracing = "0.1"
@@ -46,86 +87,109 @@ thiserror = "2"
 # Skill frontmatter parsing
 gray_matter = "0.2"
 
-# Regex (shell safety filters)
-regex = "1"
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID for session/message IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Directories
+dirs = "6"
 
 # Hostname for runtime info
 hostname = "0.4"
 whoami = "1.5"
 
-# Directories
-dirs = "6"
-
-# Archive extraction (skill installer)
-flate2 = "1"
-tar = "0.4"
-
-# UUID for session/message IDs
-uuid = { version = "1", features = ["v4"] }
-
-# Time
-chrono = { version = "0.4", features = ["serde"] }
-
-# Telegram bot
-teloxide = { version = "0.13", features = ["macros"] }
-
-# Discord bot
-serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "cache", "rustls_backend"] }
-
-# WhatsApp native client (wa-rs — fork of jlucaso1/whatsapp-rust)
-wa-rs = { git = "https://github.com/homunbot/wa-rs", rev = "d369582" }
-wa-rs-sqlite-storage = { git = "https://github.com/homunbot/wa-rs", rev = "d369582" }
-wa-rs-tokio-transport = { git = "https://github.com/homunbot/wa-rs", rev = "d369582" }
-wa-rs-ureq-http = { git = "https://github.com/homunbot/wa-rs", rev = "d369582" }
-wa-rs-core = { git = "https://github.com/homunbot/wa-rs", rev = "d369582" }
-wa-rs-proto = { git = "https://github.com/homunbot/wa-rs", rev = "d369582" }
-futures-util = "0.3"
-
-# Streaming support
-tokio-stream = "0.1"
-eventsource-stream = "0.2"
-pin-project-lite = "0.2"
-
-# TUI (terminal user interface)
-ratatui = "0.29"
-crossterm = "0.28"
+# Security - Encrypted secrets storage (core)
+ring = "0.17"
+base64 = "0.22"
+keyring = { version = "3", features = ["apple-native", "linux-native", "windows-native"] }
+zeroize = "1"
 
 # File watcher (skill hot-reload)
 notify = "7"
 
-# MCP (Model Context Protocol) client
-rmcp = { version = "0.15", features = ["client", "transport-child-process"] }
+# Streaming support
+tokio-stream = "0.1"
 
-# Web UI (embedded dashboard)
-axum = { version = "0.8", features = ["ws"] }
-tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
-rust-embed = { version = "8", features = ["compression"] }
-mime_guess = "2"
-pulldown-cmark = "0.12"
+# Cron scheduling
+cron = "0.15"
 
-# Security - Encrypted secrets storage
-ring = "0.17"           # AES-256-GCM, HKDF
-base64 = "0.22"         # Encoding
-keyring = { version = "3", features = ["apple-native", "linux-native", "windows-native"] }  # OS keychain (macOS/Linux/Windows)
-zeroize = "1"           # Secure memory zeroing
+# =============================================================================
+# OPTIONAL DEPENDENCIES (feature-gated)
+# =============================================================================
 
-# Security - TOTP 2FA
-totp-rs = { version = "5", features = ["qr"] }  # TOTP with QR code generation
-rand = "0.8"            # Random generation for recovery codes
+# --- CLI feature ---
+clap = { version = "4", features = ["derive"], optional = true }
+ratatui = { version = "0.29", optional = true }
+crossterm = { version = "0.28", optional = true }
 
-# Memory - Embedding + Vector search
-fastembed = "5"         # Local ONNX embedding (multilingual, 384-dim)
-usearch = "2"           # HNSW vector index (O(log N), 320KB)
+# --- Web UI feature ---
+axum = { version = "0.8", features = ["ws"], optional = true }
+tower = { version = "0.5", optional = true }
+tower-http = { version = "0.6", features = ["cors", "trace"], optional = true }
+rust-embed = { version = "8", features = ["compression"], optional = true }
+mime_guess = { version = "2", optional = true }
+pulldown-cmark = { version = "0.12", optional = true }
 
-# Browser automation (chromiumoxide for CDP)
-chromiumoxide = "0.9"
+# --- Shell tool feature ---
+regex = { version = "1", optional = true }
+
+# --- OpenAI-compatible providers (streaming) ---
+eventsource-stream = { version = "0.2", optional = true }
+pin-project-lite = { version = "0.2", optional = true }
+
+# --- Telegram channel ---
+teloxide = { version = "0.13", features = ["macros"], optional = true }
+reqwest-011 = { package = "reqwest", version = "0.11", features = ["json"], optional = true }
+
+# --- Discord channel ---
+serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "cache", "rustls_backend"], optional = true }
+
+# --- WhatsApp channel ---
+wa-rs = { git = "https://github.com/homunbot/wa-rs", rev = "d369582", optional = true }
+wa-rs-sqlite-storage = { git = "https://github.com/homunbot/wa-rs", rev = "d369582", optional = true }
+wa-rs-tokio-transport = { git = "https://github.com/homunbot/wa-rs", rev = "d369582", optional = true }
+wa-rs-ureq-http = { git = "https://github.com/homunbot/wa-rs", rev = "d369582", optional = true }
+wa-rs-core = { git = "https://github.com/homunbot/wa-rs", rev = "d369582", optional = true }
+wa-rs-proto = { git = "https://github.com/homunbot/wa-rs", rev = "d369582", optional = true }
+futures-util = { version = "0.3", optional = true }
+
+# --- Local embeddings ---
+fastembed = { version = "5", optional = true }
+usearch = { version = "2", optional = true }
+
+# --- Browser automation ---
+chromiumoxide = { version = "0.9", optional = true }
+
+# --- MCP client ---
+rmcp = { version = "0.15", features = ["client", "transport-child-process"], optional = true }
+
+# --- Vault 2FA ---
+totp-rs = { version = "5", features = ["qr"], optional = true }
+rand = { version = "0.8", optional = true }
+
+# --- Skill installer (archive extraction) ---
+flate2 = "1"
+tar = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
 
+# =============================================================================
+# RELEASE PROFILES
+# =============================================================================
+
+# Default release: balanced optimization
 [profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-strip = true
+opt-level = "z"        # Optimize for size
+lto = "fat"            # Maximum cross-crate optimization
+codegen-units = 1      # Serialized codegen for smaller binary
+strip = true           # Remove debug symbols
+panic = "abort"        # Reduce binary size
+
+# Fast release: faster builds, larger binary
+[profile.release-fast]
+inherits = "release"
+codegen-units = 8      # Parallel codegen for faster builds
+opt-level = 3          # Speed over size

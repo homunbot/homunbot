@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 mod agent;
+#[cfg(feature = "browser")]
 mod browser;
 mod bus;
 mod channels;
@@ -32,8 +33,13 @@ use crate::session::SessionManager;
 use crate::storage::Database;
 use crate::tools::{
     CronTool, EditFileTool, ListDirTool, McpManager, MessageTool, ReadFileTool, ShellTool,
-    SpawnTool, ToolRegistry, VaultTool, RememberTool, WebFetchTool, WebSearchTool, WriteFileTool,
+    SpawnTool, ToolRegistry, VaultTool, WebFetchTool, WebSearchTool, WriteFileTool,
 };
+
+#[cfg(feature = "local-embeddings")]
+use crate::tools::RememberTool;
+
+#[cfg(feature = "browser")]
 use crate::browser::BrowserTool;
 
 #[derive(Parser)]
@@ -403,12 +409,14 @@ fn create_tool_registry(config: &Config) -> ToolRegistry {
     // Vault tool (encrypted secrets storage)
     registry.register(Box::new(VaultTool::new()));
 
-    // Remember tool (save personal information)
-    registry.register(Box::new(RememberTool::new()));
+    // Remember tool (save personal information - requires local-embeddings feature)
+    #[cfg(feature = "local-embeddings")]
+    registry.register(Box::new(tools::RememberTool::new()));
 
     // Browser tool (if enabled in config)
+    #[cfg(feature = "browser")]
     if config.browser.enabled {
-        registry.register(Box::new(BrowserTool::new()));
+        registry.register(Box::new(tools::BrowserTool::new()));
         tracing::info!("Browser tool registered");
     }
 
@@ -424,6 +432,9 @@ fn create_tool_registry(config: &Config) -> ToolRegistry {
 ///
 /// Returns `None` if the embedding engine fails to initialize (e.g. ONNX model
 /// download fails). This keeps the agent functional without vector search.
+///
+/// Only available when `local-embeddings` feature is enabled.
+#[cfg(feature = "local-embeddings")]
 fn try_create_memory_searcher(db: Database) -> Option<agent::MemorySearcher> {
     match agent::EmbeddingEngine::new() {
         Ok(engine) => {
@@ -578,7 +589,7 @@ async fn main() -> Result<()> {
             }
 
             let session_manager = SessionManager::new(db.clone());
-            let db_for_searcher = db.clone();
+            let _db_for_searcher = db.clone();
             let mut agent = agent::AgentLoop::new(
                 provider,
                 config,
@@ -588,6 +599,7 @@ async fn main() -> Result<()> {
             );
 
             // Initialize memory searcher (vector + FTS5 hybrid search)
+            #[cfg(feature = "local-embeddings")]
             if let Some(searcher) = try_create_memory_searcher(db_for_searcher) {
                 agent.set_memory_searcher(searcher);
             }
@@ -711,7 +723,7 @@ async fn main() -> Result<()> {
             let (tool_msg_tx, tool_msg_rx) = tokio::sync::mpsc::channel(100);
 
             // Create agent only if provider is available
-            let db_for_searcher = db.clone();
+            let _db_for_searcher = db.clone();
             let db_for_web = db.clone();
             let mut agent = if let Some(p) = provider {
                 let mut a = agent::AgentLoop::new(
@@ -724,6 +736,7 @@ async fn main() -> Result<()> {
                 a.set_message_tx(tool_msg_tx);
 
                 // Initialize memory searcher (vector + FTS5 hybrid search)
+                #[cfg(feature = "local-embeddings")]
                 if let Some(searcher) = try_create_memory_searcher(db_for_searcher) {
                     a.set_memory_searcher(searcher);
                 }

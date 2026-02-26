@@ -12,7 +12,7 @@
 //! 2. **Cloud direct**: `api_base = "https://ollama.com"`, api_key from ollama.com/settings/keys
 
 use anyhow::{Context as _, Result};
-use futures_util::StreamExt as _;
+use futures::StreamExt as _;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
