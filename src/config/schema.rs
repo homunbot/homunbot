@@ -889,6 +889,100 @@ impl ShellPermissions {
     }
 }
 
+// --- Approval Config (P0-4: Command Allowlist) ---
+
+/// Autonomy level for tool execution
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AutonomyLevel {
+    /// Full autonomy - all tools execute without prompts
+    Full,
+    /// Supervised - prompts for non-whitelisted tools
+    Supervised,
+    /// ReadOnly - only read-only tools allowed
+    ReadOnly,
+}
+
+impl Default for AutonomyLevel {
+    fn default() -> Self {
+        Self::Supervised
+    }
+}
+
+/// Approval configuration for shell commands
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ApprovalConfig {
+    /// Autonomy level
+    pub level: AutonomyLevel,
+    /// Tools/commands that never need approval
+    pub auto_approve: Vec<String>,
+    /// Tools/commands that always require approval (even after "Always")
+    pub always_ask: Vec<String>,
+    /// Enable audit logging of all executed commands
+    pub audit_enabled: bool,
+    /// Path to audit log file (empty = use default ~/.homun/shell-audit.log)
+    pub audit_path: String,
+}
+
+impl Default for ApprovalConfig {
+    fn default() -> Self {
+        Self {
+            level: AutonomyLevel::Supervised,
+            // Safe commands that don't need approval
+            auto_approve: vec![
+                "ls".to_string(),
+                "cat".to_string(),
+                "head".to_string(),
+                "tail".to_string(),
+                "wc".to_string(),
+                "echo".to_string(),
+                "pwd".to_string(),
+                "which".to_string(),
+                "grep".to_string(),
+                "find".to_string(),
+                "git status".to_string(),
+                "git log".to_string(),
+                "git diff".to_string(),
+                "git branch".to_string(),
+            ],
+            // Commands that always require approval
+            always_ask: vec![
+                "rm".to_string(),
+                "mv".to_string(),
+                "cp".to_string(),
+                "chmod".to_string(),
+                "chown".to_string(),
+                "kill".to_string(),
+                "pkill".to_string(),
+                "docker".to_string(),
+                "npm install".to_string(),
+                "npm uninstall".to_string(),
+                "pip install".to_string(),
+                "pip uninstall".to_string(),
+                "cargo install".to_string(),
+                "brew install".to_string(),
+                "brew uninstall".to_string(),
+            ],
+            audit_enabled: true,
+            audit_path: String::new(),
+        }
+    }
+}
+
+/// Single audit log entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShellAuditEntry {
+    pub timestamp: String,
+    pub command: String,
+    pub args: String,
+    pub result: String,
+    pub output_preview: String,
+    pub channel: String,
+    pub approved: bool,
+    pub approval_type: Option<String>,
+}
+
 /// Root permissions configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -901,6 +995,8 @@ pub struct PermissionsConfig {
     pub acl: Vec<AclEntry>,
     /// OS-specific shell permissions
     pub shell: ShellPermissions,
+    /// Approval workflow for shell commands
+    pub approval: ApprovalConfig,
 }
 
 impl Default for PermissionsConfig {
@@ -976,6 +1072,7 @@ impl Default for PermissionsConfig {
                 },
             ],
             shell: ShellPermissions::default(),
+            approval: ApprovalConfig::default(),
         }
     }
 }

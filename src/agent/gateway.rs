@@ -101,25 +101,28 @@ impl Gateway {
                     }
                 }
             }
+            
+            // Skip if no valid token
             if tg_config.token.is_empty() || tg_config.token == "***ENCRYPTED***" {
-                tracing::error!("Telegram enabled but no token found (check encrypted storage)");
+                tracing::error!("Telegram enabled but no token found - skipping channel");
+            } else {
+                let tg_inbound_tx = inbound_tx.clone();
+                let (tg_outbound_tx, tg_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
+
+                let handle = tokio::spawn(async move {
+                    let channel = TelegramChannel::new(tg_config);
+                    if let Err(e) = channel.start(tg_inbound_tx, tg_outbound_rx).await {
+                        tracing::error!(error = %e, "Telegram channel error");
+                    }
+                });
+
+                channels.push(ChannelHandle {
+                    name: "telegram".to_string(),
+                    handle,
+                    outbound_tx: tg_outbound_tx,
+                });
+                tracing::info!("Telegram channel started");
             }
-            let tg_inbound_tx = inbound_tx.clone();
-            let (tg_outbound_tx, tg_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
-
-            let handle = tokio::spawn(async move {
-                let channel = TelegramChannel::new(tg_config);
-                if let Err(e) = channel.start(tg_inbound_tx, tg_outbound_rx).await {
-                    tracing::error!(error = %e, "Telegram channel error");
-                }
-            });
-
-            channels.push(ChannelHandle {
-                name: "telegram".to_string(),
-                handle,
-                outbound_tx: tg_outbound_tx,
-            });
-            tracing::info!("Telegram channel started");
         }
 
         // --- Start Discord channel ---
@@ -135,25 +138,28 @@ impl Gateway {
                     }
                 }
             }
+            
+            // Skip if no valid token
             if dc_config.token.is_empty() || dc_config.token == "***ENCRYPTED***" {
-                tracing::error!("Discord enabled but no token found (check encrypted storage)");
+                tracing::error!("Discord enabled but no token found - skipping channel");
+            } else {
+                let dc_inbound_tx = inbound_tx.clone();
+                let (dc_outbound_tx, dc_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
+
+                let handle = tokio::spawn(async move {
+                    let channel = DiscordChannel::new(dc_config);
+                    if let Err(e) = channel.start(dc_inbound_tx, dc_outbound_rx).await {
+                        tracing::error!(error = %e, "Discord channel error");
+                    }
+                });
+
+                channels.push(ChannelHandle {
+                    name: "discord".to_string(),
+                    handle,
+                    outbound_tx: dc_outbound_tx,
+                });
+                tracing::info!("Discord channel started");
             }
-            let dc_inbound_tx = inbound_tx.clone();
-            let (dc_outbound_tx, dc_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
-
-            let handle = tokio::spawn(async move {
-                let channel = DiscordChannel::new(dc_config);
-                if let Err(e) = channel.start(dc_inbound_tx, dc_outbound_rx).await {
-                    tracing::error!(error = %e, "Discord channel error");
-                }
-            });
-
-            channels.push(ChannelHandle {
-                name: "discord".to_string(),
-                handle,
-                outbound_tx: dc_outbound_tx,
-            });
-            tracing::info!("Discord channel started");
         }
 
         // --- Start WhatsApp channel ---

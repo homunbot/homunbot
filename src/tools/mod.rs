@@ -7,6 +7,7 @@ pub mod spawn;
 pub mod message;
 pub mod mcp;
 pub mod vault;
+pub mod approval;
 
 #[cfg(feature = "local-embeddings")]
 pub mod remember;
@@ -20,6 +21,7 @@ pub use spawn::SpawnTool;
 pub use message::MessageTool;
 pub use mcp::{McpManager, McpServerInfo};
 pub use vault::VaultTool;
+pub use approval::{ApprovalManager, ApprovalDecision, ApprovalRequest, ApprovalResponse, ApprovalLogEntry};
 
 #[cfg(feature = "local-embeddings")]
 pub use remember::RememberTool;
