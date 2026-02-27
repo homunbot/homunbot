@@ -1,6 +1,7 @@
 pub mod approval;
 pub mod cron;
 pub mod file;
+#[cfg(feature = "mcp")]
 pub mod mcp;
 pub mod message;
 pub mod registry;
@@ -18,6 +19,7 @@ pub use approval::{
 };
 pub use cron::CronTool;
 pub use file::{EditFileTool, ListDirTool, ReadFileTool, WriteFileTool};
+#[cfg(feature = "mcp")]
 pub use mcp::{McpManager, McpServerInfo};
 pub use message::MessageTool;
 pub use registry::{Tool, ToolContext, ToolRegistry, ToolResult};

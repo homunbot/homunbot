@@ -174,7 +174,10 @@ impl Channel for EmailChannel {
                         return Ok::<(), anyhow::Error>(());
                     }
                     Err(e) => {
-                        error!("IMAP session error: {}. Reconnecting in {:?}...", e, backoff);
+                        error!(
+                            "IMAP session error: {}. Reconnecting in {:?}...",
+                            e, backoff
+                        );
                         sleep(backoff).await;
                         backoff = std::cmp::min(backoff * 2, max_backoff);
                     }
@@ -275,9 +278,7 @@ async fn run_imap_session(
     loop {
         // Start IDLE mode
         let mut idle = session.idle();
-        idle.init()
-            .await
-            .context("Failed to initialize IDLE")?;
+        idle.init().await.context("Failed to initialize IDLE")?;
 
         debug!("Entering IMAP IDLE mode");
 
@@ -340,14 +341,21 @@ async fn process_unseen(
     seen_messages: &Arc<Mutex<HashSet<String>>>,
 ) -> Result<()> {
     // Search for unseen messages
-    let uids = session.uid_search("UNSEEN").await.context("UID SEARCH failed")?;
+    let uids = session
+        .uid_search("UNSEEN")
+        .await
+        .context("UID SEARCH failed")?;
     if uids.is_empty() {
         return Ok(());
     }
 
     debug!("Found {} unseen messages", uids.len());
 
-    let uid_set: String = uids.iter().map(|u| u.to_string()).collect::<Vec<_>>().join(",");
+    let uid_set: String = uids
+        .iter()
+        .map(|u| u.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
 
     // Fetch message bodies
     let fetch_stream = session
@@ -447,7 +455,12 @@ async fn send_email(config: &EmailConfig, password: &str, msg: &OutboundMessage)
     };
 
     let email = Message::builder()
-        .from(config.from_address.parse().context("Invalid from address")?)
+        .from(
+            config
+                .from_address
+                .parse()
+                .context("Invalid from address")?,
+        )
         .to(msg.chat_id.parse().context("Invalid recipient address")?)
         .subject(subject)
         .singlepart(SinglePart::plain(body.to_string()))
@@ -468,20 +481,14 @@ async fn send_email(config: &EmailConfig, password: &str, msg: &OutboundMessage)
             .build()
     };
 
-    transport
-        .send(&email)
-        .context("Failed to send email")?;
+    transport.send(&email).context("Failed to send email")?;
 
     info!("Email sent to {}", msg.chat_id);
     Ok(())
 }
 
 #[cfg(not(feature = "channel-email"))]
-async fn send_email(
-    _config: &EmailConfig,
-    _password: &str,
-    _msg: &OutboundMessage,
-) -> Result<()> {
+async fn send_email(_config: &EmailConfig, _password: &str, _msg: &OutboundMessage) -> Result<()> {
     anyhow::bail!("Email channel requires 'channel-email' feature to be enabled");
 }
 

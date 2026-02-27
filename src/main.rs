@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+#[cfg(feature = "cli")]
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
@@ -22,20 +23,26 @@ mod session;
 mod skills;
 mod storage;
 mod tools;
+#[cfg(feature = "cli")]
 mod tui;
 mod user;
 mod utils;
+#[cfg(feature = "web-ui")]
 mod web;
 
+#[cfg(feature = "cli")]
 use crate::channels::CliChannel;
 use crate::config::Config;
 use crate::provider::{AnthropicProvider, OpenAICompatProvider};
 use crate::session::SessionManager;
 use crate::storage::Database;
 use crate::tools::{
-    CronTool, EditFileTool, ListDirTool, McpManager, MessageTool, ReadFileTool, ShellTool,
-    SpawnTool, ToolRegistry, VaultTool, WebFetchTool, WebSearchTool, WriteFileTool,
+    CronTool, EditFileTool, ListDirTool, MessageTool, ReadFileTool, ShellTool, SpawnTool,
+    ToolRegistry, VaultTool, WebFetchTool, WebSearchTool, WriteFileTool,
 };
+
+#[cfg(feature = "mcp")]
+use crate::tools::McpManager;
 
 #[cfg(feature = "local-embeddings")]
 use crate::tools::RememberTool;
@@ -43,6 +50,7 @@ use crate::tools::RememberTool;
 #[cfg(feature = "browser")]
 use crate::browser::BrowserTool;
 
+#[cfg(feature = "cli")]
 #[derive(Parser)]
 #[command(
     name = "homun",
@@ -54,6 +62,7 @@ struct Cli {
     command: Option<Commands>,
 }
 
+#[cfg(feature = "cli")]
 #[derive(Subcommand)]
 enum Commands {
     /// Interactive chat or one-shot message
@@ -613,7 +622,9 @@ async fn main() -> Result<()> {
             let mut tool_registry = create_tool_registry(&config);
 
             // Connect to MCP servers and register their tools
+            #[cfg(feature = "mcp")]
             let (mcp_manager, mcp_tools) = McpManager::start(&config.mcp.servers).await;
+            #[cfg(feature = "mcp")]
             for tool in mcp_tools {
                 tool_registry.register(tool);
             }
@@ -662,6 +673,7 @@ async fn main() -> Result<()> {
             }
 
             // Gracefully shutdown MCP connections
+            #[cfg(feature = "mcp")]
             mcp_manager.shutdown().await;
         }
         Commands::Gateway => {
@@ -755,7 +767,9 @@ async fn main() -> Result<()> {
             tool_registry.register(Box::new(MessageTool::new()));
 
             // Connect to MCP servers and register their tools
+            #[cfg(feature = "mcp")]
             let (_mcp_manager, mcp_tools) = McpManager::start(&config.mcp.servers).await;
+            #[cfg(feature = "mcp")]
             for tool in mcp_tools {
                 tool_registry.register(tool);
             }
@@ -829,22 +843,34 @@ async fn main() -> Result<()> {
 
             // If no provider, start a setup-only Web UI and wait
             let Some(agent) = agent else {
-                let web_config = config.clone();
-                let web_port = config.channels.web.port;
-                let web_server = crate::web::server::WebServer::setup_only(web_config);
-                tokio::spawn(async move {
-                    if let Err(e) = web_server.start().await {
-                        tracing::error!(error = %e, "Web UI server failed");
-                    }
-                });
-                tracing::info!(
-                    port = web_port,
-                    "Web UI available at http://localhost:{web_port}/"
-                );
-                tracing::info!("Gateway running in setup mode. Configure a provider via Web UI.");
-                // Wait forever (or until Ctrl+C)
-                tokio::signal::ctrl_c().await?;
-                return Ok(());
+                #[cfg(feature = "web-ui")]
+                {
+                    let web_config = config.clone();
+                    let web_port = config.channels.web.port;
+                    let web_server = crate::web::server::WebServer::setup_only(web_config);
+                    tokio::spawn(async move {
+                        if let Err(e) = web_server.start().await {
+                            tracing::error!(error = %e, "Web UI server failed");
+                        }
+                    });
+                    tracing::info!(
+                        port = web_port,
+                        "Web UI available at http://localhost:{web_port}/"
+                    );
+                    tracing::info!(
+                        "Gateway running in setup mode. Configure a provider via Web UI."
+                    );
+                    // Wait forever (or until Ctrl+C)
+                    tokio::signal::ctrl_c().await?;
+                    return Ok(());
+                }
+                #[cfg(not(feature = "web-ui"))]
+                {
+                    tracing::error!("No provider configured and web-ui feature is disabled. Cannot start gateway.");
+                    return Err(anyhow::anyhow!(
+                        "No provider configured. Enable web-ui feature or configure a provider."
+                    ));
+                }
             };
 
             // Get the shared handles before wrapping agent in Arc

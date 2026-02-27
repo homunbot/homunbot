@@ -202,11 +202,11 @@ jobs:
       fail-fast: false
       matrix:
         features:
-          - ""
           - "cli"
           - "web-ui"
           - "gateway"
           - "full"
+          - "default""
     
     steps:
       - uses: actions/checkout@v4
@@ -227,10 +227,10 @@ jobs:
       
       - name: Build with features
         run: |
-          if [ -z "${{ matrix.features }}" ]; then
-            cargo build --release --no-default-features
+          if [ "${{ matrix.features }}" = "default" ]; then
+            cargo build --release
           else
-            cargo build --release --features "${{ matrix.features }}"
+            cargo build --release --no-default-features --features "${{ matrix.features }}"
           fi
       
       - name: Check binary size

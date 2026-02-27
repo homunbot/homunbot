@@ -1803,7 +1803,10 @@ async fn deactivate_channel(
     Json(req): Json<ChannelDeactivateRequest>,
 ) -> Result<Json<ChannelConfigResponse>, StatusCode> {
     // Remove token from encrypted storage
-    if matches!(req.name.as_str(), "telegram" | "discord" | "slack" | "email") {
+    if matches!(
+        req.name.as_str(),
+        "telegram" | "discord" | "slack" | "email"
+    ) {
         if let Ok(secrets) = crate::storage::global_secrets() {
             let key = crate::storage::SecretKey::channel_token(&req.name);
             let _ = secrets.delete(&key);
@@ -2725,6 +2728,7 @@ struct RevealRequest {
     code: Option<String>,
 }
 
+#[cfg(feature = "vault-2fa")]
 async fn reveal_vault_secret(
     Path(key): Path<String>,
     Json(req): Json<RevealRequest>,
@@ -2785,6 +2789,15 @@ async fn reveal_vault_secret(
     do_reveal_secret(&key).await
 }
 
+#[cfg(not(feature = "vault-2fa"))]
+async fn reveal_vault_secret(
+    Path(key): Path<String>,
+    _req: Json<RevealRequest>,
+) -> Result<Json<RevealResponse>, StatusCode> {
+    // 2FA feature not enabled, allow direct access
+    do_reveal_secret(&key).await
+}
+
 async fn do_reveal_secret(key: &str) -> Result<Json<RevealResponse>, StatusCode> {
     let secrets =
         crate::storage::global_secrets().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -2826,9 +2839,11 @@ async fn delete_vault_secret(Path(key): Path<String>) -> Result<Json<OkResponse>
 
 // ─── Vault 2FA ──────────────────────────────────────────────────
 
+#[cfg(feature = "vault-2fa")]
 /// Pending 2FA setup data (stored in memory until confirmed)
 static PENDING_2FA_SETUP: std::sync::Mutex<Option<Pending2FaSetup>> = std::sync::Mutex::new(None);
 
+#[cfg(feature = "vault-2fa")]
 #[derive(Clone)]
 struct Pending2FaSetup {
     secret: String,
@@ -2837,6 +2852,8 @@ struct Pending2FaSetup {
     qr_image: String,
     qr_url: String,
 }
+
+// Response structs - always available for API contract
 
 #[derive(Serialize)]
 struct TwoFaStatusResponse {
@@ -2849,6 +2866,71 @@ struct TwoFaStatusResponse {
     recovery_codes_remaining: usize,
 }
 
+#[derive(Serialize)]
+struct TwoFaSetupResponse {
+    qr_image: String,
+    secret: String,
+    uri: String,
+}
+
+#[derive(Deserialize)]
+struct Confirm2FaSetupRequest {
+    code: String,
+}
+
+#[derive(Serialize)]
+struct Confirm2FaSetupResponse {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_codes: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Verify2FaRequest {
+    code: String,
+}
+
+#[derive(Serialize)]
+struct Verify2FaResponse {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_in_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Disable2FaRequest {
+    code: String,
+}
+
+#[derive(Deserialize)]
+struct RecoveryCodesRequest {
+    session_id: String,
+}
+
+#[derive(Serialize)]
+struct RecoveryCodesResponse {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    codes: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Update2FaSettingsRequest {
+    session_id: String,
+    session_timeout_secs: Option<u64>,
+}
+
+// === Feature-gated implementations ===
+
+#[cfg(feature = "vault-2fa")]
 async fn get_2fa_status() -> Result<Json<TwoFaStatusResponse>, StatusCode> {
     let storage =
         crate::security::TwoFactorStorage::new().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -2874,13 +2956,18 @@ async fn get_2fa_status() -> Result<Json<TwoFaStatusResponse>, StatusCode> {
     }))
 }
 
-#[derive(Serialize)]
-struct TwoFaSetupResponse {
-    qr_image: String,
-    secret: String,
-    uri: String,
+#[cfg(not(feature = "vault-2fa"))]
+async fn get_2fa_status() -> Result<Json<TwoFaStatusResponse>, StatusCode> {
+    Ok(Json(TwoFaStatusResponse {
+        enabled: false,
+        created_at: None,
+        account: None,
+        session_timeout_secs: 300,
+        recovery_codes_remaining: 0,
+    }))
 }
 
+#[cfg(feature = "vault-2fa")]
 async fn setup_2fa() -> Result<Json<TwoFaSetupResponse>, StatusCode> {
     use crate::security::{TotpManager, TwoFactorStorage};
 
@@ -2934,20 +3021,16 @@ async fn setup_2fa() -> Result<Json<TwoFaSetupResponse>, StatusCode> {
     }))
 }
 
-#[derive(Deserialize)]
-struct Confirm2FaSetupRequest {
-    code: String,
+#[cfg(not(feature = "vault-2fa"))]
+async fn setup_2fa() -> Result<Json<TwoFaSetupResponse>, StatusCode> {
+    Ok(Json(TwoFaSetupResponse {
+        qr_image: String::new(),
+        secret: String::new(),
+        uri: String::new(),
+    }))
 }
 
-#[derive(Serialize)]
-struct Confirm2FaSetupResponse {
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    recovery_codes: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message: Option<String>,
-}
-
+#[cfg(feature = "vault-2fa")]
 async fn confirm_2fa_setup(
     Json(req): Json<Confirm2FaSetupRequest>,
 ) -> Result<Json<Confirm2FaSetupResponse>, StatusCode> {
@@ -3009,22 +3092,18 @@ async fn confirm_2fa_setup(
     }))
 }
 
-#[derive(Deserialize)]
-struct Verify2FaRequest {
-    code: String,
+#[cfg(not(feature = "vault-2fa"))]
+async fn confirm_2fa_setup(
+    _req: Json<Confirm2FaSetupRequest>,
+) -> Result<Json<Confirm2FaSetupResponse>, StatusCode> {
+    Ok(Json(Confirm2FaSetupResponse {
+        ok: false,
+        recovery_codes: None,
+        message: Some("2FA feature not enabled in this build".to_string()),
+    }))
 }
 
-#[derive(Serialize)]
-struct Verify2FaResponse {
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    expires_in_secs: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message: Option<String>,
-}
-
+#[cfg(feature = "vault-2fa")]
 async fn verify_2fa(
     Json(req): Json<Verify2FaRequest>,
 ) -> Result<Json<Verify2FaResponse>, StatusCode> {
@@ -3102,11 +3181,17 @@ async fn verify_2fa(
     }
 }
 
-#[derive(Deserialize)]
-struct Disable2FaRequest {
-    code: String,
+#[cfg(not(feature = "vault-2fa"))]
+async fn verify_2fa(_req: Json<Verify2FaRequest>) -> Result<Json<Verify2FaResponse>, StatusCode> {
+    Ok(Json(Verify2FaResponse {
+        ok: false,
+        session_id: None,
+        expires_in_secs: None,
+        message: Some("2FA feature not enabled in this build".to_string()),
+    }))
 }
 
+#[cfg(feature = "vault-2fa")]
 async fn disable_2fa(Json(req): Json<Disable2FaRequest>) -> Result<Json<OkResponse>, StatusCode> {
     use crate::security::{TotpManager, TwoFactorStorage};
 
@@ -3162,20 +3247,15 @@ async fn disable_2fa(Json(req): Json<Disable2FaRequest>) -> Result<Json<OkRespon
     }))
 }
 
-#[derive(Deserialize)]
-struct RecoveryCodesRequest {
-    session_id: String,
+#[cfg(not(feature = "vault-2fa"))]
+async fn disable_2fa(_req: Json<Disable2FaRequest>) -> Result<Json<OkResponse>, StatusCode> {
+    Ok(Json(OkResponse {
+        ok: false,
+        message: Some("2FA feature not enabled in this build".to_string()),
+    }))
 }
 
-#[derive(Serialize)]
-struct RecoveryCodesResponse {
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    codes: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message: Option<String>,
-}
-
+#[cfg(feature = "vault-2fa")]
 async fn get_recovery_codes(
     Json(req): Json<RecoveryCodesRequest>,
 ) -> Result<Json<RecoveryCodesResponse>, StatusCode> {
@@ -3211,12 +3291,18 @@ async fn get_recovery_codes(
     }))
 }
 
-#[derive(Deserialize)]
-struct Update2FaSettingsRequest {
-    session_id: String,
-    session_timeout_secs: Option<u64>,
+#[cfg(not(feature = "vault-2fa"))]
+async fn get_recovery_codes(
+    _req: Json<RecoveryCodesRequest>,
+) -> Result<Json<RecoveryCodesResponse>, StatusCode> {
+    Ok(Json(RecoveryCodesResponse {
+        ok: false,
+        codes: None,
+        message: Some("2FA feature not enabled in this build".to_string()),
+    }))
 }
 
+#[cfg(feature = "vault-2fa")]
 async fn update_2fa_settings(
     Json(req): Json<Update2FaSettingsRequest>,
 ) -> Result<Json<OkResponse>, StatusCode> {
@@ -3262,6 +3348,16 @@ async fn update_2fa_settings(
     Ok(Json(OkResponse {
         ok: true,
         message: None,
+    }))
+}
+
+#[cfg(not(feature = "vault-2fa"))]
+async fn update_2fa_settings(
+    _req: Json<Update2FaSettingsRequest>,
+) -> Result<Json<OkResponse>, StatusCode> {
+    Ok(Json(OkResponse {
+        ok: false,
+        message: Some("2FA feature not enabled in this build".to_string()),
     }))
 }
 

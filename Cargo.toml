@@ -29,7 +29,7 @@ default = ["cli", "web-ui", "file-tools", "shell-tool", "web-tools", "cron-tool"
 cli = ["dep:clap", "dep:ratatui", "dep:crossterm"]
 web-ui = ["dep:axum", "dep:tower", "dep:tower-http", "dep:rust-embed", "dep:mime_guess", "dep:pulldown-cmark"]
 file-tools = []
-shell-tool = ["dep:regex"]
+shell-tool = []
 web-tools = []
 cron-tool = []
 message-tool = []
@@ -134,7 +134,7 @@ mime_guess = { version = "2", optional = true }
 pulldown-cmark = { version = "0.12", optional = true }
 
 # --- Shell tool feature ---
-regex = { version = "1", optional = true }
+regex = { version = "1" }
 
 # --- OpenAI-compatible providers (streaming) ---
 eventsource-stream = { version = "0.2", optional = true }

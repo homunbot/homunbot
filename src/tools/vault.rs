@@ -18,6 +18,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 
+#[cfg(feature = "vault-2fa")]
 use crate::security::{global_session_manager, TotpManager, TwoFactorConfig, TwoFactorStorage};
 use crate::storage::{global_secrets, SecretKey};
 
@@ -43,6 +44,7 @@ impl VaultTool {
     }
 
     /// Check if 2FA is enabled
+    #[cfg(feature = "vault-2fa")]
     fn is_2fa_enabled() -> bool {
         let result = TwoFactorStorage::new()
             .ok()
@@ -54,13 +56,21 @@ impl VaultTool {
         result
     }
 
+    /// Check if 2FA is enabled (stub when feature disabled)
+    #[cfg(not(feature = "vault-2fa"))]
+    fn is_2fa_enabled() -> bool {
+        false
+    }
+
     /// Load 2FA config
+    #[cfg(feature = "vault-2fa")]
     fn load_2fa_config() -> Result<TwoFactorConfig> {
         let storage = TwoFactorStorage::new()?;
         storage.load()
     }
 
     /// Verify a TOTP code and optionally create a session
+    #[cfg(feature = "vault-2fa")]
     async fn verify_and_create_session(code: &str) -> Result<Result<String, String>> {
         let config = Self::load_2fa_config()?;
 
@@ -101,6 +111,25 @@ impl VaultTool {
                 MAX_FAILED_ATTEMPTS.saturating_sub(config.failed_attempts)
             )))
         }
+    }
+
+    /// Verify a TOTP code (stub when feature disabled)
+    #[cfg(not(feature = "vault-2fa"))]
+    async fn verify_and_create_session(_code: &str) -> Result<Result<String, String>> {
+        Ok(Err("2FA feature not enabled in this build".to_string()))
+    }
+
+    /// Verify session (feature-gated)
+    #[cfg(feature = "vault-2fa")]
+    async fn verify_session(session_id: &str) -> bool {
+        let session_manager = global_session_manager();
+        session_manager.verify_session(session_id).await
+    }
+
+    /// Verify session (stub when feature disabled)
+    #[cfg(not(feature = "vault-2fa"))]
+    async fn verify_session(_session_id: &str) -> bool {
+        true
     }
 }
 
@@ -184,8 +213,7 @@ impl Tool for VaultTool {
                 if Self::is_2fa_enabled() {
                     // Check if we have a valid session
                     if let Some(sid) = session_id {
-                        let session_manager = global_session_manager();
-                        if !session_manager.verify_session(&sid).await {
+                        if !Self::verify_session(&sid).await {
                             return Ok(ToolResult::error(
                                 "Session expired or invalid. Please authenticate again with 'confirm' action."
                             ));
