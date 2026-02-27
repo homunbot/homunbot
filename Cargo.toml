@@ -131,7 +131,7 @@ tower = { version = "0.5", optional = true }
 tower-http = { version = "0.6", features = ["cors", "trace"], optional = true }
 rust-embed = { version = "8", features = ["compression"], optional = true }
 mime_guess = { version = "2", optional = true }
-pulldown-cmark = { version = "0.12", optional = true }
+pulldown-cmark = { version = "0.13", optional = true }
 
 # --- Shell tool feature ---
 regex = { version = "1" }
