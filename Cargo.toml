@@ -99,7 +99,7 @@ dirs = "6"
 
 # Hostname for runtime info
 hostname = "0.4"
-whoami = "1.5"
+whoami = "2.1"
 
 # Security - Encrypted secrets storage (core)
 ring = "0.17"
