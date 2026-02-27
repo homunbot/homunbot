@@ -35,10 +35,9 @@ cron-tool = []
 message-tool = []
 
 # === Channels (optional) ===
-channel-telegram = ["dep:teloxide"]
-channel-telegram-frankenstein = ["dep:frankenstein"]
+channel-telegram = ["dep:frankenstein"]
 channel-discord = ["dep:serenity"]
-channel-whatsapp = ["dep:wa-rs", "dep:wa-rs-sqlite-storage", "dep:wa-rs-tokio-transport", 
+channel-whatsapp = ["dep:wa-rs", "dep:wa-rs-sqlite-storage", "dep:wa-rs-tokio-transport",
                     "dep:wa-rs-ureq-http", "dep:wa-rs-core", "dep:wa-rs-proto", "dep:futures-util"]
 channel-email = ["dep:lettre", "dep:mail-parser", "dep:async-imap", "dep:tokio-rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
 channel-webhook = []  # Built-in, uses axum
@@ -142,8 +141,9 @@ eventsource-stream = { version = "0.2", optional = true }
 pin-project-lite = { version = "0.2", optional = true }
 
 # --- Telegram channel ---
-teloxide = { version = "0.13", features = ["macros"], optional = true }
 frankenstein = { version = "0.47", default-features = false, features = ["client-reqwest"], optional = true }
+
+# --- Discord channel ---
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "cache", "rustls_backend"], optional = true }
 
 # --- WhatsApp channel ---

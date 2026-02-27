@@ -1,22 +1,22 @@
+//! Telegram channel using Frankenstein API client
+//!
+//! This implementation uses the `frankenstein` crate instead of `teloxide`
+//! for better reqwest compatibility and simpler architecture.
+
 use std::collections::HashSet;
-use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Result;
-use reqwest::Client;
-use teloxide::prelude::*;
-use teloxide::types::ParseMode;
-use teloxide::update_listeners::Polling;
-use tokio::sync::{mpsc, Mutex};
+use frankenstein::client_reqwest::Bot;
+use frankenstein::types::{ChatId, AllowedUpdate};
+use frankenstein::methods::{GetUpdatesParams, SendMessageParams};
+use frankenstein::updates::UpdateContent;
+use frankenstein::{AsyncTelegramApi, ParseMode};
+use tokio::sync::mpsc;
 
 use crate::bus::{InboundMessage, OutboundMessage};
 use crate::config::TelegramConfig;
-use crate::utils::set_network_online;
 
-/// Telegram channel — long polling bot via teloxide.
-///
-/// Access control: only users in `allow_from` can interact.
-/// Empty allow_from = allow everyone (not recommended in production).
+/// Telegram channel — long polling bot via Frankenstein.
 pub struct TelegramChannel {
     config: TelegramConfig,
 }
@@ -26,229 +26,165 @@ impl TelegramChannel {
         Self { config }
     }
 
-    /// Start the Telegram bot: listen for messages and route responses.
+    /// Start the Telegram bot using Frankenstein API
     pub async fn start(
         &self,
         inbound_tx: mpsc::Sender<InboundMessage>,
         outbound_rx: mpsc::Receiver<OutboundMessage>,
     ) -> Result<()> {
-        // Build HTTP client with extended timeout for slow connections
-        // Long polling waits up to 60s for updates, so we need at least 90s HTTP timeout
-        let http_client = Client::builder()
-            .timeout(Duration::from_secs(90))
-            .connect_timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|e| anyhow::anyhow!("Failed to create HTTP client: {}", e))?;
+        let api = Bot::new(&self.config.token);
 
-        let bot = Bot::with_client(&self.config.token, http_client);
-
-        // Build allow-list as a HashSet for O(1) lookups
         let allow_from: HashSet<String> = self.config.allow_from.iter().cloned().collect();
         let allow_all = allow_from.is_empty();
-
-        // Log token status (masked for security)
-        let token_preview = if self.config.token.len() > 10 {
-            format!(
-                "{}...{}",
-                &self.config.token[..6],
-                &self.config.token[self.config.token.len() - 4..]
-            )
-        } else {
-            "[too short]".to_string()
-        };
 
         tracing::info!(
             allow_from = ?self.config.allow_from,
             allow_all,
-            token_preview = %token_preview,
-            "Telegram channel starting"
+            "Telegram channel (Frankenstein) starting"
         );
 
-        // Spawn outbound message dispatcher
-        let bot_for_outbound = bot.clone();
-        let outbound_rx = Arc::new(Mutex::new(outbound_rx));
-        let outbound_handle = tokio::spawn(Self::outbound_loop(bot_for_outbound, outbound_rx));
+        // Spawn outbound handler
+        let api_for_outbound = api.clone();
+        let _outbound_handle = tokio::spawn(Self::outbound_loop(
+            api_for_outbound,
+            outbound_rx,
+        ));
 
-        // Set up message handler with long polling
-        let handler =
-            Update::filter_message().endpoint(
-                move |bot: Bot, msg: Message, inbound_tx: mpsc::Sender<InboundMessage>| {
-                    let allow_from = allow_from.clone();
-                    let allow_all = allow_all;
-                    async move {
-                        Self::handle_message(bot, msg, &inbound_tx, &allow_from, allow_all).await
+        // Long polling loop
+        let mut offset: u32 = 0;
+        loop {
+            let params = GetUpdatesParams {
+                offset: Some(offset as i64),
+                limit: Some(100),
+                timeout: Some(60),
+                allowed_updates: Some(vec![AllowedUpdate::Message]),
+            };
+
+            match api.get_updates(&params).await {
+                Ok(response) => {
+                    for update in response.result {
+                        offset = update.update_id + 1;
+                        if let UpdateContent::Message(message) = update.content {
+                            Self::handle_message(
+                                &api,
+                                *message,
+                                &inbound_tx,
+                                &allow_from,
+                                allow_all,
+                            )
+                            .await;
+                        }
                     }
-                },
-            );
-
-        // Configure polling with:
-        // - Extended timeout (60s) for slow connections
-        // - Drop pending updates on restart
-        // - Custom exponential backoff (2s to 120s)
-        let bot_for_listener = bot.clone();
-        let listener = Polling::builder(bot_for_listener)
-            .timeout(Duration::from_secs(60))
-            .drop_pending_updates()
-            .backoff_strategy(|error_count| {
-                // Exponential backoff: 2s, 4s, 8s, 16s, 32s, 64s, 120s (capped)
-                let base = 2u64;
-                let delay = base.saturating_pow(error_count.min(6)); // Cap at 64s
-                Duration::from_secs(delay.min(120)) // Max 2 minutes
-            })
-            .build();
-
-        let mut dispatcher = Dispatcher::builder(bot, handler)
-            .dependencies(dptree::deps![inbound_tx])
-            .default_handler(|_upd| async {})
-            .build();
-
-        // Custom error handler that tracks network state
-        let error_handler = Arc::new(|error: teloxide::RequestError| {
-            let err_str = error.to_string().to_lowercase();
-            if err_str.contains("timeout")
-                || err_str.contains("connection")
-                || err_str.contains("network")
-                || err_str.contains("timedout")
-            {
-                set_network_online(false);
-                tracing::warn!(
-                    error = %error,
-                    "Telegram network error - will retry with exponential backoff"
-                );
-            } else {
-                tracing::error!(error = %error, "Telegram API error");
-            }
-            async {}
-        });
-
-        // Run both loops concurrently
-        tokio::select! {
-            _ = dispatcher.dispatch_with_listener(listener, error_handler) => {
-                tracing::info!("Telegram dispatcher stopped");
-            }
-            result = outbound_handle => {
-                if let Err(e) = result {
-                    tracing::error!(error = %e, "Outbound loop panicked");
+                }
+                Err(e) => {
+                    tracing::error!(error = ?e, "Failed to get updates");
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
             }
         }
-
-        Ok(())
     }
 
-    /// Handle an incoming Telegram message
     async fn handle_message(
-        bot: Bot,
-        msg: Message,
+        api: &Bot,
+        msg: frankenstein::types::Message,
         inbound_tx: &mpsc::Sender<InboundMessage>,
         allow_from: &HashSet<String>,
         allow_all: bool,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Extract sender info
+    ) {
         let sender_id = msg
             .from
             .as_ref()
-            .map(|u| u.id.0.to_string())
+            .map(|u| u.id.to_string())
             .unwrap_or_default();
-        let chat_id = msg.chat.id.0.to_string();
+        let chat_id = msg.chat.id;
 
-        // Access control
         if !allow_all && !allow_from.contains(&sender_id) {
-            tracing::warn!(
-                sender_id = %sender_id,
-                chat_id = %chat_id,
-                "Telegram: unauthorized user, ignoring"
-            );
-            return Ok(());
+            tracing::warn!(sender_id = %sender_id, "Unauthorized user");
+            return;
         }
 
-        // Extract text content
-        let text = match msg.text() {
-            Some(t) if !t.is_empty() => t.to_string(),
+        // Extract text content from message
+        let text = match msg.text {
+            Some(ref t) if !t.is_empty() => t.clone(),
             _ => {
-                // Ignore non-text messages (photos, stickers, etc.) for now
-                return Ok(());
+                // Skip non-text messages (photos, stickers, etc.)
+                return;
             }
         };
 
+        tracing::info!(sender = %sender_id, chat = %chat_id, len = text.len(), "Received Telegram message");
+
         // Handle commands
         if text == "/start" {
-            bot.send_message(msg.chat.id, "🧪 Homun is ready! Send me a message.")
-                .await?;
-            return Ok(());
+            let _ = Self::send_text_message(api, chat_id, "🧪 Homun is ready! Send me a message.").await;
+            return;
         }
 
         if text == "/new" || text == "/reset" {
-            // Session reset is handled by the agent loop when it receives this
-            // For now, forward it as a regular message
-            bot.send_message(msg.chat.id, "Session cleared. Starting fresh.")
-                .await?;
-            // We still send it to the agent so it can clear the session
+            let _ = Self::send_text_message(api, chat_id, "Session cleared. Starting fresh.").await;
+            // Continue to forward to agent for session reset handling
         }
-
-        tracing::info!(
-            sender = %sender_id,
-            chat = %chat_id,
-            len = text.len(),
-            "Telegram: received message"
-        );
 
         // Send to agent via bus
         let inbound = InboundMessage {
             channel: "telegram".to_string(),
             sender_id,
-            chat_id: chat_id.clone(),
+            chat_id: chat_id.to_string(),
             content: text,
             timestamp: chrono::Utc::now(),
         };
 
         if let Err(e) = inbound_tx.send(inbound).await {
             tracing::error!(error = %e, "Failed to send to inbound bus");
-            bot.send_message(
-                msg.chat.id,
-                "Sorry, I'm having trouble processing messages right now.",
-            )
-            .await?;
+            let _ = Self::send_text_message(api, chat_id, "Sorry, I'm having trouble processing messages right now.").await;
         }
+    }
 
+    async fn send_text_message(api: &Bot, chat_id: i64, text: &str) -> Result<()> {
+        let params = SendMessageParams::builder()
+            .chat_id(ChatId::Integer(chat_id))
+            .text(text)
+            .build();
+
+        api.send_message(&params).await?;
         Ok(())
     }
 
-    /// Outbound loop: receive agent responses and send to Telegram
-    async fn outbound_loop(bot: Bot, outbound_rx: Arc<Mutex<mpsc::Receiver<OutboundMessage>>>) {
-        let mut rx = outbound_rx.lock().await;
-
-        while let Some(msg) = rx.recv().await {
+    async fn outbound_loop(
+        api: Bot,
+        mut outbound_rx: mpsc::Receiver<OutboundMessage>,
+    ) {
+        while let Some(msg) = outbound_rx.recv().await {
             if msg.channel != "telegram" {
                 continue;
             }
 
             let chat_id: i64 = match msg.chat_id.parse() {
                 Ok(id) => id,
-                Err(e) => {
-                    tracing::error!(
-                        chat_id = %msg.chat_id,
-                        error = %e,
-                        "Invalid Telegram chat_id"
-                    );
-                    continue;
-                }
+                Err(_) => continue,
             };
 
             // Split long messages (Telegram limit: 4096 chars)
             let chunks = split_message(&msg.content, 4000);
 
             for chunk in chunks {
-                // Try HTML first (more lenient than MarkdownV2), fallback to plain text
+                // Try HTML format first
                 let html_chunk = markdown_to_html(&chunk);
-                if let Err(e) = bot
-                    .send_message(ChatId(chat_id), &html_chunk)
+                let params = SendMessageParams::builder()
+                    .chat_id(ChatId::Integer(chat_id))
+                    .text(&html_chunk)
                     .parse_mode(ParseMode::Html)
-                    .await
-                {
-                    tracing::debug!(error = %e, "HTML send failed, retrying plain text");
-                    if let Err(e2) = bot.send_message(ChatId(chat_id), &chunk).await {
-                        tracing::error!(error = %e2, "Failed to send Telegram message");
+                    .build();
+
+                if let Err(_) = api.send_message(&params).await {
+                    // Fallback to plain text
+                    let params = SendMessageParams::builder()
+                        .chat_id(ChatId::Integer(chat_id))
+                        .text(&chunk)
+                        .build();
+
+                    if let Err(e) = api.send_message(&params).await {
+                        tracing::error!(error = ?e, "Failed to send Telegram message");
                     }
                 }
             }
@@ -256,50 +192,38 @@ impl TelegramChannel {
     }
 }
 
-/// Convert basic Markdown (from LLM output) to Telegram-compatible HTML.
-///
-/// Telegram HTML supports: <b>, <i>, <code>, <pre>, <a href="">, <s>, <u>
-/// This handles the most common LLM markdown patterns.
+/// Convert basic Markdown to Telegram-compatible HTML
 fn markdown_to_html(text: &str) -> String {
     let mut result = String::with_capacity(text.len() + 128);
     let mut in_code_block = false;
-    let mut code_block_lang = String::new();
 
     for line in text.lines() {
         if line.starts_with("```") {
             if in_code_block {
-                // Closing code block
                 result.push_str("</code></pre>\n");
                 in_code_block = false;
-                code_block_lang.clear();
             } else {
-                // Opening code block
                 in_code_block = true;
-                code_block_lang = line.trim_start_matches('`').trim().to_string();
                 result.push_str("<pre><code>");
             }
             continue;
         }
 
         if in_code_block {
-            // Inside code block — escape HTML entities only
             result.push_str(&escape_html(line));
             result.push('\n');
             continue;
         }
 
-        // Process inline markdown on this line
         let processed = convert_inline_markdown(line);
         result.push_str(&processed);
         result.push('\n');
     }
 
-    // Close unclosed code block
     if in_code_block {
         result.push_str("</code></pre>\n");
     }
 
-    // Remove trailing newline
     if result.ends_with('\n') {
         result.pop();
     }
@@ -307,14 +231,12 @@ fn markdown_to_html(text: &str) -> String {
     result
 }
 
-/// Escape HTML special characters
 fn escape_html(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
 
-/// Convert inline markdown to HTML: **bold**, *italic*, `code`, ~~strikethrough~~
 fn convert_inline_markdown(line: &str) -> String {
     let line = escape_html(line);
 
@@ -329,7 +251,7 @@ fn convert_inline_markdown(line: &str) -> String {
         return format!("<b>{header_text}</b>");
     }
 
-    // Bullet points: keep as-is with • for cleaner look
+    // Bullet points
     let line = if let Some(rest) = line.strip_prefix("- ") {
         format!("• {rest}")
     } else if let Some(rest) = line.strip_prefix("* ") {
@@ -344,14 +266,13 @@ fn convert_inline_markdown(line: &str) -> String {
     // Bold: **text** → <b>text</b>
     let line = replace_paired_double(&line, "**", "<b>", "</b>");
 
-    // Italic: *text* → <i>text</i> (but not inside <b> tags)
+    // Italic: *text* → <i>text</i>
     let line = replace_paired_marker(&line, '*', "<i>", "</i>");
 
     // Strikethrough: ~~text~~ → <s>text</s>
     replace_paired_double(&line, "~~", "<s>", "</s>")
 }
 
-/// Replace paired single-char markers: `x` → <tag>x</tag>
 fn replace_paired_marker(text: &str, marker: char, open: &str, close: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut is_open = false;
@@ -372,20 +293,16 @@ fn replace_paired_marker(text: &str, marker: char, open: &str, close: &str) -> S
         i += 1;
     }
 
-    // If we have an unclosed marker, it wasn't actually markdown
     if is_open {
-        // Undo: rebuild without conversion
         return text.to_string();
     }
 
     result
 }
 
-/// Replace paired double-char markers: **x** → <tag>x</tag>
 fn replace_paired_double(text: &str, marker: &str, open: &str, close: &str) -> String {
     let parts: Vec<&str> = text.split(marker).collect();
     if parts.len() < 3 || parts.len() % 2 == 0 {
-        // Not enough pairs or odd splits — not valid markdown
         return text.to_string();
     }
 
@@ -402,7 +319,7 @@ fn replace_paired_double(text: &str, marker: &str, open: &str, close: &str) -> S
     result
 }
 
-/// Split a message into chunks that fit within Telegram's character limit.
+/// Split a message into chunks that fit within Telegram's character limit
 fn split_message(text: &str, max_len: usize) -> Vec<String> {
     if text.len() <= max_len {
         return vec![text.to_string()];
