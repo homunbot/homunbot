@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use anyhow::Result;
 use reqwest::Client;
-use reqwest_011 as reqwest; // Use reqwest 0.11 for teloxide compatibility
 use teloxide::prelude::*;
 use teloxide::types::ParseMode;
 use teloxide::update_listeners::Polling;

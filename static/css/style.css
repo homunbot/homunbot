@@ -3254,3 +3254,100 @@ html, body {
     display: flex;
     gap: 0.5rem;
 }
+
+/* ═══ PAGINATION ═══ */
+.pagination-container {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+}
+.pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.pagination button {
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--surface);
+    color: var(--t1);
+    cursor: pointer;
+    transition: all var(--fast) var(--ease);
+}
+.pagination button:hover {
+    background: var(--surface-inset);
+    border-color: var(--border-strong);
+}
+.pagination-info {
+    color: var(--t3);
+    font-size: 13px;
+    white-space: nowrap;
+}
+/* ═══ SCROLLABLE LISTS ═══ */
+.scrollable-list {
+    max-height: 400px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    background: var(--surface);
+}
+.scrollable-list .empty-state {
+    padding: 24px;
+    text-align: center;
+}
+.scrollable-list .approval-item,
+.scrollable-list .audit-entry {
+    padding: 16px;
+    border-bottom: 1px solid var(--border-subtle);
+}
+.scrollable-list .approval-item:last-child,
+.scrollable-list .audit-entry:last-child {
+    border-bottom: none;
+}
+.scrollable-list .approval-header,
+.scrollable-list .audit-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+.scrollable-list .approval-time,
+.scrollable-list .audit-time {
+    font-size: 12px;
+    color: var(--t3);
+}
+.scrollable-list .approval-command code,
+.scrollable-list .audit-summary {
+    background: var(--surface-inset);
+    padding: 8px 12px;
+    border-radius: var(--r-sm);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.5;
+}
+.scrollable-list .approval-meta,
+.scrollable-list .audit-summary {
+    color: var(--t3);
+    font-size: 12px;
+}
+.scrollable-list .approval-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+.scrollable-list .approval-actions button {
+    padding: 6px 12px;
+    font-size: 12px;
+}
+.scrollable-list .audit-decision {
+    padding: 4px 8px;
+    border-radius: var(--r-sm);
+    font-size: 11px;
+    font-weight: 600;
+}
+.scrollable-list .decision-approve { background: var(--ok-bg); color: var(--ok); }
+.scrollable-list .decision-deny { background: var(--err-bg); color: var(--err); }
+.scrollable-list .decision-always-approve { background: var(--ok-bg); color: var(--ok); font-weight: 700; }

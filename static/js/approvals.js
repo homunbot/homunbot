@@ -39,9 +39,9 @@ async function apiPut(endpoint, body = {}) {
 
 async function loadApprovals() {
     try {
-        // Load all approvals data
-        const data = await apiGet('/v1/approvals');
-        pendingApprovals = data.pending || [];
+        // Load pending approvals with pagination
+        const pendingData = await apiGet(`/v1/approvals?page=${currentPage}&limit=${itemsPerPage}`);
+        pendingApprovals = pendingData.pending || [];
         
         // Update pending count badge
         document.getElementById('pending-count').textContent = pendingApprovals.length;
@@ -49,9 +49,9 @@ async function loadApprovals() {
         // Render pending approvals
         renderPendingApprovals();
         
-        // Load audit log
-        const audit = await apiGet('/v1/approvals/audit');
-        auditLog = audit.log || [];
+        // Load audit log with pagination
+        const auditData = await apiGet(`/v1/approvals/audit?page=${currentPage}&limit=${itemsPerPage}`);
+        auditLog = auditData.log || [];
         renderAuditLog();
         
     } catch (err) {
@@ -79,10 +79,22 @@ async function loadConfig() {
     }
 }
 
+// ─── State ─────────────────────────────────────────────────────────────
+
+let pendingApprovals = [];
+let auditLog = [];
+let currentPage = 1;
+let itemsPerPage = 20;
+let hasMorePending = true;
+let hasMoreAudit = true;
+
 // ─── Render Functions ───────────────────────────────────────────────────
 
 function renderPendingApprovals() {
     const container = document.getElementById('pending-approvals-list');
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    const pageItems = pendingApprovals.slice(startIndex, endIndex);
     
     if (pendingApprovals.length === 0) {
         container.innerHTML = `
@@ -91,10 +103,13 @@ function renderPendingApprovals() {
                 <p class="muted">Commands requiring approval will appear here</p>
             </div>
         `;
+        container.className = 'scrollable-list';
         return;
     }
     
-    container.innerHTML = pendingApprovals.map(item => `
+    // Clear existing content but keep the scroll position
+    const scrollPosition = container.scrollTop;
+    container.innerHTML = pageItems.map(item => `
         <div class="approval-item" data-id="${item.id}">
             <div class="approval-header">
                 <span class="approval-tool">${escapeHtml(item.tool_name)}</span>
@@ -119,10 +134,22 @@ function renderPendingApprovals() {
             </div>
         </div>
     `).join('');
+    
+    // Add scrollable list class to the container
+    container.className = 'scrollable-list';
+    
+    // Restore scroll position
+    container.scrollTop = scrollPosition;
+    
+    // Add pagination controls if needed
+    renderPagination();
 }
 
 function renderAuditLog() {
     const container = document.getElementById('approval-audit-log');
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    const pageItems = [...auditLog].reverse().slice(startIndex, endIndex);
     
     if (auditLog.length === 0) {
         container.innerHTML = `
@@ -130,13 +157,13 @@ function renderAuditLog() {
                 <p>No activity yet</p>
             </div>
         `;
+        container.className = 'scrollable-list';
         return;
     }
     
-    // Show last 20 entries, newest first
-    const recent = [...auditLog].reverse().slice(0, 20);
-    
-    container.innerHTML = recent.map(entry => `
+    // Clear existing content but keep the scroll position
+    const scrollPosition = container.scrollTop;
+    container.innerHTML = pageItems.map(entry => `
         <div class="audit-entry">
             <div class="audit-header">
                 <span class="audit-decision decision-${entry.decision}">${entry.decision}</span>
@@ -146,6 +173,54 @@ function renderAuditLog() {
             <div class="audit-summary muted">${escapeHtml(entry.arguments_summary)}</div>
         </div>
     `).join('');
+    
+    // Add scrollable list class to the container
+    container.className = 'scrollable-list';
+    
+    // Restore scroll position
+    container.scrollTop = scrollPosition;
+    
+    // Add pagination controls if needed
+    renderPagination();
+}
+
+function renderPagination() {
+    const container = document.getElementById('pagination-controls');
+    if (!container) return;
+    
+    const totalPending = pendingApprovals.length;
+    const totalPages = Math.ceil(totalPending / itemsPerPage);
+    
+    if (totalPages <= 1) {
+        container.innerHTML = '';
+        return;
+    }
+    
+    container.innerHTML = `
+        <div class="pagination">
+            ${currentPage > 1 ? `
+                <button class="btn btn-sm btn-secondary" onclick="changePage(${currentPage - 1})">
+                    ← Previous
+                </button>
+            ` : ''}
+            
+            <span class="pagination-info">
+                Page ${currentPage} of ${totalPages} (${totalPending} total)
+            </span>
+            
+            ${currentPage < totalPages ? `
+                <button class="btn btn-sm btn-secondary" onclick="changePage(${currentPage + 1})">
+                    Next →
+                </button>
+            ` : ''}
+        </div>
+    `;
+}
+
+function changePage(page) {
+    currentPage = page;
+    renderPendingApprovals();
+    renderAuditLog();
 }
 
 // ─── Actions ────────────────────────────────────────────────────────────
@@ -253,6 +328,15 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Auto-refresh pending approvals every 5 seconds
     setInterval(loadApprovals, 5000);
+    
+    // Add pagination container to the DOM
+    const content = document.querySelector('.content-inner');
+    if (content) {
+        const paginationContainer = document.createElement('div');
+        paginationContainer.id = 'pagination-controls';
+        paginationContainer.className = 'pagination-container';
+        content.appendChild(paginationContainer);
+    }
 });
 
 // Make functions available globally

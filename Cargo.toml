@@ -35,7 +35,7 @@ cron-tool = []
 message-tool = []
 
 # === Channels (optional) ===
-channel-telegram = ["dep:teloxide", "dep:reqwest-011"]
+channel-telegram = ["dep:teloxide"]
 channel-discord = ["dep:serenity"]
 channel-whatsapp = ["dep:wa-rs", "dep:wa-rs-sqlite-storage", "dep:wa-rs-tokio-transport", 
                     "dep:wa-rs-ureq-http", "dep:wa-rs-core", "dep:wa-rs-proto", "dep:futures-util"]
@@ -67,7 +67,7 @@ async-trait = "0.1"
 futures = "0.3"
 
 # HTTP client (for providers and tools)
-reqwest = { version = "0.13", features = ["json", "stream"] }
+reqwest = { version = "0.11", features = ["json", "stream"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -99,7 +99,7 @@ dirs = "6"
 
 # Hostname for runtime info
 hostname = "0.4"
-whoami = "2.1"
+whoami = "1.5"
 
 # Security - Encrypted secrets storage (core)
 ring = "0.17"
@@ -141,8 +141,7 @@ eventsource-stream = { version = "0.2", optional = true }
 pin-project-lite = { version = "0.2", optional = true }
 
 # --- Telegram channel ---
-teloxide = { version = "0.17", features = ["macros"], optional = true }
-reqwest-011 = { package = "reqwest", version = "0.11", features = ["json"], optional = true }
+teloxide = { version = "0.13", features = ["macros"], optional = true }
 
 # --- Discord channel ---
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "cache", "rustls_backend"], optional = true }
@@ -168,7 +167,7 @@ rmcp = { version = "0.16", features = ["client", "transport-child-process"], opt
 
 # --- Vault 2FA ---
 totp-rs = { version = "5", features = ["qr"], optional = true }
-rand = { version = "0.10", optional = true }
+rand = { version = "0.8", optional = true }
 
 # --- Email channel ---
 lettre = { version = "0.11", optional = true, default-features = false, features = ["builder", "smtp-transport", "rustls-tls"] }
