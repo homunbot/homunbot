@@ -108,7 +108,7 @@ keyring = { version = "3", features = ["apple-native", "linux-native", "windows-
 zeroize = "1"
 
 # File watcher (skill hot-reload)
-notify = "7"
+notify = "8"
 
 # Streaming support
 tokio-stream = "0.1"
