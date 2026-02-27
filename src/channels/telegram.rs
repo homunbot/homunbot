@@ -7,8 +7,8 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 use frankenstein::client_reqwest::Bot;
-use frankenstein::types::{ChatId, AllowedUpdate};
 use frankenstein::methods::{GetUpdatesParams, SendMessageParams};
+use frankenstein::types::{AllowedUpdate, ChatId};
 use frankenstein::updates::UpdateContent;
 use frankenstein::{AsyncTelegramApi, ParseMode};
 use tokio::sync::mpsc;
@@ -45,10 +45,7 @@ impl TelegramChannel {
 
         // Spawn outbound handler
         let api_for_outbound = api.clone();
-        let _outbound_handle = tokio::spawn(Self::outbound_loop(
-            api_for_outbound,
-            outbound_rx,
-        ));
+        let _outbound_handle = tokio::spawn(Self::outbound_loop(api_for_outbound, outbound_rx));
 
         // Long polling loop
         let mut offset: u32 = 0;
@@ -116,7 +113,8 @@ impl TelegramChannel {
 
         // Handle commands
         if text == "/start" {
-            let _ = Self::send_text_message(api, chat_id, "🧪 Homun is ready! Send me a message.").await;
+            let _ = Self::send_text_message(api, chat_id, "🧪 Homun is ready! Send me a message.")
+                .await;
             return;
         }
 
@@ -136,7 +134,12 @@ impl TelegramChannel {
 
         if let Err(e) = inbound_tx.send(inbound).await {
             tracing::error!(error = %e, "Failed to send to inbound bus");
-            let _ = Self::send_text_message(api, chat_id, "Sorry, I'm having trouble processing messages right now.").await;
+            let _ = Self::send_text_message(
+                api,
+                chat_id,
+                "Sorry, I'm having trouble processing messages right now.",
+            )
+            .await;
         }
     }
 
@@ -150,10 +153,7 @@ impl TelegramChannel {
         Ok(())
     }
 
-    async fn outbound_loop(
-        api: Bot,
-        mut outbound_rx: mpsc::Receiver<OutboundMessage>,
-    ) {
+    async fn outbound_loop(api: Bot, mut outbound_rx: mpsc::Receiver<OutboundMessage>) {
         while let Some(msg) = outbound_rx.recv().await {
             if msg.channel != "telegram" {
                 continue;
