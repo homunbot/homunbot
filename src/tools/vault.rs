@@ -44,16 +44,39 @@ impl VaultTool {
     }
 
     /// Check if 2FA is enabled
+    /// Returns true if:
+    /// - 2FA config exists and is enabled
+    /// - 2FA config exists but can't be loaded (fail closed for security)
+    /// Returns false only if 2FA config doesn't exist (not configured)
     #[cfg(feature = "vault-2fa")]
     fn is_2fa_enabled() -> bool {
-        let result = TwoFactorStorage::new()
-            .ok()
-            .and_then(|s| s.load().ok())
-            .map(|c| c.enabled)
-            .unwrap_or(false);
+        match TwoFactorStorage::new() {
+            Ok(storage) => {
+                // If file doesn't exist, 2FA is not configured
+                if !storage.exists() {
+                    tracing::debug!("2FA config file does not exist, 2FA not configured");
+                    return false;
+                }
 
-        tracing::debug!(twofa_enabled = result, "Checked 2FA status");
-        result
+                // If file exists, try to load it
+                match storage.load() {
+                    Ok(config) => {
+                        tracing::debug!(twofa_enabled = config.enabled, "Checked 2FA status");
+                        config.enabled
+                    }
+                    Err(e) => {
+                        // File exists but can't be loaded - fail closed for security
+                        tracing::error!(error = ?e, "2FA config exists but failed to load, denying access");
+                        true
+                    }
+                }
+            }
+            Err(e) => {
+                // Can't create storage - fail closed for security
+                tracing::error!(error = ?e, "Failed to create 2FA storage, denying access");
+                true
+            }
+        }
     }
 
     /// Check if 2FA is enabled (stub when feature disabled)
