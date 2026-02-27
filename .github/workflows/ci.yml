@@ -206,7 +206,7 @@ jobs:
           - "web-ui"
           - "gateway"
           - "full"
-          - "default""
+          - "default"
     
     steps:
       - uses: actions/checkout@v6

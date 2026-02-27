@@ -75,7 +75,10 @@ impl Tool for WebSearchTool {
             .header("Accept", "application/json")
             .header("Accept-Encoding", "gzip")
             .header("X-Subscription-Token", &self.api_key)
-            .query(&[("q", query.as_str()), ("count", &self.max_results.to_string())])
+            .query(&[
+                ("q", query.as_str()),
+                ("count", &self.max_results.to_string()),
+            ])
             .send()
             .await;
 
