@@ -1997,19 +1997,23 @@ async fn approvals_page(State(state): State<Arc<AppState>>) -> Html<String> {
 
     let body = format!(
         r#"
-        <main class="main">
-            <div class="page-header">
-                <h1>Approvals</h1>
-                <p class="page-desc">Manage command approval workflow for shell commands</p>
-            </div>
-
-            <div class="content-grid">
-                <!-- Approval Configuration -->
-                <section class="card">
-                    <div class="card-header">
-                        <h2>Configuration</h2>
+        <main class="content">
+            <div class="content-inner">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">Approvals</h1>
+                        <span class="badge badge-info" id="pending-count">0 pending</span>
                     </div>
-                    <div class="card-body">
+                    <p class="page-desc">Manage command approval workflow for shell commands</p>
+                </div>
+
+                <div class="content-grid">
+                    <!-- Approval Configuration -->
+                    <section class="card">
+                        <div class="card-header">
+                        <h2>Configuration</h2>
+                        </div>
+                        <div class="card-body">
                         <div class="form-group">
                             <label>Autonomy Level</label>
                             <select id="approval-level" class="input">
@@ -2030,36 +2034,36 @@ async fn approvals_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     </div>
                 </section>
 
-                <!-- Pending Approvals -->
-                <section class="card">
-                    <div class="card-header">
-                        <h2>Pending Approvals</h2>
-                        <span class="badge" id="pending-count">0</span>
-                    </div>
-                    <div class="card-body">
-                        <div id="pending-approvals-list">
-                            <div class="empty-state">
-                                <p>No pending approvals</p>
-                                <p class="muted">Commands requiring approval will appear here</p>
+                    <!-- Pending Approvals -->
+                    <section class="card">
+                        <div class="card-header">
+                            <h2>Pending Approvals</h2>
+                            <span class="badge" id="pending-approvals-count">0</span>
+                        </div>
+                        <div class="card-body">
+                            <div id="pending-approvals-list" class="scrollable-list">
+                                <div class="empty-state">
+                                    <p>No pending approvals</p>
+                                    <p class="muted">Commands requiring approval will appear here</p>
+                                </div>
                             </div>
                         </div>
-                    </div>
-                </section>
+                    </section>
 
-                <!-- Audit Log -->
-                <section class="card">
-                    <div class="card-header">
-                        <h2>Recent Activity</h2>
-                    </div>
-                    <div class="card-body">
-                        <div id="approval-audit-log" class="item-list">
-                            <div class="empty-state">
-                                <p>No activity yet</p>
+                    <!-- Audit Log -->
+                    <section class="card">
+                        <div class="card-header">
+                            <h2>Recent Activity</h2>
+                        </div>
+                        <div class="card-body">
+                            <div id="approval-audit-log" class="scrollable-list">
+                                <div class="empty-state">
+                                    <p>No activity yet</p>
+                                </div>
                             </div>
                         </div>
-                    </div>
-                </section>
-
+                    </section>
+                </div>
             </div>
         </main>"#,
         full_selected = if level == "full" { "selected" } else { "" },

@@ -241,7 +241,7 @@ impl Tool for VaultTool {
                     Some(value) => {
                         tracing::info!(key = %key, "Retrieved secret from vault");
                         Ok(ToolResult::success(format!(
-                            "vault://{key} = {value}\n\n\
+                            "**Secret value:**\n```\n{value}\n```\n\n\
                              ⚠️ This is sensitive data. Show it to the user if they asked, \
                              but NEVER store this value in memory, history, or conversation summaries."
                         )))
