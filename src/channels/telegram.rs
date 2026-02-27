@@ -176,7 +176,7 @@ impl TelegramChannel {
                     .parse_mode(ParseMode::Html)
                     .build();
 
-                if let Err(_) = api.send_message(&params).await {
+                if api.send_message(&params).await.is_err() {
                     // Fallback to plain text
                     let params = SendMessageParams::builder()
                         .chat_id(ChatId::Integer(chat_id))
