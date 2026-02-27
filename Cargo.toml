@@ -141,7 +141,7 @@ eventsource-stream = { version = "0.2", optional = true }
 pin-project-lite = { version = "0.2", optional = true }
 
 # --- Telegram channel ---
-teloxide = { version = "0.13", features = ["macros"], optional = true }
+teloxide = { version = "0.17", features = ["macros"], optional = true }
 reqwest-011 = { package = "reqwest", version = "0.11", features = ["json"], optional = true }
 
 # --- Discord channel ---
