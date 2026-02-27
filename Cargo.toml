@@ -168,7 +168,7 @@ rmcp = { version = "0.15", features = ["client", "transport-child-process"], opt
 
 # --- Vault 2FA ---
 totp-rs = { version = "5", features = ["qr"], optional = true }
-rand = { version = "0.8", optional = true }
+rand = { version = "0.10", optional = true }
 
 # --- Email channel ---
 lettre = { version = "0.11", optional = true, default-features = false, features = ["builder", "smtp-transport", "rustls-tls"] }
