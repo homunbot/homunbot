@@ -164,7 +164,7 @@ usearch = { version = "2", optional = true }
 chromiumoxide = { version = "0.9", optional = true }
 
 # --- MCP client ---
-rmcp = { version = "0.15", features = ["client", "transport-child-process"], optional = true }
+rmcp = { version = "0.16", features = ["client", "transport-child-process"], optional = true }
 
 # --- Vault 2FA ---
 totp-rs = { version = "5", features = ["qr"], optional = true }
