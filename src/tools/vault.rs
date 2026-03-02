@@ -43,10 +43,12 @@ impl VaultTool {
         SecretKey::custom(&format!("{VAULT_PREFIX}{name}"))
     }
 
-    /// Check if 2FA is enabled
+    /// Check if 2FA is enabled.
+    ///
     /// Returns true if:
     /// - 2FA config exists and is enabled
     /// - 2FA config exists but can't be loaded (fail closed for security)
+    ///
     /// Returns false only if 2FA config doesn't exist (not configured)
     #[cfg(feature = "vault-2fa")]
     fn is_2fa_enabled() -> bool {

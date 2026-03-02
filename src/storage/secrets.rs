@@ -407,6 +407,61 @@ impl EncryptedSecrets {
     pub fn path(&self) -> &std::path::Path {
         &self.path
     }
+
+    /// Encrypt arbitrary data using the same master key as secrets.enc.
+    /// Returns a JSON string containing nonce + ciphertext (both base64).
+    pub fn encrypt_data(&self, plaintext: &[u8]) -> Result<String> {
+        let master_key = self.get_master_key()?;
+
+        let mut nonce_bytes = [0u8; 12];
+        self.rng
+            .fill(&mut nonce_bytes)
+            .map_err(|e| SecretsError::EncryptionError(e.to_string()))?;
+
+        let unbound_key = ring::aead::UnboundKey::new(&AES_256_GCM, &*master_key)
+            .map_err(|e| SecretsError::EncryptionError(format!("{:?}", e)))?;
+        let mut sealing_key = SealingKey::new(unbound_key, SingleNonce::new(nonce_bytes));
+
+        let mut ciphertext = plaintext.to_vec();
+        sealing_key
+            .seal_in_place_append_tag(Aad::empty(), &mut ciphertext)
+            .map_err(|e| SecretsError::EncryptionError(format!("{:?}", e)))?;
+
+        let file_data = SecretsFile {
+            version: 1,
+            nonce: BASE64.encode(nonce_bytes),
+            ciphertext: BASE64.encode(&ciphertext),
+        };
+
+        serde_json::to_string(&file_data).context("Failed to serialize encrypted data")
+    }
+
+    /// Decrypt data previously encrypted with `encrypt_data()`.
+    pub fn decrypt_data(&self, encrypted_json: &str) -> Result<Vec<u8>> {
+        let master_key = self.get_master_key()?;
+
+        let file_data: SecretsFile =
+            serde_json::from_str(encrypted_json).context("Failed to parse encrypted data")?;
+
+        let mut nonce_bytes = [0u8; 12];
+        BASE64
+            .decode_slice(&file_data.nonce, &mut nonce_bytes)
+            .context("Failed to decode nonce")?;
+
+        let mut ciphertext = BASE64
+            .decode(&file_data.ciphertext)
+            .context("Failed to decode ciphertext")?;
+
+        let unbound_key = ring::aead::UnboundKey::new(&AES_256_GCM, &*master_key)
+            .map_err(|e| SecretsError::DecryptionError(format!("{:?}", e)))?;
+        let mut opening_key = OpeningKey::new(unbound_key, SingleNonce::new(nonce_bytes));
+
+        let plaintext = opening_key
+            .open_in_place(Aad::empty(), &mut ciphertext)
+            .map_err(|e| SecretsError::DecryptionError(format!("{:?}", e)))?;
+
+        Ok(plaintext.to_vec())
+    }
 }
 
 /// Global secrets instance (lazy-initialized)
@@ -464,6 +519,38 @@ mod tests {
         let loaded = storage.load().unwrap();
 
         assert_eq!(loaded.get("test.key"), Some(&"secret_value".to_string()));
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_data() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("secrets.enc");
+        let storage = EncryptedSecrets::test_new(path).unwrap();
+
+        let plaintext = b"sensitive 2FA config data";
+        let encrypted = storage.encrypt_data(plaintext).unwrap();
+
+        // Encrypted output should be valid JSON and different from plaintext
+        assert!(encrypted.contains("nonce"));
+        assert!(encrypted.contains("ciphertext"));
+        assert!(!encrypted.contains("sensitive"));
+
+        let decrypted = storage.decrypt_data(&encrypted).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_data_roundtrip_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("secrets.enc");
+        let storage = EncryptedSecrets::test_new(path).unwrap();
+
+        // Simulate 2FA config JSON
+        let json = r#"{"version":1,"enabled":true,"totp_secret":"JBSWY3DPEHPK3PXP"}"#;
+        let encrypted = storage.encrypt_data(json.as_bytes()).unwrap();
+        let decrypted = storage.decrypt_data(&encrypted).unwrap();
+
+        assert_eq!(String::from_utf8(decrypted).unwrap(), json);
     }
 
     #[test]

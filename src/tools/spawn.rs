@@ -12,13 +12,25 @@ use crate::agent::subagent::SubagentManager;
 /// Actions:
 /// - spawn: Start a new background task
 /// - list: Show running tasks
+///
+/// Uses a late-bound manager via `OnceCell` to break the circular dependency
+/// between AgentLoop (owns ToolRegistry) and SubagentManager (needs Arc<AgentLoop>).
 pub struct SpawnTool {
-    manager: Arc<SubagentManager>,
+    manager: Arc<tokio::sync::OnceCell<Arc<SubagentManager>>>,
 }
 
 impl SpawnTool {
-    pub fn new(manager: Arc<SubagentManager>) -> Self {
+    /// Create a new SpawnTool with a shared cell for late-binding the SubagentManager.
+    /// Call this before creating AgentLoop, then set the manager after.
+    pub fn new(manager: Arc<tokio::sync::OnceCell<Arc<SubagentManager>>>) -> Self {
         Self { manager }
+    }
+
+    fn get_manager(&self) -> Result<&SubagentManager> {
+        self.manager
+            .get()
+            .map(|m| m.as_ref())
+            .ok_or_else(|| anyhow::anyhow!("Subagent manager not initialized yet"))
     }
 }
 
@@ -60,6 +72,11 @@ impl Tool for SpawnTool {
             .and_then(|v| v.as_str())
             .unwrap_or("list");
 
+        let manager = match self.get_manager() {
+            Ok(m) => m,
+            Err(e) => return Ok(ToolResult::error(format!("{e}"))),
+        };
+
         let result = match action {
             "spawn" => {
                 let description = args
@@ -71,8 +88,7 @@ impl Tool for SpawnTool {
                     None => return Ok(ToolResult::error("Missing 'message' parameter")),
                 };
 
-                match self
-                    .manager
+                match manager
                     .spawn(description, message, &ctx.channel, &ctx.chat_id)
                     .await
                 {
@@ -83,7 +99,7 @@ impl Tool for SpawnTool {
                 }
             }
             "list" => {
-                let running: Vec<(String, String)> = self.manager.list_running().await;
+                let running: Vec<(String, String)> = manager.list_running().await;
                 if running.is_empty() {
                     ToolResult::success("No background tasks running.")
                 } else {
