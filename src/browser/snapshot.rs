@@ -16,6 +16,10 @@
 
 use anyhow::{Context, Result};
 use chromiumoxide::cdp::browser_protocol::accessibility::{AxNode, AxValue, GetFullAxTreeParams};
+use chromiumoxide::cdp::browser_protocol::dom::{
+    BackendNodeId, GetDocumentParams, PushNodesByBackendIdsToFrontendParams,
+    SetAttributeValueParams,
+};
 use chromiumoxide::page::Page;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -182,7 +186,13 @@ impl PageSnapshot {
         let ax_nodes = Self::fetch_accessibility_tree(page).await?;
 
         // Process the tree into our format
-        let (elements, role_refs) = Self::process_accessibility_tree(&ax_nodes, &options);
+        let (elements, role_refs, backend_map) =
+            Self::process_accessibility_tree(&ax_nodes, &options);
+
+        // Tag DOM elements with data-homun-ref attributes for reliable resolution
+        if let Err(e) = Self::tag_elements_in_dom(page, &backend_map).await {
+            tracing::warn!(error = ?e, "Failed to tag DOM elements (element resolution will use fallback)");
+        }
 
         // Build text snapshot
         let text_snapshot = Self::format_accessibility_tree(&url, &title, &description, &elements);
@@ -236,11 +246,78 @@ impl PageSnapshot {
         Ok(result.into_value().ok().flatten())
     }
 
-    /// Process the accessibility tree into our format
+    /// Tag DOM elements with `data-homun-ref` attributes for reliable element resolution.
+    ///
+    /// Uses CDP to:
+    /// 1. Clean up old tags
+    /// 2. Convert BackendNodeIds (from AX tree) to frontend NodeIds
+    /// 3. Set `data-homun-ref="eN"` on each element
+    async fn tag_elements_in_dom(
+        page: &Page,
+        backend_map: &HashMap<String, BackendNodeId>,
+    ) -> Result<()> {
+        if backend_map.is_empty() {
+            return Ok(());
+        }
+
+        // Step 0: Remove old data-homun-ref attributes
+        let _ = page
+            .evaluate(
+                "document.querySelectorAll('[data-homun-ref]').forEach(el => el.removeAttribute('data-homun-ref'))",
+            )
+            .await;
+
+        // Step 1: Initialize DOM agent (required before pushNodesByBackendIdsToFrontend)
+        page.execute(GetDocumentParams::builder().depth(0).build())
+            .await
+            .context("Failed to initialize DOM agent via getDocument")?;
+
+        // Step 2: Collect ref_ids and their backend IDs in order
+        let ref_ids: Vec<&String> = backend_map.keys().collect();
+        let backend_ids: Vec<BackendNodeId> =
+            ref_ids.iter().map(|k| backend_map[*k]).collect();
+
+        // Step 3: Batch convert BackendNodeId → NodeId (single CDP call)
+        let push_result = page
+            .execute(PushNodesByBackendIdsToFrontendParams::new(backend_ids))
+            .await
+            .context("Failed to push backend nodes to frontend")?;
+
+        let node_ids = &push_result.result.node_ids;
+
+        // Step 4: Set data-homun-ref attribute on each element
+        let mut tagged = 0;
+        for (i, node_id) in node_ids.iter().enumerate() {
+            // NodeId of 0 means the node couldn't be resolved (e.g., detached)
+            if *node_id.inner() == 0 {
+                continue;
+            }
+            let ref_id = ref_ids[i];
+            let params = SetAttributeValueParams::new(
+                *node_id,
+                "data-homun-ref",
+                ref_id.as_str(),
+            );
+            if page.execute(params).await.is_ok() {
+                tagged += 1;
+            }
+        }
+
+        tracing::debug!(total = backend_map.len(), tagged, "Tagged DOM elements with data-homun-ref");
+        Ok(())
+    }
+
+    /// Process the accessibility tree into our format.
+    /// Returns (elements, role_refs, backend_node_map) where backend_node_map
+    /// maps ref_id → BackendNodeId for DOM tagging.
     fn process_accessibility_tree(
         nodes: &[AxNode],
         options: &SnapshotOptions,
-    ) -> (Vec<ElementRef>, HashMap<String, RoleRef>) {
+    ) -> (
+        Vec<ElementRef>,
+        HashMap<String, RoleRef>,
+        HashMap<String, BackendNodeId>,
+    ) {
         // Build node lookup
         let by_id: HashMap<String, &AxNode> = nodes
             .iter()
@@ -261,12 +338,13 @@ impl PageSnapshot {
 
         let root_id = match root {
             Some(r) => r.node_id.as_ref().to_string(),
-            None => return (Vec::new(), HashMap::new()),
+            None => return (Vec::new(), HashMap::new(), HashMap::new()),
         };
 
         // Track role+name combinations for nth assignment
         let mut role_name_counts: HashMap<(String, Option<String>), usize> = HashMap::new();
         let mut role_refs: HashMap<String, RoleRef> = HashMap::new();
+        let mut backend_map: HashMap<String, BackendNodeId> = HashMap::new();
         let mut elements: Vec<ElementRef> = Vec::new();
         let mut ref_counter = 0;
 
@@ -373,6 +451,11 @@ impl PageSnapshot {
                 };
                 role_refs.insert(ref_id.clone(), role_ref.clone());
 
+                // Store backend DOM node ID for element tagging
+                if let Some(backend_id) = &node.backend_dom_node_id {
+                    backend_map.insert(ref_id.clone(), *backend_id);
+                }
+
                 // Generate CSS selector as fallback
                 let selector = Self::generate_selector(&role_lower, &name, nth);
 
@@ -397,7 +480,7 @@ impl PageSnapshot {
         // Remove nth from non-duplicates (like OpenClaw does)
         Self::cleanup_nth_from_non_duplicates(&mut role_refs, &role_name_counts);
 
-        (elements, role_refs)
+        (elements, role_refs, backend_map)
     }
 
     /// Extract string value from AxValue

@@ -9,6 +9,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use chromiumoxide::cdp::browser_protocol::input::{
+    DispatchKeyEventParams, DispatchKeyEventType, DispatchMouseEventParams, DispatchMouseEventType,
+};
 use chromiumoxide::page::Page;
 use serde_json::Value;
 use tokio::sync::RwLock;
@@ -75,22 +78,54 @@ impl BrowserTool {
         ref_id: &str,
         chat_id: &str,
     ) -> Result<String> {
-        // Get cached role_refs
+        // Verify the ref exists in our cache
         let role_refs = self.get_cached_role_refs(chat_id).await.ok_or_else(|| {
             anyhow::anyhow!(
                 "No cached role_refs for this session. Take a snapshot first to get element refs."
             )
         })?;
 
-        let role_ref = role_refs.get(ref_id)
-            .ok_or_else(|| anyhow::anyhow!(
+        let role_ref = role_refs.get(ref_id).ok_or_else(|| {
+            anyhow::anyhow!(
                 "Ref '{}' not found in cached snapshot. Take a new snapshot to get current element refs.",
                 ref_id
-            ))?;
+            )
+        })?;
 
-        tracing::debug!(ref_id = %ref_id, role = %role_ref.role, name = ?role_ref.name, nth = ?role_ref.nth, "Finding element by role");
+        // Primary: find by data-homun-ref attribute (set during snapshot via CDP)
+        let attr_selector = format!("[data-homun-ref='{}']", ref_id);
+        let check_js = format!(
+            r#"!!document.querySelector("[data-homun-ref='{}']")"#,
+            ref_id
+        );
+        let exists: bool = page
+            .evaluate(check_js.as_str())
+            .await
+            .ok()
+            .and_then(|r| r.into_value().ok())
+            .unwrap_or(false);
 
-        // Build JavaScript to find element by role and name
+        if exists {
+            return Ok(attr_selector);
+        }
+
+        // Fallback: role-based JS resolution (for pages that navigated since snapshot)
+        tracing::warn!(
+            ref_id = %ref_id,
+            role = %role_ref.role,
+            name = ?role_ref.name,
+            "data-homun-ref not found, falling back to role-based resolution"
+        );
+        Self::find_element_by_role_fallback(page, ref_id, role_ref).await
+    }
+
+    /// Fallback element resolution using role + accessible name matching.
+    /// Used when `data-homun-ref` attributes are not present (e.g., after navigation).
+    async fn find_element_by_role_fallback(
+        page: &Page,
+        ref_id: &str,
+        role_ref: &RoleRef,
+    ) -> Result<String> {
         let role = &role_ref.role;
         let name = role_ref.name.as_deref().unwrap_or("");
         let nth = role_ref.nth.unwrap_or(0);
@@ -102,11 +137,10 @@ impl BrowserTool {
                 const name = "{name_escaped}";
                 const nth = {nth};
 
-                // Map ARIA roles to HTML elements
                 const roleToElement = {{
                     "button": ["button", "[role='button']", "input[type='button']", "input[type='submit']"],
                     "link": ["a[href]", "[role='link']"],
-                    "textbox": ["input:not([type])", "input[type='text']", "input[type='email']", "input[type='password']", "input[type='search']", "input[type='tel']", "input[type='url']", "textarea", "[role='textbox']"],
+                    "textbox": ["input:not([type])", "input[type='text']", "input[type='email']", "input[type='password']", "input[type='search']", "input[type='tel']", "input[type='url']", "textarea", "[role='textbox']", "[contenteditable='true']", "[contenteditable='']"],
                     "checkbox": ["input[type='checkbox']", "[role='checkbox']"],
                     "radio": ["input[type='radio']", "[role='radio']"],
                     "combobox": ["select", "[role='combobox']", "[role='listbox']"],
@@ -122,7 +156,7 @@ impl BrowserTool {
                     "treeitem": ["[role='treeitem']"],
                     "option": ["option", "[role='option']"],
                     "heading": ["h1", "h2", "h3", "h4", "h5", "h6", "[role='heading']"],
-                    "img": ["img", "[role='img']"],
+                    "img": ["img[alt]", "[role='img']"],
                     "listitem": ["li", "[role='listitem']"],
                     "cell": ["td", "th", "[role='cell']", "[role='gridcell']"],
                     "gridcell": ["td", "[role='gridcell']"],
@@ -137,91 +171,86 @@ impl BrowserTool {
                     try {{
                         const elements = document.querySelectorAll(sel);
                         for (const el of elements) {{
-                            // Skip hidden elements
                             const style = window.getComputedStyle(el);
                             if (style.display === 'none' || style.visibility === 'hidden') continue;
                             if (el.offsetWidth < 5 || el.offsetHeight < 5) continue;
-
-                            candidates.push(el);
+                            if (candidates.indexOf(el) === -1) candidates.push(el);
                         }}
                     }} catch (e) {{}}
                 }}
 
-                // Filter by name if provided
+                // Compute accessible name following W3C AccName spec (simplified)
+                function getAccessibleName(el) {{
+                    // 1. aria-labelledby
+                    const labelledBy = el.getAttribute('aria-labelledby');
+                    if (labelledBy) {{
+                        const names = labelledBy.split(/\s+/).map(id => {{
+                            const ref = document.getElementById(id);
+                            return ref ? ref.textContent.trim() : '';
+                        }}).filter(Boolean);
+                        if (names.length) return names.join(' ');
+                    }}
+                    // 2. aria-label
+                    const ariaLabel = el.getAttribute('aria-label');
+                    if (ariaLabel) return ariaLabel.trim();
+                    // 3. Associated <label> (for inputs)
+                    if (el.id) {{
+                        const label = document.querySelector(`label[for="${{CSS.escape(el.id)}}"]`);
+                        if (label) return label.textContent.trim();
+                    }}
+                    if (el.closest && el.closest('label')) {{
+                        const label = el.closest('label');
+                        // Get label text excluding the input itself
+                        const clone = label.cloneNode(true);
+                        const inputs = clone.querySelectorAll('input,select,textarea');
+                        inputs.forEach(i => i.remove());
+                        const text = clone.textContent.trim();
+                        if (text) return text;
+                    }}
+                    // 4. Special attributes
+                    if (el.getAttribute('alt')) return el.getAttribute('alt').trim();
+                    if (el.getAttribute('title')) return el.getAttribute('title').trim();
+                    if (el.getAttribute('placeholder')) return el.getAttribute('placeholder').trim();
+                    // 5. Text content (normalized)
+                    const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+                    return text;
+                }}
+
                 let matches = candidates;
                 if (name) {{
+                    const normalizedName = name.replace(/\s+/g, ' ').trim().toLowerCase();
                     matches = candidates.filter(el => {{
-                        // Get accessible name from various sources
-                        const accessibleName =
-                            el.getAttribute('aria-label') ||
-                            el.getAttribute('title') ||
-                            el.getAttribute('alt') ||
-                            el.getAttribute('placeholder') ||
-                            el.getAttribute('value') ||
-                            el.textContent ||
-                            el.innerText ||
-                            "";
-
-                        return accessibleName.toLowerCase().includes(name.toLowerCase());
+                        const accName = getAccessibleName(el).replace(/\s+/g, ' ').trim().toLowerCase();
+                        return accName === normalizedName;
                     }});
+                    // Exact match failed — try substring as last resort
+                    if (matches.length === 0) {{
+                        matches = candidates.filter(el => {{
+                            const accName = getAccessibleName(el).replace(/\s+/g, ' ').trim().toLowerCase();
+                            return accName.includes(normalizedName) || normalizedName.includes(accName);
+                        }});
+                    }}
                 }}
 
-                // Select by nth index
-                if (matches.length === 0) {{
-                    return null;
-                }}
+                if (matches.length === 0) return null;
 
                 const targetEl = matches[nth] || matches[0];
                 if (!targetEl) return null;
 
-                // Generate a unique CSS selector for this element
-                // Try ID first
-                if (targetEl.id) {{
-                    return '#' + CSS.escape(targetEl.id);
-                }}
+                // Tag this element so future lookups work via data attribute
+                targetEl.setAttribute('data-homun-ref', '{ref_id}');
 
-                // Build path selector
-                const path = [];
-                let current = targetEl;
-                while (current && current !== document.body) {{
-                    let sel = current.tagName.toLowerCase();
+                // Generate a CSS selector
+                if (targetEl.id) return '#' + CSS.escape(targetEl.id);
 
-                    // Add role if available
-                    if (current.getAttribute('role')) {{
-                        sel += `[role="${{current.getAttribute('role')}}"]`;
-                    }}
-
-                    // Add unique classes (limited)
-                    if (current.className && typeof current.className === 'string') {{
-                        const classes = current.className.split(' ')
-                            .filter(c => c && !c.includes(':') && c.length < 20)
-                            .slice(0, 2);
-                        if (classes.length > 0) {{
-                            sel += '.' + classes.map(c => CSS.escape(c)).join('.');
-                        }}
-                    }}
-
-                    // Add index if needed
-                    const siblings = current.parentElement ?
-                        Array.from(current.parentElement.children).filter(c => c.tagName === current.tagName) : [];
-                    if (siblings.length > 1) {{
-                        const idx = siblings.indexOf(current) + 1;
-                        sel += `:nth-of-type(${{idx}})`;
-                    }}
-
-                    path.unshift(sel);
-                    current = current.parentElement;
-
-                    // Limit path depth
-                    if (path.length >= 4) break;
-                }}
-
-                return path.join(' > ');
+                // Use the data attribute we just set
+                return "[data-homun-ref='{ref_id}']";
             }})();
             "#,
             role = role,
-            name_escaped = name.replace('\\', "\\\\").replace('"', "\\\""),
-            nth = nth
+            name_escaped = name.replace('\\', "\\\\").replace('"', "\\\"").replace('\'', "\\'"),
+            nth = nth,
+            ref_id = ref_id,
         );
 
         let result = page
@@ -231,10 +260,12 @@ impl BrowserTool {
 
         let selector: Option<String> = result.into_value().context("Failed to parse selector")?;
 
-        selector.ok_or_else(|| anyhow::anyhow!(
-            "Element '{}' (role={}, name={}) not found on page. The page may have changed - take a new snapshot.",
-            ref_id, role, name
-        ))
+        selector.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Element '{}' (role={}, name={}) not found on page. The page may have changed - take a new snapshot.",
+                ref_id, role, name
+            )
+        })
     }
 
     /// Resolve a vault:// reference to its actual value.
@@ -254,7 +285,7 @@ impl BrowserTool {
             .ok()
             .and_then(|s| s.load().ok())
             .map(|c| c.enabled)
-            .unwrap_or(false);
+            .unwrap_or(true);
 
         if twofa_enabled {
             // Verify session
@@ -284,13 +315,91 @@ impl BrowserTool {
         }
     }
 
+    /// Validate URL to prevent SSRF attacks.
+    ///
+    /// Blocks navigation to:
+    /// - `file://` URLs (local filesystem access)
+    /// - `localhost` / `127.0.0.1` / `::1` (loopback)
+    /// - Cloud metadata endpoints (169.254.169.254)
+    /// - Private IP ranges (10.x, 172.16-31.x, 192.168.x)
+    fn validate_url(url: &str) -> Result<()> {
+        let url_lower = url.to_lowercase();
+
+        // Block file:// protocol
+        if url_lower.starts_with("file://") {
+            return Err(anyhow::anyhow!(
+                "Navigation to file:// URLs is blocked for security."
+            ));
+        }
+
+        // Block javascript: protocol
+        if url_lower.starts_with("javascript:") {
+            return Err(anyhow::anyhow!(
+                "Navigation to javascript: URLs is blocked for security."
+            ));
+        }
+
+        // Parse the URL to check the host
+        if let Ok(parsed) = reqwest::Url::parse(url) {
+            if let Some(host) = parsed.host_str() {
+                let host_lower = host.to_lowercase();
+
+                // Block localhost variants
+                if host_lower == "localhost"
+                    || host_lower == "127.0.0.1"
+                    || host_lower == "::1"
+                    || host_lower == "0.0.0.0"
+                {
+                    return Err(anyhow::anyhow!(
+                        "Navigation to localhost ({}) is blocked for security.",
+                        host
+                    ));
+                }
+
+                // Block cloud metadata endpoints
+                if host_lower == "169.254.169.254"
+                    || host_lower == "metadata.google.internal"
+                {
+                    return Err(anyhow::anyhow!(
+                        "Navigation to cloud metadata endpoint ({}) is blocked for security.",
+                        host
+                    ));
+                }
+
+                // Block private IP ranges
+                if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                    let is_private = match ip {
+                        std::net::IpAddr::V4(v4) => {
+                            v4.is_loopback()
+                                || v4.is_private()
+                                || v4.is_link_local()
+                                || v4.octets()[0] == 169 && v4.octets()[1] == 254
+                        }
+                        std::net::IpAddr::V6(v6) => v6.is_loopback(),
+                    };
+                    if is_private {
+                        return Err(anyhow::anyhow!(
+                            "Navigation to private/internal IP ({}) is blocked for security.",
+                            ip
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Execute navigate action.
     async fn execute_navigate(&self, page: &Page, url: &str, timeout_secs: u64) -> Result<String> {
-        // Use tokio::time::timeout for navigation
+        // Validate URL to prevent SSRF
+        Self::validate_url(url)?;
+
+        // page.goto() already waits for the load event internally.
+        // The old code had a redundant page.wait_for_navigation() after goto()
+        // which caused double-waits and potential hangs.
         let result = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
-            page.goto(url).await?;
-            // Wait for navigation to complete properly
-            page.wait_for_navigation().await
+            page.goto(url).await
         })
         .await
         .context("Navigation timeout")?;
@@ -313,9 +422,9 @@ impl BrowserTool {
         take_screenshot: bool,
         screenshot_dir: &std::path::Path,
     ) -> Result<PageSnapshot> {
-        // Collect console messages and errors from the page
-        let manager = global_browser_manager();
-        manager.collect_page_messages(page, chat_id).await;
+        // Console/error/network messages are captured automatically via CDP event
+        // listeners (set up in BrowserManager::setup_cdp_listeners), so no
+        // polling or JS injection is needed here.
 
         // Get text-based accessibility tree snapshot
         let snapshot = PageSnapshot::from_page(page).await?;
@@ -547,7 +656,7 @@ impl BrowserTool {
                     let js = format!(
                         r#"
                         (function() {{
-                            const el = document.querySelector("[data-ref='{}'], [aria-label*='{}']");
+                            const el = document.querySelector("[data-homun-ref='{}']") || document.querySelector("[aria-label*='{}']");
                             if (!el) return false;
                             const style = window.getComputedStyle(el);
                             return style.display !== 'none' &&
@@ -577,7 +686,7 @@ impl BrowserTool {
                     let js = format!(
                         r#"
                         (function() {{
-                            const el = document.querySelector("[data-ref='{}'], [aria-label*='{}']");
+                            const el = document.querySelector("[data-homun-ref='{}']") || document.querySelector("[aria-label*='{}']");
                             if (!el) return true;  // Not in DOM = hidden
                             const style = window.getComputedStyle(el);
                             return style.display === 'none' ||
@@ -607,7 +716,7 @@ impl BrowserTool {
                     let js = format!(
                         r#"
                         (function() {{
-                            const el = document.querySelector("[data-ref='{}'], [aria-label*='{}']");
+                            const el = document.querySelector("[data-homun-ref='{}']") || document.querySelector("[aria-label*='{}']");
                             if (!el) return false;
                             return !el.disabled;
                         }})();
@@ -729,31 +838,38 @@ impl BrowserTool {
         Ok(format!("Scrolled {}", direction))
     }
 
-    /// Execute hover action.
+    /// Execute hover action via CDP Input.dispatchMouseEvent.
+    ///
+    /// Uses CDP `mouseMoved` events to move the virtual cursor to the element center.
+    /// This triggers CSS `:hover` states, tooltips, and dropdown menus — unlike the
+    /// old JS `MouseEvent('mouseover')` which only dispatched a synthetic event.
     async fn execute_hover(&self, page: &Page, ref_id: &str, chat_id: &str) -> Result<String> {
         let selector = self.find_element_by_role(page, ref_id, chat_id).await?;
 
-        // Use JavaScript to simulate hover
+        // Get element center coordinates via JS
         let js = format!(
             r#"
             (function() {{
                 const el = document.querySelector("{}");
-                if (el) {{
-                    const event = new MouseEvent('mouseover', {{ bubbles: true }});
-                    el.dispatchEvent(event);
-                    return true;
-                }}
-                return false;
+                if (!el) return null;
+                const rect = el.getBoundingClientRect();
+                return {{ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }};
             }})();
             "#,
             selector
         );
         let result = page.evaluate(js.as_str()).await?;
-        let success: bool = result.into_value()?;
+        let coords: Option<serde_json::Value> = result.into_value()?;
 
-        if !success {
-            return Err(anyhow::anyhow!("Element not found for hover"));
-        }
+        let coords = coords.ok_or_else(|| anyhow::anyhow!("Element not found for hover"))?;
+        let x = coords.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let y = coords.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+        // Move the virtual cursor via CDP (triggers CSS :hover, tooltips, etc.)
+        let hover_cmd = DispatchMouseEventParams::new(DispatchMouseEventType::MouseMoved, x, y);
+        page.execute(hover_cmd)
+            .await
+            .context("CDP mouseMoved failed")?;
 
         Ok(format!("Hovered over element [{}]", ref_id))
     }
@@ -1252,10 +1368,11 @@ impl BrowserTool {
         Ok(output)
     }
 
-    /// Execute press action - press a single key.
+    /// Execute press action - press a single key via CDP Input.dispatchKeyEvent.
     ///
-    /// Supported keys: Enter, Escape, Tab, Backspace, Delete, ArrowUp, ArrowDown,
-    /// ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, Space, or any single character.
+    /// Uses the CDP protocol directly (not JS KeyboardEvent) so events are "trusted"
+    /// and work with sites that check `event.isTrusted`, CSS :focus handling, and
+    /// framework event delegation (React, Vue, etc.).
     async fn execute_press(&self, page: &Page, key: &str) -> Result<String> {
         // Normalize key name
         let key_lower = key.to_lowercase();
@@ -1280,41 +1397,76 @@ impl BrowserTool {
             _ => key,
         };
 
-        // Use CDP Input.dispatchKeyEvent
-        let js = format!(
-            r#"
-            (function() {{
-                const key = "{}";
-                const keyCodeMap = {{
-                    "Enter": 13, "Escape": 27, "Tab": 9, "Backspace": 8,
-                    "Delete": 46, "ArrowUp": 38, "ArrowDown": 40,
-                    "ArrowLeft": 37, "ArrowRight": 39, "Home": 36, "End": 35,
-                    "PageUp": 33, "PageDown": 34, " ": 32
-                }};
+        // Map key names to virtual key codes (Windows VK codes used by CDP)
+        let key_code: i64 = match key_normalized {
+            "Enter" => 13,
+            "Escape" => 27,
+            "Tab" => 9,
+            "Backspace" => 8,
+            "Delete" => 46,
+            "ArrowUp" => 38,
+            "ArrowDown" => 40,
+            "ArrowLeft" => 37,
+            "ArrowRight" => 39,
+            "Home" => 36,
+            "End" => 35,
+            "PageUp" => 33,
+            "PageDown" => 34,
+            " " => 32,
+            c if c.len() == 1 => c.chars().next().unwrap().to_ascii_uppercase() as i64,
+            _ => 0,
+        };
 
-                const eventInit = {{
-                    key: key,
-                    code: key.length === 1 ? "Key" + key.toUpperCase() : key,
-                    keyCode: keyCodeMap[key] || key.charCodeAt(0),
-                    which: keyCodeMap[key] || key.charCodeAt(0),
-                    bubbles: true,
-                    cancelable: true
-                }};
+        // Determine the "code" attribute (physical key location)
+        let code = match key_normalized {
+            c if c.len() == 1 && c != " " => format!("Key{}", c.to_uppercase()),
+            " " => "Space".to_string(),
+            _ => key_normalized.to_string(),
+        };
 
-                // Dispatch on the active element or document
-                const target = document.activeElement || document.body;
-                target.dispatchEvent(new KeyboardEvent("keydown", eventInit));
-                target.dispatchEvent(new KeyboardEvent("keypress", eventInit));
-                target.dispatchEvent(new KeyboardEvent("keyup", eventInit));
+        // For printable characters, set the text field
+        let text = if key_normalized.len() == 1 {
+            Some(key_normalized.to_string())
+        } else if key_normalized == "Enter" {
+            Some("\r".to_string())
+        } else {
+            None
+        };
 
-                return {{ pressed: true, key: key }};
-            }})();
-        "#,
-            key_normalized.replace("\"", "\\\"")
-        );
+        // keyDown event
+        let mut key_down = DispatchKeyEventParams::builder()
+            .r#type(DispatchKeyEventType::KeyDown)
+            .key(key_normalized.to_string())
+            .code(code.clone())
+            .windows_virtual_key_code(key_code)
+            .native_virtual_key_code(key_code);
 
-        page.evaluate(js.as_str()).await?;
-        Ok(format!("⌨️ Pressed key: {}", key_normalized))
+        if let Some(ref t) = text {
+            key_down = key_down.text(t.clone());
+        }
+
+        let key_down_params = key_down
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build keyDown params: {}", e))?;
+        page.execute(key_down_params)
+            .await
+            .context("CDP keyDown failed")?;
+
+        // keyUp event
+        let key_up = DispatchKeyEventParams::builder()
+            .r#type(DispatchKeyEventType::KeyUp)
+            .key(key_normalized.to_string())
+            .code(code)
+            .windows_virtual_key_code(key_code)
+            .native_virtual_key_code(key_code)
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build keyUp params: {}", e))?;
+
+        page.execute(key_up)
+            .await
+            .context("CDP keyUp failed")?;
+
+        Ok(format!("Pressed key: {}", key_normalized))
     }
 
     /// Execute drag action - drag from one element to another.

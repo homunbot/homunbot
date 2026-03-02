@@ -1,13 +1,22 @@
 //! Browser manager — singleton that manages browser lifecycle and page isolation.
+//!
+//! Uses CDP events (not JS injection) for console/network/error capture,
+//! matching the approach used by OpenClaw (Playwright events → CDP protocol).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chromiumoxide::browser::{Browser, BrowserConfig as ChromeConfig};
+use chromiumoxide::cdp::browser_protocol::network::{
+    EventLoadingFailed, EventRequestWillBeSent, EventResponseReceived,
+};
 use chromiumoxide::cdp::browser_protocol::target::{GetTargetsParams, TargetInfo};
+use chromiumoxide::cdp::js_protocol::runtime::{
+    ConsoleApiCalledType, EventConsoleApiCalled, EventExceptionThrown,
+};
 use chromiumoxide::page::Page;
-use futures_util::StreamExt;
+use futures::StreamExt;
 use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
@@ -467,8 +476,9 @@ impl BrowserManager {
 
         let page = Arc::new(page);
 
-        // Set up console/error capture via JavaScript
-        self.setup_console_capture(&page, chat_id).await?;
+        // Set up CDP event listeners for console, errors, and network.
+        // Unlike the old JS injection approach, CDP events survive page navigations.
+        self.setup_cdp_listeners(&page, chat_id).await?;
 
         // Cache the page
         {
@@ -485,177 +495,214 @@ impl BrowserManager {
         self.get_page(chat_id, None).await
     }
 
-    /// Set up JavaScript to capture console messages and errors.
-    async fn setup_console_capture(&self, page: &Page, chat_id: &str) -> Result<()> {
-        let chat_id_for_js = chat_id.to_string();
-
-        // Inject JavaScript that overrides console methods and captures errors
-        // Messages are stored in window.__browserConsole array
-        let setup_js = r#"
-            (function() {
-                // Initialize capture arrays if not exists
-                if (!window.__browserConsole) {
-                    window.__browserConsole = [];
-                    window.__browserErrors = [];
-
-                    // Override console methods
-                    ['log', 'warn', 'error', 'info', 'debug'].forEach(level => {
-                        const original = console[level];
-                        console[level] = function(...args) {
-                            // Call original
-                            original.apply(console, args);
-
-                            // Capture message
-                            const msg = args.map(a => {
-                                try {
-                                    return typeof a === 'object' ? JSON.stringify(a) : String(a);
-                                } catch (e) {
-                                    return String(a);
-                                }
-                            }).join(' ');
-
-                            window.__browserConsole.push({
-                                level: level,
-                                message: msg,
-                                timestamp: new Date().toISOString()
-                            });
-
-                            // Limit to 100 messages
-                            if (window.__browserConsole.length > 100) {
-                                window.__browserConsole.shift();
-                            }
-                        };
-                    });
-
-                    // Capture unhandled errors
-                    window.onerror = function(msg, url, line, col, error) {
-                        window.__browserErrors.push({
-                            message: msg,
-                            stack: error ? error.stack : null,
-                            url: url,
-                            line: line,
-                            timestamp: new Date().toISOString()
-                        });
-
-                        // Limit to 50 errors
-                        if (window.__browserErrors.length > 50) {
-                            window.__browserErrors.shift();
-                        }
-
-                        return false; // Don't prevent default
-                    };
-
-                    // Capture unhandled promise rejections
-                    window.addEventListener('unhandledrejection', function(event) {
-                        window.__browserErrors.push({
-                            message: 'Unhandled Promise Rejection: ' + (event.reason ? String(event.reason) : 'Unknown'),
-                            stack: event.reason && event.reason.stack ? event.reason.stack : null,
-                            url: '',
-                            line: null,
-                            timestamp: new Date().toISOString()
-                        });
-
-                        if (window.__browserErrors.length > 50) {
-                            window.__browserErrors.shift();
-                        }
-                    });
-                }
-            })();
-        "#;
-
-        page.evaluate(setup_js)
+    /// Set up CDP event listeners for console messages, exceptions, and network requests.
+    ///
+    /// This replaces the old JS injection approach (`setup_console_capture`).
+    /// CDP events are emitted at the protocol level and survive page navigations,
+    /// matching OpenClaw's approach of using `page.on("console")` etc.
+    async fn setup_cdp_listeners(&self, page: &Page, chat_id: &str) -> Result<()> {
+        // --- Console messages (Runtime.consoleAPICalled) ---
+        let mut console_events = page
+            .event_listener::<EventConsoleApiCalled>()
             .await
-            .context("Failed to set up console capture")?;
+            .context("Failed to subscribe to console events")?;
 
-        tracing::debug!(chat_id = %chat_id_for_js, "Console capture set up");
-        Ok(())
-    }
-
-    /// Collect console messages and errors from the page.
-    pub async fn collect_page_messages(&self, page: &Page, chat_id: &str) {
-        let collect_js = r#"
-            (function() {
-                const result = {
-                    console: window.__browserConsole || [],
-                    errors: window.__browserErrors || []
+        let manager_for_console = BROWSER_MANAGER.get().cloned();
+        let chat_id_console = chat_id.to_string();
+        tokio::spawn(async move {
+            while let Some(event) = console_events.next().await {
+                let level = match event.r#type {
+                    ConsoleApiCalledType::Log => ConsoleLevel::Log,
+                    ConsoleApiCalledType::Warning => ConsoleLevel::Warn,
+                    ConsoleApiCalledType::Error => ConsoleLevel::Error,
+                    ConsoleApiCalledType::Info => ConsoleLevel::Info,
+                    ConsoleApiCalledType::Debug => ConsoleLevel::Debug,
+                    _ => ConsoleLevel::Log,
                 };
-                return JSON.stringify(result);
-            })();
-        "#;
 
-        if let Ok(result) = page.evaluate(collect_js).await {
-            if let Ok(json_str) = result.into_value::<String>() {
-                if let Ok(captured) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                    // Process console messages
-                    if let Some(console_arr) = captured.get("console").and_then(|v| v.as_array()) {
-                        for msg in console_arr {
-                            if let (Some(level), Some(message), Some(timestamp)) = (
-                                msg.get("level").and_then(|v| v.as_str()),
-                                msg.get("message").and_then(|v| v.as_str()),
-                                msg.get("timestamp").and_then(|v| v.as_str()),
-                            ) {
-                                let console_level = match level {
-                                    "log" => ConsoleLevel::Log,
-                                    "warn" => ConsoleLevel::Warn,
-                                    "error" => ConsoleLevel::Error,
-                                    "info" => ConsoleLevel::Info,
-                                    "debug" => ConsoleLevel::Debug,
-                                    _ => ConsoleLevel::Log,
-                                };
+                // Serialize args to readable text (like OpenClaw's msg.text())
+                let message = event
+                    .args
+                    .iter()
+                    .filter_map(|arg| {
+                        arg.value
+                            .as_ref()
+                            .map(|v| match v {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            })
+                            .or_else(|| arg.description.clone())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
 
-                                let console_msg = ConsoleMessage {
-                                    level: console_level,
-                                    message: message.to_string(),
-                                    timestamp: timestamp.to_string(),
-                                    url: msg.get("url").and_then(|v| v.as_str()).map(String::from),
-                                    line: msg
-                                        .get("line")
-                                        .and_then(|v| v.as_i64())
-                                        .map(|i| i as i32),
-                                };
+                let msg = ConsoleMessage {
+                    level,
+                    message,
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    url: None,
+                    line: None,
+                };
 
-                                self.add_console_message(chat_id, console_msg).await;
-                            }
-                        }
-                    }
-
-                    // Process errors
-                    if let Some(errors_arr) = captured.get("errors").and_then(|v| v.as_array()) {
-                        for err in errors_arr {
-                            if let (Some(message), Some(timestamp)) = (
-                                err.get("message").and_then(|v| v.as_str()),
-                                err.get("timestamp").and_then(|v| v.as_str()),
-                            ) {
-                                let page_error = PageError {
-                                    message: message.to_string(),
-                                    stack: err
-                                        .get("stack")
-                                        .and_then(|v| v.as_str())
-                                        .map(String::from),
-                                    timestamp: timestamp.to_string(),
-                                    url: err.get("url").and_then(|v| v.as_str()).map(String::from),
-                                    line: err
-                                        .get("line")
-                                        .and_then(|v| v.as_i64())
-                                        .map(|i| i as i32),
-                                };
-
-                                self.add_page_error(chat_id, page_error).await;
-                            }
-                        }
-                    }
-
-                    // Clear the captured messages from the page
-                    let clear_js = r#"
-                        (function() {
-                            if (window.__browserConsole) window.__browserConsole = [];
-                            if (window.__browserErrors) window.__browserErrors = [];
-                        })();
-                    "#;
-                    let _ = page.evaluate(clear_js).await;
+                if let Some(ref mgr) = manager_for_console {
+                    mgr.add_console_message(&chat_id_console, msg).await;
                 }
             }
-        }
+        });
+
+        // --- Exceptions (Runtime.exceptionThrown) ---
+        let mut exception_events = page
+            .event_listener::<EventExceptionThrown>()
+            .await
+            .context("Failed to subscribe to exception events")?;
+
+        let manager_for_errors = BROWSER_MANAGER.get().cloned();
+        let chat_id_errors = chat_id.to_string();
+        tokio::spawn(async move {
+            while let Some(event) = exception_events.next().await {
+                let details = &event.exception_details;
+                let message = details
+                    .exception
+                    .as_ref()
+                    .and_then(|e| e.description.clone())
+                    .unwrap_or_else(|| details.text.clone());
+
+                let stack = details
+                    .stack_trace
+                    .as_ref()
+                    .map(|st| {
+                        st.call_frames
+                            .iter()
+                            .map(|f| {
+                                format!(
+                                    "  at {} ({}:{}:{})",
+                                    f.function_name, f.url, f.line_number, f.column_number
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    });
+
+                let err = PageError {
+                    message,
+                    stack,
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    url: details.url.clone(),
+                    line: Some(details.line_number as i32),
+                };
+
+                if let Some(ref mgr) = manager_for_errors {
+                    mgr.add_page_error(&chat_id_errors, err).await;
+                }
+            }
+        });
+
+        // --- Network: request sent (Network.requestWillBeSent) ---
+        let mut request_events = page
+            .event_listener::<EventRequestWillBeSent>()
+            .await
+            .context("Failed to subscribe to network request events")?;
+
+        let manager_for_requests = BROWSER_MANAGER.get().cloned();
+        let chat_id_requests = chat_id.to_string();
+        tokio::spawn(async move {
+            while let Some(event) = request_events.next().await {
+                let method = match event.request.method.to_uppercase().as_str() {
+                    "GET" => HttpMethod::Get,
+                    "POST" => HttpMethod::Post,
+                    "PUT" => HttpMethod::Put,
+                    "DELETE" => HttpMethod::Delete,
+                    "PATCH" => HttpMethod::Patch,
+                    "HEAD" => HttpMethod::Head,
+                    "OPTIONS" => HttpMethod::Options,
+                    _ => HttpMethod::Other,
+                };
+
+                let resource_type = event.r#type.as_ref().map(|rt| format!("{:?}", rt));
+
+                let req = NetworkRequest {
+                    request_id: Some(event.request_id.inner().to_string()),
+                    method,
+                    url: event.request.url.clone(),
+                    status: None,
+                    status_text: None,
+                    content_type: None,
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    response_timestamp: None,
+                    duration_ms: None,
+                    resource_type,
+                    error: None,
+                };
+
+                if let Some(ref mgr) = manager_for_requests {
+                    mgr.add_network_request(&chat_id_requests, req).await;
+                }
+            }
+        });
+
+        // --- Network: response received (Network.responseReceived) ---
+        let mut response_events = page
+            .event_listener::<EventResponseReceived>()
+            .await
+            .context("Failed to subscribe to network response events")?;
+
+        let manager_for_responses = BROWSER_MANAGER.get().cloned();
+        let chat_id_responses = chat_id.to_string();
+        tokio::spawn(async move {
+            while let Some(event) = response_events.next().await {
+                let request_id = event.request_id.inner().to_string();
+                if let Some(ref mgr) = manager_for_responses {
+                    let mut states = mgr.page_states.lock().await;
+                    if let Some(state) = states.get_mut(&chat_id_responses) {
+                        // Find the matching request and enrich it with response data
+                        if let Some(req) = state
+                            .network
+                            .iter_mut()
+                            .rev()
+                            .find(|r| r.request_id.as_deref() == Some(&request_id))
+                        {
+                            req.status = Some(event.response.status as i32);
+                            req.status_text = Some(event.response.status_text.clone());
+                            req.response_timestamp = Some(chrono::Utc::now().to_rfc3339());
+                            // Use mime_type from Response (cleaner than parsing headers)
+                            if !event.response.mime_type.is_empty() {
+                                req.content_type = Some(event.response.mime_type.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // --- Network: loading failed (Network.loadingFailed) ---
+        let mut failed_events = page
+            .event_listener::<EventLoadingFailed>()
+            .await
+            .context("Failed to subscribe to network failure events")?;
+
+        let manager_for_failures = BROWSER_MANAGER.get().cloned();
+        let chat_id_failures = chat_id.to_string();
+        tokio::spawn(async move {
+            while let Some(event) = failed_events.next().await {
+                let request_id = event.request_id.inner().to_string();
+                if let Some(ref mgr) = manager_for_failures {
+                    let mut states = mgr.page_states.lock().await;
+                    if let Some(state) = states.get_mut(&chat_id_failures) {
+                        if let Some(req) = state
+                            .network
+                            .iter_mut()
+                            .rev()
+                            .find(|r| r.request_id.as_deref() == Some(&request_id))
+                        {
+                            req.error = Some(event.error_text.clone());
+                        }
+                    }
+                }
+            }
+        });
+
+        tracing::debug!(chat_id = %chat_id, "CDP event listeners set up (console, errors, network)");
+        Ok(())
     }
 
     /// Close the page for a specific chat (closes from all profiles).
