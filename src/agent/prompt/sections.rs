@@ -377,6 +377,12 @@ impl PromptSection for RuntimeSection {
         ));
 
         prompt.push_str(&format!("Time: {}\n", now.format("%Y-%m-%d %H:%M (%A) %Z")));
+        prompt.push_str(&format!("Current year: {}\n", now.format("%Y")));
+        prompt.push_str(
+            "When the user asks about recent events, news, rankings, or anything time-sensitive \
+             without specifying a year, ALWAYS assume they mean the current year. \
+             Include the current year in your search queries.\n",
+        );
 
         Ok(prompt)
     }
