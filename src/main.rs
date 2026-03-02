@@ -460,11 +460,19 @@ fn create_tool_registry(config: &Config) -> ToolRegistry {
     #[cfg(feature = "local-embeddings")]
     registry.register(Box::new(tools::RememberTool::new()));
 
-    // Browser tool (if enabled in config)
+    // Browser tool — register if Chrome/Chromium is found on the system
     #[cfg(feature = "browser")]
-    if config.browser.enabled {
-        registry.register(Box::new(tools::BrowserTool::new()));
-        tracing::info!("Browser tool registered");
+    {
+        if let Some(executable) = config.browser.resolved_executable() {
+            registry.register(Box::new(tools::BrowserTool::new()));
+            tracing::info!(
+                executable = %executable.display(),
+                headless = config.browser.headless,
+                "Browser tool registered (Chrome found)"
+            );
+        } else {
+            tracing::debug!("Browser tool not registered: no Chrome/Chromium executable found");
+        }
     }
 
     tracing::info!(tools = registry.len(), "Tool registry initialized");

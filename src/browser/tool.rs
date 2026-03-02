@@ -1959,11 +1959,11 @@ impl Tool for BrowserTool {
     }
 
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
-        // Check if browser is enabled
+        // Check if browser executable is available
         let manager = global_browser_manager();
-        if !manager.is_enabled() {
+        if manager.resolved_executable().is_none() {
             return Ok(ToolResult::error(
-                "Browser automation is disabled. Enable it in config with [browser] enabled = true",
+                "No Chrome/Chromium executable found. Install Chrome or set browser.executable_path in config.",
             ));
         }
 

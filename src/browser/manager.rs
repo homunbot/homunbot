@@ -259,9 +259,9 @@ impl BrowserManager {
         &self.config
     }
 
-    /// Check if browser is enabled in config.
-    pub fn is_enabled(&self) -> bool {
-        self.config.enabled
+    /// Check if a Chrome/Chromium executable is available.
+    pub fn resolved_executable(&self) -> Option<std::path::PathBuf> {
+        self.config.resolved_executable()
     }
 
     /// Get page state for a chat_id (console messages, errors).
@@ -390,6 +390,17 @@ impl BrowserManager {
             )
         })?;
 
+        // Clean up stale SingletonLock that prevents Chrome from starting
+        // (left behind after crashes or forced kills)
+        let singleton_lock = user_data_dir.join("SingletonLock");
+        if singleton_lock.exists() {
+            tracing::warn!(
+                path = %singleton_lock.display(),
+                "Removing stale SingletonLock from previous session"
+            );
+            let _ = std::fs::remove_file(&singleton_lock);
+        }
+
         // Build browser config with STEALTH settings to avoid bot detection
         let mut chrome_config = ChromeConfig::builder()
             .chrome_executable(std::path::PathBuf::from(&executable))
@@ -425,9 +436,21 @@ impl BrowserManager {
             .map_err(|e| anyhow::anyhow!("Failed to build browser config: {}", e))?;
 
         // Launch browser - returns (Browser, Handler)
-        let (browser, mut handler) = Browser::launch(chrome_config)
-            .await
-            .context("Failed to launch browser. Make sure Chrome/Chromium is installed.")?;
+        let (browser, mut handler) = match Browser::launch(chrome_config).await {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    error_debug = ?e,
+                    executable = %executable.display(),
+                    profile = %profile_name,
+                    "Browser launch failed"
+                );
+                return Err(e).context(
+                    "Failed to launch browser. Make sure Chrome/Chromium is installed and not blocking automation.",
+                );
+            }
+        };
 
         // IMPORTANT: Spawn a background task to poll the handler
         let profile_name_clone = profile_name.clone();
@@ -1060,7 +1083,9 @@ mod tests {
     fn test_browser_manager_creation() {
         let config = BrowserConfig::default();
         let manager = BrowserManager::new(config);
-        assert!(!manager.is_enabled());
+        // Default config has no executable_path, so resolved_executable
+        // depends on whether Chrome is actually installed on the test machine
+        let _ = manager.resolved_executable();
     }
 
     #[test]

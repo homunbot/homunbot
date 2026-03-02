@@ -395,14 +395,14 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                         <div class="form-row">
                             <div class="form-group">
                                 <label class="toggle-label-inline">
-                                    <input type="checkbox" name="enabled" class="toggle-input" {browser_enabled_checked}>
+                                    <input type="checkbox" id="browser-enabled" name="enabled" class="toggle-input" {browser_enabled_checked}>
                                     <span>Enable Browser Automation</span>
                                 </label>
                                 <div class="form-hint">Allow the agent to control a web browser.</div>
                             </div>
                             <div class="form-group">
                                 <label class="toggle-label-inline">
-                                    <input type="checkbox" name="headless" class="toggle-input" {browser_headless_checked}>
+                                    <input type="checkbox" id="browser-headless" name="headless" class="toggle-input" {browser_headless_checked}>
                                     <span>Headless Mode</span>
                                 </label>
                                 <div class="form-hint">Run browser without visible window.</div>
@@ -411,7 +411,7 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                         <div class="form-row">
                             <div class="form-group">
                                 <label>Browser Type</label>
-                                <select name="browser_type" class="input">
+                                <select id="browser-type" name="browser_type" class="input">
                                     <option value="chromium" {browser_type_chromium}>Chromium</option>
                                     <option value="firefox" {browser_type_firefox}>Firefox</option>
                                     <option value="webkit" {browser_type_webkit}>WebKit</option>
@@ -419,7 +419,7 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             </div>
                             <div class="form-group">
                                 <label>Action Timeout (seconds)</label>
-                                <input type="number" name="action_timeout_secs" value="{action_timeout_secs}" min="5" max="300" class="input">
+                                <input type="number" id="browser-action-timeout" name="action_timeout_secs" value="{action_timeout_secs}" min="5" max="300" class="input">
                                 <div class="form-hint">Maximum time to wait for browser actions.</div>
                             </div>
                         </div>
