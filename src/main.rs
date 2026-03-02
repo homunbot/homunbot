@@ -440,11 +440,15 @@ fn create_tool_registry(config: &Config) -> ToolRegistry {
         permissions,
     )));
 
-    // Web search tool (Brave API)
-    registry.register(Box::new(WebSearchTool::new(
-        &config.tools.web_search.api_key,
-        config.tools.web_search.max_results,
-    )));
+    // Web search tool (Brave API) — only register if API key is configured
+    if !config.tools.web_search.api_key.is_empty() {
+        registry.register(Box::new(WebSearchTool::new(
+            &config.tools.web_search.api_key,
+            config.tools.web_search.max_results,
+        )));
+    } else {
+        tracing::debug!("web_search tool not registered: no API key configured");
+    }
 
     // Web fetch tool
     registry.register(Box::new(WebFetchTool::new()));
