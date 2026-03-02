@@ -499,7 +499,7 @@ impl AgentLoop {
 
                     // Notify frontend that a tool is being called
                     if let Some(ref tx) = stream_tx {
-                        let _ = tx
+                        if let Err(e) = tx
                             .send(crate::provider::StreamChunk {
                                 delta: tool_call.name.clone(),
                                 done: false,
@@ -510,7 +510,10 @@ impl AgentLoop {
                                     arguments: tool_call.arguments.clone(),
                                 }),
                             })
-                            .await;
+                            .await
+                        {
+                            tracing::warn!(error = %e, "Failed to send tool_start stream event");
+                        }
                     }
 
                     // --- OBSERVE: Execute and add result ---
@@ -543,14 +546,17 @@ impl AgentLoop {
 
                     // Notify frontend that tool execution finished
                     if let Some(ref tx) = stream_tx {
-                        let _ = tx
+                        if let Err(e) = tx
                             .send(crate::provider::StreamChunk {
                                 delta: tool_call.name.clone(),
                                 done: false,
                                 event_type: Some("tool_end".to_string()),
                                 tool_call_data: None,
                             })
-                            .await;
+                            .await
+                        {
+                            tracing::warn!(error = %e, "Failed to send tool_end stream event");
+                        }
                     }
 
                     messages.push(ChatMessage::tool_result(

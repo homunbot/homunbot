@@ -761,10 +761,14 @@ async fn main() -> Result<()> {
             let (cron_event_tx, cron_event_rx) = tokio::sync::mpsc::channel(50);
             let cron_scheduler = Arc::new(CronScheduler::new(db.clone(), cron_event_tx));
 
-            // Build tool registry with CronTool + MessageTool + MCP tools
+            // Build tool registry with CronTool + MessageTool + SpawnTool + MCP tools
             let mut tool_registry = create_tool_registry(&config);
             tool_registry.register(Box::new(CronTool::new(cron_scheduler.clone())));
             tool_registry.register(Box::new(MessageTool::new()));
+
+            // SpawnTool uses a late-bound OnceCell because SubagentManager needs Arc<AgentLoop>
+            let spawn_manager_cell = Arc::new(tokio::sync::OnceCell::new());
+            tool_registry.register(Box::new(tools::SpawnTool::new(spawn_manager_cell.clone())));
 
             // Connect to MCP servers and register their tools
             #[cfg(feature = "mcp")]
@@ -879,17 +883,17 @@ async fn main() -> Result<()> {
 
             let agent = Arc::new(agent);
 
-            // Create SubagentManager and register SpawnTool
+            // Create SubagentManager and bind it to the SpawnTool (late initialization via OnceCell)
             let (subagent_result_tx, _subagent_result_rx) = tokio::sync::mpsc::channel(50);
-            let _subagent_manager = Arc::new(agent::SubagentManager::new(
+            let subagent_manager = Arc::new(agent::SubagentManager::new(
                 agent.clone(),
                 subagent_result_tx,
             ));
-            // Note: SpawnTool uses the SubagentManager but needs access to agent's tool_registry.
-            // For now, subagent spawning is available through the gateway.
-            // TODO: register SpawnTool in the tool_registry (requires registry to accept post-creation tools)
+            if spawn_manager_cell.set(subagent_manager).is_err() {
+                tracing::error!("SpawnTool OnceCell was already initialized — this is a bug");
+            }
 
-            tracing::info!("Subagent manager initialized");
+            tracing::info!("Subagent manager initialized (SpawnTool registered)");
 
             // Start skill hot-reload watcher (watches ~/.homun/skills/ for changes)
             let skills_dir = config::Config::data_dir().join("skills");

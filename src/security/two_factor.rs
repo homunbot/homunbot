@@ -243,24 +243,37 @@ impl TwoFactorStorage {
         self.path.exists()
     }
 
-    /// Load the 2FA configuration
-    /// Returns default config if file doesn't exist
+    /// Load the 2FA configuration.
+    /// Returns default config if file doesn't exist.
+    /// Supports both encrypted (new) and plaintext JSON (legacy) formats.
     pub fn load(&self) -> Result<TwoFactorConfig> {
         if !self.path.exists() {
             return Ok(TwoFactorConfig::default());
         }
 
-        // Read and decrypt using the same mechanism as secrets.enc
-        let encrypted = std::fs::read_to_string(&self.path)
+        let raw = std::fs::read_to_string(&self.path)
             .with_context(|| format!("Failed to read 2fa config from {}", self.path.display()))?;
 
-        let config: TwoFactorConfig =
-            serde_json::from_str(&encrypted).context("Failed to parse 2fa config")?;
+        // Try encrypted format first (new)
+        if let Ok(secrets) = crate::storage::global_secrets() {
+            if let Ok(plaintext) = secrets.decrypt_data(&raw) {
+                let config: TwoFactorConfig = serde_json::from_slice(&plaintext)
+                    .context("Failed to parse decrypted 2fa config")?;
+                return Ok(config);
+            }
+        }
 
+        // Fallback: try legacy plaintext JSON for migration
+        let config: TwoFactorConfig =
+            serde_json::from_str(&raw).context("Failed to parse 2fa config")?;
+
+        tracing::warn!(
+            "Loaded 2FA config from legacy plaintext format, will re-encrypt on next save"
+        );
         Ok(config)
     }
 
-    /// Save the 2FA configuration
+    /// Save the 2FA configuration encrypted with AES-256-GCM (same master key as secrets.enc).
     pub fn save(&self, config: &TwoFactorConfig) -> Result<()> {
         // Ensure parent directory exists
         if let Some(parent) = self.path.parent() {
@@ -268,13 +281,18 @@ impl TwoFactorStorage {
                 .with_context(|| format!("Failed to create directory {}", parent.display()))?;
         }
 
-        // For now, store as JSON (TODO: encrypt with same master key as secrets.enc)
         let json =
             serde_json::to_string_pretty(config).context("Failed to serialize 2fa config")?;
 
+        // Encrypt with vault master key
+        let encrypted = crate::storage::global_secrets()
+            .context("Failed to access vault for 2FA encryption")?
+            .encrypt_data(json.as_bytes())
+            .context("Failed to encrypt 2fa config")?;
+
         // Write atomically
         let temp_path = self.path.with_extension("tmp");
-        std::fs::write(&temp_path, json)
+        std::fs::write(&temp_path, &encrypted)
             .with_context(|| format!("Failed to write 2fa config to {}", temp_path.display()))?;
 
         // Set restrictive permissions on Unix
@@ -287,7 +305,7 @@ impl TwoFactorStorage {
         std::fs::rename(&temp_path, &self.path)
             .with_context(|| format!("Failed to save 2fa config to {}", self.path.display()))?;
 
-        tracing::info!("Saved 2FA configuration");
+        tracing::info!("Saved 2FA configuration (encrypted)");
         Ok(())
     }
 
