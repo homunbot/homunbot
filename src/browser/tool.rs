@@ -248,7 +248,10 @@ impl BrowserTool {
             }})();
             "#,
             role = role,
-            name_escaped = name.replace('\\', "\\\\").replace('"', "\\\"").replace('\'', "\\'"),
+            name_escaped = name
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\'', "\\'"),
             nth = nth,
             ref_id = ref_id,
         );
@@ -357,9 +360,7 @@ impl BrowserTool {
                 }
 
                 // Block cloud metadata endpoints
-                if host_lower == "169.254.169.254"
-                    || host_lower == "metadata.google.internal"
-                {
+                if host_lower == "169.254.169.254" || host_lower == "metadata.google.internal" {
                     return Err(anyhow::anyhow!(
                         "Navigation to cloud metadata endpoint ({}) is blocked for security.",
                         host
@@ -1462,9 +1463,7 @@ impl BrowserTool {
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build keyUp params: {}", e))?;
 
-        page.execute(key_up)
-            .await
-            .context("CDP keyUp failed")?;
+        page.execute(key_up).await.context("CDP keyUp failed")?;
 
         Ok(format!("Pressed key: {}", key_normalized))
     }

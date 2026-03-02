@@ -214,10 +214,7 @@ mod tests {
 
         let result = redact_vault_values(text, &vault_entries);
 
-        assert_eq!(
-            result,
-            "vault://key is at start and end is vault://key"
-        );
+        assert_eq!(result, "vault://key is at start and end is vault://key");
     }
 
     #[test]
@@ -231,10 +228,7 @@ mod tests {
             replace_whole_match("my pass here", "pass", "REDACTED"),
             "my REDACTED here"
         );
-        assert_eq!(
-            replace_whole_match("pass", "pass", "REDACTED"),
-            "REDACTED"
-        );
+        assert_eq!(replace_whole_match("pass", "pass", "REDACTED"), "REDACTED");
         assert_eq!(
             replace_whole_match("pass-word", "pass", "REDACTED"),
             "REDACTED-word"

@@ -567,21 +567,18 @@ impl BrowserManager {
                     .and_then(|e| e.description.clone())
                     .unwrap_or_else(|| details.text.clone());
 
-                let stack = details
-                    .stack_trace
-                    .as_ref()
-                    .map(|st| {
-                        st.call_frames
-                            .iter()
-                            .map(|f| {
-                                format!(
-                                    "  at {} ({}:{}:{})",
-                                    f.function_name, f.url, f.line_number, f.column_number
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    });
+                let stack = details.stack_trace.as_ref().map(|st| {
+                    st.call_frames
+                        .iter()
+                        .map(|f| {
+                            format!(
+                                "  at {} ({}:{}:{})",
+                                f.function_name, f.url, f.line_number, f.column_number
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                });
 
                 let err = PageError {
                     message,

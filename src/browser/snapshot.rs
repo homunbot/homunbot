@@ -274,8 +274,7 @@ impl PageSnapshot {
 
         // Step 2: Collect ref_ids and their backend IDs in order
         let ref_ids: Vec<&String> = backend_map.keys().collect();
-        let backend_ids: Vec<BackendNodeId> =
-            ref_ids.iter().map(|k| backend_map[*k]).collect();
+        let backend_ids: Vec<BackendNodeId> = ref_ids.iter().map(|k| backend_map[*k]).collect();
 
         // Step 3: Batch convert BackendNodeId → NodeId (single CDP call)
         let push_result = page
@@ -293,17 +292,17 @@ impl PageSnapshot {
                 continue;
             }
             let ref_id = ref_ids[i];
-            let params = SetAttributeValueParams::new(
-                *node_id,
-                "data-homun-ref",
-                ref_id.as_str(),
-            );
+            let params = SetAttributeValueParams::new(*node_id, "data-homun-ref", ref_id.as_str());
             if page.execute(params).await.is_ok() {
                 tagged += 1;
             }
         }
 
-        tracing::debug!(total = backend_map.len(), tagged, "Tagged DOM elements with data-homun-ref");
+        tracing::debug!(
+            total = backend_map.len(),
+            tagged,
+            "Tagged DOM elements with data-homun-ref"
+        );
         Ok(())
     }
 

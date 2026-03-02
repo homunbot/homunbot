@@ -267,7 +267,9 @@ impl TwoFactorStorage {
         let config: TwoFactorConfig =
             serde_json::from_str(&raw).context("Failed to parse 2fa config")?;
 
-        tracing::warn!("Loaded 2FA config from legacy plaintext format, will re-encrypt on next save");
+        tracing::warn!(
+            "Loaded 2FA config from legacy plaintext format, will re-encrypt on next save"
+        );
         Ok(config)
     }
 
