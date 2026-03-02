@@ -115,6 +115,31 @@ impl PromptSection for ToolsSection {
             prompt.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
         }
 
+        // Tool routing rules (context-dependent)
+        let has_browser = ctx.tools.iter().any(|t| t.name == "browser");
+        let has_web_search = ctx.tools.iter().any(|t| t.name == "web_search");
+
+        if has_browser {
+            prompt.push_str("\n### Tool Routing Rules\n\n");
+            prompt.push_str(
+                "When the user asks to browse, navigate, search, or interact with websites, \
+                 ALWAYS use the **browser** tool. Specific triggers:\n\
+                 - \"vai su\", \"apri\", \"naviga\", \"cerca su Google/Bing\" → browser navigate\n\
+                 - \"clicca\", \"compila\", \"scrivi nel campo\" → browser interact\n\
+                 - Any request involving a website with dynamic content → browser\n",
+            );
+            if !has_web_search {
+                prompt.push_str(
+                    "- No web_search tool is available. To search the web, use the **browser** \
+                     to navigate to a search engine (e.g. google.com) and search from there.\n",
+                );
+            }
+            prompt.push_str(
+                "- **web_fetch** is ONLY for reading static content at a known URL, \
+                 NOT for browsing or searching.\n",
+            );
+        }
+
         // Tool call format (for XML dispatch mode)
         prompt.push_str("\n### Tool Call Format\n\n");
         prompt.push_str("To use a tool, wrap a JSON object in `<tool_call_call>` tags:\n\n");
