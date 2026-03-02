@@ -440,11 +440,15 @@ fn create_tool_registry(config: &Config) -> ToolRegistry {
         permissions,
     )));
 
-    // Web search tool (Brave API)
-    registry.register(Box::new(WebSearchTool::new(
-        &config.tools.web_search.api_key,
-        config.tools.web_search.max_results,
-    )));
+    // Web search tool (Brave API) — only register if API key is configured
+    if !config.tools.web_search.api_key.is_empty() {
+        registry.register(Box::new(WebSearchTool::new(
+            &config.tools.web_search.api_key,
+            config.tools.web_search.max_results,
+        )));
+    } else {
+        tracing::debug!("web_search tool not registered: no API key configured");
+    }
 
     // Web fetch tool
     registry.register(Box::new(WebFetchTool::new()));
@@ -456,11 +460,19 @@ fn create_tool_registry(config: &Config) -> ToolRegistry {
     #[cfg(feature = "local-embeddings")]
     registry.register(Box::new(tools::RememberTool::new()));
 
-    // Browser tool (if enabled in config)
+    // Browser tool — register if Chrome/Chromium is found on the system
     #[cfg(feature = "browser")]
-    if config.browser.enabled {
-        registry.register(Box::new(tools::BrowserTool::new()));
-        tracing::info!("Browser tool registered");
+    {
+        if let Some(executable) = config.browser.resolved_executable() {
+            registry.register(Box::new(tools::BrowserTool::new()));
+            tracing::info!(
+                executable = %executable.display(),
+                headless = config.browser.headless,
+                "Browser tool registered (Chrome found)"
+            );
+        } else {
+            tracing::debug!("Browser tool not registered: no Chrome/Chromium executable found");
+        }
     }
 
     tracing::info!(tools = registry.len(), "Tool registry initialized");

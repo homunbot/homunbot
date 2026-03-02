@@ -1775,50 +1775,43 @@ impl Tool for BrowserTool {
     }
 
     fn description(&self) -> &str {
-        "Browser automation tool for web browsing and interaction. \
-         \
-         ⚠️ WHEN TO USE THIS vs WEB_FETCH: \
-         - Use browser: Login, clicking, forms, navigation, JavaScript-heavy sites, multi-step workflows \
-         - Use web_fetch: Just reading static content (articles, docs) — much faster \
-         \
-         📋 WORKFLOW: \
-         1. Call navigate to open a URL \
-         2. Read the accessibility tree snapshot (shows page structure with [ref=e1], [ref=e2], etc.) \
-         3. Interact with elements using their refs (e.g., click ref=e1, type ref=e2) \
-         4. After each action, a new snapshot is automatically taken \
-         5. When task is COMPLETE, call 'close' to free memory \
-         \
-         📸 SNAPSHOT FORMAT (accessibility tree, like Playwright): \
-         - button \"Search\" [ref=e1] \
-         - textbox \"Enter query\" [ref=e2] \
-         - link \"About us\" [ref=e3] \
-         \
-         ⚠️ CRITICAL RULES: \
-         - ALWAYS read the snapshot before taking action \
-         - Use refs from the snapshot (e.g., click ref=e1) \
-         - accept_privacy: ONLY call if you see a privacy banner in the snapshot \
-         - Do NOT guess URLs or invent refs \
-         - **MANDATORY**: Call 'close' when task is complete to free browser resources** \
-         - Keeping browser open wastes memory - close it as soon as you're done \
-         - Use 'shutdown' to completely close the browser process (for cleanup) \
-         \
-         🔧 ACTIONS: \
-         - navigate: Open URL \
-         - snapshot: Get page structure \
-         - click/type/select/hover: Interact with elements \
-         - press: Press a key (Enter, Escape, Tab, ArrowDown, etc.) \
-         - drag: Drag element from source to target \
-         - fill: Fill multiple form fields at once \
-         - scroll: Scroll page (up/down/top/bottom) \
-         - wait: Wait for condition \
-         - screenshot: Capture page image \
-         - evaluate: Run JavaScript \
-         - back/forward: Navigate history \
-         - tabs/open_tab/focus_tab/close: Tab management \
-         - console: View console messages \
-         - resize: Change viewport size \
-         - dialog: Handle alert/confirm/prompt \
-         - accept_privacy: Auto-click consent banners"
+        "Browser automation tool for web browsing and interaction.\n\
+         \n\
+         🔍 WEB RESEARCH WORKFLOW (for searching information):\n\
+         1. navigate to a search engine (e.g. google.com)\n\
+         2. Read the snapshot — find the search box ref\n\
+         3. Type query in the search box, press Enter\n\
+         4. Read the snapshot — you now see search results with links\n\
+         5. ANALYZE the results: pick the most relevant article\n\
+         6. CLICK the link ref from the snapshot (do NOT navigate to a guessed URL)\n\
+         7. Read the article content from the snapshot\n\
+         8. If insufficient, use 'back' and try another result\n\
+         9. Formulate your answer from what you read, then 'close'\n\
+         \n\
+         📋 GENERAL WORKFLOW:\n\
+         1. navigate to open a URL\n\
+         2. Read the snapshot (page structure with [ref=e1], [ref=e2], etc.)\n\
+         3. Interact using refs (click ref=e1, type ref=e2)\n\
+         4. After each action, a new snapshot is taken\n\
+         5. Call 'close' when done to free memory\n\
+         \n\
+         📸 SNAPSHOT FORMAT:\n\
+         - button \"Search\" [ref=e1]\n\
+         - textbox \"Enter query\" [ref=e2]\n\
+         - link \"About us\" [ref=e3]\n\
+         \n\
+         ⚠️ CRITICAL RULES:\n\
+         - ALWAYS read the snapshot before taking action\n\
+         - NEVER guess or invent URLs — click links from the snapshot\n\
+         - NEVER switch to web_fetch while browser is open — stay in the browser\n\
+         - Use refs from the snapshot (e.g., click ref=e1)\n\
+         - accept_privacy: ONLY if you see a privacy/cookie banner\n\
+         - Call 'close' when task is complete (frees memory)\n\
+         \n\
+         🔧 ACTIONS: navigate, snapshot, click, type, select, hover, press, \
+         drag, fill, scroll, wait, screenshot, evaluate, back, forward, \
+         tabs, open_tab, focus_tab, close, console, resize, dialog, \
+         accept_privacy, upload, pdf, network, shutdown"
     }
 
     fn parameters(&self) -> Value {
@@ -1966,11 +1959,11 @@ impl Tool for BrowserTool {
     }
 
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
-        // Check if browser is enabled
+        // Check if browser executable is available
         let manager = global_browser_manager();
-        if !manager.is_enabled() {
+        if manager.resolved_executable().is_none() {
             return Ok(ToolResult::error(
-                "Browser automation is disabled. Enable it in config with [browser] enabled = true",
+                "No Chrome/Chromium executable found. Install Chrome or set browser.executable_path in config.",
             ));
         }
 

@@ -176,14 +176,17 @@ impl Tool for WebFetchTool {
     }
 
     fn description(&self) -> &str {
-        "Fetch and extract readable content from a URL (HTML → text). \
-         Use for LIGHTWEIGHT page access WITHOUT browser automation. \
+        "Fetch and extract readable content from a URL you already know (HTML → text). \
+         This is a simple HTTP GET request, NOT a browser. It cannot render JavaScript, \
+         interact with pages, or perform searches.\n\
          \n\
-         ⚠️ WHEN TO USE THIS vs BROWSER: \
-         - Use web_fetch: Reading static content (articles, docs, blogs) \
-         - Use browser: Interactions (login, clicking, forms, navigation, JavaScript-heavy sites) \
+         ⚠️ ROUTING RULES:\n\
+         - User says \"vai su\", \"apri\", \"cerca su Google\", \"naviga\" → use BROWSER, not this tool\n\
+         - You need to read a known article/doc URL → use this tool\n\
+         - You need to click, type, fill forms, or browse interactively → use BROWSER\n\
+         - You need search results but have no web_search tool → use BROWSER to navigate to a search engine\n\
          \n\
-         This tool is faster but cannot handle dynamic content or interactions."
+         This tool is faster than browser but ONLY works for static content at known URLs."
     }
 
     fn parameters(&self) -> Value {
