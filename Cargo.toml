@@ -27,7 +27,7 @@ default = ["cli", "web-ui", "file-tools", "shell-tool", "web-tools", "cron-tool"
 
 # === Core Features ===
 cli = ["dep:clap", "dep:ratatui", "dep:crossterm"]
-web-ui = ["dep:axum", "dep:tower", "dep:tower-http", "dep:rust-embed", "dep:mime_guess", "dep:pulldown-cmark"]
+web-ui = ["cli", "dep:axum", "dep:tower", "dep:tower-http", "dep:rust-embed", "dep:mime_guess", "dep:pulldown-cmark"]
 file-tools = []
 shell-tool = []
 web-tools = []
@@ -67,7 +67,7 @@ async-trait = "0.1"
 futures = "0.3"
 
 # HTTP client (for providers and tools)
-reqwest = { version = "0.11", features = ["json", "stream"] }
+reqwest = { version = "0.11", default-features = false, features = ["json", "stream", "rustls-tls"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
