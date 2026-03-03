@@ -420,11 +420,7 @@ impl AgentLoop {
                                     .collect();
                                 messages = self
                                     .context
-                                    .build_messages_with_tools(
-                                        &history,
-                                        content,
-                                        &xml_tool_infos,
-                                    )
+                                    .build_messages_with_tools(&history, content, &xml_tool_infos)
                                     .await;
 
                                 let retry_request = ChatRequest {

@@ -116,9 +116,7 @@ impl PromptSection for ToolsSection {
             prompt.push_str("To use a tool, wrap a JSON object in `<tool_call_call>` tags:\n\n");
             prompt.push_str("```\n");
             prompt.push_str("<tool_call_call>\n");
-            prompt.push_str(
-                "{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n",
-            );
+            prompt.push_str("{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n");
             prompt.push_str("</tool_call_call>\n");
             prompt.push_str("```\n\n");
 
@@ -134,14 +132,8 @@ impl PromptSection for ToolsSection {
         // Tool routing rules — ALWAYS included based on registered tools,
         // regardless of native vs XML mode. In native mode, tool definitions
         // go via the API parameter but the LLM still needs behavioral guidance.
-        let has_browser = ctx
-            .registered_tool_names
-            .iter()
-            .any(|n| n == "browser");
-        let has_web_search = ctx
-            .registered_tool_names
-            .iter()
-            .any(|n| n == "web_search");
+        let has_browser = ctx.registered_tool_names.iter().any(|n| n == "browser");
+        let has_web_search = ctx.registered_tool_names.iter().any(|n| n == "web_search");
 
         if has_browser {
             prompt.push_str("\n### Tool Routing Rules\n\n");
