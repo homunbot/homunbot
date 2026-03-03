@@ -51,8 +51,7 @@ fn sidebar(active: &str) -> String {
     // Settings submenu (only visible when settings is active)
     let settings_submenu = if active == "settings" {
         r##"<div class="nav-submenu">
-            <a href="#section-agent" class="nav-submenu-link">Agent</a>
-            <a href="#section-providers" class="nav-submenu-link">Providers</a>
+            <a href="#section-providers" class="nav-submenu-link">Model &amp; Providers</a>
             <a href="#section-channels" class="nav-submenu-link">Channels</a>
             <a href="#section-browser" class="nav-submenu-link">Browser</a>
             <a href="#section-memory" class="nav-submenu-link">Memory</a>
@@ -312,20 +311,25 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
     let config = state.config.read().await;
-    let providers_html = build_providers_html(&config);
+    let providers_html = build_providers_html::build(&config);
 
-    // Show warning if no model is configured
-    let no_model_warning = if config.agent.model.is_empty() {
-        r#"<div class="no-model-warning">
-            <span class="no-model-warning-icon">⚠️</span>
-            <div class="no-model-warning-text">
-                <strong>No model configured</strong>
-                <p>Select a model below to enable the assistant.</p>
-            </div>
-        </div>"#
+    // Resolve active provider for the banner
+    let active_provider_name = config
+        .resolve_provider(&config.agent.model)
+        .map(|(name, _)| name.to_string())
+        .unwrap_or_default();
+    let active_model_display = if config.agent.model.is_empty() {
+        String::new()
     } else {
-        ""
+        // Strip provider prefix for display
+        config
+            .agent
+            .model
+            .split_once('/')
+            .map(|(_, m)| m.to_string())
+            .unwrap_or_else(|| config.agent.model.clone())
     };
+    let active_provider_display = build_providers_html::get_provider_display_name(&active_provider_name);
 
     let body = format!(
         r##"<main class="content">
@@ -336,50 +340,68 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     </div>
                 </div>
 
-                {no_model_warning}
-
-                <section class="section" id="section-agent">
-                    <h2>Agent Configuration</h2>
-                    <form class="form form--full" id="agent-form">
-                        <div class="form-group model-selector-section">
-                            <label class="model-selector-label">Chat Model</label>
-                            <select id="model-select" class="input">
-                                <option value="">Loading models…</option>
-                            </select>
-                            <input type="hidden" name="model" id="model-value" value="{model}">
-                            <div class="form-hint">Select a model from configured providers, or type to search.</div>
-                        </div>
-                        <div class="form-group model-selector-section">
-                            <label class="model-selector-label">Vision Model</label>
-                            <select id="vision-model-select" class="input">
-                                <option value="">Loading models…</option>
-                            </select>
-                            <input type="hidden" name="vision_model" id="vision-model-value" value="{vision_model}">
-                            <div class="form-hint">Model for image analysis. Falls back to Chat Model if empty.</div>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Max Tokens</label>
-                                <input type="number" name="max_tokens" value="{max_tokens}" class="input">
-                            </div>
-                            <div class="form-group">
-                                <label>Temperature</label>
-                                <input type="number" name="temperature" value="{temperature}" step="0.1" min="0" max="2" class="input">
-                            </div>
-                            <div class="form-group">
-                                <label>Max Iterations</label>
-                                <input type="number" name="max_iterations" value="{max_iterations}" class="input">
-                            </div>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Save Agent Config</button>
-                    </form>
-                </section>
-
                 <section class="section" id="section-providers">
-                    <h2>Providers</h2>
-                    <div class="provider-grid">
+                    <h2>Model &amp; Providers</h2>
+
+                    <div class="active-model-banner" id="active-model-banner" {active_banner_hidden}>
+                        <div class="active-model-info">
+                            <span class="active-model-label">Active Model</span>
+                            <span class="active-model-name" id="active-model-name">{active_model_display}</span>
+                            <span class="active-model-provider" id="active-model-provider">via {active_provider_display}</span>
+                        </div>
+                    </div>
+
+                    <div id="no-model-banner" class="no-model-warning" {no_model_hidden}>
+                        <span class="no-model-warning-icon">!</span>
+                        <div class="no-model-warning-text">
+                            <strong>No model configured</strong>
+                            <p>Configure a provider below, then select a model to get started.</p>
+                        </div>
+                    </div>
+
+                    <div class="provider-accordion" id="provider-accordion">
                         {providers_html}
                     </div>
+
+                    <details class="section-advanced" id="advanced-agent">
+                        <summary>Advanced Agent Settings</summary>
+                        <form class="form form--full" id="agent-form" style="margin-top:12px;">
+                            <div class="form-group model-selector-section">
+                                <label class="model-selector-label">Vision Model</label>
+                                <select id="vision-model-select" class="input">
+                                    <option value="">Loading models…</option>
+                                </select>
+                                <input type="hidden" name="vision_model" id="vision-model-value" value="{vision_model}">
+                                <div class="form-hint">Model for image analysis. Falls back to Chat Model if empty.</div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Max Tokens</label>
+                                    <input type="number" name="max_tokens" value="{max_tokens}" class="input">
+                                </div>
+                                <div class="form-group">
+                                    <label>Temperature</label>
+                                    <input type="number" name="temperature" value="{temperature}" step="0.1" min="0" max="2" class="input">
+                                </div>
+                                <div class="form-group">
+                                    <label>Max Iterations</label>
+                                    <input type="number" name="max_iterations" value="{max_iterations}" class="input">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Fallback Models</label>
+                                <div class="form-hint" style="margin-bottom:8px;">If the primary model fails (rate limit, outage), these models are tried in order.</div>
+                                <div id="fallback-models-list" class="tag-list" data-models='{fallback_models_json}'></div>
+                                <div class="fallback-add-row">
+                                    <select id="fallback-model-select" class="input input--inline">
+                                        <option value="">Add fallback model…</option>
+                                    </select>
+                                    <button type="button" id="btn-add-fallback" class="btn btn-secondary btn--sm">Add</button>
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Save Advanced Settings</button>
+                        </form>
+                    </details>
                 </section>
 
                 <section class="section" id="section-channels">
@@ -391,15 +413,9 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
 
                 <section class="section" id="section-browser">
                     <h2>Browser Automation</h2>
+                    <div class="form-hint" style="margin-bottom:12px;">Uses Chrome/Chromium via CDP. Auto-detected: {browser_status}.</div>
                     <form class="form" id="browser-form">
                         <div class="form-row">
-                            <div class="form-group">
-                                <label class="toggle-label-inline">
-                                    <input type="checkbox" id="browser-enabled" name="enabled" class="toggle-input" {browser_enabled_checked}>
-                                    <span>Enable Browser Automation</span>
-                                </label>
-                                <div class="form-hint">Allow the agent to control a web browser.</div>
-                            </div>
                             <div class="form-group">
                                 <label class="toggle-label-inline">
                                     <input type="checkbox" id="browser-headless" name="headless" class="toggle-input" {browser_headless_checked}>
@@ -408,19 +424,26 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                                 <div class="form-hint">Run browser without visible window.</div>
                             </div>
                         </div>
+                        <div class="form-group">
+                            <label>Chrome Executable Path</label>
+                            <input type="text" id="browser-executable" name="executable_path" value="{executable_path}" class="input" placeholder="Auto-detect (leave empty)">
+                            <div class="form-hint">Leave empty to auto-detect. Override if Chrome is in a custom location.</div>
+                        </div>
                         <div class="form-row">
-                            <div class="form-group">
-                                <label>Browser Type</label>
-                                <select id="browser-type" name="browser_type" class="input">
-                                    <option value="chromium" {browser_type_chromium}>Chromium</option>
-                                    <option value="firefox" {browser_type_firefox}>Firefox</option>
-                                    <option value="webkit" {browser_type_webkit}>WebKit</option>
-                                </select>
-                            </div>
                             <div class="form-group">
                                 <label>Action Timeout (seconds)</label>
                                 <input type="number" id="browser-action-timeout" name="action_timeout_secs" value="{action_timeout_secs}" min="5" max="300" class="input">
-                                <div class="form-hint">Maximum time to wait for browser actions.</div>
+                                <div class="form-hint">Maximum time for click, type, etc.</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Navigation Timeout (seconds)</label>
+                                <input type="number" id="browser-nav-timeout" name="navigation_timeout_secs" value="{navigation_timeout_secs}" min="5" max="300" class="input">
+                                <div class="form-hint">Maximum time for page loads.</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Snapshot Limit</label>
+                                <input type="number" id="browser-snapshot-limit" name="snapshot_limit" value="{snapshot_limit}" min="10" max="500" class="input">
+                                <div class="form-hint">Max elements in accessibility tree.</div>
                             </div>
                         </div>
                         <div class="form-row">
@@ -483,41 +506,6 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                 </section>
             </div>
         </main>
-
-        <!-- Provider Configuration Modal -->
-        <div id="provider-modal" class="modal">
-            <div class="modal-backdrop"></div>
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h3 class="modal-title" id="modal-provider-name">Provider</h3>
-                    <button class="modal-close" type="button">&times;</button>
-                </div>
-                <div class="modal-body">
-                    <p class="modal-description" id="modal-provider-desc"></p>
-
-                    <form id="provider-config-form">
-                        <input type="hidden" id="modal-provider-id" name="provider">
-
-                        <div class="form-group" id="api-key-group">
-                            <label for="api-key">API Key</label>
-                            <input type="password" id="api-key" name="api_key" class="input" placeholder="sk-...">
-                            <div class="form-hint">Your API key is stored locally and never sent to our servers.</div>
-                        </div>
-
-                        <div class="form-group" id="api-base-group">
-                            <label for="api-base">Base URL</label>
-                            <input type="text" id="api-base" name="api_base" class="input" placeholder="https://api.example.com/v1">
-                            <div class="form-hint" id="api-base-hint">Custom API endpoint (optional)</div>
-                        </div>
-
-                        <div class="modal-actions">
-                            <button type="button" class="btn btn-secondary modal-cancel">Cancel</button>
-                            <button type="submit" class="btn btn-primary">Save</button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        </div>
 
         <!-- Channel Configuration Modal -->
         <div id="channel-modal" class="modal">
@@ -611,20 +599,19 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                 </div>
             </div>
         </div>"##,
-        model = config.agent.model,
+        active_model_display = active_model_display,
+        active_provider_display = active_provider_display,
+        active_banner_hidden = if config.agent.model.is_empty() { "style=\"display:none\"" } else { "" },
+        no_model_hidden = if config.agent.model.is_empty() { "" } else { "style=\"display:none\"" },
         vision_model = config.agent.vision_model,
         max_tokens = config.agent.max_tokens,
         temperature = config.agent.temperature,
         max_iterations = config.agent.max_iterations,
+        fallback_models_json = serde_json::to_string(&config.agent.fallback_models).unwrap_or_else(|_| "[]".to_string()),
         conversation_retention_days = config.memory.conversation_retention_days,
         history_retention_days = config.memory.history_retention_days,
         daily_archive_months = config.memory.daily_archive_months,
         auto_cleanup_checked = if config.memory.auto_cleanup {
-            "checked"
-        } else {
-            ""
-        },
-        browser_enabled_checked = if config.browser.enabled {
             "checked"
         } else {
             ""
@@ -634,22 +621,16 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
         } else {
             ""
         },
-        browser_type_chromium = if config.browser.browser_type == "chromium" {
-            "selected"
+        executable_path = config.browser.executable_path,
+        browser_status = if config.browser.resolved_executable().is_some() {
+            let path = config.browser.resolved_executable().unwrap();
+            format!("Chrome found at {}", path.display())
         } else {
-            ""
-        },
-        browser_type_firefox = if config.browser.browser_type == "firefox" {
-            "selected"
-        } else {
-            ""
-        },
-        browser_type_webkit = if config.browser.browser_type == "webkit" {
-            "selected"
-        } else {
-            ""
+            "Chrome not found — install Chrome or set path below".to_string()
         },
         action_timeout_secs = config.browser.action_timeout_secs,
+        navigation_timeout_secs = config.browser.navigation_timeout_secs,
+        snapshot_limit = config.browser.snapshot_limit,
         theme_system = if config.ui.theme == "system" {
             "selected"
         } else {
@@ -667,7 +648,6 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
         },
         providers_html = providers_html,
         channels_html = build_channels_cards_html(&config),
-        no_model_warning = no_model_warning,
     );
 
     Html(page_html("Settings", "settings", &body, &["setup.js"]))
@@ -1592,50 +1572,23 @@ fn build_channels_html(config: &crate::config::Config) -> String {
         .collect()
 }
 
-fn build_providers_html(config: &crate::config::Config) -> String {
+/// Module for provider accordion HTML generation
+mod build_providers_html {
+    use crate::config::Config;
+
     /// Provider display metadata: (display_name, description, needs_api_key, needs_base_url)
-    /// needs_base_url is true only for providers that REQUIRE a custom URL (vllm, custom)
-    /// All cloud providers have fixed URLs and don't need user input
     fn get_provider_meta(name: &str) -> (&'static str, &'static str, bool, bool) {
         match name {
-            // Primary providers (fixed URLs)
-            "anthropic" => (
-                "Anthropic",
-                "Claude API (claude-3.5-sonnet, claude-opus, etc.)",
-                true,
-                false,
-            ),
-            "openai" => ("OpenAI", "GPT-4, GPT-4o, o1, o3 series", true, false),
-            "openrouter" => (
-                "OpenRouter",
-                "Access to 200+ models via unified API",
-                true,
-                false,
-            ),
-            "gemini" => (
-                "Google Gemini",
-                "Gemini 1.5 Pro, Gemini 2.0 Flash",
-                true,
-                false,
-            ),
-            // Local/cloud providers
-            "ollama" => (
-                "Ollama (local)",
-                "Run models locally (llama3, mistral, etc.)",
-                false,
-                true,
-            ),
-            "ollama_cloud" => (
-                "Ollama Cloud",
-                "Hosted Ollama models with API key",
-                true,
-                false,
-            ),
+            "anthropic" => ("Anthropic", "Claude API (Sonnet, Opus, Haiku)", true, false),
+            "openai" => ("OpenAI", "GPT-4o, o1, o3 series", true, false),
+            "openrouter" => ("OpenRouter", "200+ models via unified API", true, false),
+            "gemini" => ("Google Gemini", "Gemini 2.0 Flash, Pro", true, false),
+            "ollama" => ("Ollama (local)", "Run models locally", false, true),
+            "ollama_cloud" => ("Ollama Cloud", "Hosted Ollama models", true, false),
             "vllm" => ("vLLM", "Self-hosted vLLM server", false, true),
-            "custom" => ("Custom", "Any OpenAI-compatible API endpoint", false, true),
-            // Cloud providers (all have fixed URLs)
-            "deepseek" => ("DeepSeek", "DeepSeek V3, DeepSeek R1, Coder", true, false),
-            "groq" => ("Groq", "Ultra-fast inference (llama, mixtral)", true, false),
+            "custom" => ("Custom", "Any OpenAI-compatible endpoint", false, true),
+            "deepseek" => ("DeepSeek", "DeepSeek V3, R1, Coder", true, false),
+            "groq" => ("Groq", "Ultra-fast inference", true, false),
             "mistral" => ("Mistral", "Mistral and Mixtral models", true, false),
             "xai" => ("xAI (Grok)", "Grok models by xAI", true, false),
             "together" => ("Together AI", "Open-source models at scale", true, false),
@@ -1643,18 +1596,11 @@ fn build_providers_html(config: &crate::config::Config) -> String {
             "perplexity" => ("Perplexity", "Sonar models with web search", true, false),
             "cohere" => ("Cohere", "Command R+, Command models", true, false),
             "venice" => ("Venice", "Privacy-focused AI inference", true, false),
-            // Gateways/aggregators (fixed URLs)
-            "aihubmix" => ("AiHubMix", "Multi-model aggregator gateway", true, false),
+            "aihubmix" => ("AiHubMix", "Multi-model aggregator", true, false),
             "vercel" => ("Vercel AI", "Vercel AI Gateway", true, false),
             "cloudflare" => ("Cloudflare AI", "Cloudflare AI Gateway", true, false),
             "copilot" => ("GitHub Copilot", "GitHub Copilot API", true, false),
-            "bedrock" => (
-                "AWS Bedrock",
-                "Amazon Bedrock foundation models",
-                true,
-                false,
-            ),
-            // Chinese providers (fixed URLs)
+            "bedrock" => ("AWS Bedrock", "Amazon Bedrock models", true, false),
             "minimax" => ("MiniMax", "MiniMax AI models", true, false),
             "dashscope" => ("DashScope", "Alibaba Qwen models", true, false),
             "moonshot" => ("Moonshot (Kimi)", "Moonshot AI models", true, false),
@@ -1663,51 +1609,197 @@ fn build_providers_html(config: &crate::config::Config) -> String {
         }
     }
 
-    config
-        .providers
-        .iter()
-        .map(|(name, pc)| {
+    pub fn get_provider_display_name(name: &str) -> &'static str {
+        get_provider_meta(name).0
+    }
+
+    pub fn build(config: &Config) -> String {
+        let active_provider = config
+            .resolve_provider(&config.agent.model)
+            .map(|(name, _)| name.to_string())
+            .unwrap_or_default();
+
+        // Collect providers into three groups: active, configured, unconfigured
+        let mut active_items = Vec::new();
+        let mut configured_items = Vec::new();
+        let mut unconfigured_items = Vec::new();
+
+        for (name, pc) in config.providers.iter() {
             let configured = config.is_provider_configured(name);
-
+            let is_active = name == active_provider;
             let (display_name, description, has_key, has_url) = get_provider_meta(name);
-            let is_ollama = name == "ollama";
 
-            // Build CSS class list for the card
-            let mut card_classes = String::from("provider-card");
-            if configured {
-                card_classes.push_str(" is-configured");
-            }
-
-            // API key mask — check encrypted storage first, then plaintext
             let api_key_mask = if configured && has_key {
-                // Don't leak actual key content; just show it's present
-                "••••••••".to_string()
+                "••••••••"
             } else {
-                String::new()
+                ""
             };
 
-            // Toggle is checked when provider is configured
-            let toggle_checked = if configured { "checked" } else { "" };
+            let item = build_accordion_item(
+                name,
+                display_name,
+                description,
+                has_key,
+                has_url,
+                configured,
+                is_active,
+                is_active, // expanded if active
+                api_key_mask,
+                pc.api_base.as_deref().unwrap_or(""),
+                &config.agent.model,
+            );
 
+            if is_active {
+                active_items.push(item);
+            } else if configured {
+                configured_items.push(item);
+            } else {
+                unconfigured_items.push(item);
+            }
+        }
+
+        let mut html = String::new();
+        for item in active_items {
+            html.push_str(&item);
+        }
+        for item in configured_items {
+            html.push_str(&item);
+        }
+        if !unconfigured_items.is_empty() {
+            html.push_str(r#"<div class="provider-divider">More Providers</div>"#);
+            for item in unconfigured_items {
+                html.push_str(&item);
+            }
+        }
+
+        html
+    }
+
+    fn build_accordion_item(
+        name: &str,
+        display_name: &str,
+        description: &str,
+        has_key: bool,
+        has_url: bool,
+        configured: bool,
+        is_active: bool,
+        expanded: bool,
+        api_key_mask: &str,
+        api_base: &str,
+        current_model: &str,
+    ) -> String {
+        let status_cls = if is_active {
+            "active"
+        } else if configured {
+            "configured"
+        } else {
+            ""
+        };
+
+        let active_badge = if is_active {
+            r#"<span class="provider-active-badge">Active</span>"#
+        } else {
+            ""
+        };
+
+        let body_hidden = if expanded { "" } else { "hidden" };
+        let aria_expanded = if expanded { "true" } else { "false" };
+        let chevron_cls = if expanded { "expanded" } else { "" };
+
+        // Credential fields
+        let key_field = if has_key {
             format!(
-                r#"<div class="{card_classes}" data-provider="{name}" data-display="{display_name}" data-description="{description}" data-has-key="{has_key}" data-has-url="{has_url}" data-is-ollama="{is_ollama}" data-configured="{configured}" data-api-key-mask="{api_key_mask}" data-api-base="{api_base}">
-                    <div class="provider-card-header">
-                        <div class="provider-card-info">
-                            <span class="provider-card-name">{display_name}</span>
-                        </div>
-                        <div class="provider-card-actions">
-                            <div class="toggle-wrap">
-                                <input type="checkbox" class="toggle-input" id="toggle-{name}" {toggle_checked}>
-                                <label class="toggle-label" for="toggle-{name}"></label>
-                            </div>
-                        </div>
+                r#"<div class="form-group">
+                    <label>API Key</label>
+                    <div class="credential-row">
+                        <input type="password" class="input provider-api-key" placeholder="{placeholder}" value="" data-mask="{api_key_mask}">
+                        <button type="button" class="btn btn-secondary btn--sm provider-save-key">Save Key</button>
                     </div>
-                    <div class="provider-card-desc">{description}</div>
+                    <div class="form-hint">Stored encrypted locally. Leave empty to keep current key.</div>
                 </div>"#,
-                api_base = pc.api_base.as_deref().unwrap_or(""),
+                placeholder = if api_key_mask.is_empty() {
+                    "Enter API key..."
+                } else {
+                    "Configured — enter new key to replace"
+                },
             )
-        })
-        .collect()
+        } else {
+            String::new()
+        };
+
+        let url_field = if has_url {
+            format!(
+                r#"<div class="form-group">
+                    <label>Base URL</label>
+                    <div class="credential-row">
+                        <input type="text" class="input provider-api-base" placeholder="http://localhost:11434/v1" value="{api_base}">
+                        <button type="button" class="btn btn-secondary btn--sm provider-save-url">Save URL</button>
+                    </div>
+                    <div class="form-hint">API endpoint URL.</div>
+                </div>"#,
+            )
+        } else {
+            String::new()
+        };
+
+        // Custom model input hint
+        let custom_hint = if name == "openrouter" {
+            "Use the path from OpenRouter (e.g. anthropic/claude-sonnet-4). Prefix added automatically."
+        } else if name == "ollama" || name == "ollama_cloud" {
+            "Enter the model name (e.g. llama3.3, mistral). Prefix added automatically."
+        } else {
+            "Enter a model name. Provider prefix is added automatically."
+        };
+
+        // Deactivate button (only for configured providers)
+        let deactivate_btn = if configured {
+            r#"<button type="button" class="btn btn-ghost btn--sm provider-deactivate" style="margin-top:8px;color:var(--text-muted);">Remove credentials</button>"#
+        } else {
+            ""
+        };
+
+        // Active model marker — which model from this provider is currently active
+        let provider_prefix = format!("{name}/");
+        let active_model_for_this_provider = if current_model.starts_with(&provider_prefix) {
+            current_model.to_string()
+        } else {
+            String::new()
+        };
+
+        format!(
+            r#"<div class="provider-item" data-provider="{name}" data-configured="{configured}" data-has-key="{has_key}" data-has-url="{has_url}" data-active-model="{active_model_for_this_provider}">
+                <div class="provider-item-header" role="button" tabindex="0" aria-expanded="{aria_expanded}">
+                    <div class="provider-item-left">
+                        <span class="provider-item-status {status_cls}"></span>
+                        <span class="provider-item-name">{display_name}</span>
+                        <span class="provider-item-desc">{description}</span>
+                    </div>
+                    <div class="provider-item-right">
+                        {active_badge}
+                        <span class="provider-chevron {chevron_cls}">&#9662;</span>
+                    </div>
+                </div>
+                <div class="provider-item-body" {body_hidden}>
+                    <div class="provider-credentials">
+                        {key_field}
+                        {url_field}
+                    </div>
+                    <div class="provider-models" data-provider="{name}">
+                        <label class="provider-models-label">Models</label>
+                        <div class="provider-model-list">
+                            <div class="form-hint">Loading models…</div>
+                        </div>
+                        <div class="custom-model-row">
+                            <input type="text" class="input input--inline provider-custom-model" placeholder="Custom model name…">
+                            <button type="button" class="btn btn-secondary btn--sm provider-use-custom">Use</button>
+                        </div>
+                        <div class="form-hint">{custom_hint}</div>
+                    </div>
+                    {deactivate_btn}
+                </div>
+            </div>"#,
+        )
+    }
 }
 
 fn build_channels_cards_html(config: &crate::config::Config) -> String {
