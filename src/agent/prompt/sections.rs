@@ -102,22 +102,38 @@ impl PromptSection for ToolsSection {
     fn build(&self, ctx: &PromptContext<'_>) -> Result<String> {
         let mut prompt = String::from("## Tooling\n\n");
 
-        if ctx.tools.is_empty() {
-            prompt.push_str("No tools are currently available.\n");
-            return Ok(prompt);
+        // XML mode: list tools and format instructions in the prompt
+        if !ctx.tools.is_empty() {
+            prompt.push_str("Tool availability (filtered by policy):\n");
+            prompt.push_str("Tool names are case-sensitive. Call tools exactly as listed.\n\n");
+
+            for tool in ctx.tools {
+                prompt.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
+            }
+
+            // Tool call format (XML dispatch mode only)
+            prompt.push_str("\n### Tool Call Format\n\n");
+            prompt.push_str("To use a tool, wrap a JSON object in `<tool_call_call>` tags:\n\n");
+            prompt.push_str("```\n");
+            prompt.push_str("<tool_call_call>\n");
+            prompt.push_str("{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n");
+            prompt.push_str("</tool_call_call>\n");
+            prompt.push_str("```\n\n");
+
+            prompt.push_str("### Examples\n\n");
+            prompt.push_str("**Remember user info:**\n");
+            prompt.push_str("```\n");
+            prompt.push_str("<tool_call_call>\n");
+            prompt.push_str("{\"name\": \"remember\", \"arguments\": {\"key\": \"hobby\", \"value\": \"cooking\"}}\n");
+            prompt.push_str("</tool_call_call>\n");
+            prompt.push_str("```\n");
         }
 
-        prompt.push_str("Tool availability (filtered by policy):\n");
-        prompt.push_str("Tool names are case-sensitive. Call tools exactly as listed.\n\n");
-
-        // Tool list
-        for tool in ctx.tools {
-            prompt.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
-        }
-
-        // Tool routing rules (context-dependent)
-        let has_browser = ctx.tools.iter().any(|t| t.name == "browser");
-        let has_web_search = ctx.tools.iter().any(|t| t.name == "web_search");
+        // Tool routing rules — ALWAYS included based on registered tools,
+        // regardless of native vs XML mode. In native mode, tool definitions
+        // go via the API parameter but the LLM still needs behavioral guidance.
+        let has_browser = ctx.registered_tool_names.iter().any(|n| n == "browser");
+        let has_web_search = ctx.registered_tool_names.iter().any(|n| n == "web_search");
 
         if has_browser {
             prompt.push_str("\n### Tool Routing Rules\n\n");
@@ -138,25 +154,23 @@ impl PromptSection for ToolsSection {
                 "- **web_fetch** is ONLY for reading static content at a known URL, \
                  NOT for browsing or searching.\n",
             );
+
+            // Browser workflow guidance (moved from tool description for better visibility)
+            prompt.push_str(
+                "\n### Browser Workflow\n\n\
+                 When using the browser for web research:\n\
+                 1. `navigate` to a search engine (e.g. google.com)\n\
+                 2. `snapshot` to see the page — find the search box ref\n\
+                 3. `type` your query in the search box with `submit: true`\n\
+                 4. `snapshot` to read search results — you see links with refs\n\
+                 5. `click` the most relevant link ref (do NOT navigate to a guessed URL)\n\
+                 6. `snapshot` to read the article content\n\
+                 7. If insufficient, use `back` and try another result\n\
+                 8. Formulate your answer, then `close`\n\n\
+                 CRITICAL: NEVER guess or invent URLs. ALWAYS click refs from the snapshot.\n\
+                 Snapshot format: `- link \"Title\" [ref=e3]` → use `click ref=e3`\n",
+            );
         }
-
-        // Tool call format (for XML dispatch mode)
-        prompt.push_str("\n### Tool Call Format\n\n");
-        prompt.push_str("To use a tool, wrap a JSON object in `<tool_call_call>` tags:\n\n");
-        prompt.push_str("```\n");
-        prompt.push_str("<tool_call_call>\n");
-        prompt.push_str("{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n");
-        prompt.push_str("</tool_call_call>\n");
-        prompt.push_str("```\n\n");
-
-        // Examples
-        prompt.push_str("### Examples\n\n");
-        prompt.push_str("**Remember user info:**\n");
-        prompt.push_str("```\n");
-        prompt.push_str("<tool_call_call>\n");
-        prompt.push_str("{\"name\": \"remember\", \"arguments\": {\"key\": \"hobby\", \"value\": \"cooking\"}}\n");
-        prompt.push_str("</tool_call_call>\n");
-        prompt.push_str("```\n");
 
         Ok(prompt)
     }
@@ -402,6 +416,7 @@ mod tests {
             workspace_dir: Path::new("/tmp/workspace"),
             model_name: "test-model",
             tools: &[],
+            registered_tool_names: &[],
             skills_summary: "",
             bootstrap_files: &[],
             memory_content: "",
@@ -435,19 +450,49 @@ mod tests {
     }
 
     #[test]
-    fn test_tools_section() {
+    fn test_tools_section_xml_mode() {
         let section = ToolsSection;
+        let tool_names = vec!["remember".to_string()];
         let ctx = PromptContext {
             tools: &[super::super::ToolInfo {
                 name: "remember".to_string(),
                 description: "Save user information".to_string(),
                 parameters_schema: serde_json::json!({}),
             }],
+            registered_tool_names: &tool_names,
             ..make_ctx()
         };
         let result = section.build(&ctx).unwrap();
         assert!(result.contains("remember"));
         assert!(result.contains("Tool Call Format"));
+    }
+
+    #[test]
+    fn test_tools_section_native_mode_with_browser() {
+        // In native mode, ctx.tools is empty but registered_tool_names has the browser.
+        // Routing rules must still appear.
+        let section = ToolsSection;
+        let tool_names = vec!["browser".to_string(), "shell".to_string()];
+        let ctx = PromptContext {
+            tools: &[], // native mode: tools go via API, not in prompt
+            registered_tool_names: &tool_names,
+            ..make_ctx()
+        };
+        let result = section.build(&ctx).unwrap();
+        assert!(
+            result.contains("Tool Routing Rules"),
+            "Routing rules must be visible in native mode"
+        );
+        assert!(
+            result.contains("Browser Workflow"),
+            "Browser workflow must be visible in native mode"
+        );
+        assert!(
+            result.contains("NEVER guess or invent URLs"),
+            "URL warning must be visible"
+        );
+        // Should NOT have XML tool call format
+        assert!(!result.contains("Tool Call Format"));
     }
 
     #[test]

@@ -154,6 +154,12 @@ impl AgentLoop {
         self.memory_searcher = Some(Arc::new(tokio::sync::Mutex::new(searcher)));
     }
 
+    /// Set registered tool names so the system prompt can include routing rules
+    /// even in native function calling mode (where ctx.tools is empty).
+    pub fn set_registered_tool_names(&mut self, names: Vec<String>) {
+        self.context.set_registered_tool_names(names);
+    }
+
     /// Inject available channels info for cross-channel messaging.
     /// Called after building the channel list so the agent knows where it can send.
     pub fn set_channels_info(&mut self, channels: &[(&str, &str)]) {
@@ -344,10 +350,19 @@ impl AgentLoop {
                 temperature: self.config.agent.temperature,
             };
 
+            // Estimate context size for debugging
+            let ctx_chars: usize = messages
+                .iter()
+                .map(|m| m.content.as_ref().map_or(0, |c| c.len()))
+                .sum();
+            let ctx_msgs = messages.len();
             tracing::info!(
                 provider = %self.provider.name(),
                 model = %self.config.agent.model,
                 streaming = use_streaming,
+                context_chars = ctx_chars,
+                messages = ctx_msgs,
+                iteration,
                 "Calling LLM provider"
             );
 
@@ -393,17 +408,21 @@ impl AgentLoop {
                                 );
                                 self.use_xml_dispatch.store(true, Ordering::Relaxed);
 
-                                // Inject tools into system prompt for XML mode
-                                let tools_prompt = xml_dispatcher::build_tools_prompt(&tool_defs);
-                                if let Some(system_msg) = messages.first_mut() {
-                                    if system_msg.role == "system" {
-                                        if let Some(ref mut content) = system_msg.content {
-                                            content.push_str(&tools_prompt);
-                                        }
-                                    }
-                                }
+                                // Rebuild system prompt from scratch with tools in XML mode.
+                                // The previous prompt said "No tools" — we need a clean rebuild.
+                                let xml_tool_infos: Vec<crate::agent::ToolInfo> = tool_defs
+                                    .iter()
+                                    .map(|td| crate::agent::ToolInfo {
+                                        name: td.function.name.clone(),
+                                        description: td.function.description.clone(),
+                                        parameters_schema: td.function.parameters.clone(),
+                                    })
+                                    .collect();
+                                messages = self
+                                    .context
+                                    .build_messages_with_tools(&history, content, &xml_tool_infos)
+                                    .await;
 
-                                // Retry without tool defs
                                 let retry_request = ChatRequest {
                                     messages: messages.clone(),
                                     tools: Vec::new(),
@@ -566,12 +585,8 @@ impl AgentLoop {
                     ));
                 }
 
-                // Add reflection prompt (following nanobot pattern)
-                if has_tools {
-                    messages.push(ChatMessage::user(
-                        "Reflect on the results and decide next steps.",
-                    ));
-                }
+                // No reflection prompt needed — modern LLMs reason about
+                // tool results naturally without an extra user nudge.
             } else {
                 // No tool calls → check for hallucination before accepting as final
                 let response_text = response.content.clone().unwrap_or_default();

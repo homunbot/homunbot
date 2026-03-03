@@ -646,8 +646,15 @@ async fn main() -> Result<()> {
             let db_for_searcher = db.clone();
             #[cfg(not(feature = "local-embeddings"))]
             let _db_for_searcher = db.clone();
+            // Capture tool names before moving registry (for system prompt routing rules)
+            let tool_names: Vec<String> = tool_registry
+                .names()
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
             let mut agent =
                 agent::AgentLoop::new(provider, config, session_manager.clone(), tool_registry, db);
+            agent.set_registered_tool_names(tool_names);
 
             // Initialize memory searcher (vector + FTS5 hybrid search)
             #[cfg(feature = "local-embeddings")]
@@ -799,6 +806,12 @@ async fn main() -> Result<()> {
             #[cfg(not(feature = "local-embeddings"))]
             let _db_for_searcher = db.clone();
             let db_for_web = db.clone();
+            // Capture tool names before moving registry (for system prompt routing rules)
+            let tool_names: Vec<String> = tool_registry
+                .names()
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
             let mut agent = if let Some(p) = provider {
                 let mut a = agent::AgentLoop::new(
                     p,
@@ -808,6 +821,7 @@ async fn main() -> Result<()> {
                     db,
                 );
                 a.set_message_tx(tool_msg_tx);
+                a.set_registered_tool_names(tool_names);
 
                 // Initialize memory searcher (vector + FTS5 hybrid search)
                 #[cfg(feature = "local-embeddings")]

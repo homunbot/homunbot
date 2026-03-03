@@ -155,6 +155,8 @@ pub struct SnapshotStats {
     pub interactive: usize,
     /// Number of elements with refs
     pub with_refs: usize,
+    /// Whether the snapshot was truncated due to element limit
+    pub truncated: bool,
 }
 
 impl PageSnapshot {
@@ -194,10 +196,9 @@ impl PageSnapshot {
             tracing::warn!(error = ?e, "Failed to tag DOM elements (element resolution will use fallback)");
         }
 
-        // Build text snapshot
-        let text_snapshot = Self::format_accessibility_tree(&url, &title, &description, &elements);
-
         // Calculate stats
+        let limit = options.limit.unwrap_or(100);
+        let truncated = elements.len() >= limit;
         let interactive = elements
             .iter()
             .filter(|e| INTERACTIVE_ROLES.contains(&e.role.as_str()))
@@ -206,7 +207,12 @@ impl PageSnapshot {
             total: elements.len(),
             interactive,
             with_refs: role_refs.len(),
+            truncated,
         };
+
+        // Build text snapshot
+        let text_snapshot =
+            Self::format_accessibility_tree(&url, &title, &description, &elements, truncated);
 
         Ok(Self {
             url,
@@ -568,6 +574,7 @@ impl PageSnapshot {
         title: &str,
         description: &Option<String>,
         elements: &[ElementRef],
+        truncated: bool,
     ) -> String {
         let mut output = String::new();
 
@@ -614,6 +621,13 @@ impl PageSnapshot {
                 output.push_str(&line);
                 output.push('\n');
             }
+        }
+
+        if truncated {
+            output.push_str(&format!(
+                "\n(showing first {} elements, page has more)\n",
+                elements.len()
+            ));
         }
 
         output.push_str("\n---\n");
@@ -784,6 +798,7 @@ mod tests {
             "Example Site",
             &description,
             &elements,
+            false,
         );
 
         let snapshot = PageSnapshot {
@@ -797,6 +812,7 @@ mod tests {
                 total: 3,
                 interactive: 3,
                 with_refs: 3,
+                truncated: false,
             },
         };
 

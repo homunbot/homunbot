@@ -22,8 +22,10 @@ pub struct PromptContext<'a> {
     pub workspace_dir: &'a Path,
     /// Current model name
     pub model_name: &'a str,
-    /// Tool definitions for the tools section
+    /// Tool definitions for the tools section (only populated in XML mode)
     pub tools: &'a [ToolInfo],
+    /// Names of all registered tools (always populated, for routing rules)
+    pub registered_tool_names: &'a [String],
     /// Skills summary for the skills section
     pub skills_summary: &'a str,
     /// Bootstrap files: (filename, content)
