@@ -410,8 +410,8 @@ fn create_tool_registry(config: &Config) -> ToolRegistry {
 ///
 /// Only available when `local-embeddings` feature is enabled.
 #[cfg(feature = "local-embeddings")]
-fn try_create_memory_searcher(db: Database) -> Option<agent::MemorySearcher> {
-    match agent::EmbeddingEngine::new() {
+fn try_create_memory_searcher(db: Database, config: &Config) -> Option<agent::MemorySearcher> {
+    match agent::EmbeddingEngine::new(config) {
         Ok(engine) => {
             let searcher = agent::MemorySearcher::new(db, engine);
             tracing::info!("Memory searcher initialized (vector + FTS5 hybrid search)");
@@ -579,13 +579,16 @@ async fn main() -> Result<()> {
             // but AgentLoop requires Arc<RwLock<Config>> for API uniformity)
             let shared_config = Arc::new(tokio::sync::RwLock::new(config));
             let mut agent =
-                agent::AgentLoop::new(provider, shared_config, session_manager.clone(), tool_registry, db).await;
+                agent::AgentLoop::new(provider, shared_config.clone(), session_manager.clone(), tool_registry, db).await;
             agent.set_registered_tool_names(tool_names);
 
             // Initialize memory searcher (vector + FTS5 hybrid search)
             #[cfg(feature = "local-embeddings")]
-            if let Some(searcher) = try_create_memory_searcher(db_for_searcher) {
-                agent.set_memory_searcher(searcher);
+            {
+                let cfg = shared_config.read().await;
+                if let Some(searcher) = try_create_memory_searcher(db_for_searcher, &cfg) {
+                    agent.set_memory_searcher(searcher);
+                }
             }
 
             // Load installed skills and inject into the agent's system prompt
@@ -756,8 +759,11 @@ async fn main() -> Result<()> {
 
                 // Initialize memory searcher (vector + FTS5 hybrid search)
                 #[cfg(feature = "local-embeddings")]
-                if let Some(searcher) = try_create_memory_searcher(db_for_searcher) {
-                    a.set_memory_searcher(searcher);
+                {
+                    let cfg = shared_config.read().await;
+                    if let Some(searcher) = try_create_memory_searcher(db_for_searcher, &cfg) {
+                        a.set_memory_searcher(searcher);
+                    }
                 }
 
                 Some(a)

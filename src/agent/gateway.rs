@@ -273,10 +273,18 @@ impl Gateway {
             self.web_stream_tx = Some(stream_tx);
 
             let web_db = self.db.clone();
+            // Share the memory searcher with the web server for hybrid search API
+            #[cfg(feature = "local-embeddings")]
+            let web_memory_searcher = self.agent.memory_searcher_handle();
+
             let handle = tokio::spawn(async move {
                 let mut server =
                     WebServer::new(shared_config, web_inbound_tx, web_outbound_rx, web_db);
                 server.set_stream_rx(stream_rx);
+                #[cfg(feature = "local-embeddings")]
+                if let Some(searcher) = web_memory_searcher {
+                    server.set_memory_searcher(searcher);
+                }
                 if let Err(e) = server.start().await {
                     tracing::error!(error = %e, "Web UI server error");
                 }

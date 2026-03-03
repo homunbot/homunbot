@@ -46,7 +46,7 @@ channel-webhook = []  # Built-in, uses axum
 providers-openai-compat = ["dep:eventsource-stream", "dep:pin-project-lite"]
 
 # === Advanced Features ===
-local-embeddings = ["dep:fastembed", "dep:usearch"]
+local-embeddings = ["dep:fastembed", "dep:usearch", "dep:lru"]
 browser = ["dep:chromiumoxide"]
 mcp = ["dep:rmcp"]
 vault-2fa = ["dep:totp-rs", "dep:rand"]
@@ -158,6 +158,7 @@ futures-util = { version = "0.3", optional = true }
 # --- Local embeddings ---
 fastembed = { version = "5", optional = true }
 usearch = { version = "2", optional = true }
+lru = { version = "0.12", optional = true }
 
 # --- Browser automation ---
 chromiumoxide = { version = "0.9", optional = true }

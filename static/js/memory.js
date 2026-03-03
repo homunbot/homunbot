@@ -91,12 +91,26 @@ function buildChunkRow(c) {
     wrap.appendChild(detail);
     info.appendChild(wrap);
 
-    const badge = document.createElement('span');
-    badge.className = 'badge badge-neutral';
-    badge.textContent = c.date;
+    const badges = document.createElement('div');
+    badges.style.cssText = 'display:flex;gap:6px;align-items:center;flex-shrink:0';
+
+    // Show relevance score badge when available (hybrid search)
+    if (c.score != null) {
+        const scoreBadge = document.createElement('span');
+        const pct = Math.round(c.score * 100);
+        scoreBadge.className = pct >= 50 ? 'badge badge-success' : 'badge badge-warning';
+        scoreBadge.textContent = pct + '%';
+        scoreBadge.title = 'Relevance score (hybrid vector + keyword search)';
+        badges.appendChild(scoreBadge);
+    }
+
+    const dateBadge = document.createElement('span');
+    dateBadge.className = 'badge badge-neutral';
+    dateBadge.textContent = c.date;
+    badges.appendChild(dateBadge);
 
     row.appendChild(info);
-    row.appendChild(badge);
+    row.appendChild(badges);
     return row;
 }
 

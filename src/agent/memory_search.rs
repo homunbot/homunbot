@@ -61,7 +61,7 @@ impl MemorySearcher {
     /// If FTS5 fails (e.g., special characters in query), falls back to vector-only search.
     pub async fn search(&mut self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
         // Run vector search (always works)
-        let vector_results = self.engine.search(query, CANDIDATES_PER_SOURCE)?;
+        let vector_results = self.engine.search(query, CANDIDATES_PER_SOURCE).await?;
 
         // Try FTS5 search, but gracefully handle failures
         let fts_results = match self

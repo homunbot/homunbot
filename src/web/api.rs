@@ -2433,6 +2433,9 @@ struct ChunkView {
     content: String,
     memory_type: String,
     created_at: String,
+    /// Relevance score from hybrid search (0.0–1.0). None for FTS5-only results.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    score: Option<f64>,
 }
 
 impl From<crate::storage::MemoryChunkRow> for ChunkView {
@@ -2445,6 +2448,7 @@ impl From<crate::storage::MemoryChunkRow> for ChunkView {
             content: row.content,
             memory_type: row.memory_type,
             created_at: row.created_at,
+            score: None,
         }
     }
 }
@@ -2459,6 +2463,35 @@ async fn search_memory(
         return Ok(Json(SearchResponse { chunks: vec![] }));
     }
 
+    // Try hybrid search (vector + FTS5) if memory searcher is available
+    #[cfg(feature = "local-embeddings")]
+    if let Some(ref searcher_mutex) = state.memory_searcher {
+        let mut searcher = searcher_mutex.lock().await;
+        match searcher.search(&q.q, q.limit).await {
+            Ok(results) => {
+                let chunks: Vec<ChunkView> = results
+                    .into_iter()
+                    .map(|r| ChunkView {
+                        id: r.chunk.id,
+                        date: r.chunk.date,
+                        source: r.chunk.source,
+                        heading: r.chunk.heading,
+                        content: r.chunk.content,
+                        memory_type: r.chunk.memory_type,
+                        created_at: r.chunk.created_at,
+                        score: Some(r.score),
+                    })
+                    .collect();
+                return Ok(Json(SearchResponse { chunks }));
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Hybrid search failed, falling back to FTS5-only");
+                // Fall through to FTS5-only search below
+            }
+        }
+    }
+
+    // Fallback: FTS5-only search (no vector similarity)
     let fts_results = db
         .fts5_search(&q.q, q.limit)
         .await

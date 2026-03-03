@@ -34,6 +34,10 @@ pub struct AppState {
     /// Database handle — used by memory/vault API endpoints.
     /// `None` in setup-only mode (no agent, just config UI).
     pub db: Option<Database>,
+    /// Shared memory searcher for hybrid vector + FTS5 search.
+    /// Shared with the AgentLoop — both use the same HNSW index.
+    #[cfg(feature = "local-embeddings")]
+    pub memory_searcher: Option<Arc<tokio::sync::Mutex<crate::agent::MemorySearcher>>>,
 }
 
 impl AppState {
@@ -53,6 +57,8 @@ pub struct WebServer {
     outbound_rx: Option<mpsc::Receiver<OutboundMessage>>,
     stream_rx: Option<mpsc::Receiver<StreamMessage>>,
     db: Option<Database>,
+    #[cfg(feature = "local-embeddings")]
+    memory_searcher: Option<Arc<tokio::sync::Mutex<crate::agent::MemorySearcher>>>,
 }
 
 impl WebServer {
@@ -69,7 +75,18 @@ impl WebServer {
             outbound_rx: Some(outbound_rx),
             stream_rx: None,
             db: Some(db),
+            #[cfg(feature = "local-embeddings")]
+            memory_searcher: None,
         }
+    }
+
+    /// Set the shared memory searcher for hybrid search in the web API.
+    #[cfg(feature = "local-embeddings")]
+    pub fn set_memory_searcher(
+        &mut self,
+        searcher: Arc<tokio::sync::Mutex<crate::agent::MemorySearcher>>,
+    ) {
+        self.memory_searcher = Some(searcher);
     }
 
     /// Set the receiver for streaming chunks from the gateway.
@@ -89,6 +106,8 @@ impl WebServer {
             outbound_rx: None,
             stream_rx: None,
             db: None,
+            #[cfg(feature = "local-embeddings")]
+            memory_searcher: None,
         }
     }
 
@@ -106,6 +125,8 @@ impl WebServer {
             ws_sessions: tokio::sync::RwLock::new(std::collections::HashMap::new()),
             stream_sessions: tokio::sync::RwLock::new(std::collections::HashMap::new()),
             db: self.db,
+            #[cfg(feature = "local-embeddings")]
+            memory_searcher: self.memory_searcher,
         });
 
         // If we have outbound messages, spawn task to route them to WebSocket sessions

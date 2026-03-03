@@ -166,6 +166,12 @@ impl AgentLoop {
         self.memory_searcher = Some(Arc::new(tokio::sync::Mutex::new(searcher)));
     }
 
+    /// Get a clone of the shared memory searcher handle (for sharing with the web server).
+    #[cfg(feature = "local-embeddings")]
+    pub fn memory_searcher_handle(&self) -> Option<Arc<tokio::sync::Mutex<MemorySearcher>>> {
+        self.memory_searcher.clone()
+    }
+
     /// Set registered tool names so the system prompt can include routing rules
     /// even in native function calling mode (where ctx.tools is empty).
     pub fn set_registered_tool_names(&mut self, names: Vec<String>) {
@@ -928,7 +934,7 @@ impl AgentLoop {
                                     for (chunk_id, text) in &result.new_chunks {
                                         // Check for duplicates before indexing
                                         // Distance threshold 0.15 ≈ 85% cosine similarity
-                                        match s.engine_mut().find_similar(text, 0.15) {
+                                        match s.engine_mut().find_similar(text, 0.15).await {
                                             Ok(Some((existing_id, distance))) => {
                                                 tracing::debug!(
                                                     chunk_id,
@@ -949,7 +955,8 @@ impl AgentLoop {
                                             }
                                         }
 
-                                        if let Err(e) = s.engine_mut().index_chunk(*chunk_id, text)
+                                        if let Err(e) =
+                                            s.engine_mut().index_chunk(*chunk_id, text).await
                                         {
                                             tracing::warn!(
                                                 chunk_id,

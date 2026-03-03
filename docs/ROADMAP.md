@@ -64,19 +64,21 @@
 
 | # | Task | File principali | LOC stimate | Stato |
 |---|------|----------------|-------------|-------|
-| 2.1 | **Attivare hybrid search nel loop** | `agent/agent_loop.rs` | ~50 | TODO |
+| 2.1 | **Attivare hybrid search nel loop** | `agent/agent_loop.rs`, `agent/memory_search.rs` | ~450 (pre-existing) | ✅ DONE |
 | | Prima di ogni chiamata LLM: cercare memorie rilevanti | | | |
 | | Iniettare come "Relevant memories" nel context | | | |
 | | Usare query = ultimi messaggi utente | | | |
-| 2.2 | **Embedding API provider** | `agent/embeddings.rs` | ~100 | TODO |
-| | Supporto OpenAI text-embedding-3-small via API | | | |
+| 2.2 | **Embedding API provider** | `agent/embeddings.rs`, `config/schema.rs` | ~180 | ✅ DONE |
+| | EmbeddingProvider trait (local + OpenAI backends) | | | |
+| | OpenAI text-embedding-3-small with dimensions=384 | | | |
 | | Fallback su fastembed locale se non configurato | | | |
-| | Cache LRU per evitare chiamate duplicate | | | |
-| 2.3 | **Web UI: memory search** | `static/js/memory.js`, `web/api.rs` | ~80 | TODO |
-| | Endpoint GET /api/v1/memory/search?q=... | | | |
-| | UI per testare search e vedere risultati con score | | | |
+| | LRU cache (512 entries) per evitare chiamate duplicate | | | |
+| 2.3 | **Web UI: memory search** | `web/api.rs`, `web/server.rs`, `static/js/memory.js` | ~60 | ✅ DONE |
+| | Hybrid search (vector + FTS5) nell'endpoint API | | | |
+| | MemorySearcher condiviso tra agent loop e web server | | | |
+| | UI con score badge colorati per ogni risultato | | | |
 
-**Stima totale Sprint 2: ~230 LOC**
+**Sprint 2 completo: ~240 LOC (nuove) + ~450 LOC pre-existing**
 
 ---
 

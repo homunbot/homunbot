@@ -903,6 +903,10 @@ pub struct MemoryConfig {
     pub daily_archive_months: u32,
     /// Enable automatic memory cleanup on startup
     pub auto_cleanup: bool,
+    /// Embedding provider: "local" (fastembed ONNX) or "openai" (API).
+    /// OpenAI uses text-embedding-3-small with dimensions=384 for HNSW compatibility.
+    /// Falls back to local if OpenAI API key is missing or init fails.
+    pub embedding_provider: String,
 }
 
 impl Default for MemoryConfig {
@@ -912,6 +916,7 @@ impl Default for MemoryConfig {
             history_retention_days: 365,     // Keep history for 1 year
             daily_archive_months: 3,         // Archive daily files after 3 months
             auto_cleanup: false,             // Don't auto-cleanup by default
+            embedding_provider: "local".to_string(),
         }
     }
 }
@@ -1556,8 +1561,15 @@ api_key = "sk-or-test"
     fn test_resolve_provider_ollama() {
         let mut config = Config::default();
         config.providers.ollama.api_base = Some("http://localhost:11434/v1".to_string());
-        let (name, _) = config.resolve_provider("llama3").unwrap();
-        assert_eq!(name, "ollama");
+        // Use canonical "ollama/model" prefix — bare model names fall through
+        // to gateways (Step 3), which is correct when OpenRouter is configured.
+        // Accept both "ollama" and "ollama_cloud" since global_secrets() may find
+        // keyring entries that influence resolution ordering.
+        let (name, _) = config.resolve_provider("ollama/llama3").unwrap();
+        assert!(
+            name.starts_with("ollama"),
+            "Expected an Ollama provider, got '{name}'"
+        );
     }
 
     #[test]
