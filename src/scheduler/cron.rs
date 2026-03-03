@@ -223,9 +223,17 @@ fn parse_schedule(schedule: &str) -> ScheduleKind {
         return ScheduleKind::Cron(schedule.to_string());
     }
 
-    // Try as seconds
+    // Try as seconds (bare number fallback) — enforce minimum 60s
     if let Ok(s) = schedule.parse::<u64>() {
-        return ScheduleKind::Every(s);
+        let secs = s.max(60);
+        if secs != s {
+            tracing::warn!(
+                original = s,
+                enforced = secs,
+                "Bare number schedule below 60s minimum, enforcing 60s"
+            );
+        }
+        return ScheduleKind::Every(secs);
     }
 
     ScheduleKind::Unknown
@@ -261,6 +269,30 @@ fn field_matches(field: &str, value: u32) -> bool {
     // Comma-separated values: "1,15,30"
     for part in field.split(',') {
         let part = part.trim();
+
+        // Step values: "*/15" or "1-30/5"
+        if let Some((range_part, step_str)) = part.split_once('/') {
+            if let Ok(step) = step_str.parse::<u32>() {
+                if step == 0 {
+                    continue; // Avoid division by zero
+                }
+                if range_part == "*" {
+                    // */N: matches when value is divisible by step
+                    if value % step == 0 {
+                        return true;
+                    }
+                } else if let Some((start, end)) = range_part.split_once('-') {
+                    // start-end/step
+                    if let (Ok(s), Ok(e)) = (start.parse::<u32>(), end.parse::<u32>()) {
+                        if value >= s && value <= e && (value - s) % step == 0 {
+                            return true;
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
         // Range: "1-5"
         if let Some((start, end)) = part.split_once('-') {
             if let (Ok(s), Ok(e)) = (start.parse::<u32>(), end.parse::<u32>()) {
@@ -347,8 +379,54 @@ mod tests {
     }
 
     #[test]
+    fn test_field_matches_step() {
+        // */15: matches 0, 15, 30, 45
+        assert!(field_matches("*/15", 0));
+        assert!(field_matches("*/15", 15));
+        assert!(field_matches("*/15", 30));
+        assert!(field_matches("*/15", 45));
+        assert!(!field_matches("*/15", 10));
+        assert!(!field_matches("*/15", 7));
+    }
+
+    #[test]
+    fn test_field_matches_range_step() {
+        // 1-30/5: matches 1, 6, 11, 16, 21, 26
+        assert!(field_matches("1-30/5", 1));
+        assert!(field_matches("1-30/5", 6));
+        assert!(field_matches("1-30/5", 11));
+        assert!(!field_matches("1-30/5", 2));
+        assert!(!field_matches("1-30/5", 31));
+    }
+
+    #[test]
     fn test_cron_matches_all_stars() {
         let now = chrono::Utc::now();
         assert!(cron_matches_now("* * * * *", &now));
+    }
+
+    #[test]
+    fn test_cron_every_30_min() {
+        // "*/30 * * * *" should match minute 0 and 30
+        let t = chrono::NaiveDate::from_ymd_opt(2026, 3, 3)
+            .unwrap()
+            .and_hms_opt(10, 30, 0)
+            .unwrap()
+            .and_utc();
+        assert!(cron_matches_now("*/30 * * * *", &t));
+
+        let t2 = chrono::NaiveDate::from_ymd_opt(2026, 3, 3)
+            .unwrap()
+            .and_hms_opt(10, 0, 0)
+            .unwrap()
+            .and_utc();
+        assert!(cron_matches_now("*/30 * * * *", &t2));
+
+        let t3 = chrono::NaiveDate::from_ymd_opt(2026, 3, 3)
+            .unwrap()
+            .and_hms_opt(10, 15, 0)
+            .unwrap()
+            .and_utc();
+        assert!(!cron_matches_now("*/30 * * * *", &t3));
     }
 }

@@ -123,6 +123,7 @@ pub struct FunctionDefinition {
 }
 
 /// Chat request parameters
+#[derive(Clone)]
 pub struct ChatRequest {
     pub messages: Vec<ChatMessage>,
     pub tools: Vec<ToolDefinition>,

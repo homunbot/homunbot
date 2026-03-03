@@ -317,25 +317,73 @@ enum ServiceCommands {
     Status,
 }
 
-/// Create the LLM provider from config.
+/// Create the LLM provider from config, wrapped in a ReliableProvider
+/// with retry and failover support.
 ///
-/// Anthropic uses a native provider (different API format with content blocks
-/// and tool_use). All other providers use the OpenAI-compatible format.
+/// Builds a provider chain: primary model + any `fallback_models` from config.
+/// Each provider gets retry on transient errors (429, 5xx) and automatic
+/// failover to the next provider on non-transient errors (401, 403).
 fn create_provider(config: &Config) -> Result<Arc<dyn provider::Provider>> {
-    let model = &config.agent.model;
+    let primary_model = &config.agent.model;
+    let (primary_name, primary) = create_single_provider(config, primary_model)
+        .context("No provider configured. Add an API key to ~/.homun/config.toml")?;
+
+    let mut chain = vec![(primary_name, primary, primary_model.clone())];
+
+    // Add fallback providers from config
+    for fallback_model in &config.agent.fallback_models {
+        match create_single_provider(config, fallback_model) {
+            Ok((name, provider)) => {
+                tracing::info!(
+                    provider = %name,
+                    model = %fallback_model,
+                    "Registered fallback provider"
+                );
+                chain.push((name, provider, fallback_model.clone()));
+            }
+            Err(e) => {
+                tracing::warn!(
+                    model = %fallback_model,
+                    error = %e,
+                    "Skipping fallback model — provider not configured"
+                );
+            }
+        }
+    }
+
+    tracing::info!(
+        primary_model = %primary_model,
+        chain_length = chain.len(),
+        "Provider chain ready"
+    );
+
+    Ok(Arc::new(provider::ReliableProvider::new(
+        chain,
+        crate::utils::retry::RetryConfig::default(),
+    )))
+}
+
+/// Create a single LLM provider instance for a given model string.
+///
+/// Resolves the provider from config, retrieves the API key (from encrypted
+/// storage or plaintext with auto-migration), and constructs the appropriate
+/// provider type (Anthropic, Ollama, or OpenAI-compatible).
+fn create_single_provider(
+    config: &Config,
+    model: &str,
+) -> Result<(String, Arc<dyn provider::Provider>)> {
     let (provider_name, provider_config) = config
         .resolve_provider(model)
-        .context("No provider configured. Add an API key to ~/.homun/config.toml")?;
+        .with_context(|| format!("No provider configured for model '{}'", model))?;
 
     tracing::info!(
         provider = provider_name,
         model = model,
-        "Using LLM provider"
+        "Creating LLM provider"
     );
 
     // Get API key from secure storage (encrypted)
     let api_key = if provider_config.api_key == "***ENCRYPTED***" {
-        // Retrieve from secure storage
         let secrets = storage::global_secrets().context("Failed to access secure storage")?;
         let secret_key = storage::SecretKey::provider_api_key(provider_name);
         secrets.get(&secret_key)?.unwrap_or_default()
@@ -352,7 +400,6 @@ fn create_provider(config: &Config) -> Result<Arc<dyn provider::Provider>> {
         if let Ok(secrets) = storage::global_secrets() {
             let secret_key = storage::SecretKey::provider_api_key(provider_name);
             if secrets.set(&secret_key, &plaintext_key).is_ok() {
-                // Update config file to replace plaintext with marker
                 let mut migrated = config.clone();
                 if let Some(pc) = migrated.providers.get_mut(provider_name) {
                     pc.api_key = "***ENCRYPTED***".to_string();
@@ -370,30 +417,26 @@ fn create_provider(config: &Config) -> Result<Arc<dyn provider::Provider>> {
         plaintext_key
     };
 
+    let name = provider_name.to_string();
+
     if provider_name == "anthropic" {
-        // Native Anthropic provider (Claude API with tool_use blocks)
         let provider = AnthropicProvider::new(
             &api_key,
             provider_config.api_base.as_deref(),
             provider_config.extra_headers.clone(),
         );
-        Ok(Arc::new(provider))
+        Ok((name, Arc::new(provider)))
     } else if provider_name == "ollama" {
-        // Native Ollama provider (local /api/chat — NDJSON, native tool calls, think control)
         let provider = provider::OllamaProvider::new(&api_key, provider_config.api_base.as_deref());
-        Ok(Arc::new(provider))
+        Ok((name, Arc::new(provider)))
     } else {
-        // OpenAI-compatible provider (covers OpenRouter, OpenAI, DeepSeek, Groq, Gemini,
-        // Mistral, xAI, Together, Fireworks, Perplexity, Cohere, Venice, AiHubMix, Vercel,
-        // Cloudflare, Copilot, Bedrock, Minimax, DashScope, Moonshot, Zhipu, vLLM, custom,
-        // and ollama_cloud for Ollama's hosted service)
         let provider = OpenAICompatProvider::from_config(
             provider_name,
             &api_key,
             provider_config.api_base.as_deref(),
             provider_config.extra_headers.clone(),
         );
-        Ok(Arc::new(provider))
+        Ok((name, Arc::new(provider)))
     }
 }
 

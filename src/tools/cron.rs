@@ -30,7 +30,10 @@ impl Tool for CronTool {
     }
 
     fn description(&self) -> &str {
-        "Schedule recurring or one-time tasks. Use action='add' to create a job, 'list' to see all jobs, 'remove' to delete a job."
+        "Schedule recurring or one-time tasks. Actions: add, list, remove. \
+         Schedule format: 'every:SECONDS' (e.g. every:1800 for 30 minutes, every:3600 for 1 hour), \
+         'cron:MIN HOUR DOM MON DOW' (e.g. cron:*/30 * * * * for every 30 min, cron:0 9 * * * for 9 AM daily), \
+         'at:ISO_TIMESTAMP' for one-time. IMPORTANT: 'every:' uses SECONDS not minutes."
     }
 
     fn parameters(&self) -> Value {
@@ -52,7 +55,7 @@ impl Tool for CronTool {
                 },
                 "schedule": {
                     "type": "string",
-                    "description": "Schedule: 'every:300' (every 300 seconds), 'cron:0 9 * * *' (9 AM daily), 'at:2025-02-20T10:30:00' (one-time)"
+                    "description": "Schedule format (ALWAYS use a prefix): 'every:SECONDS' (e.g. every:1800 = 30 min, every:3600 = 1 hour), 'cron:MIN HOUR DOM MON DOW' (e.g. cron:*/30 * * * * = every 30 min), 'at:YYYY-MM-DDTHH:MM:SS' (one-time). The every: value is in SECONDS."
                 },
                 "deliver_to": {
                     "type": "string",
@@ -101,9 +104,15 @@ impl CronTool {
         let schedule = match args.get("schedule").and_then(|v| v.as_str()) {
             Some(s) => s,
             None => return ToolResult::error(
-                "Missing 'schedule' parameter. Examples: 'every:300', 'cron:0 9 * * *', 'at:2025-02-20T10:30:00'"
+                "Missing 'schedule' parameter. Use 'every:SECONDS' (e.g. every:1800 for 30 min), \
+                 'cron:MIN HOUR DOM MON DOW' (e.g. cron:0 9 * * *), or 'at:ISO_TIMESTAMP'.",
             ),
         };
+
+        // Validate schedule format to prevent common mistakes
+        if let Some(err) = validate_schedule(schedule) {
+            return ToolResult::error(err);
+        }
 
         // Auto-set deliver_to from the originating channel if not explicitly provided.
         // This ensures cron responses are sent back to the user on the same channel.
@@ -164,4 +173,82 @@ impl CronTool {
             Err(e) => ToolResult::error(format!("Failed to remove job: {e}")),
         }
     }
+}
+
+/// Minimum allowed interval for `every:` schedules (60 seconds).
+const MIN_INTERVAL_SECS: u64 = 60;
+
+/// Validate a schedule string before creating a cron job.
+/// Returns `Some(error_message)` if invalid, `None` if OK.
+fn validate_schedule(schedule: &str) -> Option<String> {
+    // Reject bare numbers — too ambiguous (seconds? minutes?)
+    if schedule.parse::<u64>().is_ok() {
+        return Some(format!(
+            "Ambiguous schedule '{}'. Use an explicit prefix: 'every:{}' for {} seconds, \
+             or 'every:{}' for {} minutes. The every: value is always in SECONDS.",
+            schedule,
+            schedule,
+            schedule,
+            schedule.parse::<u64>().unwrap_or(0) * 60,
+            schedule,
+        ));
+    }
+
+    // Validate every: interval — must be at least MIN_INTERVAL_SECS
+    if let Some(secs_str) = schedule.strip_prefix("every:") {
+        if let Ok(secs) = secs_str.trim().parse::<u64>() {
+            if secs < MIN_INTERVAL_SECS {
+                return Some(format!(
+                    "Interval too short: every:{secs} is {secs} seconds. \
+                     Minimum is {MIN_INTERVAL_SECS} seconds (1 minute). \
+                     Did you mean every:{} for {} minutes?",
+                    secs * 60,
+                    secs,
+                ));
+            }
+        } else {
+            return Some(format!(
+                "Invalid interval: 'every:{secs_str}'. Must be a number of seconds (e.g. every:1800 for 30 minutes)."
+            ));
+        }
+    }
+
+    // Validate cron: expression has 5 fields
+    if let Some(expr) = schedule.strip_prefix("cron:") {
+        let fields: Vec<&str> = expr.split_whitespace().collect();
+        if fields.len() != 5 {
+            return Some(format!(
+                "Invalid cron expression: '{}'. Must have 5 fields: MIN HOUR DOM MON DOW \
+                 (e.g. cron:0 9 * * * for 9 AM daily, cron:*/30 * * * * for every 30 min).",
+                expr.trim()
+            ));
+        }
+    }
+
+    // Validate at: timestamp format
+    if let Some(ts) = schedule.strip_prefix("at:") {
+        if chrono::NaiveDateTime::parse_from_str(ts.trim(), "%Y-%m-%dT%H:%M:%S").is_err() {
+            return Some(format!(
+                "Invalid timestamp: 'at:{ts}'. Must be ISO format: at:YYYY-MM-DDTHH:MM:SS \
+                 (e.g. at:2026-03-03T10:30:00)."
+            ));
+        }
+    }
+
+    // Reject completely unknown formats
+    if !schedule.starts_with("every:")
+        && !schedule.starts_with("cron:")
+        && !schedule.starts_with("at:")
+    {
+        // Allow bare 5-field cron expressions (auto-detected by parser)
+        let parts: Vec<&str> = schedule.split_whitespace().collect();
+        if parts.len() != 5 {
+            return Some(format!(
+                "Unknown schedule format: '{schedule}'. Use 'every:SECONDS', 'cron:MIN HOUR DOM MON DOW', \
+                 or 'at:YYYY-MM-DDTHH:MM:SS'."
+            ));
+        }
+    }
+
+    None
 }
