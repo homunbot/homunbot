@@ -36,7 +36,7 @@ struct MemorySearcher;
 /// 5. Repeat until max_iterations or final response
 pub struct AgentLoop {
     provider: Arc<dyn Provider>,
-    config: Config,
+    config: Arc<RwLock<Config>>,
     context: ContextBuilder,
     session_manager: SessionManager,
     tool_registry: ToolRegistry,
@@ -56,14 +56,15 @@ pub struct AgentLoop {
 }
 
 impl AgentLoop {
-    pub fn new(
+    pub async fn new(
         provider: Arc<dyn Provider>,
-        config: Config,
+        config: Arc<RwLock<Config>>,
         session_manager: SessionManager,
         tool_registry: ToolRegistry,
         db: Database,
     ) -> Self {
-        let mut context = ContextBuilder::new(&config);
+        let cfg = config.read().await;
+        let mut context = ContextBuilder::new(&cfg);
         let memory = Arc::new(MemoryConsolidator::new(db));
 
         // Inject long-term memory into context if MEMORY.md exists
@@ -74,13 +75,13 @@ impl AgentLoop {
 
         // Determine if XML tool dispatch should be used
         // This considers: provider setting > global setting > auto-detect for Ollama
-        let model = &config.agent.model;
-        let provider_name = config
+        let model = &cfg.agent.model;
+        let provider_name = cfg
             .resolve_provider(model)
             .map(|(name, _)| name)
             .unwrap_or("unknown");
 
-        let use_xml_dispatch = config.should_use_xml_dispatch(provider_name, model);
+        let use_xml_dispatch = cfg.should_use_xml_dispatch(provider_name, model);
 
         if use_xml_dispatch {
             tracing::info!(
@@ -89,6 +90,7 @@ impl AgentLoop {
                 "Using XML tool dispatch mode (provider/model specific or auto-detected)"
             );
         }
+        drop(cfg); // release lock before storing
 
         Self {
             provider,
@@ -207,10 +209,14 @@ impl AgentLoop {
         chat_id: &str,
         stream_tx: Option<mpsc::Sender<crate::provider::StreamChunk>>,
     ) -> Result<String> {
+        // Snapshot config for this request — picks up any changes from web UI.
+        // Clone + drop lock immediately to avoid holding across LLM calls.
+        let config = self.config.read().await.clone();
+
         // Get conversation history from SQLite
         let history = self
             .session_manager
-            .get_history(session_key, self.config.agent.memory_window)
+            .get_history(session_key, config.agent.memory_window)
             .await?;
 
         // Search for relevant past memories and inject into context (Layer 3.5)
@@ -316,13 +322,13 @@ impl AgentLoop {
 
         let mut final_content: Option<String> = None;
         let mut tools_used: Vec<String> = Vec::new();
-        let max_iterations = self.config.agent.max_iterations;
+        let max_iterations = config.agent.max_iterations;
 
         for iteration in 1..=max_iterations {
             tracing::debug!(
                 iteration,
                 max_iterations,
-                model = %self.config.agent.model,
+                model = %config.agent.model,
                 provider = %self.provider.name(),
                 tools = tool_defs.len(),
                 xml_mode,
@@ -342,13 +348,13 @@ impl AgentLoop {
             };
             let use_streaming = stream_tx.is_some();
 
-            let active_model = &self.config.agent.model;
+            let active_model = &config.agent.model;
             let request = ChatRequest {
                 messages: messages.clone(),
                 tools: api_tools,
                 model: active_model.clone(),
-                max_tokens: self.config.agent.effective_max_tokens(active_model),
-                temperature: self.config.agent.effective_temperature(active_model),
+                max_tokens: config.agent.effective_max_tokens(active_model),
+                temperature: config.agent.effective_temperature(active_model),
             };
 
             // Estimate context size for debugging
@@ -359,7 +365,7 @@ impl AgentLoop {
             let ctx_msgs = messages.len();
             tracing::info!(
                 provider = %self.provider.name(),
-                model = %self.config.agent.model,
+                model = %config.agent.model,
                 streaming = use_streaming,
                 context_chars = ctx_chars,
                 messages = ctx_msgs,
@@ -382,8 +388,8 @@ impl AgentLoop {
                                 tool_defs.clone()
                             },
                             model: active_model.clone(),
-                            max_tokens: self.config.agent.effective_max_tokens(active_model),
-                            temperature: self.config.agent.effective_temperature(active_model),
+                            max_tokens: config.agent.effective_max_tokens(active_model),
+                            temperature: config.agent.effective_temperature(active_model),
                         };
                         self.provider
                             .chat(request2)
@@ -428,8 +434,8 @@ impl AgentLoop {
                                     messages: messages.clone(),
                                     tools: Vec::new(),
                                     model: active_model.clone(),
-                                    max_tokens: self.config.agent.effective_max_tokens(active_model),
-                                    temperature: self.config.agent.effective_temperature(active_model),
+                                    max_tokens: config.agent.effective_max_tokens(active_model),
+                                    temperature: config.agent.effective_temperature(active_model),
                                 };
                                 self.provider
                                     .chat(retry_request)
@@ -736,8 +742,10 @@ impl AgentLoop {
     /// After consolidation, new chunks are indexed in the HNSW vector index.
     async fn maybe_consolidate(&self, session_key: &str) {
         let memory = self.memory.clone();
-        let window = self.config.agent.consolidation_threshold;
-        let model = self.config.agent.model.clone();
+        let cfg = self.config.read().await;
+        let window = cfg.agent.consolidation_threshold;
+        let model = cfg.agent.model.clone();
+        drop(cfg);
         let provider = self.provider.clone();
         let session_key = session_key.to_string();
         #[cfg(feature = "local-embeddings")]

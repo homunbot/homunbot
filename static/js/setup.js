@@ -324,6 +324,101 @@ async function fetchAllModels() {
     }
 }
 
+/**
+ * Reusable model selector — populates a <select> with models grouped by provider.
+ *
+ * @param {HTMLSelectElement} selectEl   Target <select>
+ * @param {Object} data                 Result of fetchAllModels()
+ * @param {Object} opts                 Configuration
+ * @param {string}  opts.placeholder    Text for the first empty option
+ * @param {Array}   opts.specialOptions [{value, label}] inserted before groups
+ * @param {boolean} opts.includeCustom  Append "Custom model…" option
+ * @param {string}  opts.selectedValue  Pre-select this value
+ */
+function buildModelOptions(selectEl, data, opts) {
+    if (!selectEl) return;
+    opts = opts || {};
+    while (selectEl.firstChild) selectEl.removeChild(selectEl.firstChild);
+
+    // Placeholder
+    if (opts.placeholder) {
+        var ph = document.createElement('option');
+        ph.value = '';
+        ph.textContent = opts.placeholder;
+        selectEl.appendChild(ph);
+    }
+
+    // Special options (e.g., "(Same as chat model)")
+    if (opts.specialOptions) {
+        opts.specialOptions.forEach(function(so) {
+            var opt = document.createElement('option');
+            opt.value = so.value;
+            opt.textContent = so.label;
+            if (opts.selectedValue != null && so.value === opts.selectedValue) opt.selected = true;
+            selectEl.appendChild(opt);
+        });
+    }
+
+    // Group models by provider
+    var groups = {};
+    if (data.ok && data.models) {
+        data.models.forEach(function(m) {
+            if (!groups[m.provider]) groups[m.provider] = [];
+            groups[m.provider].push(m);
+        });
+    }
+
+    // Build optgroups
+    var found = false;
+    Object.keys(groups).forEach(function(prov) {
+        var optgroup = document.createElement('optgroup');
+        optgroup.label = providerDisplayName(prov);
+        groups[prov].forEach(function(m) {
+            var opt = document.createElement('option');
+            opt.value = m.model;
+            opt.textContent = m.label;
+            if (opts.selectedValue && m.model === opts.selectedValue) {
+                opt.selected = true;
+                found = true;
+            }
+            optgroup.appendChild(opt);
+        });
+        selectEl.appendChild(optgroup);
+    });
+
+    // Custom model option
+    if (opts.includeCustom) {
+        var customGroup = document.createElement('optgroup');
+        customGroup.label = 'Custom';
+        var customOpt = document.createElement('option');
+        customOpt.value = '__custom__';
+        customOpt.textContent = '\u270f Custom model\u2026';
+        customGroup.appendChild(customOpt);
+        selectEl.appendChild(customGroup);
+    }
+
+    // Orphaned selected value — insert as "(current)" after special options
+    if (opts.selectedValue && !found && opts.selectedValue !== '') {
+        var cur = document.createElement('option');
+        cur.value = opts.selectedValue;
+        cur.textContent = opts.selectedValue + ' (current)';
+        cur.selected = true;
+        // Insert after placeholder + special options
+        var insertPoint = selectEl.firstChild;
+        if (insertPoint) insertPoint = insertPoint.nextSibling;
+        if (opts.specialOptions) {
+            for (var i = 0; i < opts.specialOptions.length && insertPoint; i++) {
+                insertPoint = insertPoint.nextSibling;
+            }
+        }
+        if (insertPoint) {
+            selectEl.insertBefore(cur, insertPoint);
+        } else {
+            selectEl.appendChild(cur);
+        }
+    }
+}
+
 async function loadProviderModels(item) {
     var provider = item.dataset.provider;
     var modelList = item.querySelector('.provider-model-list');
@@ -736,47 +831,14 @@ if (agentForm) {
     });
 }
 
-// Load vision model dropdown
+// Load vision model dropdown (uses reusable buildModelOptions)
 async function loadVisionDropdown() {
     if (!visionModelSelect) return;
     var data = await fetchAllModels();
-    while (visionModelSelect.firstChild) visionModelSelect.removeChild(visionModelSelect.firstChild);
-
-    var sameOpt = document.createElement('option');
-    sameOpt.value = '';
-    sameOpt.textContent = '(Same as chat model)';
-    visionModelSelect.appendChild(sameOpt);
-
-    var currentVision = data.vision_model || '';
-    var groups = {};
-    if (data.ok && data.models) {
-        data.models.forEach(function(m) {
-            if (!groups[m.provider]) groups[m.provider] = [];
-            groups[m.provider].push(m);
-        });
-    }
-
-    var found = false;
-    Object.keys(groups).forEach(function(prov) {
-        var optgroup = document.createElement('optgroup');
-        optgroup.label = providerDisplayName(prov);
-        groups[prov].forEach(function(m) {
-            var opt = document.createElement('option');
-            opt.value = m.model;
-            opt.textContent = m.label;
-            if (m.model === currentVision) { opt.selected = true; found = true; }
-            optgroup.appendChild(opt);
-        });
-        visionModelSelect.appendChild(optgroup);
+    buildModelOptions(visionModelSelect, data, {
+        specialOptions: [{ value: '', label: '(Same as chat model)' }],
+        selectedValue: data.vision_model || '',
     });
-
-    if (currentVision && !found) {
-        var cur = document.createElement('option');
-        cur.value = currentVision;
-        cur.textContent = currentVision + ' (current)';
-        cur.selected = true;
-        visionModelSelect.insertBefore(cur, visionModelSelect.firstChild.nextSibling);
-    }
 }
 
 loadVisionDropdown();
@@ -816,41 +878,14 @@ function renderFallbackTags() {
     });
 }
 
+// Populate fallback dropdown (uses reusable buildModelOptions)
 async function populateFallbackDropdown() {
     if (!fallbackSelect) return;
     var data = await fetchAllModels();
-    while (fallbackSelect.firstChild) fallbackSelect.removeChild(fallbackSelect.firstChild);
-    var ph = document.createElement('option');
-    ph.value = '';
-    ph.textContent = 'Add fallback model\u2026';
-    fallbackSelect.appendChild(ph);
-
-    var groups = {};
-    if (data.ok && data.models) {
-        data.models.forEach(function(m) {
-            if (!groups[m.provider]) groups[m.provider] = [];
-            groups[m.provider].push(m);
-        });
-    }
-    Object.keys(groups).forEach(function(prov) {
-        var optgroup = document.createElement('optgroup');
-        optgroup.label = providerDisplayName(prov);
-        groups[prov].forEach(function(m) {
-            var opt = document.createElement('option');
-            opt.value = m.model;
-            opt.textContent = m.label;
-            optgroup.appendChild(opt);
-        });
-        fallbackSelect.appendChild(optgroup);
+    buildModelOptions(fallbackSelect, data, {
+        placeholder: 'Add fallback model\u2026',
+        includeCustom: true,
     });
-
-    var customGroup = document.createElement('optgroup');
-    customGroup.label = 'Custom';
-    var customOpt = document.createElement('option');
-    customOpt.value = '__custom__';
-    customOpt.textContent = '\u270f Custom model\u2026';
-    customGroup.appendChild(customOpt);
-    fallbackSelect.appendChild(customGroup);
 }
 
 if (btnAddFallback) {
