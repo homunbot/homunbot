@@ -33,6 +33,13 @@ pub struct ConsolidationResult {
     pub new_chunks: Vec<(i64, String)>,
 }
 
+/// Result of a session compaction run
+#[derive(Debug)]
+pub struct CompactionResult {
+    pub messages_removed: u64,
+    pub summary_inserted: bool,
+}
+
 /// Parsed response from the v2 consolidation prompt.
 /// Each field is optional — the LLM may not produce all of them.
 #[derive(Debug, Default, Deserialize)]
@@ -499,7 +506,160 @@ impl MemoryConsolidator {
         tracing::debug!(path = %path.display(), "Appended to HISTORY.md");
         Ok(())
     }
+
+    // --- Session compaction ---
+
+    /// Check if session compaction is needed.
+    pub async fn should_compact(&self, session_key: &str, memory_window: u32) -> Result<bool> {
+        let count = self.db.count_messages(session_key).await?;
+        Ok(count > memory_window as i64)
+    }
+
+    /// Compact a session: summarize old messages via LLM, prune them, insert summary.
+    ///
+    /// Must run AFTER memory consolidation so knowledge is extracted first.
+    /// If LLM summarization fails, falls back to plain truncation with a note.
+    pub async fn compact_session(
+        &self,
+        session_key: &str,
+        memory_window: u32,
+        provider: &dyn Provider,
+        model: &str,
+    ) -> Result<CompactionResult> {
+        let keep_count = memory_window / 2;
+        let total = self.db.count_messages(session_key).await?;
+
+        if total <= memory_window as i64 {
+            return Ok(CompactionResult {
+                messages_removed: 0,
+                summary_inserted: false,
+            });
+        }
+
+        let old_messages = self.db.load_old_messages(session_key, keep_count).await?;
+        if old_messages.is_empty() {
+            return Ok(CompactionResult {
+                messages_removed: 0,
+                summary_inserted: false,
+            });
+        }
+
+        let messages_to_remove = old_messages.len();
+
+        tracing::info!(
+            session = %session_key,
+            total_messages = total,
+            removing = messages_to_remove,
+            keeping = keep_count,
+            "Starting session compaction"
+        );
+
+        // Format old messages for summarization
+        let conversation_text = old_messages
+            .iter()
+            .map(|m| format!("[{}] {}: {}", m.timestamp, m.role.to_uppercase(), m.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Try LLM summarization, fallback to truncation note
+        let summary = match self
+            .summarize_for_compaction(&conversation_text, provider, model)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    session = %session_key,
+                    "LLM summarization failed, falling back to truncation"
+                );
+                format!(
+                    "{} older messages were removed to keep context manageable.",
+                    messages_to_remove
+                )
+            }
+        };
+
+        // Delete old messages
+        let deleted = self
+            .db
+            .delete_old_messages(session_key, keep_count)
+            .await?;
+
+        // Insert summary as system message
+        self.db
+            .insert_message(
+                session_key,
+                "system",
+                &format!("[Session Summary]\n{}", summary),
+                &[],
+            )
+            .await?;
+
+        // Reset last_consolidated pointer so consolidation knows the new layout
+        let new_consolidated = (keep_count + 1) as i64;
+        self.db
+            .upsert_session(session_key, new_consolidated)
+            .await?;
+
+        tracing::info!(
+            session = %session_key,
+            messages_removed = deleted,
+            summary_len = summary.len(),
+            "Session compaction complete"
+        );
+
+        Ok(CompactionResult {
+            messages_removed: deleted,
+            summary_inserted: true,
+        })
+    }
+
+    /// Ask the LLM to produce a concise summary of old conversation messages.
+    async fn summarize_for_compaction(
+        &self,
+        conversation_text: &str,
+        provider: &dyn Provider,
+        model: &str,
+    ) -> Result<String> {
+        let request = ChatRequest {
+            messages: vec![
+                ChatMessage::system(COMPACTION_SUMMARY_PROMPT),
+                ChatMessage::user(conversation_text),
+            ],
+            tools: vec![],
+            model: model.to_string(),
+            max_tokens: 1024,
+            temperature: 0.2,
+        };
+
+        let response = provider
+            .chat(request)
+            .await
+            .context("Compaction summary LLM call failed")?;
+
+        response
+            .content
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("LLM returned empty compaction summary"))
+    }
 }
+
+const COMPACTION_SUMMARY_PROMPT: &str = "\
+You are a conversation summarizer. Given a conversation history, produce a concise summary \
+(3-8 sentences) that captures:
+
+1. Key topics discussed and decisions made
+2. Important facts or information shared
+3. Any pending tasks or unresolved questions
+4. The overall context needed to continue the conversation naturally
+
+Rules:
+- Write in the same language as the conversation
+- Be factual and concise — this summary replaces the original messages
+- Do NOT include greetings, pleasantries, or tool call details
+- Focus on information the assistant needs to continue helping effectively
+- Output ONLY the summary text, nothing else";
 
 /// Build the v2 consolidation prompt with classification, secret redaction,
 /// instruction extraction, and deduplication context.

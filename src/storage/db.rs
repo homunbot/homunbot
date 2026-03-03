@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Pool, Sqlite};
 
@@ -121,6 +122,14 @@ impl Database {
             pool,
             "003_users",
             include_str!("../../migrations/003_users.sql"),
+        )
+        .await?;
+
+        // Migration 004 — token usage tracking
+        Self::apply_migration(
+            pool,
+            "004_token_usage",
+            include_str!("../../migrations/004_token_usage.sql"),
         )
         .await?;
 
@@ -299,6 +308,49 @@ impl Database {
         .context("Failed to reset session")?;
 
         Ok(())
+    }
+
+    /// Load the oldest messages that would be pruned during compaction
+    /// (all except the newest `keep_count`).
+    pub async fn load_old_messages(
+        &self,
+        session_key: &str,
+        keep_count: u32,
+    ) -> Result<Vec<MessageRow>> {
+        sqlx::query_as::<_, MessageRow>(
+            "SELECT id, session_key, role, content, tools_used, timestamp
+             FROM messages
+             WHERE session_key = ? AND id NOT IN (
+                 SELECT id FROM messages WHERE session_key = ?
+                 ORDER BY id DESC LIMIT ?
+             )
+             ORDER BY id ASC",
+        )
+        .bind(session_key)
+        .bind(session_key)
+        .bind(keep_count)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to load old messages")
+    }
+
+    /// Delete old messages, keeping only the newest `keep_count`.
+    /// Returns the number of messages deleted.
+    pub async fn delete_old_messages(&self, session_key: &str, keep_count: u32) -> Result<u64> {
+        let result = sqlx::query(
+            "DELETE FROM messages WHERE session_key = ? AND id NOT IN (
+                SELECT id FROM messages WHERE session_key = ?
+                ORDER BY id DESC LIMIT ?
+            )",
+        )
+        .bind(session_key)
+        .bind(session_key)
+        .bind(keep_count)
+        .execute(&self.pool)
+        .await
+        .context("Failed to delete old messages")?;
+
+        Ok(result.rows_affected())
     }
 
     // --- Memory operations ---
@@ -900,6 +952,74 @@ impl Database {
 
         Ok(result.rows_affected() > 0)
     }
+
+    // --- Token usage ---
+
+    pub async fn insert_token_usage(
+        &self,
+        session_key: &str,
+        model: &str,
+        provider: &str,
+        prompt_tokens: u32,
+        completion_tokens: u32,
+        total_tokens: u32,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO token_usage (session_key, model, provider, prompt_tokens, completion_tokens, total_tokens)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(session_key)
+        .bind(model)
+        .bind(provider)
+        .bind(prompt_tokens as i64)
+        .bind(completion_tokens as i64)
+        .bind(total_tokens as i64)
+        .execute(&self.pool)
+        .await
+        .context("Failed to insert token usage")?;
+        Ok(())
+    }
+
+    pub async fn query_token_usage(
+        &self,
+        session_key: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+    ) -> Result<Vec<TokenUsageAggRow>> {
+        let mut sql = String::from(
+            "SELECT model, provider,
+                    SUM(prompt_tokens) as prompt_tokens,
+                    SUM(completion_tokens) as completion_tokens,
+                    SUM(total_tokens) as total_tokens,
+                    COUNT(*) as call_count
+             FROM token_usage WHERE 1=1",
+        );
+        let mut binds: Vec<String> = Vec::new();
+
+        if let Some(s) = session_key {
+            sql.push_str(" AND session_key = ?");
+            binds.push(s.to_string());
+        }
+        if let Some(s) = since {
+            sql.push_str(" AND created_at >= ?");
+            binds.push(s.to_string());
+        }
+        if let Some(u) = until {
+            sql.push_str(" AND created_at <= ?");
+            binds.push(u.to_string());
+        }
+
+        sql.push_str(" GROUP BY model, provider ORDER BY total_tokens DESC");
+
+        let mut q = sqlx::query_as::<_, TokenUsageAggRow>(&sql);
+        for b in &binds {
+            q = q.bind(b);
+        }
+
+        q.fetch_all(&self.pool)
+            .await
+            .context("Failed to query token usage")
+    }
 }
 
 /// Result of memory cleanup operation.
@@ -994,6 +1114,16 @@ pub struct WebhookTokenRow {
     pub enabled: bool,
     pub last_used: Option<String>,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize)]
+pub struct TokenUsageAggRow {
+    pub model: String,
+    pub provider: String,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub total_tokens: i64,
+    pub call_count: i64,
 }
 
 /// Split SQL into individual statements, respecting BEGIN...END blocks.
@@ -1171,6 +1301,44 @@ END;
         assert_eq!(db.count_messages("cli:test").await.unwrap(), 0);
         let session = db.load_session("cli:test").await.unwrap().unwrap();
         assert_eq!(session.last_consolidated, 0);
+    }
+
+    #[tokio::test]
+    async fn test_delete_old_messages() {
+        let (db, _dir) = test_db().await;
+        db.upsert_session("cli:test", 0).await.unwrap();
+
+        for i in 0..10 {
+            db.insert_message("cli:test", "user", &format!("msg{}", i), &[])
+                .await
+                .unwrap();
+        }
+        assert_eq!(db.count_messages("cli:test").await.unwrap(), 10);
+
+        let deleted = db.delete_old_messages("cli:test", 3).await.unwrap();
+        assert_eq!(deleted, 7);
+        assert_eq!(db.count_messages("cli:test").await.unwrap(), 3);
+
+        let msgs = db.load_messages("cli:test", 100).await.unwrap();
+        assert_eq!(msgs[0].content, "msg7");
+        assert_eq!(msgs[2].content, "msg9");
+    }
+
+    #[tokio::test]
+    async fn test_load_old_messages() {
+        let (db, _dir) = test_db().await;
+        db.upsert_session("cli:test", 0).await.unwrap();
+
+        for i in 0..10 {
+            db.insert_message("cli:test", "user", &format!("msg{}", i), &[])
+                .await
+                .unwrap();
+        }
+
+        let old = db.load_old_messages("cli:test", 3).await.unwrap();
+        assert_eq!(old.len(), 7);
+        assert_eq!(old[0].content, "msg0");
+        assert_eq!(old[6].content, "msg6");
     }
 
     #[tokio::test]

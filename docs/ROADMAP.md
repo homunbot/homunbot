@@ -39,22 +39,22 @@
 
 | # | Task | File principali | LOC stimate | Stato |
 |---|------|----------------|-------------|-------|
-| 1.1 | **Provider failover** | `provider/reliable.rs` (nuovo) | ~200 | TODO |
+| 1.1 | **Provider failover** | `provider/reliable.rs`, `provider/factory.rs` | ~296 | ✅ DONE |
 | | Multi auth profiles per provider | | | |
 | | Round-robin + "last good" tracking | | | |
 | | Cooldown su errori (backoff per profile) | | | |
 | | Fallback automatico al prossimo provider | | | |
-| 1.2 | **Session compaction** | `agent/compaction.rs` (nuovo) | ~150 | TODO |
+| 1.2 | **Session compaction** | `agent/memory.rs`, `storage/db.rs` | ~170 | ✅ DONE |
 | | Trigger su threshold (es. >50 messaggi) | | | |
 | | LLM summarization dei messaggi vecchi | | | |
 | | Preserva: system prompt + ultimi N + summary | | | |
 | | Fallback: truncation se summary fallisce | | | |
-| 1.3 | **Token counting** | `provider/traits.rs`, `storage/db.rs` | ~100 | TODO |
+| 1.3 | **Token counting** | `storage/db.rs`, `agent/agent_loop.rs`, `web/api.rs` | ~128 | ✅ DONE |
 | | Estrarre usage.input/output_tokens dalle risposte | | | |
 | | Salvare in DB per session/model | | | |
 | | Esporre via API GET /api/v1/usage | | | |
 
-**Stima totale Sprint 1: ~450 LOC**
+**Sprint 1 completo: ~594 LOC**
 
 ---
 

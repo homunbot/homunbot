@@ -7,7 +7,7 @@ use tokio::sync::{mpsc, RwLock};
 use crate::bus::OutboundMessage;
 use crate::config::Config;
 use crate::provider::xml_dispatcher;
-use crate::provider::{ChatMessage, ChatRequest, Provider, ToolCallFunction, ToolCallSerialized};
+use crate::provider::{ChatMessage, ChatRequest, Provider, ToolCallFunction, ToolCallSerialized, Usage};
 use crate::security::{redact, redact_vault_values};
 use crate::session::SessionManager;
 use crate::skills::loader::SkillRegistry;
@@ -58,6 +58,8 @@ pub struct AgentLoop {
     /// Auto-detected on first error — tools are then injected into the system
     /// prompt as XML and parsed from the LLM's text response.
     use_xml_dispatch: AtomicBool,
+    /// Database handle for token usage tracking.
+    db: Database,
 }
 
 impl AgentLoop {
@@ -70,7 +72,7 @@ impl AgentLoop {
     ) -> Self {
         let cfg = config.read().await;
         let mut context = ContextBuilder::new(&cfg);
-        let memory = Arc::new(MemoryConsolidator::new(db));
+        let memory = Arc::new(MemoryConsolidator::new(db.clone()));
 
         // Inject long-term memory into context if MEMORY.md exists
         if let Some(memory_content) = memory.load_memory_md() {
@@ -110,6 +112,7 @@ impl AgentLoop {
             skill_registry: None,
             memory_searcher: None,
             use_xml_dispatch: AtomicBool::new(use_xml_dispatch),
+            db,
         }
     }
 
@@ -375,6 +378,7 @@ impl AgentLoop {
 
         let mut final_content: Option<String> = None;
         let mut tools_used: Vec<String> = Vec::new();
+        let mut total_usage = Usage::default();
         let max_iterations = config.agent.max_iterations;
 
         for iteration in 1..=max_iterations {
@@ -447,6 +451,13 @@ impl AgentLoop {
                             );
                             self.use_xml_dispatch.store(true, Ordering::Relaxed);
 
+                            // Brief delay before retrying to avoid hitting rate limits
+                            // (especially on free-tier models with aggressive limits)
+                            let delay_ms = config.agent.xml_fallback_delay_ms;
+                            if delay_ms > 0 {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                            }
+
                             let xml_tool_infos: Vec<crate::agent::ToolInfo> = tool_defs
                                 .iter()
                                 .map(|td| crate::agent::ToolInfo {
@@ -510,6 +521,12 @@ impl AgentLoop {
                                 );
                                 self.use_xml_dispatch.store(true, Ordering::Relaxed);
 
+                                // Brief delay before retrying to avoid hitting rate limits
+                                let delay_ms = config.agent.xml_fallback_delay_ms;
+                                if delay_ms > 0 {
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                                }
+
                                 // Rebuild system prompt from scratch with tools in XML mode.
                                 // The previous prompt said "No tools" — we need a clean rebuild.
                                 let xml_tool_infos: Vec<crate::agent::ToolInfo> = tool_defs
@@ -552,6 +569,11 @@ impl AgentLoop {
                 tool_calls = response.tool_calls.len(),
                 "LLM response received"
             );
+
+            // Accumulate token usage across iterations
+            total_usage.prompt_tokens += response.usage.prompt_tokens;
+            total_usage.completion_tokens += response.usage.completion_tokens;
+            total_usage.total_tokens += response.usage.total_tokens;
 
             // In XML mode, parse tool calls from the text response
             let response = if self.use_xml_dispatch.load(Ordering::Relaxed) {
@@ -807,6 +829,29 @@ impl AgentLoop {
             });
         }
 
+        // Record token usage (fire-and-forget)
+        if total_usage.total_tokens > 0 {
+            let db = self.db.clone();
+            let sk = session_key.to_string();
+            let model = config.agent.model.clone();
+            let prov = provider.name().to_string();
+            tokio::spawn(async move {
+                if let Err(e) = db
+                    .insert_token_usage(
+                        &sk,
+                        &model,
+                        &prov,
+                        total_usage.prompt_tokens,
+                        total_usage.completion_tokens,
+                        total_usage.total_tokens,
+                    )
+                    .await
+                {
+                    tracing::warn!(error = %e, "Failed to record token usage");
+                }
+            });
+        }
+
         // Check if memory consolidation is needed (non-blocking background task)
         self.maybe_consolidate(session_key).await;
 
@@ -832,13 +877,15 @@ impl AgentLoop {
         }
     }
 
-    /// Trigger memory consolidation if threshold exceeded.
+    /// Trigger memory consolidation and session compaction if thresholds exceeded.
     /// Runs in background via `tokio::spawn` — never blocks the response.
-    /// After consolidation, new chunks are indexed in the HNSW vector index.
+    /// After consolidation, new chunks are indexed in the HNSW vector index,
+    /// then session compaction prunes old messages and inserts a summary.
     async fn maybe_consolidate(&self, session_key: &str) {
         let memory = self.memory.clone();
         let cfg = self.config.read().await;
         let window = cfg.agent.consolidation_threshold;
+        let memory_window = cfg.agent.memory_window;
         let model = cfg.agent.model.clone();
         drop(cfg);
         let provider = self.provider.read().await.clone();
@@ -846,7 +893,7 @@ impl AgentLoop {
         #[cfg(feature = "local-embeddings")]
         let searcher = self.memory_searcher.clone();
 
-        // Check if needed (quick DB query)
+        // Check if consolidation is needed (quick DB query)
         match memory.should_consolidate(&session_key, window).await {
             Ok(true) => {
                 tracing::info!(
@@ -925,6 +972,9 @@ impl AgentLoop {
                                     );
                                 }
                             }
+
+                            // Session compaction: prune old messages after consolidation
+                            Self::try_compact(&memory, &session_key, memory_window, provider.as_ref(), &model).await;
                         }
                         Err(e) => {
                             tracing::error!(
@@ -936,9 +986,57 @@ impl AgentLoop {
                     }
                 });
             }
-            Ok(false) => {}
+            Ok(false) => {
+                // Consolidation not needed, but compaction might be
+                // (e.g., many messages accumulated but consolidation already ran)
+                let memory_c = memory.clone();
+                let sk = session_key.clone();
+                let prov = provider.clone();
+                let m = model.clone();
+                tokio::spawn(async move {
+                    Self::try_compact(&memory_c, &sk, memory_window, prov.as_ref(), &m).await;
+                });
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to check consolidation status");
+            }
+        }
+    }
+
+    /// Try to compact session if message count exceeds memory_window.
+    async fn try_compact(
+        memory: &MemoryConsolidator,
+        session_key: &str,
+        memory_window: u32,
+        provider: &dyn Provider,
+        model: &str,
+    ) {
+        match memory.should_compact(session_key, memory_window).await {
+            Ok(true) => {
+                match memory
+                    .compact_session(session_key, memory_window, provider, model)
+                    .await
+                {
+                    Ok(r) => {
+                        tracing::info!(
+                            session = %session_key,
+                            messages_removed = r.messages_removed,
+                            summary_inserted = r.summary_inserted,
+                            "Background session compaction complete"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            session = %session_key,
+                            error = %e,
+                            "Background session compaction failed"
+                        );
+                    }
+                }
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to check compaction status");
             }
         }
     }

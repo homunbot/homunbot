@@ -154,7 +154,9 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/v1/approvals/config",
             get(get_approval_config).put(put_approval_config),
-        );
+        )
+        // --- Usage ---
+        .route("/v1/usage", get(get_usage));
 
     // --- Browser (optional) ---
     #[cfg(feature = "browser")]
@@ -4636,5 +4638,60 @@ async fn put_approval_config(
         auto_approve: config.permissions.approval.auto_approve.clone(),
         always_ask: config.permissions.approval.always_ask.clone(),
         pending_count: mgr.map(|m| m.get_pending().len()).unwrap_or(0),
+    }))
+}
+
+// --- Token Usage ---
+
+#[derive(Deserialize)]
+struct UsageQuery {
+    session: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+}
+
+#[derive(Serialize)]
+struct UsageResponse {
+    models: Vec<crate::storage::TokenUsageAggRow>,
+    totals: UsageTotals,
+}
+
+#[derive(Serialize)]
+struct UsageTotals {
+    prompt_tokens: i64,
+    completion_tokens: i64,
+    total_tokens: i64,
+    call_count: i64,
+}
+
+async fn get_usage(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<UsageQuery>,
+) -> Result<Json<UsageResponse>, (StatusCode, String)> {
+    let db = state.db.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Database not available".to_string(),
+    ))?;
+
+    let rows = db
+        .query_token_usage(q.session.as_deref(), q.since.as_deref(), q.until.as_deref())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to query usage: {}", e),
+            )
+        })?;
+
+    let totals = UsageTotals {
+        prompt_tokens: rows.iter().map(|r| r.prompt_tokens).sum(),
+        completion_tokens: rows.iter().map(|r| r.completion_tokens).sum(),
+        total_tokens: rows.iter().map(|r| r.total_tokens).sum(),
+        call_count: rows.iter().map(|r| r.call_count).sum(),
+    };
+
+    Ok(Json(UsageResponse {
+        models: rows,
+        totals,
     }))
 }
