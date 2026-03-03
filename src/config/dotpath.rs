@@ -13,10 +13,15 @@ pub fn config_get(config: &Config, key: &str) -> Result<String> {
 /// Set a config value by dot-path. Returns the updated Config.
 /// The value string is auto-coerced: "true"/"false" → bool, numbers → number, else → string.
 pub fn config_set(config: &mut Config, key: &str, value: &str) -> Result<()> {
+    config_set_value(config, key, coerce_value(value))
+}
+
+/// Set a config value by dot-path using a pre-built JSON value.
+/// Use this for non-scalar values (arrays, objects) or when the value is already typed.
+pub fn config_set_value(config: &mut Config, key: &str, value: serde_json::Value) -> Result<()> {
     let mut json = serde_json::to_value(&*config).context("Failed to serialize config")?;
 
-    let coerced = coerce_value(value);
-    set_path(&mut json, key, coerced)?;
+    set_path(&mut json, key, value)?;
 
     // Deserialize back to validate the change
     let updated: Config =
@@ -66,12 +71,11 @@ fn set_path(root: &mut Value, path: &str, new_value: Value) -> Result<()> {
     let mut current = root;
     for (i, part) in parts.iter().enumerate() {
         if i == parts.len() - 1 {
-            // Last part — set the value
+            // Last part — set (or insert) the value.
+            // We allow inserting keys that were omitted by skip_serializing_if;
+            // deserialization back to Config will validate the result.
             match current {
                 Value::Object(map) => {
-                    if !map.contains_key(*part) {
-                        anyhow::bail!("Key '{}' not found", path);
-                    }
                     map.insert(part.to_string(), new_value);
                     return Ok(());
                 }
@@ -353,5 +357,21 @@ mod tests {
 
         config_set(&mut config, "ui.theme", "light").unwrap();
         assert_eq!(config.ui.theme, "light");
+    }
+
+    #[test]
+    fn test_config_set_value_array() {
+        let mut config = Config::default();
+        let models = serde_json::json!(["openai/gpt-4o", "ollama/llama3"]);
+        config_set_value(&mut config, "agent.fallback_models", models).unwrap();
+        assert_eq!(config.agent.fallback_models, vec!["openai/gpt-4o", "ollama/llama3"]);
+    }
+
+    #[test]
+    fn test_config_set_value_empty_array() {
+        let mut config = Config::default();
+        config.agent.fallback_models = vec!["old-model".to_string()];
+        config_set_value(&mut config, "agent.fallback_models", serde_json::json!([])).unwrap();
+        assert!(config.agent.fallback_models.is_empty());
     }
 }

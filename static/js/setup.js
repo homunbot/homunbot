@@ -1,4 +1,4 @@
-// Homun — Settings: agent form, provider toggles, model dropdown
+// Homun — Settings: unified provider accordion, model selection, agent config
 
 // Global error handler for debugging
 window.onerror = function(msg, url, line, col, error) {
@@ -6,65 +6,21 @@ window.onerror = function(msg, url, line, col, error) {
     return false;
 };
 
-console.log('[Setup] Script loading...');
+// ═══ Utilities ═══
 
-// ═══ Agent Form ═══
-
-const agentForm = document.getElementById('agent-form');
-
-if (agentForm) {
-    agentForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const btn = agentForm.querySelector('button[type="submit"]');
-        const originalText = btn.textContent;
-        btn.textContent = 'Saving…';
-        btn.disabled = true;
-
-        // Sync model values from dropdown/custom into hidden inputs
-        syncModelValue();
-        syncVisionModelValue();
-
-        const form = new FormData(agentForm);
-        const patches = [
-            { key: 'agent.model', value: form.get('model') },
-            { key: 'agent.vision_model', value: form.get('vision_model') || '' },
-            { key: 'agent.max_tokens', value: form.get('max_tokens') },
-            { key: 'agent.temperature', value: form.get('temperature') },
-            { key: 'agent.max_iterations', value: form.get('max_iterations') },
-        ];
-
-        try {
-            for (const patch of patches) {
-                if (patch.value !== undefined) {
-                    await fetch('/api/v1/config', {
-                        method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(patch),
-                    });
-                }
-            }
-            btn.textContent = 'Saved ✓';
-            setTimeout(() => {
-                btn.textContent = originalText;
-                btn.disabled = false;
-            }, 2000);
-        } catch (err) {
-            btn.textContent = 'Error!';
-            setTimeout(() => {
-                btn.textContent = originalText;
-                btn.disabled = false;
-            }, 2000);
-        }
-    });
+function showToast(message, type) {
+    var existing = document.querySelector('.toast-notification');
+    if (existing) existing.remove();
+    var toast = document.createElement('div');
+    toast.className = 'toast-notification toast-' + (type || 'info');
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(function() { toast.classList.add('show'); }, 10);
+    setTimeout(function() {
+        toast.classList.remove('show');
+        setTimeout(function() { toast.remove(); }, 300);
+    }, 4000);
 }
-
-
-// ═══ Model Dropdown (Native Select with Optgroups) ═══
-
-const modelSelect = document.getElementById('model-select');
-const modelValue = document.getElementById('model-value');
-const visionModelSelect = document.getElementById('vision-model-select');
-const visionModelValue = document.getElementById('vision-model-value');
 
 function providerDisplayName(name) {
     var map = {
@@ -81,449 +37,847 @@ function providerDisplayName(name) {
     return map[name] || name;
 }
 
-/** Populate a model dropdown using native select with optgroups */
-function populateModelDropdown(selectEl, valueEl, currentModel, groups) {
-    // Clear existing options
-    while (selectEl.firstChild) {
-        selectEl.removeChild(selectEl.firstChild);
-    }
+/** Strip provider prefix from model string for display */
+function stripPrefix(model) {
+    if (!model) return '';
+    var idx = model.indexOf('/');
+    return idx >= 0 ? model.substring(idx + 1) : model;
+}
 
-    // Add "Same as chat model" option for vision dropdown
-    if (selectEl.id === 'vision-model-select') {
-        var sameOption = document.createElement('option');
-        sameOption.value = '';
-        sameOption.textContent = '(Same as chat model)';
-        if (!currentModel || currentModel === '') {
-            sameOption.selected = true;
-        }
-        selectEl.appendChild(sameOption);
-    }
-
-    var foundCurrent = false;
-
-    // Build native select options with optgroups using safe DOM methods
-    Object.keys(groups).forEach(function(provider) {
-        var optgroup = document.createElement('optgroup');
-        optgroup.label = providerDisplayName(provider);
-
-        groups[provider].forEach(function(m) {
-            var option = document.createElement('option');
-            option.value = m.value;
-            option.textContent = m.label;
-            if (m.value === currentModel) {
-                option.selected = true;
-                foundCurrent = true;
-            }
-            optgroup.appendChild(option);
-        });
-
-        selectEl.appendChild(optgroup);
+/** Patch a single config key via API */
+async function patchConfig(key, value) {
+    var resp = await fetch('/api/v1/config', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: key, value: value }),
     });
+    if (!resp.ok) throw new Error('Failed to save ' + key);
+    return resp.json();
+}
 
-    // Add custom option group
-    var customGroup = document.createElement('optgroup');
-    customGroup.label = 'Custom';
-    var customOption = document.createElement('option');
-    customOption.value = '__custom__';
-    customOption.textContent = '✏ Custom model…';
-    customGroup.appendChild(customOption);
-    selectEl.appendChild(customGroup);
 
-    // If current model wasn't found in options, add it at the top (after the "same" option for vision)
-    if (currentModel && !foundCurrent) {
-        var currentOpt = document.createElement('option');
-        currentOpt.value = currentModel;
-        currentOpt.textContent = currentModel + ' (current)';
-        currentOpt.selected = true;
-        if (selectEl.id === 'vision-model-select' && selectEl.firstChild) {
-            selectEl.insertBefore(currentOpt, selectEl.firstChild.nextSibling);
+// ═══ Active Model Banner ═══
+
+var activeBanner = document.getElementById('active-model-banner');
+var noModelBanner = document.getElementById('no-model-banner');
+var activeModelName = document.getElementById('active-model-name');
+var activeModelProvider = document.getElementById('active-model-provider');
+
+function updateActiveBanner(model) {
+    if (!model) {
+        if (activeBanner) activeBanner.style.display = 'none';
+        if (noModelBanner) noModelBanner.style.display = '';
+        return;
+    }
+    if (activeBanner) activeBanner.style.display = '';
+    if (noModelBanner) noModelBanner.style.display = 'none';
+    if (activeModelName) activeModelName.textContent = stripPrefix(model);
+
+    // Infer provider from prefix
+    var prefix = model.indexOf('/') >= 0 ? model.substring(0, model.indexOf('/')) : '';
+    if (activeModelProvider) activeModelProvider.textContent = 'via ' + providerDisplayName(prefix);
+
+    // Update active badges in accordion
+    document.querySelectorAll('.provider-item').forEach(function(item) {
+        var prov = item.dataset.provider;
+        var badge = item.querySelector('.provider-active-badge');
+        var status = item.querySelector('.provider-item-status');
+        var isActive = model.startsWith(prov + '/');
+
+        if (isActive) {
+            if (!badge) {
+                badge = document.createElement('span');
+                badge.className = 'provider-active-badge';
+                badge.textContent = 'Active';
+                var right = item.querySelector('.provider-item-right');
+                if (right) right.insertBefore(badge, right.firstChild);
+            }
+            if (status) { status.className = 'provider-item-status active'; }
         } else {
-            selectEl.insertBefore(currentOpt, selectEl.firstChild);
-        }
-    }
-
-    // Update hidden value with current model
-    if (valueEl && currentModel) {
-        valueEl.value = currentModel;
-    }
-}
-
-/** Populate both model dropdowns using native select with optgroups */
-async function loadModelDropdown() {
-    if (!modelSelect) return;
-
-    try {
-        var resp = await fetch('/api/v1/providers/models');
-        var data = await resp.json();
-
-        var currentModel = data.current || '';
-        var currentVisionModel = data.vision_model || '';
-
-        // Group models by provider
-        var groups = {};
-
-        // Add static cloud models
-        if (data.ok && data.models.length > 0) {
-            data.models.forEach(function(m) {
-                if (!groups[m.provider]) groups[m.provider] = [];
-                groups[m.provider].push({ value: m.model, label: m.label });
-            });
-        }
-
-        // If Ollama is configured, fetch live models
-        if (data.ollama_configured) {
-            try {
-                var ollamaResp = await fetch('/api/v1/providers/ollama/models');
-                var ollamaData = await ollamaResp.json();
-                if (ollamaData.ok && ollamaData.models.length > 0) {
-                    groups['ollama'] = ollamaData.models.map(function(m) {
-                        return { value: 'ollama/' + m.name, label: m.name + ' (' + m.size + ')' };
-                    });
-                }
-            } catch (_) { /* Ollama might not be running */ }
-        }
-
-        // If Ollama Cloud is configured, fetch live models
-        if (data.ollama_cloud_configured) {
-            try {
-                var cloudResp = await fetch('/api/v1/providers/ollama-cloud/models');
-                var cloudData = await cloudResp.json();
-                if (cloudData.ok && cloudData.models.length > 0) {
-                    groups['ollama_cloud'] = cloudData.models.map(function(m) {
-                        return { value: 'ollama_cloud/' + m.id, label: m.id };
-                    });
-                }
-            } catch (_) { /* Ollama Cloud might not be reachable */ }
-        }
-
-        // Populate chat model dropdown
-        populateModelDropdown(modelSelect, modelValue, currentModel, groups);
-
-        // Populate vision model dropdown
-        if (visionModelSelect) {
-            populateModelDropdown(visionModelSelect, visionModelValue, currentVisionModel, groups);
-        }
-
-    } catch (err) {
-        console.error('Failed to load models:', err);
-        // Clear and show error using safe DOM methods
-        while (modelSelect.firstChild) {
-            modelSelect.removeChild(modelSelect.firstChild);
-        }
-        var errorOpt = document.createElement('option');
-        errorOpt.value = '';
-        errorOpt.textContent = 'Error loading models';
-        modelSelect.appendChild(errorOpt);
-
-        if (visionModelSelect) {
-            while (visionModelSelect.firstChild) {
-                visionModelSelect.removeChild(visionModelSelect.firstChild);
+            if (badge) badge.remove();
+            if (status) {
+                status.className = 'provider-item-status' +
+                    (item.dataset.configured === 'true' ? ' configured' : '');
             }
-            var visionErrorOpt = document.createElement('option');
-            visionErrorOpt.value = '';
-            visionErrorOpt.textContent = 'Error loading models';
-            visionModelSelect.appendChild(visionErrorOpt);
-        }
-    }
-}
-
-// Handle selection change for chat model
-if (modelSelect) {
-    modelSelect.addEventListener('change', function() {
-        if (modelSelect.value === '__custom__') {
-            var customModel = prompt('Enter custom model (e.g., ollama/my-model:latest):');
-            if (customModel && customModel.trim()) {
-                modelValue.value = customModel.trim();
-            } else {
-                // Reset selection
-                loadModelDropdown();
-                return;
-            }
-        } else if (modelSelect.value) {
-            modelValue.value = modelSelect.value;
         }
     });
-}
 
-// Handle selection change for vision model
-if (visionModelSelect) {
-    visionModelSelect.addEventListener('change', function() {
-        if (visionModelSelect.value === '__custom__') {
-            var customModel = prompt('Enter custom vision model (e.g., ollama/llava:latest):');
-            if (customModel && customModel.trim()) {
-                visionModelValue.value = customModel.trim();
-            } else {
-                // Reset selection
-                loadModelDropdown();
-                return;
-            }
+    // Update radio buttons
+    document.querySelectorAll('input[name="active-model"]').forEach(function(radio) {
+        var badge = radio.closest('.model-radio').querySelector('.model-radio-badge');
+        if (radio.value === model) {
+            radio.checked = true;
+            if (badge) { badge.textContent = 'Active'; badge.className = 'model-radio-badge active'; }
         } else {
-            // Empty string means "same as chat model"
-            visionModelValue.value = visionModelSelect.value;
+            radio.checked = false;
+            if (badge) { badge.textContent = ''; badge.className = 'model-radio-badge'; }
         }
     });
 }
 
-// Sync model value from select to hidden input
-function syncModelValue() {
-    if (!modelValue || !modelSelect) return;
-    if (modelSelect.value && modelSelect.value !== '__custom__') {
-        modelValue.value = modelSelect.value;
-    }
-}
 
-// Sync vision model value from select to hidden input
-function syncVisionModelValue() {
-    if (!visionModelValue || !visionModelSelect) return;
-    if (visionModelSelect.value !== '__custom__') {
-        visionModelValue.value = visionModelSelect.value;
-    }
-}
+// ═══ Provider Accordion ═══
 
-// Initial load
-loadModelDropdown();
+var accordion = document.getElementById('provider-accordion');
 
+if (accordion) {
+    // --- Expand/collapse ---
+    accordion.addEventListener('click', function(e) {
+        var header = e.target.closest('.provider-item-header');
+        if (!header) return;
+        var item = header.closest('.provider-item');
+        var body = item.querySelector('.provider-item-body');
+        if (!body) return;
 
-// ═══ Provider Toggle Cards ═══
+        var isExpanded = !body.hidden;
+        body.hidden = isExpanded;
+        header.setAttribute('aria-expanded', String(!isExpanded));
+        var chevron = header.querySelector('.provider-chevron');
+        if (chevron) chevron.classList.toggle('expanded', !isExpanded);
 
-const providerCards = document.querySelectorAll('.provider-card:not(#channel-grid .provider-card)');
-const modal = document.getElementById('provider-modal');
-
-if (modal && providerCards.length > 0) {
-    const modalBackdrop = modal.querySelector('.modal-backdrop');
-    const modalClose = modal.querySelector('.modal-close');
-    const modalCancel = modal.querySelector('.modal-cancel');
-    const providerForm = document.getElementById('provider-config-form');
-    const apiKeyGroup = document.getElementById('api-key-group');
-    const apiBaseGroup = document.getElementById('api-base-group');
-
-    let currentProvider = null;
-
-    // --- Click handlers for each card ---
-    providerCards.forEach(card => {
-        const toggle = card.querySelector('.toggle-input');
-        const toggleLabel = card.querySelector('.toggle-label');
-
-        // Click anywhere on card (except toggle) → open config modal
-        card.style.cursor = 'pointer';
-        card.addEventListener('click', (e) => {
-            if (e.target === toggle || e.target === toggleLabel) return;
-            openProviderModal(card);
-        });
-
-        // Toggle switch logic
-        if (toggle) {
-            toggle.addEventListener('change', (e) => {
-                if (toggle.checked) {
-                    // Turning ON → if not configured, open modal to configure
-                    if (card.dataset.configured !== 'true') {
-                        e.preventDefault();
-                        toggle.checked = false;
-                        openProviderModal(card);
-                    }
-                } else {
-                    // Turning OFF → confirm then deactivate
-                    const name = card.dataset.provider;
-                    const displayName = card.dataset.display;
-                    if (confirm('Deactivate ' + displayName + '? This will remove its stored credentials.')) {
-                        deactivateProvider(name, card);
-                    } else {
-                        toggle.checked = true;
-                    }
-                }
-            });
+        // Load models when expanding for the first time
+        if (!isExpanded && !item.dataset.modelsLoaded) {
+            loadProviderModels(item);
         }
+    });
+
+    // --- Save API key ---
+    accordion.addEventListener('click', function(e) {
+        var btn = e.target.closest('.provider-save-key');
+        if (!btn) return;
+        var item = btn.closest('.provider-item');
+        var provider = item.dataset.provider;
+        var keyInput = item.querySelector('.provider-api-key');
+        var apiKey = keyInput ? keyInput.value.trim() : '';
+        if (!apiKey) { showToast('Enter an API key', 'error'); return; }
+
+        var payload = { name: provider, api_key: apiKey };
+        btn.textContent = 'Saving\u2026';
+        btn.disabled = true;
+
+        fetch('/api/v1/providers/configure', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        }).then(function(r) { return r.json(); }).then(function(data) {
+            if (data.ok) {
+                item.dataset.configured = 'true';
+                var status = item.querySelector('.provider-item-status');
+                if (status && !status.classList.contains('active')) status.className = 'provider-item-status configured';
+                keyInput.value = '';
+                keyInput.placeholder = 'Configured \u2014 enter new key to replace';
+                showToast('API key saved!', 'success');
+                _allModelsCache = null;
+                loadProviderModels(item);
+                loadVisionDropdown();
+                populateFallbackDropdown();
+            } else {
+                showToast(data.message || 'Failed to save', 'error');
+            }
+            btn.textContent = 'Save Key';
+            btn.disabled = false;
+        }).catch(function() {
+            showToast('Failed to save API key', 'error');
+            btn.textContent = 'Save Key';
+            btn.disabled = false;
+        });
+    });
+
+    // --- Save Base URL ---
+    accordion.addEventListener('click', function(e) {
+        var btn = e.target.closest('.provider-save-url');
+        if (!btn) return;
+        var item = btn.closest('.provider-item');
+        var provider = item.dataset.provider;
+        var urlInput = item.querySelector('.provider-api-base');
+        var apiBase = urlInput ? urlInput.value.trim() : '';
+        if (!apiBase) { showToast('Enter a base URL', 'error'); return; }
+
+        var payload = { name: provider, api_base: apiBase };
+        btn.textContent = 'Saving\u2026';
+        btn.disabled = true;
+
+        fetch('/api/v1/providers/configure', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        }).then(function(r) { return r.json(); }).then(function(data) {
+            if (data.ok) {
+                item.dataset.configured = 'true';
+                var status = item.querySelector('.provider-item-status');
+                if (status && !status.classList.contains('active')) status.className = 'provider-item-status configured';
+                showToast('URL saved!', 'success');
+                _allModelsCache = null;
+                loadProviderModels(item);
+                loadVisionDropdown();
+                populateFallbackDropdown();
+            } else {
+                showToast(data.message || 'Failed to save', 'error');
+            }
+            btn.textContent = 'Save URL';
+            btn.disabled = false;
+        }).catch(function() {
+            showToast('Failed to save URL', 'error');
+            btn.textContent = 'Save URL';
+            btn.disabled = false;
+        });
+    });
+
+    // --- Model radio selection ---
+    accordion.addEventListener('change', function(e) {
+        if (e.target.name !== 'active-model') return;
+        var model = e.target.value;
+        patchConfig('agent.model', model).then(function() {
+            updateActiveBanner(model);
+            showToast('Model changed to ' + stripPrefix(model), 'success');
+        }).catch(function() {
+            showToast('Failed to change model', 'error');
+        });
+    });
+
+    // --- Custom model ---
+    accordion.addEventListener('click', function(e) {
+        var btn = e.target.closest('.provider-use-custom');
+        if (!btn) return;
+        var item = btn.closest('.provider-item');
+        var provider = item.dataset.provider;
+        var input = item.querySelector('.provider-custom-model');
+        var modelName = input ? input.value.trim() : '';
+        if (!modelName) return;
+
+        // Auto-prepend provider prefix if not already present
+        if (!modelName.startsWith(provider + '/')) {
+            modelName = provider + '/' + modelName;
+        }
+
+        patchConfig('agent.model', modelName).then(function() {
+            updateActiveBanner(modelName);
+            input.value = '';
+            showToast('Model set to ' + stripPrefix(modelName), 'success');
+            // Add to model list as a radio
+            addModelRadio(item, modelName, true);
+        }).catch(function() {
+            showToast('Failed to set model', 'error');
+        });
     });
 
     // --- Deactivate provider ---
-    async function deactivateProvider(name, card) {
-        try {
-            const resp = await fetch('/api/v1/providers/deactivate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name }),
-            });
-            const data = await resp.json();
+    accordion.addEventListener('click', function(e) {
+        var btn = e.target.closest('.provider-deactivate');
+        if (!btn) return;
+        var item = btn.closest('.provider-item');
+        var provider = item.dataset.provider;
+        var displayName = item.querySelector('.provider-item-name').textContent;
+
+        if (!confirm('Remove credentials for ' + displayName + '?')) return;
+
+        fetch('/api/v1/providers/deactivate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: provider }),
+        }).then(function(r) { return r.json(); }).then(function(data) {
             if (data.ok) {
-                // Update card UI
-                card.classList.remove('is-configured');
-                card.dataset.configured = 'false';
-                card.dataset.apiKeyMask = '';
-                card.dataset.apiBase = '';
-
-                // Remove active badge if present
-                const badge = card.querySelector('.provider-active-badge');
+                item.dataset.configured = 'false';
+                var status = item.querySelector('.provider-item-status');
+                if (status) status.className = 'provider-item-status';
+                var badge = item.querySelector('.provider-active-badge');
                 if (badge) badge.remove();
-
-                // Ensure toggle is unchecked
-                const toggle = card.querySelector('.toggle-input');
-                if (toggle) toggle.checked = false;
-
-                showToast('Provider deactivated', 'success');
-                loadModelDropdown();
-            } else {
-                const toggle = card.querySelector('.toggle-input');
-                if (toggle) toggle.checked = true;
-                showToast(data.message || 'Failed to deactivate', 'error');
-            }
-        } catch (err) {
-            const toggle = card.querySelector('.toggle-input');
-            if (toggle) toggle.checked = true;
-            showToast('Failed to deactivate provider', 'error');
-        }
-    }
-
-    // Simple toast notification
-    function showToast(message, type) {
-        // Remove existing toast
-        const existing = document.querySelector('.toast-notification');
-        if (existing) existing.remove();
-
-        const toast = document.createElement('div');
-        toast.className = 'toast-notification toast-' + (type || 'info');
-        toast.textContent = message;
-        document.body.appendChild(toast);
-
-        // Trigger animation
-        setTimeout(() => toast.classList.add('show'), 10);
-
-        // Auto-remove after 4 seconds
-        setTimeout(() => {
-            toast.classList.remove('show');
-            setTimeout(() => toast.remove(), 300);
-        }, 4000);
-    }
-
-    // --- Close modal handlers ---
-    [modalBackdrop, modalClose, modalCancel].forEach(el => {
-        if (el) el.addEventListener('click', closeModal);
-    });
-
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && modal.classList.contains('open')) {
-            closeModal();
-        }
-    });
-
-    function openProviderModal(card) {
-        currentProvider = card.dataset.provider;
-        const displayName = card.dataset.display;
-        const description = card.dataset.description;
-        const hasKey = card.dataset.hasKey === 'true';
-        const hasUrl = card.dataset.hasUrl === 'true';
-        const isOllama = card.dataset.isOllama === 'true';
-        const apiKeyMask = card.dataset.apiKeyMask || '';
-        const apiBase = card.dataset.apiBase || '';
-
-        document.getElementById('modal-provider-name').textContent = displayName;
-        document.getElementById('modal-provider-desc').textContent = description;
-        document.getElementById('modal-provider-id').value = currentProvider;
-
-        apiKeyGroup.style.display = hasKey ? 'block' : 'none';
-        document.getElementById('api-key').value = '';
-        document.getElementById('api-key').placeholder = apiKeyMask ? 'Current: ' + apiKeyMask : 'sk-...';
-
-        apiBaseGroup.style.display = hasUrl ? 'block' : 'none';
-        document.getElementById('api-base').value = apiBase;
-
-        const baseHint = document.getElementById('api-base-hint');
-        if (isOllama) {
-            baseHint.textContent = 'Ollama server URL (default: http://localhost:11434/v1)';
-            document.getElementById('api-base').placeholder = 'http://localhost:11434/v1';
-        } else if (currentProvider === 'ollama_cloud') {
-            baseHint.textContent = 'Ollama Cloud API endpoint (default: https://ollama.com)';
-            document.getElementById('api-base').placeholder = 'https://ollama.com';
-        } else if (currentProvider === 'vllm' || currentProvider === 'custom') {
-            baseHint.textContent = 'API endpoint URL (required)';
-        } else {
-            baseHint.textContent = 'Custom API endpoint (optional)';
-        }
-
-        modal.classList.add('open');
-        document.body.style.overflow = 'hidden';
-    }
-
-    function closeModal() {
-        modal.classList.remove('open');
-        document.body.style.overflow = '';
-        currentProvider = null;
-    }
-
-    // --- Save provider configuration ---
-    if (providerForm) {
-        providerForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const formData = new FormData(providerForm);
-            const btn = providerForm.querySelector('button[type="submit"]');
-            const originalText = btn.textContent;
-
-            const providerName = formData.get('provider');
-            const apiKey = (formData.get('api_key') || '').trim();
-            const apiBaseVal = (formData.get('api_base') || '').trim();
-
-            // Validation: check required fields
-            const needsApiKey = apiKeyGroup.style.display !== 'none';
-            const needsBaseUrl = apiBaseGroup.style.display !== 'none' &&
-                (providerName === 'vllm' || providerName === 'custom');
-
-            if (needsApiKey && !apiKey) {
-                showToast('API key is required', 'error');
-                return;
-            }
-            if (needsBaseUrl && !apiBaseVal) {
-                showToast('Base URL is required for this provider', 'error');
-                return;
-            }
-
-            btn.textContent = 'Saving…';
-            btn.disabled = true;
-
-            const payload = { name: providerName };
-
-            if (needsApiKey) {
-                payload.api_key = apiKey;
-            }
-            if (apiBaseGroup.style.display !== 'none') {
-                payload.api_base = apiBaseVal;
-            }
-
-            try {
-                const resp = await fetch('/api/v1/providers/configure', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                });
-                const data = await resp.json();
-
-                if (data.ok) {
-                    // Update card UI
-                    const card = document.querySelector('.provider-card[data-provider="' + providerName + '"]');
-                    if (card) {
-                        card.classList.add('is-configured');
-                        card.dataset.configured = 'true';
-                        const toggle = card.querySelector('.toggle-input');
-                        if (toggle) toggle.checked = true;
-                        if (payload.api_key) card.dataset.apiKeyMask = '••••••••';
-                        if (payload.api_base) card.dataset.apiBase = payload.api_base;
-                    }
-
-                    // Close modal, show toast, reload models
-                    closeModal();
-                    showToast('Provider configured!', 'success');
-                    loadModelDropdown();
-                } else {
-                    showToast(data.message || 'Failed to save configuration', 'error');
-                    btn.textContent = originalText;
-                    btn.disabled = false;
+                var keyInput = item.querySelector('.provider-api-key');
+                if (keyInput) { keyInput.value = ''; keyInput.placeholder = 'Enter API key...'; }
+                showToast('Provider removed', 'success');
+                // If this was the active model, clear banner
+                var banner = document.getElementById('active-model-name');
+                if (banner) {
+                    var currentModel = banner.textContent;
+                    // Reload page to reflect changes
+                    window.location.reload();
                 }
-            } catch (err) {
-                showToast('Failed to save configuration', 'error');
-                btn.textContent = originalText;
-                btn.disabled = false;
+            } else {
+                showToast(data.message || 'Failed to remove', 'error');
+            }
+        }).catch(function() {
+            showToast('Failed to remove provider', 'error');
+        });
+    });
+
+    // --- Load models for expanded providers on init ---
+    accordion.querySelectorAll('.provider-item-body:not([hidden])').forEach(function(body) {
+        var item = body.closest('.provider-item');
+        if (item) loadProviderModels(item);
+    });
+}
+
+
+// ═══ Load Models for a Provider Accordion Item ═══
+
+var _allModelsCache = null;
+
+async function fetchAllModels() {
+    if (_allModelsCache) return _allModelsCache;
+    try {
+        var resp = await fetch('/api/v1/providers/models');
+        var data = await resp.json();
+        _allModelsCache = data;
+        return data;
+    } catch (err) {
+        return { ok: false, models: [], current: '', vision_model: '' };
+    }
+}
+
+async function loadProviderModels(item) {
+    var provider = item.dataset.provider;
+    var modelList = item.querySelector('.provider-model-list');
+    if (!modelList) return;
+
+    item.dataset.modelsLoaded = 'true';
+
+    var data = await fetchAllModels();
+    var currentModel = data.current || '';
+    var models = [];
+
+    // Get static models for this provider
+    if (data.ok && data.models) {
+        data.models.forEach(function(m) {
+            if (m.provider === provider) {
+                models.push({ value: m.model, label: m.label });
             }
         });
     }
+
+    // Fetch live models for Ollama/Ollama Cloud
+    if (provider === 'ollama' && data.ollama_configured) {
+        try {
+            var ollamaResp = await fetch('/api/v1/providers/ollama/models');
+            var ollamaData = await ollamaResp.json();
+            if (ollamaData.ok && ollamaData.models && ollamaData.models.length > 0) {
+                models = ollamaData.models.map(function(m) {
+                    return { value: 'ollama/' + m.name, label: m.name + ' (' + m.size + ')' };
+                });
+            }
+        } catch (_) {}
+    }
+    if (provider === 'ollama_cloud' && data.ollama_cloud_configured) {
+        try {
+            var cloudResp = await fetch('/api/v1/providers/ollama-cloud/models');
+            var cloudData = await cloudResp.json();
+            if (cloudData.ok && cloudData.models && cloudData.models.length > 0) {
+                models = cloudData.models.map(function(m) {
+                    return { value: 'ollama_cloud/' + m.id, label: m.id };
+                });
+            }
+        } catch (_) {}
+    }
+
+    // If current model belongs to this provider but isn't in the list, add it
+    if (currentModel.startsWith(provider + '/')) {
+        var found = models.some(function(m) { return m.value === currentModel; });
+        if (!found) {
+            models.unshift({ value: currentModel, label: stripPrefix(currentModel) + ' (current)' });
+        }
+    }
+
+    // Render model radio buttons
+    while (modelList.firstChild) modelList.removeChild(modelList.firstChild);
+
+    if (models.length === 0 && item.dataset.configured !== 'true') {
+        var hint = document.createElement('div');
+        hint.className = 'form-hint';
+        hint.textContent = 'Configure this provider to see available models.';
+        modelList.appendChild(hint);
+        return;
+    }
+
+    if (models.length === 0) {
+        var hint = document.createElement('div');
+        hint.className = 'form-hint';
+        hint.textContent = 'No predefined models. Use the custom field below.';
+        modelList.appendChild(hint);
+        return;
+    }
+
+    var provHidden = (data.hidden_models && data.hidden_models[provider]) || [];
+    var overrides = data.model_overrides || {};
+
+    models.forEach(function(m) {
+        addModelRadioElement(modelList, m.value, m.label, currentModel, provider, overrides);
+    });
+
+    // "Show N hidden" toggle if there are hidden models
+    if (provHidden.length > 0) {
+        var toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'model-show-hidden';
+        toggleBtn.textContent = 'Show ' + provHidden.length + ' hidden';
+        toggleBtn.addEventListener('click', function() {
+            toggleHiddenModels(modelList, provider, provHidden, currentModel, toggleBtn, overrides);
+        });
+        modelList.appendChild(toggleBtn);
+    }
 }
+
+function addModelRadioElement(container, value, label, currentModel, provider, overrides) {
+    var wrapper = document.createElement('div');
+    wrapper.className = 'model-radio-wrapper';
+
+    var lbl = document.createElement('label');
+    lbl.className = 'model-radio';
+
+    var radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'active-model';
+    radio.value = value;
+    if (value === currentModel) radio.checked = true;
+    lbl.appendChild(radio);
+
+    var nameSpan = document.createElement('span');
+    nameSpan.className = 'model-radio-name';
+    nameSpan.textContent = label || stripPrefix(value);
+    lbl.appendChild(nameSpan);
+
+    var badge = document.createElement('span');
+    badge.className = 'model-radio-badge' + (value === currentModel ? ' active' : '');
+    badge.textContent = value === currentModel ? 'Active' : '';
+    lbl.appendChild(badge);
+
+    // Gear button (per-model overrides)
+    var gearBtn = document.createElement('button');
+    gearBtn.type = 'button';
+    gearBtn.className = 'model-radio-gear';
+    if (overrides && overrides[value]) gearBtn.classList.add('has-overrides');
+    gearBtn.textContent = '\u2699';
+    gearBtn.title = 'Model settings';
+    gearBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleModelOverrides(wrapper, value, overrides);
+    });
+    lbl.appendChild(gearBtn);
+
+    // Hide button (only for non-active models)
+    if (value !== currentModel && provider) {
+        var hideBtn = document.createElement('button');
+        hideBtn.type = 'button';
+        hideBtn.className = 'model-radio-hide';
+        hideBtn.textContent = '\u00D7';
+        hideBtn.title = 'Hide model';
+        hideBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            hideModel(provider, value, wrapper);
+        });
+        lbl.appendChild(hideBtn);
+    }
+
+    wrapper.appendChild(lbl);
+    container.appendChild(wrapper);
+}
+
+/** Add a custom model as a new radio in the provider's list */
+function addModelRadio(item, model, setActive) {
+    var modelList = item.querySelector('.provider-model-list');
+    if (!modelList) return;
+    // Check if already exists
+    var exists = modelList.querySelector('input[value="' + CSS.escape(model) + '"]');
+    if (exists) return;
+    var currentModel = setActive ? model : '';
+    var provider = item.dataset.provider || '';
+    addModelRadioElement(modelList, model, stripPrefix(model), currentModel, provider, {});
+}
+
+
+// ═══ Model Hiding ═══
+
+function hideModel(provider, modelId, wrapperEl) {
+    var data = _allModelsCache || {};
+    var hidden = (data.hidden_models && data.hidden_models[provider]) || [];
+    if (hidden.indexOf(modelId) === -1) hidden.push(modelId);
+
+    patchConfig('providers.' + provider + '.hidden_models', hidden).then(function() {
+        wrapperEl.remove();
+        _allModelsCache = null;
+        loadVisionDropdown();
+        populateFallbackDropdown();
+        showToast('Model hidden', 'success');
+        // Reload provider model list to update "Show N hidden" link
+        var item = document.querySelector('.provider-item[data-provider="' + provider + '"]');
+        if (item) {
+            item.dataset.modelsLoaded = '';
+            loadProviderModels(item);
+        }
+    }).catch(function() {
+        showToast('Failed to hide model', 'error');
+    });
+}
+
+function toggleHiddenModels(modelList, provider, hiddenIds, currentModel, toggleBtn, overrides) {
+    var existing = modelList.querySelector('.hidden-models-section');
+    if (existing) {
+        existing.remove();
+        toggleBtn.textContent = 'Show ' + hiddenIds.length + ' hidden';
+        return;
+    }
+
+    var section = document.createElement('div');
+    section.className = 'hidden-models-section';
+
+    hiddenIds.forEach(function(id) {
+        var row = document.createElement('div');
+        row.className = 'hidden-model-row';
+
+        var name = document.createElement('span');
+        name.className = 'hidden-model-name';
+        name.textContent = stripPrefix(id);
+        row.appendChild(name);
+
+        var restoreBtn = document.createElement('button');
+        restoreBtn.type = 'button';
+        restoreBtn.className = 'btn btn-xs';
+        restoreBtn.textContent = 'Restore';
+        restoreBtn.addEventListener('click', function() {
+            restoreModel(provider, id);
+        });
+        row.appendChild(restoreBtn);
+
+        section.appendChild(row);
+    });
+
+    modelList.insertBefore(section, toggleBtn);
+    toggleBtn.textContent = 'Hide list';
+}
+
+function restoreModel(provider, modelId) {
+    var data = _allModelsCache || {};
+    var hidden = (data.hidden_models && data.hidden_models[provider]) || [];
+    hidden = hidden.filter(function(id) { return id !== modelId; });
+
+    patchConfig('providers.' + provider + '.hidden_models', hidden).then(function() {
+        _allModelsCache = null;
+        showToast('Model restored', 'success');
+        var item = document.querySelector('.provider-item[data-provider="' + provider + '"]');
+        if (item) {
+            item.dataset.modelsLoaded = '';
+            loadProviderModels(item);
+        }
+        loadVisionDropdown();
+        populateFallbackDropdown();
+    }).catch(function() {
+        showToast('Failed to restore model', 'error');
+    });
+}
+
+
+// ═══ Per-Model Settings ═══
+
+function toggleModelOverrides(wrapper, modelId, overrides) {
+    var existing = wrapper.querySelector('.model-overrides-form');
+    if (existing) {
+        existing.remove();
+        return;
+    }
+
+    var current = (overrides && overrides[modelId]) || {};
+
+    var form = document.createElement('div');
+    form.className = 'model-overrides-form';
+
+    // Temperature row
+    var tempLabel = document.createElement('label');
+    tempLabel.className = 'override-label';
+    tempLabel.textContent = 'Temperature';
+    form.appendChild(tempLabel);
+
+    var tempInput = document.createElement('input');
+    tempInput.type = 'number';
+    tempInput.className = 'input override-input';
+    tempInput.step = '0.1';
+    tempInput.min = '0';
+    tempInput.max = '2';
+    tempInput.placeholder = 'global';
+    if (current.temperature != null) tempInput.value = current.temperature;
+    form.appendChild(tempInput);
+
+    // Max tokens row
+    var tokLabel = document.createElement('label');
+    tokLabel.className = 'override-label';
+    tokLabel.textContent = 'Max tokens';
+    form.appendChild(tokLabel);
+
+    var tokInput = document.createElement('input');
+    tokInput.type = 'number';
+    tokInput.className = 'input override-input';
+    tokInput.step = '1';
+    tokInput.min = '1';
+    tokInput.placeholder = 'global';
+    if (current.max_tokens != null) tokInput.value = current.max_tokens;
+    form.appendChild(tokInput);
+
+    // Buttons row
+    var btnRow = document.createElement('div');
+    btnRow.className = 'override-buttons';
+
+    var saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'btn btn-xs btn-primary';
+    saveBtn.textContent = 'Save';
+    saveBtn.addEventListener('click', function() {
+        saveModelOverrides(modelId, tempInput.value, tokInput.value, form);
+    });
+    btnRow.appendChild(saveBtn);
+
+    var clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'btn btn-xs';
+    clearBtn.textContent = 'Clear';
+    clearBtn.addEventListener('click', function() {
+        clearModelOverrides(modelId, form);
+    });
+    btnRow.appendChild(clearBtn);
+
+    form.appendChild(btnRow);
+    wrapper.appendChild(form);
+}
+
+function saveModelOverrides(modelId, tempVal, tokensVal, formEl) {
+    var data = _allModelsCache || {};
+    var allOverrides = Object.assign({}, data.model_overrides || {});
+
+    var entry = {};
+    if (tempVal !== '') entry.temperature = parseFloat(tempVal);
+    if (tokensVal !== '') entry.max_tokens = parseInt(tokensVal, 10);
+
+    if (Object.keys(entry).length === 0) {
+        delete allOverrides[modelId];
+    } else {
+        allOverrides[modelId] = entry;
+    }
+
+    var wrapper = formEl.closest('.model-radio-wrapper');
+    patchConfig('agent.model_overrides', allOverrides).then(function() {
+        _allModelsCache = null;
+        formEl.remove();
+        showToast('Model settings saved', 'success');
+        if (wrapper) {
+            var gear = wrapper.querySelector('.model-radio-gear');
+            if (gear) {
+                if (Object.keys(entry).length > 0) {
+                    gear.classList.add('has-overrides');
+                } else {
+                    gear.classList.remove('has-overrides');
+                }
+            }
+        }
+    }).catch(function() {
+        showToast('Failed to save settings', 'error');
+    });
+}
+
+function clearModelOverrides(modelId, formEl) {
+    var data = _allModelsCache || {};
+    var allOverrides = Object.assign({}, data.model_overrides || {});
+    delete allOverrides[modelId];
+
+    var wrapper = formEl.closest('.model-radio-wrapper');
+    patchConfig('agent.model_overrides', allOverrides).then(function() {
+        _allModelsCache = null;
+        formEl.remove();
+        showToast('Model settings cleared', 'success');
+        if (wrapper) {
+            var gear = wrapper.querySelector('.model-radio-gear');
+            if (gear) gear.classList.remove('has-overrides');
+        }
+    }).catch(function() {
+        showToast('Failed to clear settings', 'error');
+    });
+}
+
+
+// ═══ Advanced Agent Settings ═══
+
+var agentForm = document.getElementById('agent-form');
+var visionModelSelect = document.getElementById('vision-model-select');
+var visionModelValue = document.getElementById('vision-model-value');
+
+if (agentForm) {
+    agentForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var btn = agentForm.querySelector('button[type="submit"]');
+        var originalText = btn.textContent;
+        btn.textContent = 'Saving\u2026';
+        btn.disabled = true;
+
+        // Sync vision model
+        if (visionModelSelect && visionModelValue) {
+            visionModelValue.value = visionModelSelect.value;
+        }
+
+        var form = new FormData(agentForm);
+        var patches = [
+            { key: 'agent.vision_model', value: form.get('vision_model') || '' },
+            { key: 'agent.max_tokens', value: form.get('max_tokens') },
+            { key: 'agent.temperature', value: form.get('temperature') },
+            { key: 'agent.max_iterations', value: form.get('max_iterations') },
+            { key: 'agent.fallback_models', value: fallbackModels },
+        ];
+
+        try {
+            for (var i = 0; i < patches.length; i++) {
+                await fetch('/api/v1/config', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(patches[i]),
+                });
+            }
+            btn.textContent = 'Saved!';
+            setTimeout(function() { btn.textContent = originalText; btn.disabled = false; }, 2000);
+        } catch (err) {
+            btn.textContent = 'Error!';
+            setTimeout(function() { btn.textContent = originalText; btn.disabled = false; }, 2000);
+        }
+    });
+}
+
+// Load vision model dropdown
+async function loadVisionDropdown() {
+    if (!visionModelSelect) return;
+    var data = await fetchAllModels();
+    while (visionModelSelect.firstChild) visionModelSelect.removeChild(visionModelSelect.firstChild);
+
+    var sameOpt = document.createElement('option');
+    sameOpt.value = '';
+    sameOpt.textContent = '(Same as chat model)';
+    visionModelSelect.appendChild(sameOpt);
+
+    var currentVision = data.vision_model || '';
+    var groups = {};
+    if (data.ok && data.models) {
+        data.models.forEach(function(m) {
+            if (!groups[m.provider]) groups[m.provider] = [];
+            groups[m.provider].push(m);
+        });
+    }
+
+    var found = false;
+    Object.keys(groups).forEach(function(prov) {
+        var optgroup = document.createElement('optgroup');
+        optgroup.label = providerDisplayName(prov);
+        groups[prov].forEach(function(m) {
+            var opt = document.createElement('option');
+            opt.value = m.model;
+            opt.textContent = m.label;
+            if (m.model === currentVision) { opt.selected = true; found = true; }
+            optgroup.appendChild(opt);
+        });
+        visionModelSelect.appendChild(optgroup);
+    });
+
+    if (currentVision && !found) {
+        var cur = document.createElement('option');
+        cur.value = currentVision;
+        cur.textContent = currentVision + ' (current)';
+        cur.selected = true;
+        visionModelSelect.insertBefore(cur, visionModelSelect.firstChild.nextSibling);
+    }
+}
+
+loadVisionDropdown();
+
+
+// ═══ Fallback Models ═══
+
+var fallbackList = document.getElementById('fallback-models-list');
+var fallbackSelect = document.getElementById('fallback-model-select');
+var btnAddFallback = document.getElementById('btn-add-fallback');
+var fallbackModels = [];
+
+function renderFallbackTags() {
+    if (!fallbackList) return;
+    while (fallbackList.firstChild) fallbackList.removeChild(fallbackList.firstChild);
+    if (fallbackModels.length === 0) {
+        var empty = document.createElement('span');
+        empty.className = 'tag-list-empty';
+        empty.textContent = 'No fallback models configured. The agent will retry the primary model only.';
+        fallbackList.appendChild(empty);
+        return;
+    }
+    fallbackModels.forEach(function(model, idx) {
+        var tag = document.createElement('span');
+        tag.className = 'tag';
+        var label = document.createElement('span');
+        label.className = 'tag-label';
+        label.textContent = (idx + 1) + '. ' + model;
+        tag.appendChild(label);
+        var removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'tag-remove';
+        removeBtn.textContent = '\u00d7';
+        removeBtn.addEventListener('click', function() { fallbackModels.splice(idx, 1); renderFallbackTags(); });
+        tag.appendChild(removeBtn);
+        fallbackList.appendChild(tag);
+    });
+}
+
+async function populateFallbackDropdown() {
+    if (!fallbackSelect) return;
+    var data = await fetchAllModels();
+    while (fallbackSelect.firstChild) fallbackSelect.removeChild(fallbackSelect.firstChild);
+    var ph = document.createElement('option');
+    ph.value = '';
+    ph.textContent = 'Add fallback model\u2026';
+    fallbackSelect.appendChild(ph);
+
+    var groups = {};
+    if (data.ok && data.models) {
+        data.models.forEach(function(m) {
+            if (!groups[m.provider]) groups[m.provider] = [];
+            groups[m.provider].push(m);
+        });
+    }
+    Object.keys(groups).forEach(function(prov) {
+        var optgroup = document.createElement('optgroup');
+        optgroup.label = providerDisplayName(prov);
+        groups[prov].forEach(function(m) {
+            var opt = document.createElement('option');
+            opt.value = m.model;
+            opt.textContent = m.label;
+            optgroup.appendChild(opt);
+        });
+        fallbackSelect.appendChild(optgroup);
+    });
+
+    var customGroup = document.createElement('optgroup');
+    customGroup.label = 'Custom';
+    var customOpt = document.createElement('option');
+    customOpt.value = '__custom__';
+    customOpt.textContent = '\u270f Custom model\u2026';
+    customGroup.appendChild(customOpt);
+    fallbackSelect.appendChild(customGroup);
+}
+
+if (btnAddFallback) {
+    btnAddFallback.addEventListener('click', function() {
+        if (!fallbackSelect) return;
+        var val = fallbackSelect.value;
+        if (!val) return;
+        if (val === '__custom__') {
+            var custom = prompt('Enter model name (e.g. openai/gpt-4o):');
+            if (custom && custom.trim()) val = custom.trim(); else return;
+        }
+        if (fallbackModels.indexOf(val) !== -1) return;
+        fallbackModels.push(val);
+        renderFallbackTags();
+        fallbackSelect.value = '';
+    });
+}
+
+if (fallbackList) {
+    try {
+        var initial = JSON.parse(fallbackList.getAttribute('data-models') || '[]');
+        if (Array.isArray(initial)) fallbackModels = initial;
+    } catch (_) {}
+    renderFallbackTags();
+}
+
+populateFallbackDropdown();
 
 
 // ═══ Channel Configuration Cards ═══
@@ -1149,14 +1503,10 @@ if (btnRunCleanup) {
     var browserForm = document.getElementById('browser-form');
     var btnTestBrowser = document.getElementById('btn-test-browser');
     var browserResult = document.getElementById('browser-result');
-    var enabledToggle = document.getElementById('browser-enabled');
     var headlessToggle = document.getElementById('browser-headless');
-
-    console.log('[Browser] Form:', browserForm, 'Enabled:', enabledToggle, 'Headless:', headlessToggle);
 
     if (browserForm) {
         browserForm.addEventListener('submit', async function(e) {
-            console.log('[Browser] Form submit triggered');
             e.preventDefault();
             e.stopPropagation();
 
@@ -1167,24 +1517,18 @@ if (btnRunCleanup) {
             browserResult.textContent = '';
             browserResult.className = 'form-hint';
 
-            // Get values from inputs (toggles are outside form)
-            var enabled = enabledToggle ? enabledToggle.checked : false;
             var headless = headlessToggle ? headlessToggle.checked : true;
-            var browserType = document.getElementById('browser-type');
+            var executablePath = document.getElementById('browser-executable');
             var actionTimeout = document.getElementById('browser-action-timeout');
-
-            console.log('[Browser] Saving:', {
-                enabled: enabled,
-                headless: headless,
-                browserType: browserType ? browserType.value : 'chromium',
-                actionTimeout: actionTimeout ? actionTimeout.value : '10'
-            });
+            var navTimeout = document.getElementById('browser-nav-timeout');
+            var snapshotLimit = document.getElementById('browser-snapshot-limit');
 
             var patches = [
-                { key: 'browser.enabled', value: String(enabled) },
                 { key: 'browser.headless', value: String(headless) },
-                { key: 'browser.browser_type', value: browserType ? (browserType.value || 'chromium') : 'chromium' },
+                { key: 'browser.executable_path', value: executablePath ? executablePath.value : '' },
                 { key: 'browser.action_timeout_secs', value: actionTimeout ? (actionTimeout.value || '10') : '10' },
+                { key: 'browser.navigation_timeout_secs', value: navTimeout ? (navTimeout.value || '30') : '30' },
+                { key: 'browser.snapshot_limit', value: snapshotLimit ? (snapshotLimit.value || '50') : '50' },
             ];
 
             try {

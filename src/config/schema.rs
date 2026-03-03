@@ -303,6 +303,25 @@ pub struct AgentConfig {
     /// When true, tools are injected into the system prompt as XML and parsed
     /// from the LLM's text response.
     pub force_xml_tools: bool,
+    /// Fallback models tried in order when the primary model fails.
+    /// Each entry is a full model string (e.g. "openai/gpt-4o", "ollama/llama3").
+    /// The provider is resolved automatically from the model name.
+    #[serde(default)]
+    pub fallback_models: Vec<String>,
+    /// Per-model parameter overrides. When a model is active, these
+    /// values replace the global defaults for temperature/max_tokens.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub model_overrides: HashMap<String, ModelOverrides>,
+}
+
+/// Per-model parameter overrides.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
 }
 
 impl Default for AgentConfig {
@@ -316,7 +335,27 @@ impl Default for AgentConfig {
             memory_window: 50,
             consolidation_threshold: 20,
             force_xml_tools: false,
+            fallback_models: Vec::new(),
+            model_overrides: HashMap::new(),
         }
+    }
+}
+
+impl AgentConfig {
+    /// Get effective temperature for a model, checking per-model overrides first.
+    pub fn effective_temperature(&self, model: &str) -> f32 {
+        self.model_overrides
+            .get(model)
+            .and_then(|o| o.temperature)
+            .unwrap_or(self.temperature)
+    }
+
+    /// Get effective max_tokens for a model, checking per-model overrides first.
+    pub fn effective_max_tokens(&self, model: &str) -> u32 {
+        self.model_overrides
+            .get(model)
+            .and_then(|o| o.max_tokens)
+            .unwrap_or(self.max_tokens)
     }
 }
 
@@ -336,6 +375,9 @@ pub struct ProviderConfig {
     /// - `false`: Always use native tool calling
     /// - `None`: Use global setting or auto-detect
     pub force_xml_tools: Option<bool>,
+    /// Models hidden from the UI lists by the user.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_models: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

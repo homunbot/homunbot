@@ -342,12 +342,13 @@ impl AgentLoop {
             };
             let use_streaming = stream_tx.is_some();
 
+            let active_model = &self.config.agent.model;
             let request = ChatRequest {
                 messages: messages.clone(),
                 tools: api_tools,
-                model: self.config.agent.model.clone(),
-                max_tokens: self.config.agent.max_tokens,
-                temperature: self.config.agent.temperature,
+                model: active_model.clone(),
+                max_tokens: self.config.agent.effective_max_tokens(active_model),
+                temperature: self.config.agent.effective_temperature(active_model),
             };
 
             // Estimate context size for debugging
@@ -380,9 +381,9 @@ impl AgentLoop {
                             } else {
                                 tool_defs.clone()
                             },
-                            model: self.config.agent.model.clone(),
-                            max_tokens: self.config.agent.max_tokens,
-                            temperature: self.config.agent.temperature,
+                            model: active_model.clone(),
+                            max_tokens: self.config.agent.effective_max_tokens(active_model),
+                            temperature: self.config.agent.effective_temperature(active_model),
                         };
                         self.provider
                             .chat(request2)
@@ -426,9 +427,9 @@ impl AgentLoop {
                                 let retry_request = ChatRequest {
                                     messages: messages.clone(),
                                     tools: Vec::new(),
-                                    model: self.config.agent.model.clone(),
-                                    max_tokens: self.config.agent.max_tokens,
-                                    temperature: self.config.agent.temperature,
+                                    model: active_model.clone(),
+                                    max_tokens: self.config.agent.effective_max_tokens(active_model),
+                                    temperature: self.config.agent.effective_temperature(active_model),
                                 };
                                 self.provider
                                     .chat(retry_request)
