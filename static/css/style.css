@@ -1039,17 +1039,14 @@ html, body {
     padding: 2px 4px;
     font-size: 14px;
     line-height: 1;
-    border-radius: var(--r);
-    opacity: 0;
-    transition: opacity var(--fast) var(--ease), color var(--fast) var(--ease);
+    border-radius: var(--r-sm);
+    color: var(--t3);
+    transition: color var(--fast) var(--ease);
 }
 
-.model-radio-wrapper:hover .model-radio-hide,
-.model-radio-wrapper:hover .model-radio-gear { opacity: 0.5; }
-
-.model-radio-hide:hover { opacity: 1 !important; color: var(--red, #e53e3e); }
-.model-radio-gear:hover { opacity: 1 !important; color: var(--accent); }
-.model-radio-gear.has-overrides { opacity: 0.8; color: var(--accent); }
+.model-radio-hide:hover { color: var(--err); }
+.model-radio-gear:hover { color: var(--accent); }
+.model-radio-gear.has-overrides { color: var(--accent); }
 
 .model-show-hidden {
     border: none;

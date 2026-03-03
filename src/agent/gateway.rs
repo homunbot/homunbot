@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use crate::bus::{InboundMessage, OutboundMessage, StreamMessage};
 use crate::config::Config;
 use crate::scheduler::{CronEvent, CronScheduler};
+use tokio::sync::RwLock;
 use crate::session::SessionManager;
 use crate::storage::Database;
 use crate::utils::strip_reasoning;
@@ -49,7 +50,7 @@ struct ChannelHandle {
 /// ```
 pub struct Gateway {
     agent: Arc<AgentLoop>,
-    config: Config,
+    config: Arc<RwLock<Config>>,
     #[allow(dead_code)]
     session_manager: SessionManager,
     cron_scheduler: Arc<CronScheduler>,
@@ -65,7 +66,7 @@ pub struct Gateway {
 impl Gateway {
     pub fn new(
         agent: Arc<AgentLoop>,
-        config: Config,
+        config: Arc<RwLock<Config>>,
         session_manager: SessionManager,
         cron_scheduler: Arc<CronScheduler>,
         cron_event_rx: mpsc::Receiver<CronEvent>,
@@ -91,13 +92,17 @@ impl Gateway {
     /// Start the gateway — runs all channels + cron + agent loop.
     /// Blocks until Ctrl+C.
     pub async fn run(mut self) -> Result<()> {
+        // Snapshot config for channel startup (one-time operation).
+        // The Arc is passed to WebServer so web UI changes propagate to the agent.
+        let config = self.config.read().await.clone();
+
         let (inbound_tx, mut inbound_rx) = mpsc::channel::<InboundMessage>(100);
         let mut channels: Vec<ChannelHandle> = Vec::new();
 
         // --- Start Telegram channel ---
         #[cfg(feature = "channel-telegram")]
-        if self.config.channels.telegram.enabled {
-            let mut tg_config = self.config.channels.telegram.clone();
+        if config.channels.telegram.enabled {
+            let mut tg_config = config.channels.telegram.clone();
             // Resolve token from encrypted storage if marker is present
             if tg_config.token == "***ENCRYPTED***" || tg_config.token.is_empty() {
                 if let Ok(secrets) = crate::storage::global_secrets() {
@@ -133,8 +138,8 @@ impl Gateway {
 
         // --- Start Discord channel ---
         #[cfg(feature = "channel-discord")]
-        if self.config.channels.discord.enabled {
-            let mut dc_config = self.config.channels.discord.clone();
+        if config.channels.discord.enabled {
+            let mut dc_config = config.channels.discord.clone();
             // Resolve token from encrypted storage if marker is present
             if dc_config.token == "***ENCRYPTED***" || dc_config.token.is_empty() {
                 if let Ok(secrets) = crate::storage::global_secrets() {
@@ -170,8 +175,8 @@ impl Gateway {
 
         // --- Start WhatsApp channel ---
         #[cfg(feature = "channel-whatsapp")]
-        if self.config.channels.whatsapp.enabled {
-            let wa_config = self.config.channels.whatsapp.clone();
+        if config.channels.whatsapp.enabled {
+            let wa_config = config.channels.whatsapp.clone();
             let wa_inbound_tx = inbound_tx.clone();
             let (wa_outbound_tx, wa_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
 
@@ -191,8 +196,8 @@ impl Gateway {
         }
 
         // --- Start Slack channel ---
-        if self.config.channels.slack.enabled {
-            let mut slack_config = self.config.channels.slack.clone();
+        if config.channels.slack.enabled {
+            let mut slack_config = config.channels.slack.clone();
 
             // Resolve token from encrypted storage if marker is present
             if slack_config.token == "***ENCRYPTED***" || slack_config.token.is_empty() {
@@ -229,8 +234,8 @@ impl Gateway {
 
         // --- Start Email channel ---
         #[cfg(feature = "channel-email")]
-        if self.config.channels.email.enabled {
-            let email_config = self.config.channels.email.clone();
+        if config.channels.email.enabled {
+            let email_config = config.channels.email.clone();
 
             // Skip if not properly configured
             if !email_config.is_configured() {
@@ -257,10 +262,10 @@ impl Gateway {
 
         // --- Start Web UI server ---
         #[cfg(feature = "web-ui")]
-        if self.config.channels.web.enabled {
-            let web_config = self.config.clone();
+        if config.channels.web.enabled {
+            let shared_config = self.config.clone(); // Arc — shared with agent for hot-reload
             let web_inbound_tx = inbound_tx.clone();
-            let port = web_config.channels.web.port;
+            let port = config.channels.web.port;
             let (web_outbound_tx, web_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
 
             // Channel for streaming text chunks from the agent to WebSocket clients
@@ -270,7 +275,7 @@ impl Gateway {
             let web_db = self.db.clone();
             let handle = tokio::spawn(async move {
                 let mut server =
-                    WebServer::new(web_config, web_inbound_tx, web_outbound_rx, web_db);
+                    WebServer::new(shared_config, web_inbound_tx, web_outbound_rx, web_db);
                 server.set_stream_rx(stream_rx);
                 if let Err(e) = server.start().await {
                     tracing::error!(error = %e, "Web UI server error");
@@ -291,8 +296,8 @@ impl Gateway {
         tracing::info!("Cron scheduler started");
 
         // --- Run memory cleanup if enabled ---
-        if self.config.memory.auto_cleanup {
-            let mem_config = &self.config.memory;
+        if config.memory.auto_cleanup {
+            let mem_config = &config.memory;
             tracing::info!(
                 conversation_days = mem_config.conversation_retention_days,
                 history_days = mem_config.history_retention_days,
@@ -330,10 +335,10 @@ impl Gateway {
         drop(inbound_tx);
 
         let active = channels.len();
-        let web_url = if self.config.channels.web.enabled {
+        let web_url = if config.channels.web.enabled {
             format!(
                 " Web UI: http://localhost:{}",
-                self.config.channels.web.port
+                config.channels.web.port
             )
         } else {
             String::new()

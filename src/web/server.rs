@@ -16,9 +16,11 @@ use super::api;
 use super::pages;
 use super::ws;
 
-/// Shared state accessible by all web handlers
+/// Shared state accessible by all web handlers.
+/// The config Arc is shared with the AgentLoop for hot-reload:
+/// web UI writes → agent reads on next request.
 pub struct AppState {
-    pub config: tokio::sync::RwLock<Config>,
+    pub config: Arc<tokio::sync::RwLock<Config>>,
     pub started_at: Instant,
     pub inbound_tx: Option<mpsc::Sender<InboundMessage>>,
     /// Active WebSocket sessions: chat_id → sender for outbound messages
@@ -36,6 +38,7 @@ pub struct AppState {
 
 impl AppState {
     /// Save config to disk AND update the in-memory copy atomically.
+    /// Since config is shared via Arc, the AgentLoop sees changes on next request.
     pub async fn save_config(&self, config: Config) -> anyhow::Result<()> {
         config.save()?;
         *self.config.write().await = config;
@@ -45,7 +48,7 @@ impl AppState {
 
 /// Web server — embedded dashboard + REST API + WebSocket chat
 pub struct WebServer {
-    config: Config,
+    config: Arc<tokio::sync::RwLock<Config>>,
     inbound_tx: Option<mpsc::Sender<InboundMessage>>,
     outbound_rx: Option<mpsc::Receiver<OutboundMessage>>,
     stream_rx: Option<mpsc::Receiver<StreamMessage>>,
@@ -53,8 +56,9 @@ pub struct WebServer {
 }
 
 impl WebServer {
+    /// Create a web server that shares config with the agent for hot-reload.
     pub fn new(
-        config: Config,
+        config: Arc<tokio::sync::RwLock<Config>>,
         inbound_tx: mpsc::Sender<InboundMessage>,
         outbound_rx: mpsc::Receiver<OutboundMessage>,
         db: Database,
@@ -76,10 +80,11 @@ impl WebServer {
         self.stream_rx = Some(rx);
     }
 
-    /// Create a setup-only server (no agent, just config UI)
+    /// Create a setup-only server (no agent, just config UI).
+    /// Wraps config in its own Arc — not shared with any agent.
     pub fn setup_only(config: Config) -> Self {
         Self {
-            config,
+            config: Arc::new(tokio::sync::RwLock::new(config)),
             inbound_tx: None,
             outbound_rx: None,
             stream_rx: None,
@@ -89,11 +94,13 @@ impl WebServer {
 
     /// Start the web server. Runs until the server is shut down.
     pub async fn start(self) -> Result<()> {
-        let host = self.config.channels.web.host.clone();
-        let port = self.config.channels.web.port;
+        let (host, port) = {
+            let cfg = self.config.read().await;
+            (cfg.channels.web.host.clone(), cfg.channels.web.port)
+        };
 
         let state = Arc::new(AppState {
-            config: tokio::sync::RwLock::new(self.config),
+            config: self.config,
             started_at: Instant::now(),
             inbound_tx: self.inbound_tx,
             ws_sessions: tokio::sync::RwLock::new(std::collections::HashMap::new()),

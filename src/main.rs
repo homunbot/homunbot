@@ -695,8 +695,11 @@ async fn main() -> Result<()> {
                 .iter()
                 .map(|s| s.to_string())
                 .collect();
+            // Wrap config in Arc for AgentLoop (no web server sharing in CLI mode,
+            // but AgentLoop requires Arc<RwLock<Config>> for API uniformity)
+            let shared_config = Arc::new(tokio::sync::RwLock::new(config));
             let mut agent =
-                agent::AgentLoop::new(provider, config, session_manager.clone(), tool_registry, db);
+                agent::AgentLoop::new(provider, shared_config, session_manager.clone(), tool_registry, db).await;
             agent.set_registered_tool_names(tool_names);
 
             // Initialize memory searcher (vector + FTS5 hybrid search)
@@ -800,6 +803,11 @@ async fn main() -> Result<()> {
             std::fs::write(&pid_file, std::process::id().to_string())?;
 
             let config = Config::load()?;
+            // Shared config: web UI writes → agent reads on next request (hot-reload)
+            let shared_config = Arc::new(tokio::sync::RwLock::new(config));
+            // Snapshot for one-time startup operations (provider, tools, channels, etc.)
+            let config = shared_config.read().await.clone();
+
             let db = Database::open(&config.storage.resolved_path()).await?;
 
             // Try to create provider, but allow gateway to start without one
@@ -858,11 +866,11 @@ async fn main() -> Result<()> {
             let mut agent = if let Some(p) = provider {
                 let mut a = agent::AgentLoop::new(
                     p,
-                    config.clone(),
+                    shared_config.clone(),
                     session_manager.clone(),
                     tool_registry,
                     db,
-                );
+                ).await;
                 a.set_message_tx(tool_msg_tx);
                 a.set_registered_tool_names(tool_names);
 
@@ -981,7 +989,7 @@ async fn main() -> Result<()> {
 
             let mut gateway = agent::Gateway::new(
                 agent,
-                config,
+                shared_config,
                 session_manager,
                 cron_scheduler,
                 cron_event_rx,
