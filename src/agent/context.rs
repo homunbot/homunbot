@@ -51,6 +51,8 @@ pub struct ContextBuilder {
     prompt_builder: SystemPromptBuilder,
     /// Current model name (for runtime section)
     model_name: String,
+    /// Names of all registered tools (always set, for routing rules in system prompt)
+    registered_tool_names: Vec<String>,
 }
 
 impl ContextBuilder {
@@ -68,6 +70,7 @@ impl ContextBuilder {
             channels_info: String::new(),
             prompt_builder: SystemPromptBuilder::with_defaults(),
             model_name: config.agent.model.clone(),
+            registered_tool_names: Vec::new(),
         }
     }
 
@@ -176,6 +179,11 @@ impl ContextBuilder {
         *guard = memories;
     }
 
+    /// Set the names of all registered tools (for routing rules in system prompt).
+    pub fn set_registered_tool_names(&mut self, names: Vec<String>) {
+        self.registered_tool_names = names;
+    }
+
     /// Set available channels info for cross-channel messaging.
     pub fn set_channels_info(&mut self, channels: &[(&str, &str)]) {
         if channels.is_empty() {
@@ -209,6 +217,7 @@ impl ContextBuilder {
             workspace_dir: std::path::Path::new(&self.workspace),
             model_name: &self.model_name,
             tools,
+            registered_tool_names: &self.registered_tool_names,
             skills_summary: &skills_summary,
             bootstrap_files: &bootstrap_files,
             memory_content: &self.memory_content,

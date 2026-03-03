@@ -427,8 +427,16 @@ impl BrowserTool {
         // listeners (set up in BrowserManager::setup_cdp_listeners), so no
         // polling or JS injection is needed here.
 
-        // Get text-based accessibility tree snapshot
-        let snapshot = PageSnapshot::from_page(page).await?;
+        // Get text-based accessibility tree snapshot (compact: skip unnamed structural elements)
+        let snapshot = PageSnapshot::from_page_with_options(
+            page,
+            crate::browser::snapshot::SnapshotOptions {
+                compact: true,
+                limit: Some(75),
+                ..Default::default()
+            },
+        )
+        .await?;
 
         // Cache role_refs for role-based element resolution
         self.cache_role_refs(chat_id, snapshot.role_refs.clone())
@@ -1775,43 +1783,10 @@ impl Tool for BrowserTool {
     }
 
     fn description(&self) -> &str {
-        "Browser automation tool for web browsing and interaction.\n\
-         \n\
-         🔍 WEB RESEARCH WORKFLOW (for searching information):\n\
-         1. navigate to a search engine (e.g. google.com)\n\
-         2. Read the snapshot — find the search box ref\n\
-         3. Type query in the search box, press Enter\n\
-         4. Read the snapshot — you now see search results with links\n\
-         5. ANALYZE the results: pick the most relevant article\n\
-         6. CLICK the link ref from the snapshot (do NOT navigate to a guessed URL)\n\
-         7. Read the article content from the snapshot\n\
-         8. If insufficient, use 'back' and try another result\n\
-         9. Formulate your answer from what you read, then 'close'\n\
-         \n\
-         📋 GENERAL WORKFLOW:\n\
-         1. navigate to open a URL\n\
-         2. Read the snapshot (page structure with [ref=e1], [ref=e2], etc.)\n\
-         3. Interact using refs (click ref=e1, type ref=e2)\n\
-         4. After each action, a new snapshot is taken\n\
-         5. Call 'close' when done to free memory\n\
-         \n\
-         📸 SNAPSHOT FORMAT:\n\
-         - button \"Search\" [ref=e1]\n\
-         - textbox \"Enter query\" [ref=e2]\n\
-         - link \"About us\" [ref=e3]\n\
-         \n\
-         ⚠️ CRITICAL RULES:\n\
-         - ALWAYS read the snapshot before taking action\n\
-         - NEVER guess or invent URLs — click links from the snapshot\n\
-         - NEVER switch to web_fetch while browser is open — stay in the browser\n\
-         - Use refs from the snapshot (e.g., click ref=e1)\n\
-         - accept_privacy: ONLY if you see a privacy/cookie banner\n\
-         - Call 'close' when task is complete (frees memory)\n\
-         \n\
-         🔧 ACTIONS: navigate, snapshot, click, type, select, hover, press, \
-         drag, fill, scroll, wait, screenshot, evaluate, back, forward, \
-         tabs, open_tab, focus_tab, close, console, resize, dialog, \
-         accept_privacy, upload, pdf, network, shutdown"
+        "Control a web browser. Use 'snapshot' to see page elements with refs like [ref=e1]. \
+         Interact by clicking refs (click ref=e1), typing in refs (type ref=e2), or navigating to URLs. \
+         NEVER guess or invent URLs — always click link refs from the snapshot. \
+         Call 'close' when done."
     }
 
     fn parameters(&self) -> Value {
@@ -1820,11 +1795,9 @@ impl Tool for BrowserTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["navigate", "snapshot", "click", "type", "select", "wait", "screenshot",
-                             "evaluate", "back", "forward", "close", "tabs", "open_tab", "focus_tab",
-                             "console", "scroll", "hover", "accept_privacy", "press", "drag", "fill",
-                             "resize", "dialog", "upload", "pdf", "network", "shutdown"],
-                    "description": "The browser action to perform"
+                    "enum": ["navigate", "snapshot", "click", "type", "select",
+                             "scroll", "back", "close", "wait", "press"],
+                    "description": "Core actions: navigate (open URL), snapshot (read page), click/type/select (interact via ref), scroll, back, close, wait, press (key)"
                 },
                 "url": {
                     "type": "string",
@@ -1850,108 +1823,27 @@ impl Tool for BrowserTool {
                     "type": "boolean",
                     "description": "Type character by character (for type action, triggers key handlers)"
                 },
-                "screenshot": {
+                "submit": {
                     "type": "boolean",
-                    "description": "Also take a screenshot when taking a snapshot"
-                },
-                "full_page": {
-                    "type": "boolean",
-                    "description": "Capture full page for screenshot action"
+                    "description": "Press Enter after typing"
                 },
                 "wait_type": {
                     "type": "string",
-                    "enum": ["selector", "text", "url", "time", "visible", "hidden", "enabled", "network_idle"],
-                    "description": "What to wait for (for wait action)"
+                    "enum": ["time", "text", "selector", "network_idle"],
+                    "description": "What to wait for"
                 },
                 "value": {
                     "type": "string",
-                    "description": "Value for wait action (selector, text, URL pattern, or seconds)"
+                    "description": "Value for wait (seconds, text, or selector)"
                 },
                 "direction": {
                     "type": "string",
-                    "enum": ["up", "down", "top", "bottom"],
+                    "enum": ["up", "down"],
                     "description": "Scroll direction"
-                },
-                "code": {
-                    "type": "string",
-                    "description": "JavaScript code to execute (for evaluate action)"
-                },
-                "target_id": {
-                    "type": "string",
-                    "description": "Target ID of a tab (for close action to close a specific tab, or focus_tab action)"
-                },
-                "clear": {
-                    "type": "boolean",
-                    "description": "Clear console messages after retrieving them (for console action)"
-                },
-                "level": {
-                    "type": "string",
-                    "enum": ["all", "error", "warn", "info", "log", "debug"],
-                    "description": "Filter console messages by level (for console action, default: all)"
-                },
-                "session_id": {
-                    "type": "string",
-                    "description": "2FA session ID for vault:// resolution (if 2FA is enabled)"
                 },
                 "key": {
                     "type": "string",
-                    "description": "Key to press (for press action): Enter, Escape, Tab, Backspace, ArrowUp, ArrowDown, etc."
-                },
-                "source_ref_id": {
-                    "type": "string",
-                    "description": "Source element reference ID for drag action"
-                },
-                "target_ref_id": {
-                    "type": "string",
-                    "description": "Target element reference ID for drag action"
-                },
-                "fields": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "ref_id": { "type": "string", "description": "Element reference ID" },
-                            "value": { "type": "string", "description": "Value to fill (supports vault://)" }
-                        },
-                        "required": ["ref_id", "value"]
-                    },
-                    "description": "Array of field ref_id and value pairs for fill action"
-                },
-                "width": {
-                    "type": "integer",
-                    "description": "Viewport width in pixels (for resize action)"
-                },
-                "height": {
-                    "type": "integer",
-                    "description": "Viewport height in pixels (for resize action)"
-                },
-                "accept": {
-                    "type": "boolean",
-                    "description": "Whether to accept (true) or dismiss (false) dialog (for dialog action, default: true)"
-                },
-                "prompt_text": {
-                    "type": "string",
-                    "description": "Text to enter for prompt dialogs (for dialog action)"
-                },
-                "profile": {
-                    "type": "string",
-                    "description": "Browser profile to use (default: 'default'). Use to isolate sessions, cookies, and cache."
-                },
-                "file_path": {
-                    "type": "string",
-                    "description": "Path to the file to upload (for upload action)"
-                },
-                "print_background": {
-                    "type": "boolean",
-                    "description": "Print background graphics in PDF (for pdf action, default: true)"
-                },
-                "landscape": {
-                    "type": "boolean",
-                    "description": "Use landscape orientation for PDF (for pdf action, default: false)"
-                },
-                "url_filter": {
-                    "type": "string",
-                    "description": "Filter network requests by URL pattern (for network action)"
+                    "description": "Key to press: Enter, Escape, Tab, etc."
                 }
             },
             "required": ["action"]
@@ -2330,7 +2222,8 @@ mod tests {
     fn test_browser_tool_metadata() {
         let tool = BrowserTool::new();
         assert_eq!(tool.name(), "browser");
-        assert!(tool.description().contains("navigate"));
+        assert!(tool.description().contains("browser"));
+        assert!(tool.description().contains("snapshot"));
 
         let params = tool.parameters();
         assert!(params["properties"]["action"].is_object());
