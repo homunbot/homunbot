@@ -35,7 +35,12 @@ struct MemorySearcher;
 /// 4. If no tool calls → return final response
 /// 5. Repeat until max_iterations or final response
 pub struct AgentLoop {
-    provider: Arc<dyn Provider>,
+    /// Current LLM provider — rebuilt lazily when `config.agent.model` changes.
+    /// Wrapped in RwLock so we can swap it at runtime without &mut self.
+    provider: RwLock<Arc<dyn Provider>>,
+    /// The model string the current provider was built for.
+    /// Compared against `config.agent.model` on each request to detect changes.
+    provider_model: RwLock<String>,
     config: Arc<RwLock<Config>>,
     context: ContextBuilder,
     session_manager: SessionManager,
@@ -90,10 +95,12 @@ impl AgentLoop {
                 "Using XML tool dispatch mode (provider/model specific or auto-detected)"
             );
         }
+        let initial_model = cfg.agent.model.clone();
         drop(cfg); // release lock before storing
 
         Self {
-            provider,
+            provider: RwLock::new(provider),
+            provider_model: RwLock::new(initial_model),
             config,
             context,
             session_manager,
@@ -213,6 +220,52 @@ impl AgentLoop {
         // Clone + drop lock immediately to avoid holding across LLM calls.
         let config = self.config.read().await.clone();
 
+        // Lazy provider rebuild: if the model changed (e.g. user switched model
+        // in the web UI), recreate the entire provider chain so the correct
+        // backend (Anthropic, OpenAI-compat, Ollama) is used.
+        {
+            let current_model = self.provider_model.read().await;
+            if *current_model != config.agent.model {
+                let new_model = config.agent.model.clone();
+                drop(current_model); // release read lock before acquiring write
+
+                match crate::provider::create_provider(&config) {
+                    Ok(new_provider) => {
+                        *self.provider.write().await = new_provider;
+                        *self.provider_model.write().await = new_model.clone();
+
+                        // Also re-evaluate XML dispatch mode for the new model
+                        let provider_name = config
+                            .resolve_provider(&new_model)
+                            .map(|(name, _)| name)
+                            .unwrap_or("unknown");
+                        let xml = config.should_use_xml_dispatch(provider_name, &new_model);
+                        self.use_xml_dispatch.store(xml, Ordering::Relaxed);
+
+                        // Update model name in system prompt so LLM knows its identity
+                        self.context.set_model_name(new_model.clone()).await;
+
+                        tracing::info!(
+                            model = %new_model,
+                            provider = %provider_name,
+                            xml_dispatch = xml,
+                            "Provider rebuilt for new model"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            model = %config.agent.model,
+                            "Failed to rebuild provider for new model — using previous provider"
+                        );
+                    }
+                }
+            }
+        }
+
+        // Get the current provider for this request (clone the Arc, release lock)
+        let provider = self.provider.read().await.clone();
+
         // Get conversation history from SQLite
         let history = self
             .session_manager
@@ -329,7 +382,7 @@ impl AgentLoop {
                 iteration,
                 max_iterations,
                 model = %config.agent.model,
-                provider = %self.provider.name(),
+                provider = %provider.name(),
                 tools = tool_defs.len(),
                 xml_mode,
                 "Agent loop iteration"
@@ -364,7 +417,7 @@ impl AgentLoop {
                 .sum();
             let ctx_msgs = messages.len();
             tracing::info!(
-                provider = %self.provider.name(),
+                provider = %provider.name(),
                 model = %config.agent.model,
                 streaming = use_streaming,
                 context_chars = ctx_chars,
@@ -375,30 +428,72 @@ impl AgentLoop {
 
             let response = if use_streaming {
                 let tx = stream_tx.as_ref().unwrap().clone();
-                match self.provider.chat_stream(request, tx).await {
+                match provider.chat_stream(request, tx).await {
                     Ok(r) => r,
                     Err(e) => {
-                        // Fallback: if streaming fails, try non-streaming
-                        tracing::warn!(error = ?e, "Streaming failed, falling back to non-streaming");
-                        let request2 = ChatRequest {
-                            messages: messages.clone(),
-                            tools: if xml_mode {
-                                Vec::new()
-                            } else {
-                                tool_defs.clone()
-                            },
-                            model: active_model.clone(),
-                            max_tokens: config.agent.effective_max_tokens(active_model),
-                            temperature: config.agent.effective_temperature(active_model),
-                        };
-                        self.provider
-                            .chat(request2)
-                            .await
-                            .context("Non-streaming fallback also failed")?
+                        // Check if the model rejected tool use — if so, switch to XML dispatch
+                        let err_lower = e.to_string().to_lowercase();
+                        let tool_rejected = !xml_mode
+                            && has_tools
+                            && iteration == 1
+                            && (err_lower.contains("tool")
+                                || err_lower.contains("function")
+                                || err_lower.contains("not supported")
+                                || err_lower.contains("no endpoints"));
+
+                        if tool_rejected {
+                            tracing::info!(
+                                "Model rejected tool use (streaming), switching to XML dispatch mode"
+                            );
+                            self.use_xml_dispatch.store(true, Ordering::Relaxed);
+
+                            let xml_tool_infos: Vec<crate::agent::ToolInfo> = tool_defs
+                                .iter()
+                                .map(|td| crate::agent::ToolInfo {
+                                    name: td.function.name.clone(),
+                                    description: td.function.description.clone(),
+                                    parameters_schema: td.function.parameters.clone(),
+                                })
+                                .collect();
+                            messages = self
+                                .context
+                                .build_messages_with_tools(&history, content, &xml_tool_infos)
+                                .await;
+
+                            let retry_request = ChatRequest {
+                                messages: messages.clone(),
+                                tools: Vec::new(),
+                                model: active_model.clone(),
+                                max_tokens: config.agent.effective_max_tokens(active_model),
+                                temperature: config.agent.effective_temperature(active_model),
+                            };
+                            provider
+                                .chat(retry_request)
+                                .await
+                                .context("XML dispatch fallback also failed")?
+                        } else {
+                            // Regular streaming failure — try non-streaming with same tools
+                            tracing::warn!(error = ?e, "Streaming failed, falling back to non-streaming");
+                            let request2 = ChatRequest {
+                                messages: messages.clone(),
+                                tools: if xml_mode {
+                                    Vec::new()
+                                } else {
+                                    tool_defs.clone()
+                                },
+                                model: active_model.clone(),
+                                max_tokens: config.agent.effective_max_tokens(active_model),
+                                temperature: config.agent.effective_temperature(active_model),
+                            };
+                            provider
+                                .chat(request2)
+                                .await
+                                .context("Non-streaming fallback also failed")?
+                        }
                     }
                 }
             } else {
-                match self.provider.chat(request).await {
+                match provider.chat(request).await {
                     Ok(r) => r,
                     Err(e) => {
                         // Auto-detect: if the model rejects tool specs,
@@ -437,7 +532,7 @@ impl AgentLoop {
                                     max_tokens: config.agent.effective_max_tokens(active_model),
                                     temperature: config.agent.effective_temperature(active_model),
                                 };
-                                self.provider
+                                provider
                                     .chat(retry_request)
                                     .await
                                     .context("Failed to get response from LLM (XML mode retry)")?
@@ -746,7 +841,7 @@ impl AgentLoop {
         let window = cfg.agent.consolidation_threshold;
         let model = cfg.agent.model.clone();
         drop(cfg);
-        let provider = self.provider.clone();
+        let provider = self.provider.read().await.clone();
         let session_key = session_key.to_string();
         #[cfg(feature = "local-embeddings")]
         let searcher = self.memory_searcher.clone();

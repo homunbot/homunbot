@@ -47,19 +47,17 @@ impl OpenAICompatProvider {
         Self::new(api_key, &base, provider_name, extra_headers)
     }
 
-    /// Resolve model name — strip provider prefix if present (e.g., "anthropic/claude-*" → "claude-*")
+    /// Resolve model name — strip our provider prefix while preserving the model's
+    /// own namespace. For OpenRouter, `openrouter/anthropic/claude-*` → `anthropic/claude-*`.
+    /// For OpenAI, `openai/gpt-4` → `gpt-4`. Uses prefix-aware stripping instead of
+    /// naive split_once('/') which would break multi-segment model IDs.
     fn resolve_model(&self, model: &str) -> String {
-        // For OpenRouter, keep the full model name (it needs the prefix)
-        if self.provider_name == "openrouter" {
-            return model.to_string();
+        // Strip our provider prefix (e.g., "openrouter/org/model" → "org/model")
+        let prefix = format!("{}/", self.provider_name);
+        if let Some(stripped) = model.strip_prefix(&prefix) {
+            return stripped.to_string();
         }
-
-        // For other providers, strip the provider prefix
-        if let Some(stripped) = model.split_once('/') {
-            stripped.1.to_string()
-        } else {
-            model.to_string()
-        }
+        model.to_string()
     }
 }
 
@@ -274,8 +272,14 @@ impl Provider for OpenAICompatProvider {
                 .ok()
                 .and_then(|e| e.error)
                 .map(|e| e.message)
-                .unwrap_or_else(|| format!("HTTP {}: {}", status, response_text));
-            anyhow::bail!("Provider {} error: {}", self.provider_name, error_msg);
+                .unwrap_or_else(|| response_text.clone());
+            // Always include HTTP status so retry/failover logic can classify correctly
+            anyhow::bail!(
+                "Provider {} error (HTTP {}): {}",
+                self.provider_name,
+                status.as_u16(),
+                error_msg
+            );
         }
 
         let api_response: OpenAIResponse = serde_json::from_str(&response_text)
@@ -596,13 +600,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_resolve_model_openrouter() {
+    fn test_resolve_model_openrouter_strips_prefix() {
         let provider = OpenAICompatProvider::new(
             "key",
             "https://openrouter.ai/api/v1",
             "openrouter",
             HashMap::new(),
         );
+        // OpenRouter model IDs have org/model format — we strip only our "openrouter/" prefix
+        assert_eq!(
+            provider.resolve_model("openrouter/anthropic/claude-sonnet-4-20250514"),
+            "anthropic/claude-sonnet-4-20250514"
+        );
+        assert_eq!(
+            provider.resolve_model("openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free"),
+            "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_openrouter_no_prefix() {
+        let provider = OpenAICompatProvider::new(
+            "key",
+            "https://openrouter.ai/api/v1",
+            "openrouter",
+            HashMap::new(),
+        );
+        // If model doesn't have our prefix, return as-is
         assert_eq!(
             provider.resolve_model("anthropic/claude-sonnet-4-20250514"),
             "anthropic/claude-sonnet-4-20250514"

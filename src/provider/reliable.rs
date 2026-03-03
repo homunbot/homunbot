@@ -74,6 +74,12 @@ impl ReliableProvider {
             || err_str.contains("model not found")
             || err_str.contains("does not exist")
             || err_str.contains("not available")
+            || err_str.contains("not a valid")
+            || err_str.contains("invalid model")
+            || err_str.contains("bad request")
+            || err_str.contains("not support tool")
+            || err_str.contains("no endpoints found")
+            || err_str.contains("unsupported")
         {
             return FailoverDecision::NextProvider;
         }
@@ -329,6 +335,22 @@ mod tests {
         );
 
         let err = anyhow::anyhow!("model_not_found: gpt-5-turbo");
+        assert_eq!(
+            ReliableProvider::classify_error(&err),
+            FailoverDecision::NextProvider
+        );
+
+        // "not a valid model ID" from OpenRouter
+        let err = anyhow::anyhow!(
+            "Provider openrouter error: some/model is not a valid model ID"
+        );
+        assert_eq!(
+            ReliableProvider::classify_error(&err),
+            FailoverDecision::NextProvider
+        );
+
+        // Generic "bad request" should not be retried
+        let err = anyhow::anyhow!("Bad Request: invalid parameters");
         assert_eq!(
             ReliableProvider::classify_error(&err),
             FailoverDecision::NextProvider

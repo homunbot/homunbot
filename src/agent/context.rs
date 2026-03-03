@@ -49,8 +49,9 @@ pub struct ContextBuilder {
     channels_info: String,
     /// The modular prompt builder
     prompt_builder: SystemPromptBuilder,
-    /// Current model name (for runtime section)
-    model_name: String,
+    /// Current model name (for runtime section).
+    /// Uses RwLock so agent_loop can update it when model changes via hot-reload.
+    model_name: RwLock<String>,
     /// Names of all registered tools (always set, for routing rules in system prompt)
     registered_tool_names: Vec<String>,
 }
@@ -69,7 +70,7 @@ impl ContextBuilder {
             relevant_memories: RwLock::new(String::new()),
             channels_info: String::new(),
             prompt_builder: SystemPromptBuilder::with_defaults(),
-            model_name: config.agent.model.clone(),
+            model_name: RwLock::new(config.agent.model.clone()),
             registered_tool_names: Vec::new(),
         }
     }
@@ -179,6 +180,11 @@ impl ContextBuilder {
         *guard = memories;
     }
 
+    /// Update the model name shown in the system prompt (called on hot-reload).
+    pub async fn set_model_name(&self, model: String) {
+        *self.model_name.write().await = model;
+    }
+
     /// Set the names of all registered tools (for routing rules in system prompt).
     pub fn set_registered_tool_names(&mut self, names: Vec<String>) {
         self.registered_tool_names = names;
@@ -211,11 +217,12 @@ impl ContextBuilder {
         let bootstrap_files = self.bootstrap_files.read().await;
         let skills_summary = self.skills_summary.read().await;
         let relevant_memories = self.relevant_memories.read().await;
+        let model_name = self.model_name.read().await;
 
         // Build PromptContext
         let ctx = PromptContext {
             workspace_dir: std::path::Path::new(&self.workspace),
-            model_name: &self.model_name,
+            model_name: &model_name,
             tools,
             registered_tool_names: &self.registered_tool_names,
             skills_summary: &skills_summary,
