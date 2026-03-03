@@ -295,7 +295,7 @@ async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> 
 #[derive(serde::Deserialize)]
 struct ConfigPatch {
     key: String,
-    value: String,
+    value: serde_json::Value,
 }
 
 async fn patch_config(
@@ -303,14 +303,25 @@ async fn patch_config(
     Json(patch): Json<ConfigPatch>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let mut config = state.config.read().await.clone();
-    crate::config::dotpath::config_set(&mut config, &patch.key, &patch.value)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // For string values, use coerce_value (backwards compatible: "8192" → number).
+    // For arrays, objects, bools, numbers — use directly.
+    match &patch.value {
+        serde_json::Value::String(s) => {
+            crate::config::dotpath::config_set(&mut config, &patch.key, s)
+        }
+        other => {
+            crate::config::dotpath::config_set_value(&mut config, &patch.key, other.clone())
+        }
+    }
+    .map_err(|_| StatusCode::BAD_REQUEST)?;
+
     state
         .save_config(config)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(
-        serde_json::json!({"ok": true, "key": patch.key, "value": patch.value}),
+        serde_json::json!({"ok": true, "key": patch.key}),
     ))
 }
 
@@ -1131,42 +1142,6 @@ fn cloud_models_for(provider: &str) -> &'static [&'static str] {
     }
 }
 
-fn display_name_for(provider: &str) -> &'static str {
-    match provider {
-        // Primary
-        "anthropic" => "Anthropic",
-        "openai" => "OpenAI",
-        "openrouter" => "OpenRouter",
-        "gemini" => "Gemini",
-        // Cloud
-        "deepseek" => "DeepSeek",
-        "groq" => "Groq",
-        "mistral" => "Mistral",
-        "xai" => "xAI",
-        "together" => "Together",
-        "fireworks" => "Fireworks",
-        "perplexity" => "Perplexity",
-        "cohere" => "Cohere",
-        "venice" => "Venice",
-        // Gateways
-        "aihubmix" => "AiHubMix",
-        "vercel" => "Vercel",
-        "cloudflare" => "Cloudflare",
-        "copilot" => "Copilot",
-        "bedrock" => "Bedrock",
-        "ollama_cloud" => "Ollama Cloud",
-        // Chinese
-        "moonshot" => "Moonshot",
-        "zhipu" => "Zhipu",
-        "dashscope" => "DashScope",
-        "minimax" => "MiniMax",
-        // Local
-        "ollama" => "Ollama",
-        "vllm" => "vLLM",
-        "custom" => "Custom",
-        _ => "Unknown",
-    }
-}
 
 #[derive(Serialize)]
 struct ModelEntry {
@@ -1183,6 +1158,8 @@ struct AllModelsResponse {
     vision_model: String,
     ollama_configured: bool,
     ollama_cloud_configured: bool,
+    hidden_models: std::collections::HashMap<String, Vec<String>>,
+    model_overrides: std::collections::HashMap<String, crate::config::ModelOverrides>,
 }
 
 async fn list_all_models(State(state): State<Arc<AppState>>) -> Json<AllModelsResponse> {
@@ -1227,14 +1204,30 @@ async fn list_all_models(State(state): State<Arc<AppState>>) -> Json<AllModelsRe
             continue;
         }
 
-        let display = display_name_for(name);
         for model_id in cloud_models_for(name) {
-            let short = model_id.split('/').next_back().unwrap_or(model_id);
+            // Skip models hidden by the user
+            if pc.hidden_models.contains(&model_id.to_string()) {
+                continue;
+            }
+            // Strip provider prefix: "openrouter/anthropic/claude-sonnet-4" → "anthropic/claude-sonnet-4"
+            let label = model_id
+                .strip_prefix(name)
+                .and_then(|s| s.strip_prefix('/'))
+                .unwrap_or(model_id)
+                .to_string();
             models.push(ModelEntry {
                 provider: name.to_string(),
                 model: model_id.to_string(),
-                label: format!("{} / {}", display, short),
+                label,
             });
+        }
+    }
+
+    // Collect hidden models per configured provider
+    let mut hidden_models = std::collections::HashMap::new();
+    for (name, pc) in config.providers.iter() {
+        if !pc.hidden_models.is_empty() {
+            hidden_models.insert(name.to_string(), pc.hidden_models.clone());
         }
     }
 
@@ -1245,6 +1238,8 @@ async fn list_all_models(State(state): State<Arc<AppState>>) -> Json<AllModelsRe
         vision_model,
         ollama_configured,
         ollama_cloud_configured,
+        hidden_models,
+        model_overrides: config.agent.model_overrides.clone(),
     })
 }
 
