@@ -311,7 +311,9 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
     let config = state.config.read().await;
-    let providers_html = build_providers_html::build(&config);
+    let providers_output = build_providers_html::build(&config);
+    let providers_html = &providers_output.cards_html;
+    let catalog_modal_html = &providers_output.catalog_modal_html;
 
     // Resolve active provider for the banner
     let active_provider_name = config
@@ -359,9 +361,12 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                         </div>
                     </div>
 
-                    <div class="provider-accordion" id="provider-accordion">
+                    <div class="configured-providers-grid" id="provider-grid">
                         {providers_html}
                     </div>
+                    <button type="button" class="btn btn-secondary" id="btn-add-provider" style="margin-top:12px;">+ Add Provider</button>
+
+                    {catalog_modal_html}
 
                     <details class="section-advanced" id="advanced-agent">
                         <summary>Advanced Agent Settings</summary>
@@ -386,6 +391,11 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                                 <div class="form-group">
                                     <label>Max Iterations</label>
                                     <input type="number" name="max_iterations" value="{max_iterations}" class="input">
+                                </div>
+                                <div class="form-group">
+                                    <label>XML Fallback Delay (ms)</label>
+                                    <input type="number" name="xml_fallback_delay_ms" value="{xml_fallback_delay_ms}" min="0" step="100" class="input">
+                                    <div class="form-hint">Delay before retrying when switching to XML tool dispatch. Prevents rate-limit errors on free models.</div>
                                 </div>
                             </div>
                             <div class="form-group">
@@ -415,13 +425,14 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     <h2>Browser Automation</h2>
                     <div class="form-hint" style="margin-bottom:12px;">Uses Chrome/Chromium via CDP. Auto-detected: {browser_status}.</div>
                     <form class="form" id="browser-form">
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label class="toggle-label-inline">
-                                    <input type="checkbox" id="browser-headless" name="headless" class="toggle-input" {browser_headless_checked}>
-                                    <span>Headless Mode</span>
-                                </label>
-                                <div class="form-hint">Run browser without visible window.</div>
+                        <div class="setting-toggle-row">
+                            <div class="setting-toggle-info">
+                                <span class="setting-toggle-name">Headless Mode</span>
+                                <span class="setting-toggle-desc">Run browser without visible window</span>
+                            </div>
+                            <div class="toggle-wrap">
+                                <input type="checkbox" id="browser-headless" name="headless" class="toggle-input" {browser_headless_checked}>
+                                <label class="toggle-label" for="browser-headless"></label>
                             </div>
                         </div>
                         <div class="form-group">
@@ -429,24 +440,26 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <input type="text" id="browser-executable" name="executable_path" value="{executable_path}" class="input" placeholder="Auto-detect (leave empty)">
                             <div class="form-hint">Leave empty to auto-detect. Override if Chrome is in a custom location.</div>
                         </div>
-                        <div class="form-row">
+                        <div class="form-row--2">
                             <div class="form-group">
-                                <label>Action Timeout (seconds)</label>
+                                <label>Action Timeout (s)</label>
                                 <input type="number" id="browser-action-timeout" name="action_timeout_secs" value="{action_timeout_secs}" min="5" max="300" class="input">
-                                <div class="form-hint">Maximum time for click, type, etc.</div>
+                                <div class="form-hint">Max time for click, type, etc.</div>
                             </div>
                             <div class="form-group">
-                                <label>Navigation Timeout (seconds)</label>
+                                <label>Navigation Timeout (s)</label>
                                 <input type="number" id="browser-nav-timeout" name="navigation_timeout_secs" value="{navigation_timeout_secs}" min="5" max="300" class="input">
-                                <div class="form-hint">Maximum time for page loads.</div>
+                                <div class="form-hint">Max time for page loads.</div>
                             </div>
+                        </div>
+                        <div class="form-row--2">
                             <div class="form-group">
                                 <label>Snapshot Limit</label>
                                 <input type="number" id="browser-snapshot-limit" name="snapshot_limit" value="{snapshot_limit}" min="10" max="500" class="input">
                                 <div class="form-hint">Max elements in accessibility tree.</div>
                             </div>
                         </div>
-                        <div class="form-row">
+                        <div class="form-actions">
                             <button type="submit" class="btn btn-primary">Save Browser Config</button>
                             <button type="button" class="btn btn-secondary" id="btn-test-browser">Test Connection</button>
                         </div>
@@ -607,6 +620,7 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
         max_tokens = config.agent.max_tokens,
         temperature = config.agent.temperature,
         max_iterations = config.agent.max_iterations,
+        xml_fallback_delay_ms = config.agent.xml_fallback_delay_ms,
         fallback_models_json = serde_json::to_string(&config.agent.fallback_models).unwrap_or_else(|_| "[]".to_string()),
         conversation_retention_days = config.memory.conversation_retention_days,
         history_retention_days = config.memory.history_retention_days,
@@ -647,6 +661,7 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
             ""
         },
         providers_html = providers_html,
+        catalog_modal_html = catalog_modal_html,
         channels_html = build_channels_cards_html(&config),
     );
 
@@ -1576,6 +1591,11 @@ fn build_channels_html(config: &crate::config::Config) -> String {
 mod build_providers_html {
     use crate::config::Config;
 
+    pub struct ProvidersOutput {
+        pub cards_html: String,
+        pub catalog_modal_html: String,
+    }
+
     /// Provider display metadata: (display_name, description, needs_api_key, needs_base_url)
     fn get_provider_meta(name: &str) -> (&'static str, &'static str, bool, bool) {
         match name {
@@ -1613,98 +1633,89 @@ mod build_providers_html {
         get_provider_meta(name).0
     }
 
-    pub fn build(config: &Config) -> String {
+    pub fn build(config: &Config) -> ProvidersOutput {
         let active_provider = config
             .resolve_provider(&config.agent.model)
             .map(|(name, _)| name.to_string())
             .unwrap_or_default();
 
-        // Collect providers into three groups: active, configured, unconfigured
-        let mut active_items = Vec::new();
-        let mut configured_items = Vec::new();
-        let mut unconfigured_items = Vec::new();
+        let mut cards_html = String::new();
+        let mut catalog_items = Vec::new();
 
         for (name, pc) in config.providers.iter() {
             let configured = config.is_provider_configured(name);
             let is_active = name == active_provider;
             let (display_name, description, has_key, has_url) = get_provider_meta(name);
 
-            let api_key_mask = if configured && has_key {
-                "••••••••"
+            if is_active || configured {
+                let api_key_mask = if configured && has_key {
+                    "••••••••"
+                } else {
+                    ""
+                };
+                cards_html.push_str(&build_provider_card(
+                    name,
+                    display_name,
+                    description,
+                    has_key,
+                    has_url,
+                    is_active,
+                    api_key_mask,
+                    pc.api_base.as_deref().unwrap_or(""),
+                    &config.agent.model,
+                ));
             } else {
-                ""
-            };
-
-            let item = build_accordion_item(
-                name,
-                display_name,
-                description,
-                has_key,
-                has_url,
-                configured,
-                is_active,
-                is_active, // expanded if active
-                api_key_mask,
-                pc.api_base.as_deref().unwrap_or(""),
-                &config.agent.model,
-            );
-
-            if is_active {
-                active_items.push(item);
-            } else if configured {
-                configured_items.push(item);
-            } else {
-                unconfigured_items.push(item);
+                catalog_items.push(build_catalog_card(name, display_name, description, has_key, has_url));
             }
         }
 
-        let mut html = String::new();
-        for item in active_items {
-            html.push_str(&item);
+        // Build catalog modal
+        let mut catalog_html = String::from(
+            r#"<div id="provider-catalog-modal" class="modal">
+            <div class="modal-backdrop"></div>
+            <div class="modal-content modal-content--wide">
+                <div class="modal-header">
+                    <h3 class="modal-title">Add Provider</h3>
+                    <button class="modal-close catalog-modal-close" type="button">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <input type="text" class="input" id="catalog-search" placeholder="Search providers...">
+                    <div class="catalog-grid" id="catalog-grid">"#,
+        );
+        for item in &catalog_items {
+            catalog_html.push_str(item);
         }
-        for item in configured_items {
-            html.push_str(&item);
-        }
-        if !unconfigured_items.is_empty() {
-            html.push_str(r#"<div class="provider-divider">More Providers</div>"#);
-            for item in unconfigured_items {
-                html.push_str(&item);
-            }
-        }
+        catalog_html.push_str(
+            r#"</div>
+                </div>
+            </div>
+        </div>"#,
+        );
 
-        html
+        ProvidersOutput {
+            cards_html,
+            catalog_modal_html: catalog_html,
+        }
     }
 
-    fn build_accordion_item(
+    fn build_provider_card(
         name: &str,
         display_name: &str,
         description: &str,
         has_key: bool,
         has_url: bool,
-        configured: bool,
         is_active: bool,
-        expanded: bool,
         api_key_mask: &str,
         api_base: &str,
         current_model: &str,
     ) -> String {
-        let status_cls = if is_active {
-            "active"
-        } else if configured {
-            "configured"
-        } else {
-            ""
-        };
+        let active_cls = if is_active { " provider-card--active" } else { "" };
 
         let active_badge = if is_active {
             r#"<span class="provider-active-badge">Active</span>"#
         } else {
             ""
         };
-
-        let body_hidden = if expanded { "" } else { "hidden" };
-        let aria_expanded = if expanded { "true" } else { "false" };
-        let chevron_cls = if expanded { "expanded" } else { "" };
 
         // Credential fields
         let key_field = if has_key {
@@ -1742,7 +1753,6 @@ mod build_providers_html {
             String::new()
         };
 
-        // Custom model input hint
         let custom_hint = if name == "openrouter" {
             "Use the path from OpenRouter (e.g. anthropic/claude-sonnet-4). Prefix added automatically."
         } else if name == "ollama" || name == "ollama_cloud" {
@@ -1751,14 +1761,6 @@ mod build_providers_html {
             "Enter a model name. Provider prefix is added automatically."
         };
 
-        // Deactivate button (only for configured providers)
-        let deactivate_btn = if configured {
-            r#"<button type="button" class="btn btn-ghost btn--sm provider-deactivate" style="margin-top:8px;color:var(--text-muted);">Remove credentials</button>"#
-        } else {
-            ""
-        };
-
-        // Active model marker — which model from this provider is currently active
         let provider_prefix = format!("{name}/");
         let active_model_for_this_provider = if current_model.starts_with(&provider_prefix) {
             current_model.to_string()
@@ -1767,19 +1769,21 @@ mod build_providers_html {
         };
 
         format!(
-            r#"<div class="provider-item" data-provider="{name}" data-configured="{configured}" data-has-key="{has_key}" data-has-url="{has_url}" data-active-model="{active_model_for_this_provider}">
-                <div class="provider-item-header" role="button" tabindex="0" aria-expanded="{aria_expanded}">
-                    <div class="provider-item-left">
-                        <span class="provider-item-status {status_cls}"></span>
-                        <span class="provider-item-name">{display_name}</span>
-                        <span class="provider-item-desc">{description}</span>
+            r#"<div class="provider-card{active_cls}" data-provider="{name}" data-configured="true" data-has-key="{has_key}" data-has-url="{has_url}" data-active-model="{active_model_for_this_provider}">
+                <div class="provider-card-header" role="button" tabindex="0" aria-expanded="false">
+                    <div class="provider-card-left">
+                        <span class="provider-card-status{}">&bull;</span>
+                        <div class="provider-card-info">
+                            <span class="provider-card-name">{display_name}</span>
+                            <span class="provider-card-desc">{description}</span>
+                        </div>
                     </div>
-                    <div class="provider-item-right">
+                    <div class="provider-card-right">
                         {active_badge}
-                        <span class="provider-chevron {chevron_cls}">&#9662;</span>
+                        <span class="provider-chevron">&#9662;</span>
                     </div>
                 </div>
-                <div class="provider-item-body" {body_hidden}>
+                <div class="provider-card-body" hidden>
                     <div class="provider-credentials">
                         {key_field}
                         {url_field}
@@ -1795,8 +1799,25 @@ mod build_providers_html {
                         </div>
                         <div class="form-hint">{custom_hint}</div>
                     </div>
-                    {deactivate_btn}
+                    <button type="button" class="btn btn-ghost btn--sm provider-deactivate" style="margin-top:8px;color:var(--text-muted);">Remove credentials</button>
                 </div>
+            </div>"#,
+            if is_active { " active" } else { " configured" },
+        )
+    }
+
+    fn build_catalog_card(
+        name: &str,
+        display_name: &str,
+        description: &str,
+        has_key: bool,
+        has_url: bool,
+    ) -> String {
+        format!(
+            r#"<div class="catalog-card" data-provider="{name}" data-has-key="{has_key}" data-has-url="{has_url}">
+                <div class="catalog-card-name">{display_name}</div>
+                <div class="catalog-card-desc">{description}</div>
+                <button type="button" class="btn btn-secondary btn--sm catalog-configure-btn">Configure</button>
             </div>"#,
         )
     }

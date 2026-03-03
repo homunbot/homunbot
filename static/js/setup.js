@@ -77,27 +77,29 @@ function updateActiveBanner(model) {
     var prefix = model.indexOf('/') >= 0 ? model.substring(0, model.indexOf('/')) : '';
     if (activeModelProvider) activeModelProvider.textContent = 'via ' + providerDisplayName(prefix);
 
-    // Update active badges in accordion
-    document.querySelectorAll('.provider-item').forEach(function(item) {
-        var prov = item.dataset.provider;
-        var badge = item.querySelector('.provider-active-badge');
-        var status = item.querySelector('.provider-item-status');
+    // Update active badges and card styles
+    document.querySelectorAll('.provider-card').forEach(function(card) {
+        var prov = card.dataset.provider;
+        var badge = card.querySelector('.provider-active-badge');
+        var status = card.querySelector('.provider-card-status');
         var isActive = model.startsWith(prov + '/');
 
         if (isActive) {
+            card.classList.add('provider-card--active');
             if (!badge) {
                 badge = document.createElement('span');
                 badge.className = 'provider-active-badge';
                 badge.textContent = 'Active';
-                var right = item.querySelector('.provider-item-right');
+                var right = card.querySelector('.provider-card-right');
                 if (right) right.insertBefore(badge, right.firstChild);
             }
-            if (status) { status.className = 'provider-item-status active'; }
+            if (status) { status.className = 'provider-card-status active'; }
         } else {
+            card.classList.remove('provider-card--active');
             if (badge) badge.remove();
             if (status) {
-                status.className = 'provider-item-status' +
-                    (item.dataset.configured === 'true' ? ' configured' : '');
+                status.className = 'provider-card-status' +
+                    (card.dataset.configured === 'true' ? ' configured' : '');
             }
         }
     });
@@ -116,17 +118,17 @@ function updateActiveBanner(model) {
 }
 
 
-// ═══ Provider Accordion ═══
+// ═══ Provider Cards Grid ═══
 
-var accordion = document.getElementById('provider-accordion');
+var providerGrid = document.getElementById('provider-grid');
 
-if (accordion) {
-    // --- Expand/collapse ---
-    accordion.addEventListener('click', function(e) {
-        var header = e.target.closest('.provider-item-header');
+if (providerGrid) {
+    // --- Expand/collapse card ---
+    providerGrid.addEventListener('click', function(e) {
+        var header = e.target.closest('.provider-card-header');
         if (!header) return;
-        var item = header.closest('.provider-item');
-        var body = item.querySelector('.provider-item-body');
+        var card = header.closest('.provider-card');
+        var body = card.querySelector('.provider-card-body');
         if (!body) return;
 
         var isExpanded = !body.hidden;
@@ -136,18 +138,18 @@ if (accordion) {
         if (chevron) chevron.classList.toggle('expanded', !isExpanded);
 
         // Load models when expanding for the first time
-        if (!isExpanded && !item.dataset.modelsLoaded) {
-            loadProviderModels(item);
+        if (!isExpanded && !card.dataset.modelsLoaded) {
+            loadProviderModels(card);
         }
     });
 
     // --- Save API key ---
-    accordion.addEventListener('click', function(e) {
+    providerGrid.addEventListener('click', function(e) {
         var btn = e.target.closest('.provider-save-key');
         if (!btn) return;
-        var item = btn.closest('.provider-item');
-        var provider = item.dataset.provider;
-        var keyInput = item.querySelector('.provider-api-key');
+        var card = btn.closest('.provider-card');
+        var provider = card.dataset.provider;
+        var keyInput = card.querySelector('.provider-api-key');
         var apiKey = keyInput ? keyInput.value.trim() : '';
         if (!apiKey) { showToast('Enter an API key', 'error'); return; }
 
@@ -161,14 +163,14 @@ if (accordion) {
             body: JSON.stringify(payload),
         }).then(function(r) { return r.json(); }).then(function(data) {
             if (data.ok) {
-                item.dataset.configured = 'true';
-                var status = item.querySelector('.provider-item-status');
-                if (status && !status.classList.contains('active')) status.className = 'provider-item-status configured';
+                card.dataset.configured = 'true';
+                var status = card.querySelector('.provider-card-status');
+                if (status && !status.classList.contains('active')) status.className = 'provider-card-status configured';
                 keyInput.value = '';
                 keyInput.placeholder = 'Configured \u2014 enter new key to replace';
                 showToast('API key saved!', 'success');
                 _allModelsCache = null;
-                loadProviderModels(item);
+                loadProviderModels(card);
                 loadVisionDropdown();
                 populateFallbackDropdown();
             } else {
@@ -184,12 +186,12 @@ if (accordion) {
     });
 
     // --- Save Base URL ---
-    accordion.addEventListener('click', function(e) {
+    providerGrid.addEventListener('click', function(e) {
         var btn = e.target.closest('.provider-save-url');
         if (!btn) return;
-        var item = btn.closest('.provider-item');
-        var provider = item.dataset.provider;
-        var urlInput = item.querySelector('.provider-api-base');
+        var card = btn.closest('.provider-card');
+        var provider = card.dataset.provider;
+        var urlInput = card.querySelector('.provider-api-base');
         var apiBase = urlInput ? urlInput.value.trim() : '';
         if (!apiBase) { showToast('Enter a base URL', 'error'); return; }
 
@@ -203,12 +205,12 @@ if (accordion) {
             body: JSON.stringify(payload),
         }).then(function(r) { return r.json(); }).then(function(data) {
             if (data.ok) {
-                item.dataset.configured = 'true';
-                var status = item.querySelector('.provider-item-status');
-                if (status && !status.classList.contains('active')) status.className = 'provider-item-status configured';
+                card.dataset.configured = 'true';
+                var status = card.querySelector('.provider-card-status');
+                if (status && !status.classList.contains('active')) status.className = 'provider-card-status configured';
                 showToast('URL saved!', 'success');
                 _allModelsCache = null;
-                loadProviderModels(item);
+                loadProviderModels(card);
                 loadVisionDropdown();
                 populateFallbackDropdown();
             } else {
@@ -224,7 +226,7 @@ if (accordion) {
     });
 
     // --- Model radio selection ---
-    accordion.addEventListener('change', function(e) {
+    providerGrid.addEventListener('change', function(e) {
         if (e.target.name !== 'active-model') return;
         var model = e.target.value;
         patchConfig('agent.model', model).then(function() {
@@ -236,16 +238,15 @@ if (accordion) {
     });
 
     // --- Custom model ---
-    accordion.addEventListener('click', function(e) {
+    providerGrid.addEventListener('click', function(e) {
         var btn = e.target.closest('.provider-use-custom');
         if (!btn) return;
-        var item = btn.closest('.provider-item');
-        var provider = item.dataset.provider;
-        var input = item.querySelector('.provider-custom-model');
+        var card = btn.closest('.provider-card');
+        var provider = card.dataset.provider;
+        var input = card.querySelector('.provider-custom-model');
         var modelName = input ? input.value.trim() : '';
         if (!modelName) return;
 
-        // Auto-prepend provider prefix if not already present
         if (!modelName.startsWith(provider + '/')) {
             modelName = provider + '/' + modelName;
         }
@@ -254,20 +255,19 @@ if (accordion) {
             updateActiveBanner(modelName);
             input.value = '';
             showToast('Model set to ' + stripPrefix(modelName), 'success');
-            // Add to model list as a radio
-            addModelRadio(item, modelName, true);
+            addModelRadio(card, modelName, true);
         }).catch(function() {
             showToast('Failed to set model', 'error');
         });
     });
 
     // --- Deactivate provider ---
-    accordion.addEventListener('click', function(e) {
+    providerGrid.addEventListener('click', function(e) {
         var btn = e.target.closest('.provider-deactivate');
         if (!btn) return;
-        var item = btn.closest('.provider-item');
-        var provider = item.dataset.provider;
-        var displayName = item.querySelector('.provider-item-name').textContent;
+        var card = btn.closest('.provider-card');
+        var provider = card.dataset.provider;
+        var displayName = card.querySelector('.provider-card-name').textContent;
 
         if (!confirm('Remove credentials for ' + displayName + '?')) return;
 
@@ -277,21 +277,8 @@ if (accordion) {
             body: JSON.stringify({ name: provider }),
         }).then(function(r) { return r.json(); }).then(function(data) {
             if (data.ok) {
-                item.dataset.configured = 'false';
-                var status = item.querySelector('.provider-item-status');
-                if (status) status.className = 'provider-item-status';
-                var badge = item.querySelector('.provider-active-badge');
-                if (badge) badge.remove();
-                var keyInput = item.querySelector('.provider-api-key');
-                if (keyInput) { keyInput.value = ''; keyInput.placeholder = 'Enter API key...'; }
                 showToast('Provider removed', 'success');
-                // If this was the active model, clear banner
-                var banner = document.getElementById('active-model-name');
-                if (banner) {
-                    var currentModel = banner.textContent;
-                    // Reload page to reflect changes
-                    window.location.reload();
-                }
+                window.location.reload();
             } else {
                 showToast(data.message || 'Failed to remove', 'error');
             }
@@ -300,12 +287,84 @@ if (accordion) {
         });
     });
 
-    // --- Load models for expanded providers on init ---
-    accordion.querySelectorAll('.provider-item-body:not([hidden])').forEach(function(body) {
-        var item = body.closest('.provider-item');
-        if (item) loadProviderModels(item);
+    // --- Load models for expanded cards on init ---
+    providerGrid.querySelectorAll('.provider-card-body:not([hidden])').forEach(function(body) {
+        var card = body.closest('.provider-card');
+        if (card) loadProviderModels(card);
     });
 }
+
+// ═══ Provider Catalog Modal ═══
+
+(function() {
+    var catalogModal = document.getElementById('provider-catalog-modal');
+    var addBtn = document.getElementById('btn-add-provider');
+    var searchInput = document.getElementById('catalog-search');
+
+    if (!catalogModal || !addBtn) return;
+
+    function openCatalog() { catalogModal.classList.add('open'); if (searchInput) searchInput.focus(); }
+    function closeCatalog() { catalogModal.classList.remove('open'); }
+
+    addBtn.addEventListener('click', openCatalog);
+    catalogModal.querySelector('.modal-backdrop').addEventListener('click', closeCatalog);
+    catalogModal.querySelector('.catalog-modal-close').addEventListener('click', closeCatalog);
+
+    // Search filter
+    if (searchInput) {
+        searchInput.addEventListener('input', function() {
+            var q = searchInput.value.toLowerCase();
+            catalogModal.querySelectorAll('.catalog-card').forEach(function(card) {
+                var name = card.querySelector('.catalog-card-name').textContent.toLowerCase();
+                var desc = card.querySelector('.catalog-card-desc').textContent.toLowerCase();
+                card.classList.toggle('hidden', q && name.indexOf(q) === -1 && desc.indexOf(q) === -1);
+            });
+        });
+    }
+
+    // Configure button — add provider card to the grid
+    catalogModal.addEventListener('click', function(e) {
+        var btn = e.target.closest('.catalog-configure-btn');
+        if (!btn) return;
+        var catalogCard = btn.closest('.catalog-card');
+        var provider = catalogCard.dataset.provider;
+        var hasKey = catalogCard.dataset.hasKey === 'true';
+        var hasUrl = catalogCard.dataset.hasUrl === 'true';
+        var displayName = catalogCard.querySelector('.catalog-card-name').textContent;
+        var desc = catalogCard.querySelector('.catalog-card-desc').textContent;
+
+        // Build credential fields
+        var keyField = hasKey ?
+            '<div class="form-group"><label>API Key</label><div class="credential-row"><input type="password" class="input provider-api-key" placeholder="Enter API key..."><button type="button" class="btn btn-secondary btn--sm provider-save-key">Save Key</button></div><div class="form-hint">Stored encrypted locally.</div></div>' : '';
+        var urlField = hasUrl ?
+            '<div class="form-group"><label>Base URL</label><div class="credential-row"><input type="text" class="input provider-api-base" placeholder="http://localhost:11434/v1"><button type="button" class="btn btn-secondary btn--sm provider-save-url">Save URL</button></div><div class="form-hint">API endpoint URL.</div></div>' : '';
+
+        // Create the provider card HTML
+        var cardHtml = '<div class="provider-card" data-provider="' + provider + '" data-configured="false" data-has-key="' + hasKey + '" data-has-url="' + hasUrl + '" data-active-model="">' +
+            '<div class="provider-card-header" role="button" tabindex="0" aria-expanded="true">' +
+                '<div class="provider-card-left"><span class="provider-card-status">&bull;</span><div class="provider-card-info"><span class="provider-card-name">' + displayName + '</span><span class="provider-card-desc">' + desc + '</span></div></div>' +
+                '<div class="provider-card-right"><span class="provider-chevron expanded">&#9662;</span></div>' +
+            '</div>' +
+            '<div class="provider-card-body">' +
+                '<div class="provider-credentials">' + keyField + urlField + '</div>' +
+                '<div class="provider-models" data-provider="' + provider + '"><label class="provider-models-label">Models</label><div class="provider-model-list"><div class="form-hint">Configure credentials to see models.</div></div><div class="custom-model-row"><input type="text" class="input input--inline provider-custom-model" placeholder="Custom model name\u2026"><button type="button" class="btn btn-secondary btn--sm provider-use-custom">Use</button></div><div class="form-hint">Enter a model name. Provider prefix is added automatically.</div></div>' +
+                '<button type="button" class="btn btn-ghost btn--sm provider-deactivate" style="margin-top:8px;color:var(--text-muted);">Remove credentials</button>' +
+            '</div></div>';
+
+        // Add to grid and remove from catalog
+        var grid = document.getElementById('provider-grid');
+        if (grid) grid.insertAdjacentHTML('beforeend', cardHtml);
+        catalogCard.remove();
+        closeCatalog();
+
+        // Focus the new card's first input
+        var newCard = grid.querySelector('.provider-card[data-provider="' + provider + '"]');
+        if (newCard) {
+            var firstInput = newCard.querySelector('.provider-api-key, .provider-api-base');
+            if (firstInput) firstInput.focus();
+        }
+    });
+})();
 
 
 // ═══ Load Models for a Provider Accordion Item ═══
@@ -317,11 +376,72 @@ async function fetchAllModels() {
     try {
         var resp = await fetch('/api/v1/providers/models');
         var data = await resp.json();
+
+        // Fetch live Ollama models and merge into data.models
+        if (data.ollama_configured) {
+            try {
+                var ollamaResp = await fetch('/api/v1/providers/ollama/models');
+                var ollamaData = await ollamaResp.json();
+                if (ollamaData.ok && ollamaData.models) {
+                    ollamaData.models.forEach(function(m) {
+                        data.models.push({
+                            provider: 'ollama',
+                            model: 'ollama/' + m.name,
+                            label: m.name + ' (' + m.size + ')',
+                        });
+                    });
+                }
+            } catch (_) {}
+        }
+
+        // Fetch live Ollama Cloud models and merge into data.models
+        if (data.ollama_cloud_configured) {
+            try {
+                var cloudResp = await fetch('/api/v1/providers/ollama-cloud/models');
+                var cloudData = await cloudResp.json();
+                if (cloudData.ok && cloudData.models) {
+                    cloudData.models.forEach(function(m) {
+                        data.models.push({
+                            provider: 'ollama_cloud',
+                            model: 'ollama_cloud/' + m.id,
+                            label: m.id,
+                        });
+                    });
+                }
+            } catch (_) {}
+        }
+
         _allModelsCache = data;
         return data;
     } catch (err) {
         return { ok: false, models: [], current: '', vision_model: '' };
     }
+}
+
+/**
+ * Return a copy of data with hidden models merged back into the models array.
+ * Hidden models are excluded from provider card radio buttons but should still
+ * be available in vision/fallback dropdowns.
+ */
+function allModelsIncludingHidden(data) {
+    if (!data.hidden_models) return data;
+    var extra = [];
+    Object.keys(data.hidden_models).forEach(function(prov) {
+        data.hidden_models[prov].forEach(function(modelId) {
+            var exists = data.models.some(function(m) { return m.model === modelId; });
+            if (!exists) {
+                var label = modelId.replace(prov + '/', '');
+                extra.push({ provider: prov, model: modelId, label: label });
+            }
+        });
+    });
+    if (extra.length > 0) {
+        var merged = {};
+        for (var k in data) { if (data.hasOwnProperty(k)) merged[k] = data[k]; }
+        merged.models = data.models.concat(extra);
+        return merged;
+    }
+    return data;
 }
 
 /**
@@ -594,7 +714,7 @@ function hideModel(provider, modelId, wrapperEl) {
         populateFallbackDropdown();
         showToast('Model hidden', 'success');
         // Reload provider model list to update "Show N hidden" link
-        var item = document.querySelector('.provider-item[data-provider="' + provider + '"]');
+        var item = document.querySelector('.provider-card[data-provider="' + provider + '"]');
         if (item) {
             item.dataset.modelsLoaded = '';
             loadProviderModels(item);
@@ -648,7 +768,7 @@ function restoreModel(provider, modelId) {
     patchConfig('providers.' + provider + '.hidden_models', hidden).then(function() {
         _allModelsCache = null;
         showToast('Model restored', 'success');
-        var item = document.querySelector('.provider-item[data-provider="' + provider + '"]');
+        var item = document.querySelector('.provider-card[data-provider="' + provider + '"]');
         if (item) {
             item.dataset.modelsLoaded = '';
             loadProviderModels(item);
@@ -811,6 +931,7 @@ if (agentForm) {
             { key: 'agent.max_tokens', value: form.get('max_tokens') },
             { key: 'agent.temperature', value: form.get('temperature') },
             { key: 'agent.max_iterations', value: form.get('max_iterations') },
+            { key: 'agent.xml_fallback_delay_ms', value: form.get('xml_fallback_delay_ms') },
             { key: 'agent.fallback_models', value: fallbackModels },
         ];
 
@@ -835,8 +956,10 @@ if (agentForm) {
 async function loadVisionDropdown() {
     if (!visionModelSelect) return;
     var data = await fetchAllModels();
-    buildModelOptions(visionModelSelect, data, {
+    var fullData = allModelsIncludingHidden(data);
+    buildModelOptions(visionModelSelect, fullData, {
         specialOptions: [{ value: '', label: '(Same as chat model)' }],
+        includeCustom: true,
         selectedValue: data.vision_model || '',
     });
 }
@@ -882,7 +1005,8 @@ function renderFallbackTags() {
 async function populateFallbackDropdown() {
     if (!fallbackSelect) return;
     var data = await fetchAllModels();
-    buildModelOptions(fallbackSelect, data, {
+    var fullData = allModelsIncludingHidden(data);
+    buildModelOptions(fallbackSelect, fullData, {
         placeholder: 'Add fallback model\u2026',
         includeCustom: true,
     });

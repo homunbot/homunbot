@@ -312,6 +312,11 @@ pub struct AgentConfig {
     /// values replace the global defaults for temperature/max_tokens.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub model_overrides: HashMap<String, ModelOverrides>,
+    /// Delay in milliseconds before retrying after switching to XML tool dispatch.
+    /// When a model doesn't support native tool use, the agent switches to XML mode
+    /// and retries — this delay prevents hitting rate limits (especially on free-tier models).
+    /// Default: 1000ms. Set to 0 to disable.
+    pub xml_fallback_delay_ms: u64,
 }
 
 /// Per-model parameter overrides.
@@ -337,6 +342,7 @@ impl Default for AgentConfig {
             force_xml_tools: false,
             fallback_models: Vec::new(),
             model_overrides: HashMap::new(),
+            xml_fallback_delay_ms: 1000,
         }
     }
 }
