@@ -5784,6 +5784,7 @@ struct UsageQuery {
 #[derive(Serialize)]
 struct UsageResponse {
     models: Vec<crate::storage::TokenUsageAggRow>,
+    days: Vec<crate::storage::TokenUsageDailyRow>,
     totals: UsageTotals,
 }
 
@@ -5814,6 +5815,16 @@ async fn get_usage(
             )
         })?;
 
+    let days = db
+        .query_token_usage_daily(q.session.as_deref(), q.since.as_deref(), q.until.as_deref())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to query daily usage: {}", e),
+            )
+        })?;
+
     let totals = UsageTotals {
         prompt_tokens: rows.iter().map(|r| r.prompt_tokens).sum(),
         completion_tokens: rows.iter().map(|r| r.completion_tokens).sum(),
@@ -5823,6 +5834,7 @@ async fn get_usage(
 
     Ok(Json(UsageResponse {
         models: rows,
+        days,
         totals,
     }))
 }

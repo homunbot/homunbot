@@ -282,6 +282,85 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                     </div>
                 </div>
 
+                <section class="section usage-section">
+                    <h2>Token Usage</h2>
+                    <div class="usage-controls">
+                        <div class="usage-presets">
+                            <button class="btn btn-secondary btn-sm usage-range-btn is-active" type="button" data-days="7">7d</button>
+                            <button class="btn btn-secondary btn-sm usage-range-btn" type="button" data-days="30">30d</button>
+                            <button class="btn btn-secondary btn-sm usage-range-btn" type="button" data-days="90">90d</button>
+                            <button class="btn btn-secondary btn-sm usage-range-btn" type="button" data-days="all">All</button>
+                        </div>
+                        <div class="usage-date-range">
+                            <label class="usage-filter">
+                                <span>From</span>
+                                <input type="date" class="input usage-date-input" id="usage-since">
+                            </label>
+                            <label class="usage-filter">
+                                <span>To</span>
+                                <input type="date" class="input usage-date-input" id="usage-until">
+                            </label>
+                        </div>
+                        <button class="btn btn-secondary btn-sm" type="button" id="usage-refresh">Refresh</button>
+                    </div>
+
+                    <div class="stats-grid usage-stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-label">Total Tokens</div>
+                            <div class="stat-value" id="usage-total-tokens">-</div>
+                            <div class="stat-sub" id="usage-days-count">-</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Prompt Tokens</div>
+                            <div class="stat-value" id="usage-prompt-tokens">-</div>
+                            <div class="stat-sub">input</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Completion Tokens</div>
+                            <div class="stat-value" id="usage-completion-tokens">-</div>
+                            <div class="stat-sub">output</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Estimated Cost (USD)</div>
+                            <div class="stat-value" id="usage-estimated-cost">$0.00</div>
+                            <div class="stat-sub" id="usage-total-calls">- calls</div>
+                        </div>
+                    </div>
+
+                    <div class="usage-panels">
+                        <div class="usage-panel">
+                            <div class="usage-panel-title">Daily Token Trend</div>
+                            <svg id="usage-chart" viewBox="0 0 720 220" preserveAspectRatio="none"></svg>
+                            <div class="usage-chart-empty" id="usage-chart-empty" hidden>No usage data in selected range.</div>
+                        </div>
+                        <div class="usage-panel">
+                            <div class="usage-panel-title">Prompt vs Completion</div>
+                            <div class="usage-split" id="usage-split"></div>
+                        </div>
+                    </div>
+
+                    <div class="usage-table-wrap">
+                        <table class="usage-table" id="usage-models-table">
+                            <thead>
+                                <tr>
+                                    <th>Model</th>
+                                    <th>Provider</th>
+                                    <th>Prompt</th>
+                                    <th>Completion</th>
+                                    <th>Total</th>
+                                    <th>Calls</th>
+                                    <th>Est. Cost</th>
+                                </tr>
+                            </thead>
+                            <tbody id="usage-models-body">
+                                <tr>
+                                    <td colspan="7" class="usage-loading">Loading usage...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
                 <section class="section">
                     <h2>Channels</h2>
                     <div class="item-list">

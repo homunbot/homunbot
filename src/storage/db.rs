@@ -1375,6 +1375,47 @@ impl Database {
             .context("Failed to query token usage")
     }
 
+    pub async fn query_token_usage_daily(
+        &self,
+        session_key: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+    ) -> Result<Vec<TokenUsageDailyRow>> {
+        let mut sql = String::from(
+            "SELECT DATE(created_at) as day,
+                    SUM(prompt_tokens) as prompt_tokens,
+                    SUM(completion_tokens) as completion_tokens,
+                    SUM(total_tokens) as total_tokens,
+                    COUNT(*) as call_count
+             FROM token_usage WHERE 1=1",
+        );
+        let mut binds: Vec<String> = Vec::new();
+
+        if let Some(s) = session_key {
+            sql.push_str(" AND session_key = ?");
+            binds.push(s.to_string());
+        }
+        if let Some(s) = since {
+            sql.push_str(" AND created_at >= ?");
+            binds.push(s.to_string());
+        }
+        if let Some(u) = until {
+            sql.push_str(" AND created_at <= ?");
+            binds.push(u.to_string());
+        }
+
+        sql.push_str(" GROUP BY DATE(created_at) ORDER BY day ASC");
+
+        let mut q = sqlx::query_as::<_, TokenUsageDailyRow>(&sql);
+        for b in &binds {
+            q = q.bind(b);
+        }
+
+        q.fetch_all(&self.pool)
+            .await
+            .context("Failed to query daily token usage")
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // EMAIL PENDING — assisted approval flow
     // ═══════════════════════════════════════════════════════════════
@@ -1615,6 +1656,15 @@ pub struct WebhookTokenRow {
 pub struct TokenUsageAggRow {
     pub model: String,
     pub provider: String,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub total_tokens: i64,
+    pub call_count: i64,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize)]
+pub struct TokenUsageDailyRow {
+    pub day: String,
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
     pub total_tokens: i64,
