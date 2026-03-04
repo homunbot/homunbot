@@ -7,6 +7,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 #[cfg(feature = "cli")]
 use clap::{Parser, Subcommand};
+use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
 mod agent;
@@ -15,7 +16,9 @@ mod browser;
 mod bus;
 mod channels;
 mod config;
+mod logs;
 mod provider;
+mod queue;
 mod scheduler;
 mod security;
 mod service;
@@ -36,9 +39,11 @@ use crate::config::Config;
 
 use crate::session::SessionManager;
 use crate::storage::Database;
+#[cfg(feature = "channel-email")]
+use crate::tools::ReadEmailInboxTool;
 use crate::tools::{
-    CronTool, EditFileTool, ListDirTool, MessageTool, ReadFileTool, ShellTool, SpawnTool,
-    ToolRegistry, VaultTool, WebFetchTool, WebSearchTool, WriteFileTool,
+    CreateAutomationTool, CronTool, EditFileTool, ListDirTool, MessageTool, ReadFileTool,
+    ShellTool, SpawnTool, ToolRegistry, VaultTool, WebFetchTool, WebSearchTool, WriteFileTool,
 };
 
 #[cfg(feature = "mcp")]
@@ -94,6 +99,11 @@ enum Commands {
     Cron {
         #[command(subcommand)]
         command: CronCommands,
+    },
+    /// Manage automations
+    Automations {
+        #[command(subcommand)]
+        command: AutomationCommands,
     },
     /// Manage MCP servers
     Mcp {
@@ -232,6 +242,47 @@ enum CronCommands {
 }
 
 #[derive(Subcommand)]
+enum AutomationCommands {
+    /// List automations
+    List,
+    /// Add a new automation
+    Add {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        prompt: String,
+        #[arg(long)]
+        cron: Option<String>,
+        #[arg(long)]
+        every: Option<u64>,
+        /// Delivery target in format channel:chat_id (default: cli:default)
+        #[arg(long)]
+        deliver_to: Option<String>,
+        /// Trigger condition: always | on_change | contains
+        #[arg(long)]
+        trigger: Option<String>,
+        /// Optional value for trigger=contains
+        #[arg(long)]
+        trigger_value: Option<String>,
+        /// Create automation as disabled
+        #[arg(long, default_value_t = false)]
+        disabled: bool,
+    },
+    /// Toggle automation on/off
+    Toggle { id: String },
+    /// Run an automation immediately
+    Run { id: String },
+    /// Show execution history
+    History {
+        id: String,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+    },
+    /// Remove an automation
+    Remove { id: String },
+}
+
+#[derive(Subcommand)]
 enum MemoryCommands {
     /// Show memory statistics
     Status,
@@ -321,7 +372,7 @@ enum ServiceCommands {
 // provider::create_provider / provider::create_single_provider).
 
 /// Create and register all tools from config
-fn create_tool_registry(config: &Config) -> ToolRegistry {
+fn create_tool_registry(config: &Config, db: Database) -> ToolRegistry {
     let mut registry = ToolRegistry::new();
 
     // Workspace directory restriction
@@ -378,6 +429,13 @@ fn create_tool_registry(config: &Config) -> ToolRegistry {
 
     // Vault tool (encrypted secrets storage)
     registry.register(Box::new(VaultTool::new()));
+
+    // Automation creation tool (shared storage with scheduler + web API)
+    registry.register(Box::new(CreateAutomationTool::new(db)));
+
+    // Email inbox reading tool (IMAP) for proactive automations and chat tasks.
+    #[cfg(feature = "channel-email")]
+    registry.register(Box::new(ReadEmailInboxTool::new()));
 
     // Remember tool (save personal information - requires local-embeddings feature)
     #[cfg(feature = "local-embeddings")]
@@ -517,6 +575,11 @@ fn stop_gateway() -> Result<bool> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install rustls CryptoProvider before any TLS usage.
+    // Multiple transitive deps enable both `ring` and `aws-lc-rs` features on rustls,
+    // so we must pick one explicitly to avoid the auto-detection panic.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let cli = Cli::parse();
 
     // Default (no subcommand) = interactive chat
@@ -525,6 +588,7 @@ async fn main() -> Result<()> {
     // TUI commands use alternate screen — logs on stderr would corrupt the display.
     // Write logs to a file instead, or suppress them entirely.
     let is_tui_command = matches!(&command, Commands::Config { command: None });
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     if is_tui_command {
         // During TUI: log to ~/.homun/tui.log so stderr stays clean
@@ -532,20 +596,22 @@ async fn main() -> Result<()> {
         std::fs::create_dir_all(&log_dir).ok();
         let log_file = std::fs::File::create(log_dir.join("tui.log")).ok();
         if let Some(file) = log_file {
-            tracing_subscriber::fmt()
-                .with_env_filter(
-                    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(file)
+                        .with_ansi(false),
                 )
-                .with_writer(file)
-                .with_ansi(false)
+                .with(crate::logs::SseLogLayer)
                 .init();
         }
     } else {
         // Normal mode: log to stderr
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-            )
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer())
+            .with(crate::logs::SseLogLayer)
             .init();
     }
 
@@ -554,7 +620,7 @@ async fn main() -> Result<()> {
             let config = Config::load()?;
             let db = Database::open(&config.storage.resolved_path()).await?;
             let provider = provider::create_provider(&config)?;
-            let mut tool_registry = create_tool_registry(&config);
+            let mut tool_registry = create_tool_registry(&config, db.clone());
 
             // Connect to MCP servers and register their tools
             #[cfg(feature = "mcp")]
@@ -578,8 +644,14 @@ async fn main() -> Result<()> {
             // Wrap config in Arc for AgentLoop (no web server sharing in CLI mode,
             // but AgentLoop requires Arc<RwLock<Config>> for API uniformity)
             let shared_config = Arc::new(tokio::sync::RwLock::new(config));
-            let mut agent =
-                agent::AgentLoop::new(provider, shared_config.clone(), session_manager.clone(), tool_registry, db).await;
+            let mut agent = agent::AgentLoop::new(
+                provider,
+                shared_config.clone(),
+                session_manager.clone(),
+                tool_registry,
+                db,
+            )
+            .await;
             agent.set_registered_tool_names(tool_names);
 
             // Initialize memory searcher (vector + FTS5 hybrid search)
@@ -715,7 +787,7 @@ async fn main() -> Result<()> {
             let cron_scheduler = Arc::new(CronScheduler::new(db.clone(), cron_event_tx));
 
             // Build tool registry with CronTool + MessageTool + SpawnTool + MCP tools
-            let mut tool_registry = create_tool_registry(&config);
+            let mut tool_registry = create_tool_registry(&config, db.clone());
             tool_registry.register(Box::new(CronTool::new(cron_scheduler.clone())));
             tool_registry.register(Box::new(MessageTool::new()));
 
@@ -753,7 +825,8 @@ async fn main() -> Result<()> {
                     session_manager.clone(),
                     tool_registry,
                     db,
-                ).await;
+                )
+                .await;
                 a.set_message_tx(tool_msg_tx);
                 a.set_registered_tool_names(tool_names);
 
@@ -804,6 +877,21 @@ async fn main() -> Result<()> {
                     tracing::info!(
                         channels = ?active_channels.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
                         "Cross-channel routing info injected into agent context"
+                    );
+                }
+
+                // Inject email account info (name + mode) into system prompt
+                let email_accounts: Vec<(String, crate::config::EmailMode)> = config
+                    .channels
+                    .active_email_accounts()
+                    .into_iter()
+                    .map(|(name, acc)| (name.clone(), acc.mode.clone()))
+                    .collect();
+                if !email_accounts.is_empty() {
+                    a.set_email_accounts_info(&email_accounts);
+                    tracing::info!(
+                        accounts = ?email_accounts.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+                        "Email account info injected into agent context"
                     );
                 }
             }
@@ -1202,6 +1290,33 @@ async fn main() -> Result<()> {
                 match SkillInstaller::remove(&name).await {
                     Ok(()) => {
                         println!("Skill '{}' removed.", name);
+                        let config = Config::load()?;
+                        match Database::open(&config.storage.resolved_path()).await {
+                            Ok(db) => {
+                                let reason = format!("Missing skill dependency: {name}");
+                                match db
+                                    .invalidate_automations_by_dependency("skill", &name, &reason)
+                                    .await
+                                {
+                                    Ok(affected) if affected > 0 => {
+                                        println!(
+                                            "Invalidated {affected} automation(s) depending on skill '{name}'."
+                                        );
+                                    }
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        eprintln!(
+                                            "Warning: failed to invalidate dependent automations: {e}"
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "Warning: could not open DB to invalidate automations: {e}"
+                                );
+                            }
+                        }
                     }
                     Err(e) => {
                         eprintln!("Failed to remove skill: {e}");
@@ -1265,6 +1380,32 @@ async fn main() -> Result<()> {
                     if config.mcp.servers.remove(&name).is_some() {
                         config.save()?;
                         println!("MCP server '{name}' removed.");
+                        match Database::open(&config.storage.resolved_path()).await {
+                            Ok(db) => {
+                                let reason = format!("Missing or disabled MCP dependency: {name}");
+                                match db
+                                    .invalidate_automations_by_dependency("mcp", &name, &reason)
+                                    .await
+                                {
+                                    Ok(affected) if affected > 0 => {
+                                        println!(
+                                            "Invalidated {affected} automation(s) depending on MCP '{name}'."
+                                        );
+                                    }
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        eprintln!(
+                                            "Warning: failed to invalidate dependent automations: {e}"
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "Warning: could not open DB to invalidate automations: {e}"
+                                );
+                            }
+                        }
                     } else {
                         eprintln!("MCP server '{name}' not found.");
                         std::process::exit(1);
@@ -1343,6 +1484,265 @@ async fn main() -> Result<()> {
                         println!("Job '{id}' removed.");
                     } else {
                         eprintln!("Job '{id}' not found.");
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+        Commands::Automations { command } => {
+            let config = Config::load()?;
+            let db = Database::open(&config.storage.resolved_path()).await?;
+
+            match command {
+                AutomationCommands::List => {
+                    let automations = db.load_automations().await?;
+                    if automations.is_empty() {
+                        println!("No automations found.");
+                        println!(
+                            "Add one with: homun automations add --name \"daily\" --prompt \"Morning briefing\" --cron \"0 9 * * *\""
+                        );
+                    } else {
+                        println!("Automations:\n");
+                        for a in &automations {
+                            let enabled = if a.enabled { "✓" } else { "✗" };
+                            let last = a.last_run.as_deref().unwrap_or("never");
+                            let target = a.deliver_to.as_deref().unwrap_or("cli:default");
+                            println!("  [{enabled}] {id} | {name}", id = a.id, name = a.name);
+                            println!("      Schedule: {}", a.schedule);
+                            println!("      Status: {}", a.status);
+                            println!("      Deliver to: {target}");
+                            if let Some(v) = &a.trigger_value {
+                                println!("      Trigger: {} ({v})", a.trigger_kind);
+                            } else {
+                                println!("      Trigger: {}", a.trigger_kind);
+                            }
+                            println!("      Last run: {last}");
+                            if let Some(res) = &a.last_result {
+                                println!("      Last result: {res}");
+                            }
+                            println!();
+                        }
+                        println!("{} automation(s) total.", automations.len());
+                    }
+                }
+                AutomationCommands::Add {
+                    name,
+                    prompt,
+                    cron,
+                    every,
+                    deliver_to,
+                    trigger,
+                    trigger_value,
+                    disabled,
+                } => {
+                    if name.trim().is_empty() {
+                        eprintln!("Name cannot be empty.");
+                        std::process::exit(1);
+                    }
+                    if prompt.trim().is_empty() {
+                        eprintln!("Prompt cannot be empty.");
+                        std::process::exit(1);
+                    }
+                    let schedule = match (cron, every) {
+                        (Some(expr), None) => {
+                            crate::scheduler::AutomationSchedule::from_cron(&expr)?.as_stored()
+                        }
+                        (None, Some(secs)) => {
+                            crate::scheduler::AutomationSchedule::from_every(secs)?.as_stored()
+                        }
+                        _ => {
+                            eprintln!("Specify exactly one schedule mode:");
+                            eprintln!("  --cron \"0 9 * * *\"");
+                            eprintln!("  --every 3600");
+                            std::process::exit(1);
+                        }
+                    };
+
+                    let deliver_to = deliver_to.unwrap_or_else(|| "cli:default".to_string());
+                    if deliver_to.rsplit_once(':').is_none() {
+                        eprintln!("--deliver-to must be in format channel:chat_id");
+                        std::process::exit(1);
+                    }
+
+                    let trigger = trigger
+                        .as_deref()
+                        .unwrap_or("always")
+                        .trim()
+                        .to_ascii_lowercase()
+                        .replace('-', "_");
+                    let (trigger_kind, trigger_value) = match trigger.as_str() {
+                        "always" => ("always".to_string(), None),
+                        "on_change" | "changed" => ("on_change".to_string(), None),
+                        "contains" => {
+                            let value = trigger_value
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|v| !v.is_empty())
+                                .map(ToOwned::to_owned);
+                            if value.is_none() {
+                                eprintln!(
+                                    "--trigger-value is required when --trigger contains is used."
+                                );
+                                std::process::exit(1);
+                            }
+                            ("contains".to_string(), value)
+                        }
+                        _ => {
+                            eprintln!("--trigger must be one of: always, on_change, contains");
+                            std::process::exit(1);
+                        }
+                    };
+
+                    let enabled = !disabled;
+                    let compiled_plan = crate::scheduler::automations::compile_automation_plan(
+                        prompt.trim(),
+                        &config,
+                    );
+                    let status = if !enabled {
+                        "paused"
+                    } else if compiled_plan.is_valid() {
+                        "active"
+                    } else {
+                        "invalid_config"
+                    };
+                    let id = uuid::Uuid::new_v4().to_string();
+                    let plan_json = compiled_plan.plan_json();
+                    let dependencies_json = compiled_plan.dependencies_json();
+                    let validation_errors_json = compiled_plan.validation_errors_json();
+                    db.insert_automation_with_plan(
+                        &id,
+                        name.trim(),
+                        prompt.trim(),
+                        &schedule,
+                        enabled,
+                        status,
+                        Some(&deliver_to),
+                        &trigger_kind,
+                        trigger_value.as_deref(),
+                        Some(&plan_json),
+                        &dependencies_json,
+                        compiled_plan.plan.version,
+                        validation_errors_json.as_deref(),
+                    )
+                    .await?;
+
+                    println!("Automation created: id={id}");
+                    println!("  Name: {name}");
+                    println!("  Schedule: {schedule}");
+                    println!("  Deliver to: {deliver_to}");
+                    println!(
+                        "  Trigger: {}{}",
+                        trigger_kind,
+                        trigger_value
+                            .as_deref()
+                            .map(|v| format!(" ({v})"))
+                            .unwrap_or_default()
+                    );
+                    println!("  Enabled: {enabled}");
+                    println!("  Status: {status}");
+                    if !compiled_plan.is_valid() {
+                        println!(
+                            "  Validation errors: {}",
+                            compiled_plan.validation_errors.join(" | ")
+                        );
+                    }
+                }
+                AutomationCommands::Toggle { id } => {
+                    let row = db.load_automation(&id).await?;
+                    let Some(current) = row else {
+                        eprintln!("Automation '{id}' not found.");
+                        std::process::exit(1);
+                    };
+                    let next_enabled = !current.enabled;
+                    let next_status = if next_enabled { "active" } else { "paused" };
+                    let changed = db
+                        .update_automation(
+                            &id,
+                            crate::storage::AutomationUpdate {
+                                enabled: Some(next_enabled),
+                                status: Some(next_status.to_string()),
+                                ..Default::default()
+                            },
+                        )
+                        .await?;
+                    if !changed {
+                        eprintln!("Automation '{id}' not updated.");
+                        std::process::exit(1);
+                    }
+                    println!("Automation '{id}' is now {next_status}.");
+                }
+                AutomationCommands::Run { id } => {
+                    let endpoint = format!(
+                        "http://{}:{}/api/v1/automations/{}/run",
+                        config.channels.web.host, config.channels.web.port, id
+                    );
+                    let client = reqwest::Client::new();
+                    let response = client.post(&endpoint).send().await;
+
+                    let response = match response {
+                        Ok(resp) => resp,
+                        Err(e) => {
+                            eprintln!("Failed to contact runtime API at {endpoint}");
+                            eprintln!("Start gateway (and web UI) first: homun gateway");
+                            eprintln!("Details: {e}");
+                            std::process::exit(1);
+                        }
+                    };
+
+                    if !response.status().is_success() {
+                        let status = response.status();
+                        let body = response.text().await.unwrap_or_default();
+                        eprintln!("Runtime API returned {status} for run-now request.");
+                        if !body.trim().is_empty() {
+                            eprintln!("{body}");
+                        }
+                        std::process::exit(1);
+                    }
+
+                    let json: serde_json::Value = response.json().await.unwrap_or_default();
+                    let run_id = json
+                        .get("run_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    let status = json
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("queued");
+                    let message = json
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Run request accepted");
+
+                    println!("Run requested: {run_id}");
+                    println!("  Status: {status}");
+                    println!("  Message: {message}");
+                }
+                AutomationCommands::History { id, limit } => {
+                    let runs = db.load_automation_runs(&id, limit).await?;
+                    if runs.is_empty() {
+                        println!("No runs found for automation '{id}'.");
+                    } else {
+                        println!("Runs for automation '{id}':\n");
+                        for run in runs {
+                            let finished = run.finished_at.as_deref().unwrap_or("in-progress");
+                            println!(
+                                "  {id} | status={status} | started={started} | finished={finished}",
+                                id = run.id,
+                                status = run.status,
+                                started = run.started_at,
+                            );
+                            if let Some(result) = run.result {
+                                println!("      {result}");
+                            }
+                        }
+                    }
+                }
+                AutomationCommands::Remove { id } => {
+                    let removed = db.delete_automation(&id).await?;
+                    if removed {
+                        println!("Automation '{id}' removed.");
+                    } else {
+                        eprintln!("Automation '{id}' not found.");
                         std::process::exit(1);
                     }
                 }

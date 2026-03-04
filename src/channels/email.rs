@@ -1,11 +1,11 @@
-//! Email channel — IMAP IDLE for instant push notifications, SMTP for outbound
+//! Email channel — multi-account IMAP IDLE + SMTP with batching and mode-based routing.
 //!
-//! Implements the Channel trait for email integration.
-//! Inspired by ZeroClaw's implementation, adapted for Homun architecture.
+//! Each email account runs its own IMAP listener and BatchQueue.
+//! Modes: assisted (default), automatic, on_demand.
 
 #![allow(clippy::too_many_lines)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,51 +44,58 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
 use super::traits::Channel;
-use crate::bus::{InboundMessage, OutboundMessage};
-use crate::config::EmailConfig;
+use crate::bus::{InboundMessage, MessageMetadata, OutboundMessage};
+use crate::config::{EmailAccountConfig, EmailMode};
+use crate::queue::{BatchQueue, QueueEvent, QueueItem};
 
 /// Type alias for IMAP session with TLS
 #[cfg(feature = "channel-email")]
 type ImapSession = Session<TlsStream<TcpStream>>;
 
-/// Email channel — IMAP IDLE for instant push notifications, SMTP for outbound
+/// A parsed email ready for queue/routing.
+#[derive(Debug, Clone)]
+pub struct ParsedEmail {
+    pub uid: u32,
+    pub from: String,
+    pub subject: String,
+    pub body_text: String,
+    pub message_id: String,
+}
+
+/// Multi-account email channel.
+///
+/// Each account spawns its own IMAP listener task. SMTP sending is shared
+/// across accounts, dispatched by the `email:<account>` channel prefix.
 pub struct EmailChannel {
-    config: EmailConfig,
-    seen_messages: Arc<Mutex<HashSet<String>>>,
+    accounts: HashMap<String, EmailAccountConfig>,
 }
 
 impl EmailChannel {
-    pub fn new(config: EmailConfig) -> Self {
-        Self {
-            config,
-            seen_messages: Arc::new(Mutex::new(HashSet::new())),
-        }
+    pub fn new(accounts: HashMap<String, EmailAccountConfig>) -> Self {
+        Self { accounts }
     }
 
-    /// Check if a sender email is in the allowlist
-    pub fn is_sender_allowed(&self, email: &str) -> bool {
-        if self.config.allow_from.is_empty() {
-            return false; // Empty = deny all
+    /// Check if a sender email is in an allowlist.
+    pub fn is_sender_allowed(email: &str, allow_from: &[String]) -> bool {
+        if allow_from.is_empty() {
+            return false;
         }
-        if self.config.allow_from.iter().any(|a| a == "*") {
-            return true; // Wildcard = allow all
+        if allow_from.iter().any(|a| a == "*") {
+            return true;
         }
         let email_lower = email.to_lowercase();
-        self.config.allow_from.iter().any(|allowed| {
+        allow_from.iter().any(|allowed| {
             if allowed.starts_with('@') {
-                // Domain match with @ prefix: "@example.com"
                 email_lower.ends_with(&allowed.to_lowercase())
             } else if allowed.contains('@') {
-                // Full email address match
                 allowed.eq_ignore_ascii_case(email)
             } else {
-                // Domain match without @ prefix: "example.com"
                 email_lower.ends_with(&format!("@{}", allowed.to_lowercase()))
             }
         })
     }
 
-    /// Strip HTML tags from content (basic)
+    /// Strip HTML tags from content (basic).
     pub fn strip_html(html: &str) -> String {
         let mut result = String::new();
         let mut in_tag = false;
@@ -110,20 +117,93 @@ impl EmailChannel {
         normalized
     }
 
-    /// Resolve password from vault if needed
-    fn resolve_password(&self) -> String {
-        if self.config.password == "***ENCRYPTED***" {
+    /// Resolve password from vault if needed.
+    fn resolve_account_password(account_name: &str, config: &EmailAccountConfig) -> String {
+        if config.password == "***ENCRYPTED***" {
             if let Ok(secrets) = crate::storage::global_secrets() {
-                let key = crate::storage::SecretKey::channel_token("email");
+                let key =
+                    crate::storage::SecretKey::custom(&format!("email.{account_name}.password"));
                 if let Ok(Some(password)) = secrets.get(&key) {
                     return password;
                 }
+                // Fallback to legacy key format
+                let legacy_key = crate::storage::SecretKey::channel_token("email");
+                if let Ok(Some(password)) = secrets.get(&legacy_key) {
+                    return password;
+                }
             }
-            // Fallback to config password
-            warn!("Email password marked as encrypted but not found in vault");
+            warn!(
+                account = account_name,
+                "Email password marked as encrypted but not found in vault"
+            );
         }
-        self.config.password.clone()
+        config.password.clone()
     }
+
+    /// Resolve or generate trigger word for on_demand accounts.
+    fn resolve_trigger_word(account_name: &str, config: &EmailAccountConfig) -> Option<String> {
+        if config.mode != EmailMode::OnDemand {
+            return None;
+        }
+        // If already set in config, use it
+        if let Some(ref tw) = config.trigger_word {
+            if !tw.is_empty() {
+                return Some(tw.clone());
+            }
+        }
+        // Try vault
+        if let Ok(secrets) = crate::storage::global_secrets() {
+            let key =
+                crate::storage::SecretKey::custom(&format!("email.{account_name}.trigger_word"));
+            if let Ok(Some(tw)) = secrets.get(&key) {
+                return Some(tw);
+            }
+            // Generate random trigger word
+            let tw = generate_trigger_word();
+            if let Err(e) = secrets.set(&key, &tw) {
+                warn!(error = %e, "Failed to store trigger word in vault");
+            } else {
+                info!(
+                    account = account_name,
+                    trigger_word = %tw,
+                    "Generated trigger word for on_demand account"
+                );
+            }
+            return Some(tw);
+        }
+        // Last resort: generate ephemeral (not persisted)
+        let tw = generate_trigger_word();
+        info!(
+            account = account_name,
+            trigger_word = %tw,
+            "Generated ephemeral trigger word (vault unavailable)"
+        );
+        Some(tw)
+    }
+
+    /// Check if an email should be processed in on_demand mode.
+    fn matches_trigger(subject: &str, body: &str, trigger_word: &str) -> bool {
+        let combined = format!("{} {}", subject, body).to_lowercase();
+        combined.contains("@homun") || combined.contains(&trigger_word.to_lowercase())
+    }
+}
+
+/// Generate a random 8-char trigger word like "hm-x7k2p9".
+fn generate_trigger_word() -> String {
+    use std::time::SystemTime;
+    let seed = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let chars: Vec<char> = "abcdefghijklmnopqrstuvwxyz0123456789".chars().collect();
+    let mut result = String::from("hm-");
+    let mut state = seed;
+    for _ in 0..6 {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let idx = (state >> 33) as usize % chars.len();
+        result.push(chars[idx]);
+    }
+    result
 }
 
 #[async_trait]
@@ -137,75 +217,133 @@ impl Channel for EmailChannel {
         inbound_tx: mpsc::Sender<InboundMessage>,
         mut outbound_rx: mpsc::Receiver<OutboundMessage>,
     ) -> Result<()> {
-        let password = self.resolve_password();
+        if self.accounts.is_empty() {
+            anyhow::bail!("No email accounts configured");
+        }
 
-        if !self.config.is_configured() && password.is_empty() {
-            anyhow::bail!("Email channel not configured");
+        let active: Vec<_> = self
+            .accounts
+            .iter()
+            .filter(|(_, acc)| acc.enabled && acc.is_configured())
+            .collect();
+
+        if active.is_empty() {
+            anyhow::bail!("No email accounts enabled and configured");
         }
 
         info!(
-            "Starting email channel: {} (IMAP: {}:{}, SMTP: {}:{})",
-            self.config.from_address,
-            self.config.imap_host,
-            self.config.imap_port,
-            self.config.smtp_host,
-            self.config.smtp_port
+            count = active.len(),
+            "Starting email channel (multi-account)"
         );
 
-        // Clone what we need for the tasks
-        let config = self.config.clone();
-        let seen_messages = self.seen_messages.clone();
-        let inbound_tx_clone = inbound_tx.clone();
-        let password_imap = password.clone();
-        let password_smtp = password.clone();
+        // Collect account configs with passwords for SMTP routing
+        let mut smtp_configs: HashMap<String, (EmailAccountConfig, String)> = HashMap::new();
 
-        // Spawn IMAP listener task
-        let imap_handle = tokio::spawn(async move {
-            let mut backoff = Duration::from_secs(1);
-            let max_backoff = Duration::from_secs(60);
+        // Spawn one IMAP listener per account
+        let mut handles = Vec::new();
+        for (name, config) in &active {
+            let account_name = (*name).clone();
+            let config = (*config).clone();
+            let password = Self::resolve_account_password(&account_name, &config);
+            let trigger_word = Self::resolve_trigger_word(&account_name, &config);
 
-            loop {
-                match run_imap_session(&config, &password_imap, &inbound_tx_clone, &seen_messages)
+            if password.is_empty() || password == "***ENCRYPTED***" {
+                error!(
+                    account = %account_name,
+                    "Email account has no valid password - skipping"
+                );
+                continue;
+            }
+
+            smtp_configs.insert(account_name.clone(), (config.clone(), password.clone()));
+
+            let inbound_tx = inbound_tx.clone();
+            let seen_messages = Arc::new(Mutex::new(HashSet::new()));
+
+            let handle = tokio::spawn(async move {
+                let mut backoff = Duration::from_secs(1);
+                let max_backoff = Duration::from_secs(60);
+                let mut current_password = password;
+
+                loop {
+                    match run_account_imap_session(
+                        &account_name,
+                        &config,
+                        &current_password,
+                        trigger_word.as_deref(),
+                        &inbound_tx,
+                        &seen_messages,
+                    )
                     .await
-                {
-                    Ok(()) => {
-                        // Clean exit
-                        info!("IMAP session ended cleanly");
-                        return Ok::<(), anyhow::Error>(());
-                    }
-                    Err(e) => {
-                        error!(
-                            "IMAP session error: {}. Reconnecting in {:?}...",
-                            e, backoff
-                        );
-                        sleep(backoff).await;
-                        backoff = std::cmp::min(backoff * 2, max_backoff);
+                    {
+                        Ok(()) => {
+                            info!(account = %account_name, "IMAP session ended cleanly");
+                            return;
+                        }
+                        Err(e) => {
+                            error!(
+                                account = %account_name,
+                                error = %e,
+                                backoff_secs = backoff.as_secs(),
+                                "IMAP session error, reconnecting..."
+                            );
+                            // Re-resolve password from vault in case user updated it
+                            let fresh = Self::resolve_account_password(&account_name, &config);
+                            if !fresh.is_empty()
+                                && fresh != "***ENCRYPTED***"
+                                && fresh != current_password
+                            {
+                                info!(account = %account_name, "Password updated from vault, resetting backoff");
+                                current_password = fresh;
+                                backoff = Duration::from_secs(1); // reset backoff on credential change
+                            }
+                            sleep(backoff).await;
+                            backoff = std::cmp::min(backoff * 2, max_backoff);
+                        }
                     }
                 }
-            }
-        });
+            });
+            handles.push(handle);
+        }
 
-        // Spawn SMTP sender task
-        let smtp_config = self.config.clone();
+        // Spawn SMTP sender task (shared, routes by channel prefix "email:<account>")
         let smtp_handle = tokio::spawn(async move {
             while let Some(msg) = outbound_rx.recv().await {
-                if msg.channel != "email" {
+                // Extract account name from channel: "email:lavoro" → "lavoro"
+                let account_name = if let Some(name) = msg.channel.strip_prefix("email:") {
+                    name.to_string()
+                } else if msg.channel == "email" {
+                    // Legacy single-account: use first available
+                    smtp_configs.keys().next().cloned().unwrap_or_default()
+                } else {
                     continue;
-                }
-                if let Err(e) = send_email(&smtp_config, &password_smtp, &msg).await {
-                    error!("Failed to send email: {}", e);
+                };
+
+                if let Some((config, _startup_password)) = smtp_configs.get(&account_name) {
+                    // Re-resolve password from vault (user may have updated it at runtime)
+                    let password = EmailChannel::resolve_account_password(&account_name, config);
+                    if let Err(e) = send_email_account(config, &password, &msg).await {
+                        error!(account = %account_name, error = %e, "Failed to send email");
+                    }
+                } else {
+                    error!(account = %account_name, "No SMTP config found for account");
                 }
             }
-            Ok::<(), anyhow::Error>(())
         });
 
-        // Wait for either task to complete
-        tokio::select! {
-            result = imap_handle => {
-                warn!("IMAP task finished: {:?}", result);
+        // Wait for any task to finish (shouldn't happen in normal operation)
+        let imap_future = async {
+            for handle in handles {
+                let _ = handle.await;
             }
-            result = smtp_handle => {
-                warn!("SMTP task finished: {:?}", result);
+        };
+
+        tokio::select! {
+            _ = imap_future => {
+                warn!("All IMAP tasks finished");
+            }
+            _ = smtp_handle => {
+                warn!("SMTP task finished");
             }
         }
 
@@ -213,23 +351,27 @@ impl Channel for EmailChannel {
     }
 }
 
-/// Run a single IMAP session (with IDLE support)
+// ---------------------------------------------------------------------------
+// IMAP session with BatchQueue integration
+// ---------------------------------------------------------------------------
+
 #[cfg(feature = "channel-email")]
-async fn run_imap_session(
-    config: &EmailConfig,
+async fn run_account_imap_session(
+    account_name: &str,
+    config: &EmailAccountConfig,
     password: &str,
+    trigger_word: Option<&str>,
     inbound_tx: &mpsc::Sender<InboundMessage>,
     seen_messages: &Arc<Mutex<HashSet<String>>>,
 ) -> Result<()> {
     let addr = format!("{}:{}", config.imap_host, config.imap_port);
-    debug!("Connecting to IMAP server at {}", addr);
+    debug!(account = account_name, addr = %addr, "Connecting to IMAP server");
 
-    // Connect TCP
+    // Connect TCP + TLS
     let tcp = TcpStream::connect(&addr)
         .await
         .context("Failed to connect to IMAP server")?;
 
-    // Establish TLS using rustls
     let certs = RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.into(),
     };
@@ -247,61 +389,113 @@ async fn run_imap_session(
         .await
         .context("TLS handshake failed")?;
 
-    // Create IMAP client
     let client = async_imap::Client::new(stream);
-
-    // Login
     let mut session: ImapSession = client
         .login(&config.username, password)
         .await
         .map_err(|(e, _)| anyhow!("IMAP login failed: {}", e))?;
 
-    debug!("IMAP login successful");
+    debug!(account = account_name, "IMAP login successful");
 
-    // Select mailbox
     session
         .select(&config.imap_folder)
         .await
         .context("Failed to select mailbox")?;
 
     info!(
-        "Email IDLE listening on {} (instant push enabled)",
-        config.imap_folder
+        account = account_name,
+        folder = %config.imap_folder,
+        mode = ?config.mode,
+        "Email IDLE listening (instant push enabled)"
     );
 
+    // Create per-account batch queue
+    let queue_config = config.queue_config();
+    let queue = Arc::new(Mutex::new(BatchQueue::new(
+        format!("email:{account_name}"),
+        queue_config,
+    )));
+
+    // Spawn queue tick task
+    let queue_tick = queue.clone();
+    let tick_tx = inbound_tx.clone();
+    let tick_account = account_name.to_string();
+    let tick_config = config.clone();
+    let tick_trigger = trigger_word.map(|s| s.to_string());
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            interval.tick().await;
+            let event = queue_tick.lock().await.tick();
+            if let Some(event) = event {
+                emit_queue_event(
+                    &tick_account,
+                    &tick_config,
+                    tick_trigger.as_deref(),
+                    event,
+                    &tick_tx,
+                )
+                .await;
+            }
+        }
+    });
+
     // Check for existing unseen messages first
-    process_unseen(&mut session, config, inbound_tx, seen_messages).await?;
+    process_unseen_account(
+        &mut session,
+        account_name,
+        config,
+        trigger_word,
+        &queue,
+        inbound_tx,
+        seen_messages,
+    )
+    .await?;
 
     // IDLE loop
     let idle_timeout = Duration::from_secs(config.idle_timeout_secs);
 
     loop {
-        // Start IDLE mode
         let mut idle = session.idle();
         idle.init().await.context("Failed to initialize IDLE")?;
-
-        debug!("Entering IMAP IDLE mode");
+        debug!(account = account_name, "Entering IMAP IDLE mode");
 
         let (wait_future, _stop_source) = idle.wait();
         let result = timeout(idle_timeout, wait_future).await;
 
         match result {
             Ok(Ok(response)) => {
-                debug!("IDLE response: {:?}", response);
-                // Done with IDLE, return session to normal mode
+                debug!(account = account_name, "IDLE response: {:?}", response);
                 session = idle.done().await.context("Failed to exit IDLE mode")?;
 
                 match response {
                     IdleResponse::NewData(_) => {
-                        debug!("New mail notification received");
-                        process_unseen(&mut session, config, inbound_tx, seen_messages).await?;
+                        debug!(account = account_name, "New mail notification");
+                        process_unseen_account(
+                            &mut session,
+                            account_name,
+                            config,
+                            trigger_word,
+                            &queue,
+                            inbound_tx,
+                            seen_messages,
+                        )
+                        .await?;
                     }
                     IdleResponse::Timeout => {
-                        // Re-check after IDLE timeout (defensive)
-                        process_unseen(&mut session, config, inbound_tx, seen_messages).await?;
+                        process_unseen_account(
+                            &mut session,
+                            account_name,
+                            config,
+                            trigger_word,
+                            &queue,
+                            inbound_tx,
+                            seen_messages,
+                        )
+                        .await?;
                     }
                     IdleResponse::ManualInterrupt => {
-                        info!("IDLE interrupted, exiting");
+                        info!(account = account_name, "IDLE interrupted, exiting");
                         let _ = session.logout().await;
                         return Ok(());
                     }
@@ -312,35 +506,49 @@ async fn run_imap_session(
                 return Err(anyhow!("IDLE error: {}", e));
             }
             Err(_) => {
-                // Timeout - RFC 2177 recommends restarting IDLE every 29 minutes
-                debug!("IDLE timeout reached, re-establishing");
+                debug!(account = account_name, "IDLE timeout, re-establishing");
                 session = idle.done().await.context("Failed to exit IDLE mode")?;
-                process_unseen(&mut session, config, inbound_tx, seen_messages).await?;
+                process_unseen_account(
+                    &mut session,
+                    account_name,
+                    config,
+                    trigger_word,
+                    &queue,
+                    inbound_tx,
+                    seen_messages,
+                )
+                .await?;
             }
         }
     }
 }
 
-/// Non-IDLE fallback (for IMAP servers without IDLE support)
 #[cfg(not(feature = "channel-email"))]
-async fn run_imap_session(
-    _config: &EmailConfig,
+async fn run_account_imap_session(
+    _account_name: &str,
+    _config: &EmailAccountConfig,
     _password: &str,
+    _trigger_word: Option<&str>,
     _inbound_tx: &mpsc::Sender<InboundMessage>,
     _seen_messages: &Arc<Mutex<HashSet<String>>>,
 ) -> Result<()> {
     anyhow::bail!("Email channel requires 'channel-email' feature to be enabled");
 }
 
-/// Fetch and process unseen messages
+// ---------------------------------------------------------------------------
+// Fetch & process unseen messages into the queue
+// ---------------------------------------------------------------------------
+
 #[cfg(feature = "channel-email")]
-async fn process_unseen(
+async fn process_unseen_account(
     session: &mut ImapSession,
-    config: &EmailConfig,
+    account_name: &str,
+    config: &EmailAccountConfig,
+    trigger_word: Option<&str>,
+    queue: &Arc<Mutex<BatchQueue<ParsedEmail>>>,
     inbound_tx: &mpsc::Sender<InboundMessage>,
     seen_messages: &Arc<Mutex<HashSet<String>>>,
 ) -> Result<()> {
-    // Search for unseen messages
     let uids = session
         .uid_search("UNSEEN")
         .await
@@ -349,7 +557,11 @@ async fn process_unseen(
         return Ok(());
     }
 
-    debug!("Found {} unseen messages", uids.len());
+    debug!(
+        account = account_name,
+        count = uids.len(),
+        "Unseen messages found"
+    );
 
     let uid_set: String = uids
         .iter()
@@ -357,7 +569,6 @@ async fn process_unseen(
         .collect::<Vec<_>>()
         .join(",");
 
-    // Fetch message bodies
     let fetch_stream = session
         .uid_fetch(&uid_set, "RFC822")
         .await
@@ -369,70 +580,97 @@ async fn process_unseen(
 
     for msg in messages {
         let uid = msg.uid.unwrap_or(0);
-        if let Some(body) = msg.body() {
-            if let Some(parsed) = MessageParser::default().parse(body) {
-                // Extract sender
-                let sender = parsed
-                    .from()
-                    .and_then(|addr| addr.first())
-                    .and_then(|a| a.address())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "unknown".into());
+        let Some(body) = msg.body() else {
+            continue;
+        };
+        let Some(parsed) = MessageParser::default().parse(body) else {
+            continue;
+        };
 
-                // Extract subject and body
-                let subject = parsed.subject().unwrap_or("(no subject)").to_string();
-                let body_text = if let Some(text) = parsed.body_text(0) {
-                    text.to_string()
-                } else if let Some(html) = parsed.body_html(0) {
-                    EmailChannel::strip_html(html.as_ref())
-                } else {
-                    "(no readable content)".to_string()
-                };
+        let sender = parsed
+            .from()
+            .and_then(|addr| addr.first())
+            .and_then(|a| a.address())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "unknown".into());
 
-                let content = format!("Subject: {}\n\n{}", subject, body_text);
-                let msg_id = parsed
-                    .message_id()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| format!("email-{}-{}", uid, chrono::Utc::now().timestamp()));
+        let subject = parsed.subject().unwrap_or("(no subject)").to_string();
+        let body_text = if let Some(text) = parsed.body_text(0) {
+            text.to_string()
+        } else if let Some(html) = parsed.body_html(0) {
+            EmailChannel::strip_html(html.as_ref())
+        } else {
+            "(no readable content)".to_string()
+        };
 
-                // Check allowlist
-                let config_clone = config.clone();
-                let is_allowed = {
-                    let email_channel = EmailChannel::new(config_clone);
-                    email_channel.is_sender_allowed(&sender)
-                };
+        let msg_id = parsed
+            .message_id()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("email-{uid}-{}", Utc::now().timestamp()));
 
-                if !is_allowed {
-                    warn!("Blocked email from {}", sender);
+        // Allowlist check
+        if !EmailChannel::is_sender_allowed(&sender, &config.allow_from) {
+            warn!(account = account_name, sender = %sender, "Blocked email");
+            continue;
+        }
+
+        // Deduplication
+        let is_new = {
+            let mut seen = seen_messages.lock().await;
+            seen.insert(msg_id.clone())
+        };
+        if !is_new {
+            continue;
+        }
+
+        // On-demand trigger check
+        if config.mode == EmailMode::OnDemand {
+            if let Some(tw) = trigger_word {
+                if !EmailChannel::matches_trigger(&subject, &body_text, tw) {
+                    debug!(
+                        account = account_name,
+                        subject = %subject,
+                        "On-demand: no trigger found, skipping"
+                    );
                     continue;
                 }
-
-                // Check if already seen
-                let is_new = {
-                    let mut seen = seen_messages.lock().await;
-                    seen.insert(msg_id.clone())
-                };
-                if !is_new {
-                    continue;
-                }
-
-                let inbound_msg = InboundMessage {
-                    channel: "email".to_string(),
-                    sender_id: sender.clone(),
-                    chat_id: sender.clone(), // Use sender email as chat_id
-                    content,
-                    timestamp: Utc::now(),
-                };
-
-                if inbound_tx.send(inbound_msg).await.is_err() {
-                    warn!("Channel closed, stopping email processing");
-                    return Ok(());
-                }
+                info!(
+                    account = account_name,
+                    subject = %subject,
+                    "On-demand: trigger matched, processing as assisted"
+                );
+            } else {
+                debug!(
+                    account = account_name,
+                    "On-demand: no trigger word configured, skipping"
+                );
+                continue;
             }
+        }
+
+        let email = ParsedEmail {
+            uid,
+            from: sender,
+            subject: subject.clone(),
+            body_text,
+            message_id: msg_id,
+        };
+
+        let item = QueueItem {
+            id: format!("{account_name}-{uid}"),
+            summary: format!("{} — \"{}\"", email.from, subject),
+            payload: email,
+            received_at: Utc::now(),
+        };
+
+        // Push to batch queue
+        let event = queue.lock().await.push(item);
+        if let Some(event) = event {
+            emit_queue_event(account_name, config, trigger_word, event, inbound_tx).await;
         }
     }
 
-    // Mark fetched messages as seen
+    // Mark as seen in IMAP
     if !uids.is_empty() {
         let _ = session.uid_store(&uid_set, "+FLAGS (\\Seen)").await;
     }
@@ -440,10 +678,120 @@ async fn process_unseen(
     Ok(())
 }
 
-/// Send an email via SMTP
+// ---------------------------------------------------------------------------
+// Queue event → InboundMessage emission
+// ---------------------------------------------------------------------------
+
+async fn emit_queue_event(
+    account_name: &str,
+    config: &EmailAccountConfig,
+    _trigger_word: Option<&str>,
+    event: QueueEvent<ParsedEmail>,
+    inbound_tx: &mpsc::Sender<InboundMessage>,
+) {
+    let channel_name = format!("email:{account_name}");
+    let mode_str = match config.mode {
+        EmailMode::Assisted => "assisted",
+        EmailMode::Automatic => "automatic",
+        EmailMode::OnDemand => "assisted", // on_demand triggers behave as assisted
+    };
+    let requires_approval = config.mode != EmailMode::Automatic;
+
+    match event {
+        QueueEvent::Single(item) => {
+            let email = &item.payload;
+            let content = format!("Subject: {}\n\n{}", email.subject, email.body_text);
+            let inbound = InboundMessage {
+                channel: channel_name,
+                sender_id: email.from.clone(),
+                chat_id: email.from.clone(),
+                content,
+                timestamp: Utc::now(),
+                metadata: Some(MessageMetadata {
+                    email_account: Some(account_name.to_string()),
+                    email_mode: Some(mode_str.to_string()),
+                    email_subject: Some(email.subject.clone()),
+                    email_message_id: Some(email.message_id.clone()),
+                    requires_approval,
+                    is_digest: false,
+                    ..Default::default()
+                }),
+            };
+
+            if inbound_tx.send(inbound).await.is_err() {
+                warn!(
+                    account = account_name,
+                    "Channel closed, email not delivered"
+                );
+            }
+        }
+        QueueEvent::Batch(items) => {
+            // Build digest content
+            let mut digest = format!(
+                "You have {} new emails on [{}]:\n",
+                items.len(),
+                account_name
+            );
+            for (i, item) in items.iter().enumerate() {
+                digest.push_str(&format!(
+                    "{}. {} — \"{}\"\n",
+                    i + 1,
+                    item.payload.from,
+                    item.payload.subject
+                ));
+            }
+            digest.push_str(
+                "\nHow should I proceed?\n\
+                 - \"reply to all\" — process one by one\n\
+                 - \"remind me at HH:MM\" — snooze and re-notify\n\
+                 - \"I'll handle them\" — mark as read, no action\n\
+                 - \"reply to N\" — process only that email\n\
+                 - \"ignore N\" — skip that email",
+            );
+
+            // Use the first sender as chat_id (the digest is sent to the notify channel anyway)
+            let first_sender = items
+                .first()
+                .map(|i| i.payload.from.clone())
+                .unwrap_or_default();
+
+            let inbound = InboundMessage {
+                channel: channel_name,
+                sender_id: first_sender.clone(),
+                chat_id: first_sender,
+                content: digest,
+                timestamp: Utc::now(),
+                metadata: Some(MessageMetadata {
+                    email_account: Some(account_name.to_string()),
+                    email_mode: Some(mode_str.to_string()),
+                    email_subject: None,
+                    email_message_id: None,
+                    requires_approval: true,
+                    is_digest: true,
+                    ..Default::default()
+                }),
+            };
+
+            if inbound_tx.send(inbound).await.is_err() {
+                warn!(
+                    account = account_name,
+                    "Channel closed, digest not delivered"
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SMTP sending (per-account)
+// ---------------------------------------------------------------------------
+
 #[cfg(feature = "channel-email")]
-async fn send_email(config: &EmailConfig, password: &str, msg: &OutboundMessage) -> Result<()> {
-    // Parse subject and body from content
+async fn send_email_account(
+    config: &EmailAccountConfig,
+    password: &str,
+    msg: &OutboundMessage,
+) -> Result<()> {
     let (subject, body) = if msg.content.starts_with("Subject: ") {
         if let Some(pos) = msg.content.find('\n') {
             (&msg.content[9..pos], msg.content[pos + 1..].trim())
@@ -483,21 +831,30 @@ async fn send_email(config: &EmailConfig, password: &str, msg: &OutboundMessage)
 
     transport.send(&email).context("Failed to send email")?;
 
-    info!("Email sent to {}", msg.chat_id);
+    info!(to = %msg.chat_id, "Email sent");
     Ok(())
 }
 
 #[cfg(not(feature = "channel-email"))]
-async fn send_email(_config: &EmailConfig, _password: &str, _msg: &OutboundMessage) -> Result<()> {
+async fn send_email_account(
+    _config: &EmailAccountConfig,
+    _password: &str,
+    _msg: &OutboundMessage,
+) -> Result<()> {
     anyhow::bail!("Email channel requires 'channel-email' feature to be enabled");
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::EmailAccountConfig;
 
-    fn test_config() -> EmailConfig {
-        EmailConfig {
+    fn test_account() -> EmailAccountConfig {
+        EmailAccountConfig {
             enabled: true,
             imap_host: "imap.example.com".to_string(),
             imap_port: 993,
@@ -510,54 +867,56 @@ mod tests {
             from_address: "bot@example.com".to_string(),
             idle_timeout_secs: 1740,
             allow_from: vec![],
+            pairing_required: false,
+            mode: EmailMode::Assisted,
+            notify_channel: None,
+            notify_chat_id: None,
+            trigger_word: None,
+            batch_threshold: 3,
+            batch_window_secs: 120,
+            send_delay_secs: 30,
         }
     }
 
     #[test]
-    fn test_email_channel_name() {
-        let channel = EmailChannel::new(test_config());
-        assert_eq!(channel.name(), "email");
-    }
-
-    #[test]
     fn test_is_sender_allowed_empty_list() {
-        let channel = EmailChannel::new(test_config());
-        assert!(!channel.is_sender_allowed("anyone@example.com"));
+        assert!(!EmailChannel::is_sender_allowed("anyone@example.com", &[]));
     }
 
     #[test]
     fn test_is_sender_allowed_wildcard() {
-        let mut config = test_config();
-        config.allow_from = vec!["*".to_string()];
-        let channel = EmailChannel::new(config);
-        assert!(channel.is_sender_allowed("anyone@example.com"));
+        let allow = vec!["*".to_string()];
+        assert!(EmailChannel::is_sender_allowed(
+            "anyone@example.com",
+            &allow
+        ));
     }
 
     #[test]
     fn test_is_sender_allowed_specific_email() {
-        let mut config = test_config();
-        config.allow_from = vec!["allowed@example.com".to_string()];
-        let channel = EmailChannel::new(config);
-        assert!(channel.is_sender_allowed("allowed@example.com"));
-        assert!(!channel.is_sender_allowed("other@example.com"));
+        let allow = vec!["allowed@example.com".to_string()];
+        assert!(EmailChannel::is_sender_allowed(
+            "allowed@example.com",
+            &allow
+        ));
+        assert!(!EmailChannel::is_sender_allowed(
+            "other@example.com",
+            &allow
+        ));
     }
 
     #[test]
     fn test_is_sender_allowed_domain() {
-        let mut config = test_config();
-        config.allow_from = vec!["@example.com".to_string()];
-        let channel = EmailChannel::new(config);
-        assert!(channel.is_sender_allowed("user@example.com"));
-        assert!(!channel.is_sender_allowed("user@other.com"));
+        let allow = vec!["@example.com".to_string()];
+        assert!(EmailChannel::is_sender_allowed("user@example.com", &allow));
+        assert!(!EmailChannel::is_sender_allowed("user@other.com", &allow));
     }
 
     #[test]
     fn test_is_sender_allowed_domain_without_at() {
-        let mut config = test_config();
-        config.allow_from = vec!["example.com".to_string()];
-        let channel = EmailChannel::new(config);
-        assert!(channel.is_sender_allowed("user@example.com"));
-        assert!(!channel.is_sender_allowed("user@other.com"));
+        let allow = vec!["example.com".to_string()];
+        assert!(EmailChannel::is_sender_allowed("user@example.com", &allow));
+        assert!(!EmailChannel::is_sender_allowed("user@other.com", &allow));
     }
 
     #[test]
@@ -572,10 +931,53 @@ mod tests {
 
     #[test]
     fn test_config_is_configured() {
-        let config = test_config();
+        let config = test_account();
         assert!(config.is_configured());
 
-        let mut empty_config = EmailConfig::default();
-        assert!(!empty_config.is_configured());
+        let empty = EmailAccountConfig::default();
+        assert!(!empty.is_configured());
+    }
+
+    #[test]
+    fn test_trigger_word_generation() {
+        let tw = generate_trigger_word();
+        assert!(tw.starts_with("hm-"));
+        assert_eq!(tw.len(), 9); // "hm-" + 6 chars
+    }
+
+    #[test]
+    fn test_matches_trigger() {
+        assert!(EmailChannel::matches_trigger(
+            "Help @homun with this",
+            "",
+            "secret"
+        ));
+        assert!(EmailChannel::matches_trigger(
+            "normal subject",
+            "body with @homun mention",
+            "secret"
+        ));
+        assert!(EmailChannel::matches_trigger(
+            "normal subject",
+            "body with secret word",
+            "secret"
+        ));
+        assert!(!EmailChannel::matches_trigger(
+            "normal subject",
+            "normal body",
+            "secret"
+        ));
+        // Case insensitive
+        assert!(EmailChannel::matches_trigger(
+            "SUBJECT @HOMUN",
+            "",
+            "secret"
+        ));
+    }
+
+    #[test]
+    fn test_email_mode_default_is_assisted() {
+        let config = EmailAccountConfig::default();
+        assert_eq!(config.mode, EmailMode::Assisted);
     }
 }

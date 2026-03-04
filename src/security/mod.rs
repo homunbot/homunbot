@@ -48,6 +48,7 @@
 //! - **Exfiltration detection** for API keys, tokens, passwords
 
 mod exfiltration;
+mod pairing;
 mod vault_leak;
 
 #[cfg(feature = "vault-2fa")]
@@ -60,6 +61,7 @@ pub use exfiltration::{
     global_filter, init_global_filter, redact, scan, Detection, ExfilConfig, ExfilFilter,
     ScanResult, Severity,
 };
+pub use pairing::PairingManager;
 pub use vault_leak::redact_vault_values;
 
 #[cfg(feature = "vault-2fa")]

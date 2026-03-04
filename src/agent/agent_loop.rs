@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -7,7 +8,9 @@ use tokio::sync::{mpsc, RwLock};
 use crate::bus::OutboundMessage;
 use crate::config::Config;
 use crate::provider::xml_dispatcher;
-use crate::provider::{ChatMessage, ChatRequest, Provider, ToolCallFunction, ToolCallSerialized, Usage};
+use crate::provider::{
+    ChatMessage, ChatRequest, Provider, ToolCallFunction, ToolCallSerialized, Usage,
+};
 use crate::security::{redact, redact_vault_values};
 use crate::session::SessionManager;
 use crate::skills::loader::SkillRegistry;
@@ -184,6 +187,11 @@ impl AgentLoop {
         self.context.set_channels_info(channels);
     }
 
+    /// Inject email account details (name + mode) into the system prompt.
+    pub fn set_email_accounts_info(&mut self, accounts: &[(String, crate::config::EmailMode)]) {
+        self.context.set_email_accounts_info(accounts);
+    }
+
     /// Process a single user message and return the assistant's response.
     /// This runs the full ReAct loop: reason → act → observe → loop.
     ///
@@ -199,7 +207,21 @@ impl AgentLoop {
         channel: &str,
         chat_id: &str,
     ) -> Result<String> {
-        self.process_message_inner(content, session_key, channel, chat_id, None)
+        self.process_message_inner(content, session_key, channel, chat_id, None, &[])
+            .await
+    }
+
+    /// Process a message while disabling a subset of tools for this request.
+    /// Useful for constrained contexts such as automation runs.
+    pub async fn process_message_with_blocked_tools(
+        &self,
+        content: &str,
+        session_key: &str,
+        channel: &str,
+        chat_id: &str,
+        blocked_tools: &[&str],
+    ) -> Result<String> {
+        self.process_message_inner(content, session_key, channel, chat_id, None, blocked_tools)
             .await
     }
 
@@ -213,8 +235,29 @@ impl AgentLoop {
         chat_id: &str,
         stream_tx: mpsc::Sender<crate::provider::StreamChunk>,
     ) -> Result<String> {
-        self.process_message_inner(content, session_key, channel, chat_id, Some(stream_tx))
+        self.process_message_inner(content, session_key, channel, chat_id, Some(stream_tx), &[])
             .await
+    }
+
+    /// Streaming variant with per-request blocked tools.
+    pub async fn process_message_streaming_with_blocked_tools(
+        &self,
+        content: &str,
+        session_key: &str,
+        channel: &str,
+        chat_id: &str,
+        stream_tx: mpsc::Sender<crate::provider::StreamChunk>,
+        blocked_tools: &[&str],
+    ) -> Result<String> {
+        self.process_message_inner(
+            content,
+            session_key,
+            channel,
+            chat_id,
+            Some(stream_tx),
+            blocked_tools,
+        )
+        .await
     }
 
     async fn process_message_inner(
@@ -224,7 +267,10 @@ impl AgentLoop {
         channel: &str,
         chat_id: &str,
         stream_tx: Option<mpsc::Sender<crate::provider::StreamChunk>>,
+        blocked_tools: &[&str],
     ) -> Result<String> {
+        let blocked_set: HashSet<&str> = blocked_tools.iter().copied().collect();
+
         // Snapshot config for this request — picks up any changes from web UI.
         // Clone + drop lock immediately to avoid holding across LLM calls.
         let config = self.config.read().await.clone();
@@ -346,6 +392,10 @@ impl AgentLoop {
             }
         }
 
+        if !blocked_set.is_empty() {
+            tool_defs.retain(|td| !blocked_set.contains(td.function.name.as_str()));
+        }
+
         let has_tools = !tool_defs.is_empty();
         let xml_mode = self.use_xml_dispatch.load(Ordering::Relaxed);
 
@@ -461,7 +511,8 @@ impl AgentLoop {
                             // (especially on free-tier models with aggressive limits)
                             let delay_ms = config.agent.xml_fallback_delay_ms;
                             if delay_ms > 0 {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms))
+                                    .await;
                             }
 
                             let xml_tool_infos: Vec<crate::agent::ToolInfo> = tool_defs
@@ -530,7 +581,10 @@ impl AgentLoop {
                                 // Brief delay before retrying to avoid hitting rate limits
                                 let delay_ms = config.agent.xml_fallback_delay_ms;
                                 if delay_ms > 0 {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(
+                                        delay_ms,
+                                    ))
+                                    .await;
                                 }
 
                                 // Rebuild system prompt from scratch with tools in XML mode.
@@ -668,7 +722,12 @@ impl AgentLoop {
                     // --- OBSERVE: Execute and add result ---
                     // First check if this is a registered tool; if not, check
                     // if it matches an installed skill (on-demand body loading).
-                    let result = if self.tool_registry.get(&tool_call.name).is_some() {
+                    let result = if blocked_set.contains(tool_call.name.as_str()) {
+                        crate::tools::ToolResult::error(format!(
+                            "Tool '{}' is disabled in this execution context.",
+                            tool_call.name
+                        ))
+                    } else if self.tool_registry.get(&tool_call.name).is_some() {
                         self.tool_registry
                             .execute(&tool_call.name, tool_call.arguments.clone(), &tool_ctx)
                             .await
@@ -981,7 +1040,14 @@ impl AgentLoop {
                             }
 
                             // Session compaction: prune old messages after consolidation
-                            Self::try_compact(&memory, &session_key, memory_window, provider.as_ref(), &model).await;
+                            Self::try_compact(
+                                &memory,
+                                &session_key,
+                                memory_window,
+                                provider.as_ref(),
+                                &model,
+                            )
+                            .await;
                         }
                         Err(e) => {
                             tracing::error!(

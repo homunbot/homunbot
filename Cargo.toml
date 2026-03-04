@@ -104,6 +104,9 @@ whoami = "1.5"
 # Security - Encrypted secrets storage (core)
 ring = "0.17"
 base64 = "0.22"
+# TLS: rustls requires explicit CryptoProvider since v0.23
+# Multiple transitive deps enable both ring and aws-lc-rs, so we pin ring
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 keyring = { version = "3", features = ["apple-native", "linux-native", "windows-native"] }
 zeroize = "1"
 
@@ -174,7 +177,7 @@ rand = { version = "0.8", optional = true }
 lettre = { version = "0.11", optional = true, default-features = false, features = ["builder", "smtp-transport", "rustls-tls"] }
 mail-parser = { version = "0.11", optional = true }
 async-imap = { version = "0.11", optional = true, default-features = false, features = ["runtime-tokio"] }
-tokio-rustls = { version = "0.26", optional = true }
+tokio-rustls = { version = "0.26", optional = true, features = ["ring"] }
 rustls-pki-types = { version = "1", optional = true }
 webpki-roots = { version = "0.26", optional = true }
 

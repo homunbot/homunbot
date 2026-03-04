@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -40,10 +41,14 @@ impl DiscordChannel {
             "Discord channel starting"
         );
 
+        let mention_required = self.config.mention_required;
+
         let handler = Handler {
             inbound_tx,
             allow_from,
             allow_all,
+            mention_required,
+            bot_user_id: Arc::new(AtomicU64::new(0)),
         };
 
         let intents = GatewayIntents::GUILD_MESSAGES
@@ -81,6 +86,8 @@ struct Handler {
     inbound_tx: mpsc::Sender<InboundMessage>,
     allow_from: HashSet<String>,
     allow_all: bool,
+    mention_required: bool,
+    bot_user_id: Arc<AtomicU64>,
 }
 
 #[async_trait]
@@ -104,9 +111,30 @@ impl EventHandler for Handler {
             return;
         }
 
-        let text = msg.content.clone();
+        let mut text = msg.content.clone();
         if text.is_empty() {
             return;
+        }
+
+        // Mention gating: in guilds, only respond when @mentioned
+        let is_dm = msg.guild_id.is_none();
+        if !is_dm && self.mention_required {
+            let bot_id = self.bot_user_id.load(Ordering::Relaxed);
+            if bot_id == 0 {
+                return; // Bot ID not yet known (ready hasn't fired)
+            }
+            let mentioned = msg.mentions.iter().any(|u| u.id.get() == bot_id);
+            if !mentioned {
+                return; // Not addressed to us
+            }
+            // Strip mention tags from text: <@123> or <@!123>
+            text = text
+                .replace(&format!("<@{bot_id}>"), "")
+                .replace(&format!("<@!{bot_id}>"), "");
+            text = text.trim().to_string();
+            if text.is_empty() {
+                return;
+            }
         }
 
         // Handle commands
@@ -138,12 +166,16 @@ impl EventHandler for Handler {
             "Discord: received message"
         );
 
+        // Send typing indicator
+        let _ = ctx.http.broadcast_typing(msg.channel_id).await;
+
         let inbound = InboundMessage {
             channel: "discord".to_string(),
             sender_id,
             chat_id: chat_id.clone(),
             content: text,
             timestamp: chrono::Utc::now(),
+            metadata: None,
         };
 
         if let Err(e) = self.inbound_tx.send(inbound).await {
@@ -162,8 +194,13 @@ impl EventHandler for Handler {
     }
 
     async fn ready(&self, ctx: Context, ready: Ready) {
+        // Store bot user ID for mention detection
+        self.bot_user_id
+            .store(ready.user.id.get(), Ordering::Relaxed);
+
         tracing::info!(
             user = %ready.user.name,
+            bot_id = %ready.user.id,
             "Discord bot connected"
         );
 

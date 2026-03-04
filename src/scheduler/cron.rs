@@ -4,15 +4,24 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::sync::{mpsc, Mutex};
 
-use crate::storage::{CronJobRow, Database};
+use crate::storage::{AutomationRow, AutomationUpdate, CronJobRow, Database};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScheduledKind {
+    Cron,
+    Automation,
+}
 
 /// Message sent when a cron job fires
 #[derive(Debug, Clone)]
 pub struct CronEvent {
+    pub kind: ScheduledKind,
     pub job_id: String,
     pub job_name: String,
     pub message: String,
     pub deliver_to: Option<String>,
+    /// Present for automation events to track end-to-end lifecycle.
+    pub automation_run_id: Option<String>,
 }
 
 /// Cron scheduler — manages recurring and one-shot jobs.
@@ -76,9 +85,17 @@ impl CronScheduler {
         }
     }
 
-    /// Check all enabled jobs and fire any that are due
+    /// Check all enabled scheduled jobs (cron + automations) and fire any that are due.
     async fn check_and_fire(&self) -> Result<()> {
-        let jobs = self.jobs.lock().await;
+        // Keep cron cache fresh and process both domains in a single scheduler loop.
+        self.reload().await?;
+        self.check_and_fire_cron().await?;
+        self.check_and_fire_automations().await?;
+        Ok(())
+    }
+
+    async fn check_and_fire_cron(&self) -> Result<()> {
+        let jobs = self.jobs.lock().await.clone();
         let now = chrono::Utc::now();
 
         for job in jobs.iter() {
@@ -86,43 +103,7 @@ impl CronScheduler {
                 continue;
             }
 
-            let should_fire = match parse_schedule(&job.schedule) {
-                ScheduleKind::Every(secs) => {
-                    // Check if enough time has passed since last run
-                    match &job.last_run {
-                        Some(last) => {
-                            if let Ok(last_time) =
-                                chrono::NaiveDateTime::parse_from_str(last, "%Y-%m-%d %H:%M:%S")
-                            {
-                                let last_utc = last_time.and_utc();
-                                (now - last_utc).num_seconds() >= secs as i64
-                            } else {
-                                true // Can't parse last_run, fire
-                            }
-                        }
-                        None => true, // Never run before
-                    }
-                }
-                ScheduleKind::Cron(expr) => {
-                    // Simple cron check: match current time against expression
-                    cron_matches_now(&expr, &now)
-                }
-                ScheduleKind::At(target) => {
-                    // One-time: fire if we're past the target time and never run
-                    if let Ok(target_time) =
-                        chrono::NaiveDateTime::parse_from_str(&target, "%Y-%m-%dT%H:%M:%S")
-                    {
-                        let target_utc = target_time.and_utc();
-                        now >= target_utc && job.last_run.is_none()
-                    } else {
-                        false
-                    }
-                }
-                ScheduleKind::Unknown => {
-                    tracing::warn!(schedule = %job.schedule, "Unknown schedule format");
-                    false
-                }
-            };
+            let should_fire = should_fire_schedule(&job.schedule, job.last_run.as_deref(), &now);
 
             if should_fire {
                 tracing::info!(
@@ -132,10 +113,12 @@ impl CronScheduler {
                 );
 
                 let event = CronEvent {
+                    kind: ScheduledKind::Cron,
                     job_id: job.id.clone(),
                     job_name: job.name.clone(),
                     message: job.message.clone(),
                     deliver_to: job.deliver_to.clone(),
+                    automation_run_id: None,
                 };
 
                 if let Err(e) = self.event_tx.send(event).await {
@@ -146,6 +129,146 @@ impl CronScheduler {
                 if let Err(e) = self.db.update_cron_last_run(&job.id).await {
                     tracing::error!(error = %e, "Failed to update cron job last_run");
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn check_and_fire_automations(&self) -> Result<()> {
+        let now = chrono::Utc::now();
+        let automations = self.db.load_automations().await?;
+        let runtime_config = crate::config::Config::load().ok();
+
+        for automation in automations {
+            if !automation.enabled {
+                continue;
+            }
+
+            let mut effective_status = automation.status.clone();
+            if let Some(cfg) = runtime_config.as_ref() {
+                let compiled =
+                    crate::scheduler::automations::compile_automation_plan(&automation.prompt, cfg);
+                let plan_json = compiled.plan_json();
+                let dependencies_json = compiled.dependencies_json();
+                let validation_errors_json = compiled.validation_errors_json();
+                let desired_status = if compiled.is_valid() {
+                    "active".to_string()
+                } else {
+                    "invalid_config".to_string()
+                };
+
+                let needs_update = automation.plan_json.as_deref() != Some(plan_json.as_str())
+                    || automation.dependencies_json != dependencies_json
+                    || automation.plan_version != compiled.plan.version
+                    || automation.validation_errors.as_deref() != validation_errors_json.as_deref()
+                    || automation.status != desired_status;
+
+                if needs_update {
+                    let mut update = AutomationUpdate {
+                        status: Some(desired_status.clone()),
+                        plan_json: Some(Some(plan_json)),
+                        dependencies_json: Some(Some(dependencies_json)),
+                        plan_version: Some(compiled.plan.version),
+                        validation_errors: Some(validation_errors_json.clone()),
+                        ..Default::default()
+                    };
+                    if !compiled.is_valid() {
+                        update.last_result = Some(Some(format!(
+                            "Automation configuration invalid: {}",
+                            compiled.validation_errors.join(" | ")
+                        )));
+                    }
+                    let _ = self.db.update_automation(&automation.id, update).await;
+                }
+                effective_status = desired_status;
+            }
+
+            if effective_status.eq_ignore_ascii_case("paused")
+                || effective_status.eq_ignore_ascii_case("invalid_config")
+            {
+                continue;
+            }
+
+            let should_fire =
+                should_fire_schedule(&automation.schedule, automation.last_run.as_deref(), &now);
+            if !should_fire {
+                continue;
+            }
+
+            let run_id = uuid::Uuid::new_v4().to_string();
+            let queued_msg = "Scheduled run queued".to_string();
+
+            if let Err(e) = self
+                .db
+                .insert_automation_run(&run_id, &automation.id, "queued", Some(&queued_msg))
+                .await
+            {
+                tracing::error!(
+                    error = %e,
+                    automation_id = %automation.id,
+                    "Failed to insert automation run"
+                );
+                continue;
+            }
+
+            let _ = self
+                .db
+                .update_automation(
+                    &automation.id,
+                    AutomationUpdate {
+                        status: Some("active".to_string()),
+                        last_result: Some(Some(queued_msg.clone())),
+                        touch_last_run: true,
+                        ..Default::default()
+                    },
+                )
+                .await;
+
+            tracing::info!(
+                automation_id = %automation.id,
+                automation_name = %automation.name,
+                run_id = %run_id,
+                "Automation firing"
+            );
+
+            let runtime_prompt = crate::scheduler::automations::build_runtime_run_input_from_plan(
+                automation.plan_json.as_deref(),
+                &automation.prompt,
+            );
+
+            let event = CronEvent {
+                kind: ScheduledKind::Automation,
+                job_id: automation.id.clone(),
+                job_name: automation.name.clone(),
+                message: runtime_prompt,
+                deliver_to: automation.deliver_to.clone(),
+                automation_run_id: Some(run_id.clone()),
+            };
+
+            if let Err(e) = self.event_tx.send(event).await {
+                tracing::error!(error = %e, "Failed to send automation event");
+                let _ = self
+                    .db
+                    .complete_automation_run(
+                        &run_id,
+                        "error",
+                        Some("Failed to enqueue automation event"),
+                    )
+                    .await;
+                let _ = self
+                    .db
+                    .update_automation(
+                        &automation.id,
+                        AutomationUpdate {
+                            status: Some("error".to_string()),
+                            last_result: Some(Some(
+                                "Failed to enqueue automation event".to_string(),
+                            )),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
             }
         }
 
@@ -193,6 +316,43 @@ impl CronScheduler {
     }
 }
 
+fn should_fire_schedule(
+    schedule: &str,
+    last_run: Option<&str>,
+    now: &chrono::DateTime<chrono::Utc>,
+) -> bool {
+    match parse_schedule(schedule) {
+        ScheduleKind::Every(secs) => match last_run {
+            Some(last) => {
+                if let Ok(last_time) =
+                    chrono::NaiveDateTime::parse_from_str(last, "%Y-%m-%d %H:%M:%S")
+                {
+                    let last_utc = last_time.and_utc();
+                    (now.to_owned() - last_utc).num_seconds() >= secs as i64
+                } else {
+                    true
+                }
+            }
+            None => true,
+        },
+        ScheduleKind::Cron(expr) => cron_matches_now(&expr, now),
+        ScheduleKind::At(target) => {
+            if let Ok(target_time) =
+                chrono::NaiveDateTime::parse_from_str(&target, "%Y-%m-%dT%H:%M:%S")
+            {
+                let target_utc = target_time.and_utc();
+                now.to_owned() >= target_utc && last_run.is_none()
+            } else {
+                false
+            }
+        }
+        ScheduleKind::Unknown => {
+            tracing::warn!(schedule = %schedule, "Unknown schedule format");
+            false
+        }
+    }
+}
+
 // --- Schedule parsing ---
 
 enum ScheduleKind {
@@ -210,7 +370,11 @@ fn parse_schedule(schedule: &str) -> ScheduleKind {
     }
 
     if let Some(expr) = schedule.strip_prefix("cron:") {
-        return ScheduleKind::Cron(expr.trim().to_string());
+        if let Some(normalized) = normalize_cron_expr(expr) {
+            return ScheduleKind::Cron(normalized);
+        }
+        tracing::warn!(schedule = %schedule, "Invalid cron schedule format");
+        return ScheduleKind::Unknown;
     }
 
     if let Some(ts) = schedule.strip_prefix("at:") {
@@ -218,9 +382,8 @@ fn parse_schedule(schedule: &str) -> ScheduleKind {
     }
 
     // Try to guess: if it looks like a cron expression (has spaces and numbers)
-    let parts: Vec<&str> = schedule.split_whitespace().collect();
-    if parts.len() == 5 {
-        return ScheduleKind::Cron(schedule.to_string());
+    if let Some(normalized) = normalize_cron_expr(schedule) {
+        return ScheduleKind::Cron(normalized);
     }
 
     // Try as seconds (bare number fallback) — enforce minimum 60s
@@ -239,11 +402,31 @@ fn parse_schedule(schedule: &str) -> ScheduleKind {
     ScheduleKind::Unknown
 }
 
+/// Normalize cron expression to 5-field format (MIN HOUR DOM MON DOW).
+///
+/// Supports two 6-field legacy variants for compatibility:
+/// - trailing wildcard mistake: `0 8 * * * *` -> `0 8 * * *`
+/// - leading seconds format: `0 0 8 * * *` -> `0 8 * * *`
+fn normalize_cron_expr(expr: &str) -> Option<String> {
+    let parts: Vec<&str> = expr.split_whitespace().collect();
+    match parts.len() {
+        5 => Some(parts.join(" ")),
+        6 if parts[2] == "*" => Some(parts[..5].join(" ")),
+        6 if parts[0] == "0" => Some(parts[1..].join(" ")),
+        _ => None,
+    }
+}
+
 /// Simple cron expression matching against current time.
 /// Supports: minute hour day_of_month month day_of_week
 /// Supports: * (any), specific numbers, comma-separated lists
 fn cron_matches_now(expr: &str, now: &chrono::DateTime<chrono::Utc>) -> bool {
-    let parts: Vec<&str> = expr.split_whitespace().collect();
+    let normalized = match normalize_cron_expr(expr) {
+        Some(v) => v,
+        None => return false,
+    };
+
+    let parts: Vec<&str> = normalized.split_whitespace().collect();
     if parts.len() != 5 {
         return false;
     }
@@ -343,6 +526,22 @@ mod tests {
     fn test_parse_schedule_bare_cron() {
         match parse_schedule("0 9 * * *") {
             ScheduleKind::Cron(e) => assert_eq!(e, "0 9 * * *"),
+            _ => panic!("Expected Cron"),
+        }
+    }
+
+    #[test]
+    fn test_parse_schedule_cron_trailing_wildcard_normalized() {
+        match parse_schedule("cron:0 8 * * * *") {
+            ScheduleKind::Cron(e) => assert_eq!(e, "0 8 * * *"),
+            _ => panic!("Expected Cron"),
+        }
+    }
+
+    #[test]
+    fn test_parse_schedule_cron_leading_seconds_normalized() {
+        match parse_schedule("cron:0 0 8 * * *") {
+            ScheduleKind::Cron(e) => assert_eq!(e, "0 8 * * *"),
             _ => panic!("Expected Cron"),
         }
     }

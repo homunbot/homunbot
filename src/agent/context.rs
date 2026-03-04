@@ -196,14 +196,65 @@ impl ContextBuilder {
             return;
         }
         let mut info = String::from("\n\n## Available Channels\n");
-        info.push_str("You can send messages to the user on any of these channels using the `send_message` tool ");
-        info.push_str("with the `channel` and `chat_id` parameters:\n");
+        info.push_str("You can send messages using the `send_message` tool ");
+        info.push_str("with `channel` and `chat_id` parameters:\n");
         for (name, chat_id) in channels {
-            info.push_str(&format!("- **{name}**: chat_id = `{chat_id}`\n"));
+            info.push_str(&format!("- **{name}**: default chat_id = `{chat_id}`\n"));
         }
-        info.push_str("\nWhen the user asks you to reply on a different channel (e.g. \"rispondimi su WhatsApp\"), ");
+        info.push_str("\n### Cross-channel messaging\n");
+        info.push_str("When the user asks you to reply on a different channel (e.g. \"rispondimi su WhatsApp\"), ");
         info.push_str("use `send_message` with the appropriate channel and chat_id from above.\n");
+        info.push_str("\n### Sending emails\n");
+        info.push_str("To send an email, use `send_message` with the email channel name (e.g. `channel=\"email:lavoro\"`) ");
+        info.push_str(
+            "and `chat_id` set to the **recipient's email address** (not the bot's address).\n",
+        );
+        info.push_str(
+            "Format the content as: `Subject: <subject>\\n<body>` to set the subject line.\n",
+        );
+        info.push_str(
+            "If no `Subject:` prefix is provided, the subject defaults to \"Homun Response\".\n",
+        );
         self.channels_info = info;
+    }
+
+    /// Set email account details in the system prompt.
+    ///
+    /// Informs the agent about each email account's mode and behavior.
+    pub fn set_email_accounts_info(&mut self, accounts: &[(String, crate::config::EmailMode)]) {
+        if accounts.is_empty() {
+            return;
+        }
+        let mut info = String::from("\n\n## Email Accounts\n");
+        info.push_str("You manage the following email accounts:\n\n");
+        for (name, mode) in accounts {
+            let mode_desc = match mode {
+                crate::config::EmailMode::Assisted => {
+                    "ASSISTED — When you receive an email on this account, \
+                     generate a summary and a draft reply. Present both to the user \
+                     on the notify channel and wait for approval before sending."
+                }
+                crate::config::EmailMode::Automatic => {
+                    "AUTOMATIC — Respond directly to emails when you have enough information. \
+                     If you lack info or the response would include vault secrets, \
+                     escalate to assisted mode (show summary + draft on notify channel)."
+                }
+                crate::config::EmailMode::OnDemand => {
+                    "ON-DEMAND — Only process emails containing a trigger word. \
+                     When triggered, behave as ASSISTED (summary + draft + approval)."
+                }
+            };
+            info.push_str(&format!("- **{name}**: {mode_desc}\n"));
+        }
+        info.push_str("\n### Email Security Rules\n");
+        info.push_str(
+            "- NEVER include vault secrets (API keys, passwords, tokens) in email responses.\n",
+        );
+        info.push_str(
+            "- If a response would contain vault data, always escalate to assisted mode.\n",
+        );
+        info.push_str("- When in batch/digest mode, present the digest to the user and wait for instructions.\n");
+        self.channels_info.push_str(&info);
     }
 
     /// Build the system prompt using the new modular system.

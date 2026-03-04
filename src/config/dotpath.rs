@@ -364,7 +364,10 @@ mod tests {
         let mut config = Config::default();
         let models = serde_json::json!(["openai/gpt-4o", "ollama/llama3"]);
         config_set_value(&mut config, "agent.fallback_models", models).unwrap();
-        assert_eq!(config.agent.fallback_models, vec!["openai/gpt-4o", "ollama/llama3"]);
+        assert_eq!(
+            config.agent.fallback_models,
+            vec!["openai/gpt-4o", "ollama/llama3"]
+        );
     }
 
     #[test]

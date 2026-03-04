@@ -12,6 +12,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/", get(dashboard))
         .route("/setup", get(setup_page))
         .route("/chat", get(chat_page))
+        .route("/automations", get(automations_page))
         .route("/skills", get(skills_page))
         .route("/memory", get(memory_page))
         .route("/vault", get(vault_page))
@@ -26,6 +27,7 @@ pub fn router() -> Router<Arc<AppState>> {
 /// SVG icons used in the sidebar nav
 const ICON_DASHBOARD: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="1" width="7" height="7" rx="1.5"/><rect x="10" y="1" width="7" height="4" rx="1.5"/><rect x="1" y="10" width="7" height="4" rx="1.5" transform="translate(0,3)"/><rect x="10" y="7" width="7" height="7" rx="1.5" transform="translate(0,3)"/></svg>"#;
 const ICON_CHAT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12.5V3.5A1.5 1.5 0 0 1 3.5 2h11A1.5 1.5 0 0 1 16 3.5v7a1.5 1.5 0 0 1-1.5 1.5H6L2 16V12.5z"/><line x1="6" y1="6" x2="12" y2="6"/><line x1="6" y1="9" x2="10" y2="9"/></svg>"#;
+const ICON_AUTOMATIONS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="6.5"/><path d="M9 5.5v4l2.8 1.8"/><path d="M9 1v1.5M9 15.5V17M1 9h1.5M15.5 9H17"/></svg>"#;
 const ICON_SKILLS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1L11.5 6.5 17 7.5 13 11.5 14 17 9 14.5 4 17 5 11.5 1 7.5 6.5 6.5z"/></svg>"#;
 const ICON_SETTINGS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="2.5"/><path d="M14.7 11.1a1.2 1.2 0 0 0 .24 1.32l.04.04a1.44 1.44 0 1 1-2.04 2.04l-.04-.04a1.2 1.2 0 0 0-1.32-.24 1.2 1.2 0 0 0-.72 1.08v.12a1.44 1.44 0 0 1-2.88 0v-.06a1.2 1.2 0 0 0-.78-1.08 1.2 1.2 0 0 0-1.32.24l-.04.04a1.44 1.44 0 1 1-2.04-2.04l.04-.04a1.2 1.2 0 0 0 .24-1.32 1.2 1.2 0 0 0-1.08-.72h-.12a1.44 1.44 0 0 1 0-2.88h.06a1.2 1.2 0 0 0 1.08-.78 1.2 1.2 0 0 0-.24-1.32l-.04-.04a1.44 1.44 0 1 1 2.04-2.04l.04.04a1.2 1.2 0 0 0 1.32.24h.06a1.2 1.2 0 0 0 .72-1.08V2.88a1.44 1.44 0 0 1 2.88 0v.06a1.2 1.2 0 0 0 .72 1.08 1.2 1.2 0 0 0 1.32-.24l.04-.04a1.44 1.44 0 1 1 2.04 2.04l-.04.04a1.2 1.2 0 0 0-.24 1.32v.06a1.2 1.2 0 0 0 1.08.72h.12a1.44 1.44 0 0 1 0 2.88h-.06a1.2 1.2 0 0 0-1.08.72z"/></svg>"#;
 const ICON_LOGS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v12"/><line x1="6" y1="6" x2="12" y2="6"/><line x1="6" y1="9" x2="12" y2="9"/><line x1="6" y1="12" x2="9" y2="12"/></svg>"#;
@@ -73,6 +75,10 @@ fn sidebar(active: &str) -> String {
             <span class="nav-icon">{icon_dash}</span>
             <span class="nav-label">Dashboard</span>
         </a>
+        <a href="/automations" class="nav-link{automations_active}">
+            <span class="nav-icon">{icon_automations}</span>
+            <span class="nav-label">Automations</span>
+        </a>
         <a href="/skills" class="nav-link{skills_active}">
             <span class="nav-icon">{icon_skills}</span>
             <span class="nav-label">Skills</span>
@@ -111,6 +117,11 @@ fn sidebar(active: &str) -> String {
         </a>"##,
         chat_active = if active == "chat" { " active" } else { "" },
         dash_active = if active == "dashboard" { " active" } else { "" },
+        automations_active = if active == "automations" {
+            " active"
+        } else {
+            ""
+        },
         skills_active = if active == "skills" { " active" } else { "" },
         memory_active = if active == "memory" { " active" } else { "" },
         vault_active = if active == "vault" { " active" } else { "" },
@@ -125,6 +136,7 @@ fn sidebar(active: &str) -> String {
         logs_active = if active == "logs" { " active" } else { "" },
         icon_chat = ICON_CHAT,
         icon_dash = ICON_DASHBOARD,
+        icon_automations = ICON_AUTOMATIONS,
         icon_skills = ICON_SKILLS,
         icon_memory = ICON_MEMORY,
         icon_vault = ICON_VAULT,
@@ -331,7 +343,8 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
             .map(|(_, m)| m.to_string())
             .unwrap_or_else(|| config.agent.model.clone())
     };
-    let active_provider_display = build_providers_html::get_provider_display_name(&active_provider_name);
+    let active_provider_display =
+        build_providers_html::get_provider_display_name(&active_provider_name);
 
     let body = format!(
         r##"<main class="content">
@@ -523,74 +536,142 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
         <!-- Channel Configuration Modal -->
         <div id="channel-modal" class="modal">
             <div class="modal-backdrop"></div>
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h3 class="modal-title" id="modal-channel-name">Channel</h3>
-                    <button class="modal-close ch-modal-close" type="button">&times;</button>
+            <div class="modal-content modal-content--channel">
+                <div class="modal-header-group">
+                    <div class="modal-header">
+                        <h3 class="modal-title" id="modal-channel-name">Channel</h3>
+                        <button class="modal-close ch-modal-close" type="button">&times;</button>
+                    </div>
+                    <p class="modal-subtitle" id="channel-subtitle"></p>
                 </div>
                 <div class="modal-body">
-                    <div id="channel-guide" class="channel-guide"></div>
-
                     <form id="channel-config-form">
                         <input type="hidden" id="modal-channel-id" name="channel">
 
+                        <!-- Token (Telegram/Discord/Slack) -->
                         <div class="form-group" id="ch-token-group" style="display:none;">
                             <label for="ch-token">Bot Token</label>
                             <input type="password" id="ch-token" name="token" class="input">
                             <div class="form-hint" id="ch-token-hint">Stored encrypted locally.</div>
                         </div>
 
+                        <!-- WhatsApp phone + pairing -->
                         <div class="form-group" id="ch-phone-group" style="display:none;">
                             <label for="ch-phone">Phone Number</label>
                             <input type="tel" id="ch-phone" name="phone_number" class="input" placeholder="393331234567">
                             <div class="form-hint">International format without + (e.g. 393331234567)</div>
                         </div>
-
                         <div id="ch-wa-pairing" style="display:none;">
                             <div id="ch-wa-pairing-status" class="pairing-status"></div>
                             <div id="ch-wa-pairing-code" class="pairing-code" style="display:none;"></div>
                         </div>
 
+                        <!-- Allowed Users -->
                         <div class="form-group" id="ch-allow-from-group" style="display:none;">
                             <label>Allowed Users</label>
                             <input type="text" id="ch-allow-from" name="allow_from" class="input" placeholder="User IDs, comma-separated">
                             <div class="form-hint" id="ch-allow-from-hint">Only these users can interact with the bot.</div>
                         </div>
 
+                        <!-- Discord default channel -->
                         <div class="form-group" id="ch-discord-channel-group" style="display:none;">
                             <label for="ch-discord-channel">Default Channel ID</label>
                             <input type="text" id="ch-discord-channel" name="default_channel_id" class="input">
                             <div class="form-hint">For proactive messages (optional)</div>
                         </div>
 
+                        <!-- Slack channel -->
                         <div class="form-group" id="ch-slack-channel-group" style="display:none;">
                             <label for="ch-slack-channel">Channel ID</label>
                             <input type="text" id="ch-slack-channel" name="slack_channel_id" class="input">
                             <div class="form-hint">Specific channel to monitor (e.g., C1234567890). Leave empty for auto-discovery.</div>
                         </div>
 
-                        <!-- Email channel fields -->
-                        <div class="form-group" id="ch-email-imap-group" style="display:none;">
-                            <label for="ch-email-imap-host">IMAP Server</label>
-                            <input type="text" id="ch-email-imap-host" name="imap_host" class="input" placeholder="imap.gmail.com">
-                            <input type="number" id="ch-email-imap-port" name="imap_port" class="input" placeholder="993" style="width:80px;display:inline-block;margin-left:10px;">
-                            <div class="form-hint">IMAP server and port (default: 993 for TLS)</div>
-                        </div>
-                        <div class="form-group" id="ch-email-smtp-group" style="display:none;">
-                            <label for="ch-email-smtp-host">SMTP Server</label>
-                            <input type="text" id="ch-email-smtp-host" name="smtp_host" class="input" placeholder="smtp.gmail.com">
-                            <input type="number" id="ch-email-smtp-port" name="smtp_port" class="input" placeholder="465" style="width:80px;display:inline-block;margin-left:10px;">
-                            <div class="form-hint">SMTP server and port (default: 465 for TLS)</div>
-                        </div>
-                        <div class="form-group" id="ch-email-credentials-group" style="display:none;">
-                            <label for="ch-email-username">Username</label>
-                            <input type="text" id="ch-email-username" name="email_username" class="input" placeholder="bot@example.com">
-                            <label for="ch-email-password" style="margin-top:10px;">Password</label>
-                            <input type="password" id="ch-email-password" name="email_password" class="input" placeholder="App password (stored encrypted)">
-                            <label for="ch-email-from" style="margin-top:10px;">From Address</label>
-                            <input type="text" id="ch-email-from" name="from_address" class="input" placeholder="bot@example.com">
+                        <!-- Email: Mail Servers (2 columns) -->
+                        <div id="ch-email-servers-group" style="display:none;">
+                            <div class="modal-section-label">Mail Servers</div>
+                            <div class="form-row--2">
+                                <div class="form-group">
+                                    <label for="ch-email-imap-host">IMAP Server</label>
+                                    <input type="text" id="ch-email-imap-host" name="imap_host" class="input" placeholder="imap.gmail.com">
+                                </div>
+                                <div class="form-group">
+                                    <label for="ch-email-imap-port">IMAP Port</label>
+                                    <input type="number" id="ch-email-imap-port" name="imap_port" class="input" placeholder="993">
+                                </div>
+                            </div>
+                            <div class="form-row--2">
+                                <div class="form-group">
+                                    <label for="ch-email-smtp-host">SMTP Server</label>
+                                    <input type="text" id="ch-email-smtp-host" name="smtp_host" class="input" placeholder="smtp.gmail.com">
+                                </div>
+                                <div class="form-group">
+                                    <label for="ch-email-smtp-port">SMTP Port</label>
+                                    <input type="number" id="ch-email-smtp-port" name="smtp_port" class="input" placeholder="465">
+                                </div>
+                            </div>
                         </div>
 
+                        <!-- Email: Credentials (2 columns) -->
+                        <div id="ch-email-credentials-group" style="display:none;">
+                            <div class="modal-section-label">Credentials</div>
+                            <div class="form-row--2">
+                                <div class="form-group">
+                                    <label for="ch-email-username">Username</label>
+                                    <input type="text" id="ch-email-username" name="email_username" class="input" placeholder="bot@example.com">
+                                </div>
+                                <div class="form-group">
+                                    <label for="ch-email-password">Password</label>
+                                    <input type="password" id="ch-email-password" name="email_password" class="input" placeholder="App password (stored encrypted)">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="ch-email-from">From Address</label>
+                                <input type="text" id="ch-email-from" name="from_address" class="input" placeholder="bot@example.com">
+                            </div>
+                        </div>
+
+                        <!-- Email: Behavior (mode + notify) -->
+                        <div id="ch-email-behavior-group" style="display:none;">
+                            <div class="modal-section-label">Behavior</div>
+                            <div class="form-row--2">
+                                <div class="form-group" id="ch-email-mode-group">
+                                    <label for="ch-email-mode">Response Mode</label>
+                                    <select id="ch-email-mode" name="email_mode" class="input">
+                                        <option value="assisted">Assisted (summary + approval)</option>
+                                        <option value="automatic">Automatic (direct response)</option>
+                                        <option value="on_demand">On-Demand (trigger word only)</option>
+                                    </select>
+                                    <div class="form-hint" id="ch-email-mode-hint">Generates summary and draft, sends to notification channel for approval.</div>
+                                </div>
+                                <div class="form-group" id="ch-email-trigger-group" style="display:none;">
+                                    <label for="ch-email-trigger-word">Trigger Word</label>
+                                    <input type="text" id="ch-email-trigger-word" name="email_trigger_word" class="input" placeholder="Auto-generated if empty">
+                                    <div class="form-hint">Include in subject/body to activate the bot.</div>
+                                </div>
+                            </div>
+                            <div id="ch-email-notify-group" style="display:none;">
+                                <div class="form-row--2">
+                                    <div class="form-group">
+                                        <label for="ch-email-notify-channel">Notify Channel</label>
+                                        <select id="ch-email-notify-channel" name="email_notify_channel" class="input">
+                                            <option value="">None</option>
+                                            <option value="telegram">Telegram</option>
+                                            <option value="discord">Discord</option>
+                                            <option value="slack">Slack</option>
+                                            <option value="whatsapp">WhatsApp</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="ch-email-notify-chat-id">Notify Chat ID</label>
+                                        <input type="text" id="ch-email-notify-chat-id" name="email_notify_chat_id" class="input" placeholder="User/Channel ID">
+                                        <div class="form-hint form-hint--suggest" id="ch-notify-hint"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Web channel fields -->
                         <div class="form-group" id="ch-web-host-group" style="display:none;">
                             <label for="ch-web-host">Host</label>
                             <input type="text" id="ch-web-host" name="host" class="input">
@@ -599,29 +680,38 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <label for="ch-web-port">Port</label>
                             <input type="number" id="ch-web-port" name="port" class="input">
                         </div>
-
-                        <div class="modal-actions">
-                            <button type="button" class="btn btn-secondary ch-modal-cancel">Cancel</button>
-                            <button type="submit" class="btn btn-primary" id="btn-ch-save">Save &amp; Enable</button>
-                            <button type="button" id="btn-test-channel" class="btn btn-secondary">Test Connection</button>
-                            <button type="button" id="btn-wa-pair" class="btn btn-success" style="display:none;">Start Pairing</button>
-                        </div>
                     </form>
-
                     <div id="ch-test-result" class="form-hint" style="margin-top:10px;"></div>
                 </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary ch-modal-cancel">Cancel</button>
+                    <button type="submit" form="channel-config-form" class="btn btn-primary" id="btn-ch-save">Save &amp; Enable</button>
+                    <button type="button" id="btn-test-channel" class="btn btn-secondary">Test Connection</button>
+                    <button type="button" id="btn-wa-pair" class="btn btn-success" style="display:none;">Start Pairing</button>
+                </div>
             </div>
-        </div>"##,
+        </div>
+
+        "##,
         active_model_display = active_model_display,
         active_provider_display = active_provider_display,
-        active_banner_hidden = if config.agent.model.is_empty() { "style=\"display:none\"" } else { "" },
-        no_model_hidden = if config.agent.model.is_empty() { "" } else { "style=\"display:none\"" },
+        active_banner_hidden = if config.agent.model.is_empty() {
+            "style=\"display:none\""
+        } else {
+            ""
+        },
+        no_model_hidden = if config.agent.model.is_empty() {
+            ""
+        } else {
+            "style=\"display:none\""
+        },
         vision_model = config.agent.vision_model,
         max_tokens = config.agent.max_tokens,
         temperature = config.agent.temperature,
         max_iterations = config.agent.max_iterations,
         xml_fallback_delay_ms = config.agent.xml_fallback_delay_ms,
-        fallback_models_json = serde_json::to_string(&config.agent.fallback_models).unwrap_or_else(|_| "[]".to_string()),
+        fallback_models_json = serde_json::to_string(&config.agent.fallback_models)
+            .unwrap_or_else(|_| "[]".to_string()),
         conversation_retention_days = config.memory.conversation_retention_days,
         history_retention_days = config.memory.history_retention_days,
         daily_archive_months = config.memory.daily_archive_months,
@@ -701,6 +791,133 @@ async fn chat_page() -> Html<String> {
         <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>"#;
 
     Html(page_html("Chat", "chat", body, &["chat.js"]))
+}
+
+// ─── Automations ────────────────────────────────────────────────
+
+async fn automations_page() -> Html<String> {
+    let body = r#"<main class="content">
+            <div class="content-inner">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">Automations</h1>
+                        <span class="badge badge-info" id="automations-count">0</span>
+                    </div>
+                    <div class="actions">
+                        <button class="btn btn-secondary btn-sm" id="btn-automations-refresh">Refresh</button>
+                    </div>
+                </div>
+
+                <section class="section">
+                    <h2>Create Automation</h2>
+                    <form id="automation-create-form" class="form form--full">
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="automation-name">Name</label>
+                                <input id="automation-name" class="input" type="text" maxlength="120" placeholder="Email digest">
+                                <div class="form-hint">Short label shown in the command center.</div>
+                            </div>
+                            <div class="form-group">
+                                <label for="automation-deliver-to">Deliver To</label>
+                                <select id="automation-deliver-to" class="input"></select>
+                                <div class="form-hint">Choose one of the configured channels.</div>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="automation-prompt">Prompt</label>
+                            <textarea id="automation-prompt" class="input automation-textarea" rows="4" placeholder="Vai su Gmail, leggi le email non lette e fammi un riassunto."></textarea>
+                            <div class="form-hint">Detailed instructions that the agent executes at run time.</div>
+                        </div>
+
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="automation-schedule-mode">Schedule Type</label>
+                                <select id="automation-schedule-mode" class="input">
+                                    <option value="daily">Every day</option>
+                                    <option value="weekdays">Weekdays (Mon-Fri)</option>
+                                    <option value="weekly">Every week</option>
+                                    <option value="interval">Every N hours</option>
+                                    <option value="custom">Advanced (cron/every)</option>
+                                </select>
+                            </div>
+                            <div class="form-group" id="automation-time-group">
+                                <label for="automation-time">Time</label>
+                                <input id="automation-time" class="input" type="time" value="09:00">
+                                <div class="form-hint">Local time.</div>
+                            </div>
+                            <div class="form-group" id="automation-weekday-group" style="display:none;">
+                                <label for="automation-weekday">Day of week</label>
+                                <select id="automation-weekday" class="input">
+                                    <option value="1">Monday</option>
+                                    <option value="2">Tuesday</option>
+                                    <option value="3">Wednesday</option>
+                                    <option value="4">Thursday</option>
+                                    <option value="5">Friday</option>
+                                    <option value="6">Saturday</option>
+                                    <option value="7">Sunday</option>
+                                </select>
+                            </div>
+                            <div class="form-group" id="automation-interval-group" style="display:none;">
+                                <label for="automation-interval-hours">Every (hours)</label>
+                                <input id="automation-interval-hours" class="input" type="number" min="1" step="1" value="6">
+                                <div class="form-hint">Example: every 6 hours.</div>
+                            </div>
+                            <div class="form-group" id="automation-custom-group" style="display:none;">
+                                <label for="automation-custom-schedule">Custom schedule</label>
+                                <input id="automation-custom-schedule" class="input" type="text" placeholder="cron:0 9 * * * or every:3600">
+                                <div class="form-hint">Advanced format only.</div>
+                            </div>
+                        </div>
+
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="automation-trigger">Trigger</label>
+                                <select id="automation-trigger" class="input">
+                                    <option value="always">Always notify</option>
+                                    <option value="on_change">Notify on change</option>
+                                    <option value="contains">Notify when output contains text</option>
+                                </select>
+                            </div>
+                            <div class="form-group" id="automation-trigger-value-group" style="display:none;">
+                                <label for="automation-trigger-value">Trigger Value</label>
+                                <input id="automation-trigger-value" class="input" type="text" placeholder="e.g. prezzo sceso">
+                                <div class="form-hint">Used only with trigger=contains.</div>
+                            </div>
+                        </div>
+
+                        <div class="actions">
+                            <button class="btn btn-primary" type="submit">Create Automation</button>
+                        </div>
+                    </form>
+                </section>
+
+                <section class="section">
+                    <h2>Automation List</h2>
+                    <div id="automations-list" class="item-list">
+                        <div class="empty-state">
+                            <p>Loading automations...</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="section">
+                    <h2>Run History</h2>
+                    <div id="automation-history" class="scrollable-list">
+                        <div class="empty-state">
+                            <p>Select an automation to load run history.</p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>"#;
+
+    Html(page_html(
+        "Automations",
+        "automations",
+        body,
+        &["automations.js"],
+    ))
 }
 
 // ─── Skills ─────────────────────────────────────────────────────
@@ -883,19 +1100,36 @@ async fn logs_page() -> Html<String> {
                 <div class="page-header">
                     <div class="page-title-group">
                         <h1 class="page-title">Logs</h1>
+                        <span id="logs-status" class="badge badge-warning">Connecting...</span>
                     </div>
                 </div>
+                <div class="logs-toolbar">
+                    <label class="form-group logs-toolbar-item">
+                        <span>Level</span>
+                        <select id="logs-level" class="input">
+                            <option value="trace">Trace+</option>
+                            <option value="debug">Debug+</option>
+                            <option value="info" selected>Info+</option>
+                            <option value="warn">Warn+</option>
+                            <option value="error">Error only</option>
+                        </select>
+                    </label>
+                    <label class="checkbox-label logs-toolbar-item">
+                        <input type="checkbox" id="logs-autoscroll" checked>
+                        Auto-scroll
+                    </label>
+                    <button class="btn btn-secondary btn-sm logs-toolbar-item" id="logs-clear">Clear</button>
+                    <span class="logs-count" id="logs-count">0 events</span>
+                </div>
                 <div class="log-viewer" id="log-viewer">
-                    <div class="empty-state">
-                        <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 15V3a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v18"/><line x1="7" y1="7" x2="17" y2="7"/><line x1="7" y1="11" x2="17" y2="11"/><line x1="7" y1="15" x2="12" y2="15"/></svg>
-                        <p>Log streaming coming soon.</p>
-                        <p>Check your terminal for real-time logs.</p>
+                    <div class="empty-state log-empty">
+                        <p>Waiting for log events...</p>
                     </div>
                 </div>
             </div>
         </main>"#;
 
-    Html(page_html("Logs", "logs", body, &[]))
+    Html(page_html("Logs", "logs", body, &["logs.js"]))
 }
 
 // ─── Memory ──────────────────────────────────────────────────────
@@ -1596,6 +1830,19 @@ mod build_providers_html {
         pub catalog_modal_html: String,
     }
 
+    /// Bundled parameters for `build_provider_card` (avoids clippy::too_many_arguments).
+    struct ProviderCardData<'a> {
+        name: &'a str,
+        display_name: &'a str,
+        description: &'a str,
+        has_key: bool,
+        has_url: bool,
+        is_active: bool,
+        api_key_mask: &'a str,
+        api_base: &'a str,
+        current_model: &'a str,
+    }
+
     /// Provider display metadata: (display_name, description, needs_api_key, needs_base_url)
     fn get_provider_meta(name: &str) -> (&'static str, &'static str, bool, bool) {
         match name {
@@ -1653,7 +1900,7 @@ mod build_providers_html {
                 } else {
                     ""
                 };
-                cards_html.push_str(&build_provider_card(
+                cards_html.push_str(&build_provider_card(&ProviderCardData {
                     name,
                     display_name,
                     description,
@@ -1661,11 +1908,17 @@ mod build_providers_html {
                     has_url,
                     is_active,
                     api_key_mask,
-                    pc.api_base.as_deref().unwrap_or(""),
-                    &config.agent.model,
-                ));
+                    api_base: pc.api_base.as_deref().unwrap_or(""),
+                    current_model: &config.agent.model,
+                }));
             } else {
-                catalog_items.push(build_catalog_card(name, display_name, description, has_key, has_url));
+                catalog_items.push(build_catalog_card(
+                    name,
+                    display_name,
+                    description,
+                    has_key,
+                    has_url,
+                ));
             }
         }
 
@@ -1698,18 +1951,22 @@ mod build_providers_html {
         }
     }
 
-    fn build_provider_card(
-        name: &str,
-        display_name: &str,
-        description: &str,
-        has_key: bool,
-        has_url: bool,
-        is_active: bool,
-        api_key_mask: &str,
-        api_base: &str,
-        current_model: &str,
-    ) -> String {
-        let active_cls = if is_active { " provider-card--active" } else { "" };
+    fn build_provider_card(p: &ProviderCardData<'_>) -> String {
+        let is_active = p.is_active;
+        let name = p.name;
+        let display_name = p.display_name;
+        let description = p.description;
+        let has_key = p.has_key;
+        let has_url = p.has_url;
+        let api_key_mask = p.api_key_mask;
+        let api_base = p.api_base;
+        let current_model = p.current_model;
+
+        let active_cls = if is_active {
+            " provider-card--active"
+        } else {
+            ""
+        };
 
         let active_badge = if is_active {
             r#"<span class="provider-active-badge">Active</span>"#
@@ -1841,6 +2098,13 @@ fn build_channels_cards_html(config: &crate::config::Config) -> String {
             has_token: true,
         },
         ChannelMeta {
+            name: "discord",
+            display: "Discord",
+            desc: "Discord bot via gateway connection",
+            icon: ICON_DISCORD,
+            has_token: true,
+        },
+        ChannelMeta {
             name: "slack",
             display: "Slack",
             desc: "Slack workspace integration via Web API",
@@ -1852,6 +2116,13 @@ fn build_channels_cards_html(config: &crate::config::Config) -> String {
             display: "WhatsApp",
             desc: "Native WhatsApp Web client (no bridge needed)",
             icon: ICON_PHONE,
+            has_token: false,
+        },
+        ChannelMeta {
+            name: "email",
+            display: "Email",
+            desc: "IMAP/SMTP email integration",
+            icon: ICON_EMAIL,
             has_token: false,
         },
         ChannelMeta {
@@ -1872,6 +2143,7 @@ fn build_channels_cards_html(config: &crate::config::Config) -> String {
                 "discord" => config.channels.discord.enabled,
                 "slack" => config.channels.slack.enabled,
                 "whatsapp" => config.channels.whatsapp.enabled,
+                "email" => config.channels.email.enabled,
                 "web" => config.channels.web.enabled,
                 _ => false,
             };
@@ -1907,6 +2179,7 @@ fn build_channels_cards_html(config: &crate::config::Config) -> String {
                 "discord" => config.channels.discord.allow_from.join(","),
                 "slack" => config.channels.slack.allow_from.join(","),
                 "whatsapp" => config.channels.whatsapp.allow_from.join(","),
+                "email" => config.channels.email.allow_from.join(","),
                 _ => String::new(),
             };
             let phone = &config.channels.whatsapp.phone_number;
@@ -1915,8 +2188,35 @@ fn build_channels_cards_html(config: &crate::config::Config) -> String {
             let web_host = &config.channels.web.host;
             let web_port = config.channels.web.port;
 
+            // Email-specific data attributes
+            let email_imap_host = &config.channels.email.imap_host;
+            let email_imap_port = config.channels.email.imap_port;
+            let email_smtp_host = &config.channels.email.smtp_host;
+            let email_smtp_port = config.channels.email.smtp_port;
+            let email_username = &config.channels.email.username;
+            let email_from = &config.channels.email.from_address;
+
+            // Mode/notify from emails.default (multi-account) if it exists
+            let default_acc = config.channels.emails.get("default");
+            let email_mode = default_acc
+                .map(|a| match a.mode {
+                    crate::config::EmailMode::Assisted => "assisted",
+                    crate::config::EmailMode::Automatic => "automatic",
+                    crate::config::EmailMode::OnDemand => "on_demand",
+                })
+                .unwrap_or("assisted");
+            let email_notify_channel = default_acc
+                .and_then(|a| a.notify_channel.as_deref())
+                .unwrap_or("");
+            let email_notify_chat_id = default_acc
+                .and_then(|a| a.notify_chat_id.as_deref())
+                .unwrap_or("");
+            let email_trigger_word = default_acc
+                .and_then(|a| a.trigger_word.as_deref())
+                .unwrap_or("");
+
             format!(
-                r##"<div class="{classes}" data-channel="{name}" data-display="{display}" data-configured="{configured}" data-enabled="{enabled}" data-has-token="{has_token}" data-token-mask="{token_mask}" data-allow-from="{allow_from}" data-phone="{phone}" data-discord-channel="{discord_channel}" data-slack-channel="{slack_channel}" data-web-host="{web_host}" data-web-port="{web_port}" data-is-web="{is_web}">
+                r##"<div class="{classes}" data-channel="{name}" data-display="{display}" data-configured="{configured}" data-enabled="{enabled}" data-has-token="{has_token}" data-token-mask="{token_mask}" data-allow-from="{allow_from}" data-phone="{phone}" data-discord-channel="{discord_channel}" data-slack-channel="{slack_channel}" data-web-host="{web_host}" data-web-port="{web_port}" data-is-web="{is_web}" data-email-imap-host="{email_imap_host}" data-email-imap-port="{email_imap_port}" data-email-smtp-host="{email_smtp_host}" data-email-smtp-port="{email_smtp_port}" data-email-username="{email_username}" data-email-from="{email_from}" data-email-mode="{email_mode}" data-email-notify-channel="{email_notify_channel}" data-email-notify-chat-id="{email_notify_chat_id}" data-email-trigger-word="{email_trigger_word}">
                     <div class="provider-card-header">
                         <div class="provider-card-info">
                             <span class="channel-icon">{icon}</span>
@@ -1969,6 +2269,81 @@ fn resolve_and_mask_token(channel_name: &str, toml_value: &str) -> String {
     }
 }
 
+/// Build email account cards for the settings page.
+fn build_email_accounts_html(config: &crate::config::Config) -> String {
+    let mut html = String::new();
+
+    for (name, acc) in &config.channels.emails {
+        // Skip "default" — it's the primary email configured in Channels
+        if name == "default" {
+            continue;
+        }
+        let mode_label = match acc.mode {
+            crate::config::EmailMode::Assisted => "Assisted",
+            crate::config::EmailMode::Automatic => "Automatic",
+            crate::config::EmailMode::OnDemand => "On-Demand",
+        };
+        let mode_badge_cls = match acc.mode {
+            crate::config::EmailMode::Assisted => "badge-info",
+            crate::config::EmailMode::Automatic => "badge-success",
+            crate::config::EmailMode::OnDemand => "badge-neutral",
+        };
+
+        let status = if acc.enabled && acc.is_configured() {
+            r#"<span class="provider-default-badge">Active</span>"#
+        } else {
+            ""
+        };
+
+        let _notify_info = match (&acc.notify_channel, &acc.notify_chat_id) {
+            (Some(ch), Some(id)) => format!("{ch}:{id}"),
+            _ => String::new(),
+        };
+
+        html.push_str(&format!(
+            r##"<div class="provider-card email-account-card" data-email-name="{name}" data-enabled="{enabled}" data-configured="{configured}" data-mode="{mode}" data-imap-host="{imap_host}" data-imap-port="{imap_port}" data-imap-folder="{imap_folder}" data-smtp-host="{smtp_host}" data-smtp-port="{smtp_port}" data-smtp-tls="{smtp_tls}" data-username="{username}" data-from-address="{from_address}" data-idle-timeout="{idle_timeout}" data-allow-from="{allow_from}" data-notify-channel="{notify_channel}" data-notify-chat-id="{notify_chat_id}" data-trigger-word="{trigger_word}" data-batch-threshold="{batch_threshold}" data-batch-window="{batch_window}" data-send-delay="{send_delay}">
+                <div class="provider-card-header">
+                    <div class="provider-card-info">
+                        <span class="channel-icon">{icon}</span>
+                        <span class="provider-card-name">{name}</span>
+                    </div>
+                    <div class="provider-card-actions">
+                        {status}
+                        <span class="badge {mode_badge_cls}" style="margin-left:4px">{mode_label}</span>
+                    </div>
+                </div>
+                <div class="provider-card-desc">{username} &bull; {imap_host}</div>
+            </div>"##,
+            name = name,
+            enabled = acc.enabled,
+            configured = acc.is_configured(),
+            mode = mode_label.to_lowercase(),
+            icon = ICON_EMAIL,
+            imap_host = acc.imap_host,
+            imap_port = acc.imap_port,
+            imap_folder = acc.imap_folder,
+            smtp_host = acc.smtp_host,
+            smtp_port = acc.smtp_port,
+            smtp_tls = acc.smtp_tls,
+            username = acc.username,
+            from_address = acc.from_address,
+            idle_timeout = acc.idle_timeout_secs,
+            allow_from = acc.allow_from.join(","),
+            notify_channel = acc.notify_channel.as_deref().unwrap_or(""),
+            notify_chat_id = acc.notify_chat_id.as_deref().unwrap_or(""),
+            trigger_word = acc.trigger_word.as_deref().unwrap_or(""),
+            batch_threshold = acc.batch_threshold,
+            batch_window = acc.batch_window_secs,
+            send_delay = acc.send_delay_secs,
+            status = status,
+            mode_badge_cls = mode_badge_cls,
+            mode_label = mode_label,
+        ));
+    }
+
+    html
+}
+
 fn format_uptime(secs: u64) -> String {
     if secs < 60 {
         format!("{secs}s")
@@ -1983,8 +2358,13 @@ fn format_uptime(secs: u64) -> String {
 
 // ─── Account Page ─────────────────────────────────────────────────
 
-async fn account_page(State(_state): State<Arc<AppState>>) -> Html<String> {
-    let body = r#"<main class="content">
+async fn account_page(State(state): State<Arc<AppState>>) -> Html<String> {
+    let config = state.config.read().await;
+    let email_accounts_html = build_email_accounts_html(&config);
+    drop(config);
+
+    let body = format!(
+        r##"<main class="content">
             <div class="content-inner">
                 <div class="page-header">
                     <div class="page-title-group">
@@ -2084,7 +2464,7 @@ async fn account_page(State(_state): State<Arc<AppState>>) -> Html<String> {
                                 </div>
                                 <div class="form-group">
                                     <label>Webhook URL (after creation)</label>
-                                    <input type="text" id="webhook-url-preview" class="input" readonly value="POST /api/v1/webhook/{token}">
+                                    <input type="text" id="webhook-url-preview" class="input" readonly value="POST /api/v1/webhook/{{token}}">
                                 </div>
                             </div>
                             <button type="submit" class="btn btn-primary btn-sm">Create Token</button>
@@ -2092,10 +2472,158 @@ async fn account_page(State(_state): State<Arc<AppState>>) -> Html<String> {
                     </details>
                 </section>
 
-            </div>
-        </main>"#;
+                <!-- Additional Email Accounts -->
+                <section class="section" id="section-email-accounts">
+                    <div class="section-header" style="display:flex;justify-content:space-between;align-items:center;">
+                        <h2>Additional Email Accounts</h2>
+                        <button class="btn btn-primary btn-sm" id="btn-add-email-account">+ Add Account</button>
+                    </div>
+                    <div class="form-hint" style="margin-bottom:12px;">Add extra email accounts beyond the primary one configured in Settings &rarr; Channels.</div>
+                    <div class="provider-grid" id="email-accounts-grid">
+                        {email_accounts_html}
+                    </div>
+                </section>
 
-    let html = page_html("Account", "account", body, &["account.js"]);
+            </div>
+        </main>
+
+        <!-- Email Account Modal -->
+        <div id="email-account-modal" class="modal">
+            <div class="modal-backdrop"></div>
+            <div class="modal-content modal-content--channel">
+                <div class="modal-header-group">
+                    <div class="modal-header">
+                        <h3 class="modal-title" id="email-modal-title">Configure Email Account</h3>
+                        <button class="modal-close ea-modal-close" type="button">&times;</button>
+                    </div>
+                    <p class="modal-subtitle">IMAP/SMTP account for receiving and responding to emails.</p>
+                </div>
+                <div class="modal-body">
+                    <form id="email-account-form">
+                        <div class="form-group">
+                            <label for="ea-name">Account Name</label>
+                            <input type="text" id="ea-name" name="name" class="input" placeholder="e.g. lavoro, personal" required>
+                            <div class="form-hint">Unique identifier. Used in channel routing (email:name).</div>
+                        </div>
+
+                        <div class="modal-section-label">Mail Servers</div>
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="ea-imap-host">IMAP Server</label>
+                                <input type="text" id="ea-imap-host" name="imap_host" class="input" placeholder="imap.gmail.com">
+                            </div>
+                            <div class="form-group">
+                                <label for="ea-imap-port">IMAP Port</label>
+                                <input type="number" id="ea-imap-port" name="imap_port" class="input" value="993">
+                            </div>
+                        </div>
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="ea-smtp-host">SMTP Server</label>
+                                <input type="text" id="ea-smtp-host" name="smtp_host" class="input" placeholder="smtp.gmail.com">
+                            </div>
+                            <div class="form-group">
+                                <label for="ea-smtp-port">SMTP Port</label>
+                                <input type="number" id="ea-smtp-port" name="smtp_port" class="input" value="465">
+                            </div>
+                        </div>
+
+                        <div class="modal-section-label">Credentials</div>
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="ea-username">Username</label>
+                                <input type="text" id="ea-username" name="username" class="input" placeholder="bot@example.com">
+                            </div>
+                            <div class="form-group">
+                                <label for="ea-password">Password</label>
+                                <input type="password" id="ea-password" name="password" class="input" placeholder="App password (stored encrypted)">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="ea-from">From Address</label>
+                            <input type="text" id="ea-from" name="from_address" class="input" placeholder="bot@example.com">
+                        </div>
+
+                        <div class="modal-section-label">Behavior</div>
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="ea-mode">Response Mode</label>
+                                <select id="ea-mode" name="mode" class="input">
+                                    <option value="assisted">Assisted (summary + approval)</option>
+                                    <option value="automatic">Automatic (direct response)</option>
+                                    <option value="on_demand">On-Demand (trigger word only)</option>
+                                </select>
+                                <div class="form-hint" id="ea-mode-hint">Generates summary and draft, sends to notification channel for approval.</div>
+                            </div>
+                            <div class="form-group" id="ea-trigger-field" style="display:none;">
+                                <label for="ea-trigger-word">Trigger Word</label>
+                                <input type="text" id="ea-trigger-word" name="trigger_word" class="input" placeholder="Auto-generated if empty">
+                                <div class="form-hint">Include in subject/body to activate the bot.</div>
+                            </div>
+                        </div>
+
+                        <div id="ea-notify-fields">
+                            <div class="form-row--2">
+                                <div class="form-group">
+                                    <label for="ea-notify-channel">Notify Channel</label>
+                                    <select id="ea-notify-channel" name="notify_channel" class="input">
+                                        <option value="">None</option>
+                                        <option value="telegram">Telegram</option>
+                                        <option value="discord">Discord</option>
+                                        <option value="slack">Slack</option>
+                                        <option value="whatsapp">WhatsApp</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="ea-notify-chat-id">Notify Chat ID</label>
+                                    <input type="text" id="ea-notify-chat-id" name="notify_chat_id" class="input" placeholder="User/Channel ID">
+                                    <div class="form-hint form-hint--suggest" id="ea-notify-hint"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <details style="margin-top:12px;">
+                            <summary style="cursor:pointer;font-weight:500;color:var(--text-secondary);">Advanced (Batching &amp; Allow List)</summary>
+                            <div style="padding-top:12px;">
+                                <div class="form-group">
+                                    <label for="ea-allow-from">Allow From</label>
+                                    <input type="text" id="ea-allow-from" name="allow_from" class="input" placeholder="user@example.com, * for all">
+                                    <div class="form-hint">Comma-separated. Empty = deny all, * = allow all.</div>
+                                </div>
+                                <div class="form-row--2">
+                                    <div class="form-group">
+                                        <label for="ea-batch-threshold">Batch Threshold</label>
+                                        <input type="number" id="ea-batch-threshold" name="batch_threshold" class="input" value="3" min="1" max="50">
+                                        <div class="form-hint">Emails before sending digest</div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="ea-batch-window">Batch Window (s)</label>
+                                        <input type="number" id="ea-batch-window" name="batch_window_secs" class="input" value="120" min="10" max="3600">
+                                        <div class="form-hint">Seconds to accumulate</div>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="ea-send-delay">Send Delay (s)</label>
+                                    <input type="number" id="ea-send-delay" name="send_delay_secs" class="input" value="30" min="0" max="300">
+                                    <div class="form-hint">Delay between successive responses</div>
+                                </div>
+                            </div>
+                        </details>
+                        <div id="ea-test-result" class="form-hint" style="margin-top:8px;"></div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary ea-modal-cancel">Cancel</button>
+                    <button type="button" id="btn-delete-email-account" class="btn btn-danger" style="display:none;">Delete</button>
+                    <button type="button" id="btn-test-email-account" class="btn btn-secondary">Test IMAP</button>
+                    <button type="submit" form="email-account-form" class="btn btn-primary">Save &amp; Enable</button>
+                </div>
+            </div>
+        </div>"##,
+        email_accounts_html = email_accounts_html,
+    );
+
+    let html = page_html("Account", "account", &body, &["account.js"]);
     Html(html)
 }
 

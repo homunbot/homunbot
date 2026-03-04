@@ -1,3 +1,5 @@
+pub mod automations;
 pub mod cron;
 
-pub use cron::{CronEvent, CronScheduler};
+pub use automations::AutomationSchedule;
+pub use cron::{CronEvent, CronScheduler, ScheduledKind};

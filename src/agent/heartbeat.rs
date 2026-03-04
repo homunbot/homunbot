@@ -56,6 +56,7 @@ impl HeartbeatService {
                 content: HEARTBEAT_PROMPT.to_string(),
                 sender_id: "system".to_string(),
                 timestamp: chrono::Utc::now(),
+                metadata: None,
             };
 
             if let Err(e) = self.inbound_tx.send(message).await {

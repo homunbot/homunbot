@@ -1,8 +1,12 @@
+use std::collections::HashSet;
+use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{Path, Query, State, WebSocketUpgrade};
 use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Json};
 use axum::routing::get;
 use axum::Router;
@@ -14,6 +18,7 @@ use super::server::AppState;
 pub fn router() -> Router<Arc<AppState>> {
     let api_router = Router::new()
         .route("/health", get(health))
+        .route("/v1/logs/stream", get(stream_logs))
         .route("/v1/status", get(status))
         .route("/v1/config", get(get_config))
         .route("/v1/config", axum::routing::patch(patch_config))
@@ -60,6 +65,10 @@ pub fn router() -> Router<Arc<AppState>> {
             axum::routing::post(deactivate_channel),
         )
         .route("/v1/channels/test", axum::routing::post(test_channel))
+        .route(
+            "/v1/channels/email/trigger-word",
+            axum::routing::post(generate_or_get_trigger_word),
+        )
         .route("/v1/channels/whatsapp/pair", get(ws_whatsapp_pair))
         // --- Webhook Ingress ---
         .route("/v1/webhook/{token}", axum::routing::post(webhook_ingress))
@@ -155,6 +164,39 @@ pub fn router() -> Router<Arc<AppState>> {
             "/v1/approvals/config",
             get(get_approval_config).put(put_approval_config),
         )
+        // --- Email Accounts (multi-account) ---
+        .route("/v1/email-accounts", get(list_email_accounts))
+        .route(
+            "/v1/email-accounts/configure",
+            axum::routing::post(configure_email_account),
+        )
+        .route(
+            "/v1/email-accounts/deactivate",
+            axum::routing::post(deactivate_email_account),
+        )
+        .route(
+            "/v1/email-accounts/test",
+            axum::routing::post(test_email_account),
+        )
+        .route(
+            "/v1/email-accounts/{name}",
+            get(get_email_account).delete(delete_email_account),
+        )
+        // --- Automations ---
+        .route(
+            "/v1/automations",
+            get(list_automations).post(create_automation),
+        )
+        .route("/v1/automations/targets", get(list_automation_targets))
+        .route(
+            "/v1/automations/{id}",
+            axum::routing::patch(patch_automation).delete(delete_automation),
+        )
+        .route("/v1/automations/{id}/history", get(get_automation_history))
+        .route(
+            "/v1/automations/{id}/run",
+            axum::routing::post(run_automation_now),
+        )
         // --- Usage ---
         .route("/v1/usage", get(get_usage));
 
@@ -180,6 +222,45 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
         version: env!("CARGO_PKG_VERSION"),
         uptime_secs: state.started_at.elapsed().as_secs(),
     })
+}
+
+/// GET /api/v1/logs/stream
+async fn stream_logs() -> Sse<impl futures::Stream<Item = Result<Event, Infallible>>> {
+    let rx = crate::logs::subscribe();
+
+    let stream = futures::stream::unfold(rx, |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok(record) => {
+                    let payload =
+                        serde_json::to_string(&record).unwrap_or_else(|_| "{}".to_string());
+                    let event = Event::default().event("log").data(payload);
+                    return Some((Ok(event), rx));
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    let lag_record = crate::logs::LogRecord {
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                        level: "warn".to_string(),
+                        target: "homun.logs".to_string(),
+                        message: format!(
+                            "Log stream dropped {skipped} events because the client was too slow"
+                        ),
+                    };
+                    let payload =
+                        serde_json::to_string(&lag_record).unwrap_or_else(|_| "{}".to_string());
+                    let event = Event::default().event("log").data(payload);
+                    return Some((Ok(event), rx));
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    });
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keepalive"),
+    )
 }
 
 // --- Status ---
@@ -217,8 +298,16 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
             enabled: config.channels.discord.enabled,
         },
         ChannelStatus {
+            name: "slack".into(),
+            enabled: config.channels.slack.enabled,
+        },
+        ChannelStatus {
             name: "whatsapp".into(),
             enabled: config.channels.whatsapp.enabled,
+        },
+        ChannelStatus {
+            name: "email".into(),
+            enabled: config.channels.email.enabled,
         },
         ChannelStatus {
             name: "web".into(),
@@ -264,7 +353,9 @@ struct AgentConfigView {
 struct ChannelsConfigView {
     telegram_enabled: bool,
     discord_enabled: bool,
+    slack_enabled: bool,
     whatsapp_enabled: bool,
+    email_enabled: bool,
     web_enabled: bool,
 }
 
@@ -284,7 +375,9 @@ async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> 
         channels: ChannelsConfigView {
             telegram_enabled: config.channels.telegram.enabled,
             discord_enabled: config.channels.discord.enabled,
+            slack_enabled: config.channels.slack.enabled,
             whatsapp_enabled: config.channels.whatsapp.enabled,
+            email_enabled: config.channels.email.enabled,
             web_enabled: config.channels.web.enabled,
         },
         has_provider: provider_name != "none",
@@ -312,9 +405,7 @@ async fn patch_config(
         serde_json::Value::String(s) => {
             crate::config::dotpath::config_set(&mut config, &patch.key, s)
         }
-        other => {
-            crate::config::dotpath::config_set_value(&mut config, &patch.key, other.clone())
-        }
+        other => crate::config::dotpath::config_set_value(&mut config, &patch.key, other.clone()),
     }
     .map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -322,9 +413,7 @@ async fn patch_config(
         .save_config(config)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(
-        serde_json::json!({"ok": true, "key": patch.key}),
-    ))
+    Ok(Json(serde_json::json!({"ok": true, "key": patch.key})))
 }
 
 // --- Skills ---
@@ -512,12 +601,34 @@ struct DeleteSkillResponse {
     message: String,
 }
 
-async fn delete_skill(Path(name): Path<String>) -> Json<DeleteSkillResponse> {
+async fn delete_skill(
+    Path(name): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Json<DeleteSkillResponse> {
     match crate::skills::SkillInstaller::remove(&name).await {
-        Ok(()) => Json(DeleteSkillResponse {
-            ok: true,
-            message: format!("Skill '{}' removed", name),
-        }),
+        Ok(()) => {
+            let mut message = format!("Skill '{}' removed", name);
+            if let Some(db) = &state.db {
+                let reason = format!("Missing skill dependency: {name}");
+                match db
+                    .invalidate_automations_by_dependency("skill", &name, &reason)
+                    .await
+                {
+                    Ok(affected) if affected > 0 => {
+                        message = format!("{message}. Invalidated {affected} automation(s).");
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            skill = %name,
+                            "Failed to invalidate dependent automations after skill removal"
+                        );
+                    }
+                }
+            }
+            Json(DeleteSkillResponse { ok: true, message })
+        }
         Err(e) => Json(DeleteSkillResponse {
             ok: false,
             message: e.to_string(),
@@ -1144,7 +1255,6 @@ fn cloud_models_for(provider: &str) -> &'static [&'static str] {
     }
 }
 
-
 #[derive(Serialize)]
 struct ModelEntry {
     provider: String,
@@ -1559,6 +1669,22 @@ async fn get_channel(
                 "default_channel_id": config.channels.discord.default_channel_id,
             })
         }
+        "slack" => {
+            let masked = if config.channels.slack.token == "***ENCRYPTED***" {
+                resolve_and_mask("slack")
+            } else {
+                mask_token(&config.channels.slack.token)
+            };
+            serde_json::json!({
+                "name": "slack",
+                "enabled": config.channels.slack.enabled,
+                "configured": config.is_channel_configured("slack"),
+                "token_masked": masked,
+                "has_token": !masked.is_empty(),
+                "allow_from": config.channels.slack.allow_from,
+                "channel_id": config.channels.slack.channel_id,
+            })
+        }
         "whatsapp" => {
             serde_json::json!({
                 "name": "whatsapp",
@@ -1589,6 +1715,32 @@ async fn get_channel(
             } else {
                 !config.channels.email.password.is_empty()
             };
+            // Read mode/notify/trigger from emails.default
+            let default_acc = config.channels.emails.get("default");
+            let email_mode = default_acc
+                .map(|a| match a.mode {
+                    crate::config::EmailMode::Automatic => "automatic",
+                    crate::config::EmailMode::OnDemand => "on_demand",
+                    crate::config::EmailMode::Assisted => "assisted",
+                })
+                .unwrap_or("assisted");
+            let notify_channel = default_acc
+                .and_then(|a| a.notify_channel.as_deref())
+                .unwrap_or("");
+            let notify_chat_id = default_acc
+                .and_then(|a| a.notify_chat_id.as_deref())
+                .unwrap_or("");
+            // Resolve trigger word: config → vault → auto-generate (on_demand only)
+            let trigger_word = default_acc
+                .and_then(|a| a.trigger_word.as_deref().filter(|s| !s.is_empty()))
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    // Check vault (always — user may have generated one previously)
+                    let secrets = crate::storage::global_secrets().ok()?;
+                    let key = crate::storage::SecretKey::custom("email.default.trigger_word");
+                    secrets.get(&key).ok().flatten()
+                })
+                .unwrap_or_default();
             serde_json::json!({
                 "name": "email",
                 "enabled": config.channels.email.enabled,
@@ -1604,6 +1756,10 @@ async fn get_channel(
                 "from_address": config.channels.email.from_address,
                 "idle_timeout_secs": config.channels.email.idle_timeout_secs,
                 "allow_from": config.channels.email.allow_from,
+                "email_mode": email_mode,
+                "email_notify_channel": notify_channel,
+                "email_notify_chat_id": notify_chat_id,
+                "email_trigger_word": trigger_word,
             })
         }
         _ => return Err(StatusCode::NOT_FOUND),
@@ -1634,6 +1790,11 @@ struct ChannelConfigRequest {
     password: Option<String>,
     from_address: Option<String>,
     idle_timeout_secs: Option<u64>,
+    // Email mode/notify fields (write to channels.emails.default)
+    email_mode: Option<String>,
+    email_notify_channel: Option<String>,
+    email_notify_chat_id: Option<String>,
+    email_trigger_word: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1755,12 +1916,17 @@ async fn configure_channel(
             }
             if let Some(password) = &req.password {
                 if !password.is_empty() {
-                    // Store password in encrypted storage
+                    // Store password in encrypted storage (both legacy + new key)
                     let secrets = crate::storage::global_secrets()
                         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-                    let key = crate::storage::SecretKey::channel_token("email");
+                    let legacy_key = crate::storage::SecretKey::channel_token("email");
                     secrets
-                        .set(&key, password)
+                        .set(&legacy_key, password)
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                    // Also store with multi-account key so EmailChannel resolves it directly
+                    let new_key = crate::storage::SecretKey::custom("email.default.password");
+                    secrets
+                        .set(&new_key, password)
                         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
                     config.channels.email.password = "***ENCRYPTED***".to_string();
                 }
@@ -1775,6 +1941,75 @@ async fn configure_channel(
                 config.channels.email.allow_from = allow_from.clone();
             }
             config.channels.email.enabled = true;
+
+            // Sync to channels.emails["default"] for the multi-account system
+            let default_acc = config
+                .channels
+                .emails
+                .entry("default".to_string())
+                .or_insert_with(|| crate::config::EmailAccountConfig {
+                    enabled: true,
+                    ..Default::default()
+                });
+            // Mirror IMAP/SMTP/credentials from legacy config
+            default_acc.enabled = true;
+            default_acc.imap_host = config.channels.email.imap_host.clone();
+            default_acc.imap_port = config.channels.email.imap_port;
+            default_acc.imap_folder = config.channels.email.imap_folder.clone();
+            default_acc.smtp_host = config.channels.email.smtp_host.clone();
+            default_acc.smtp_port = config.channels.email.smtp_port;
+            default_acc.smtp_tls = config.channels.email.smtp_tls;
+            default_acc.username = config.channels.email.username.clone();
+            default_acc.password = config.channels.email.password.clone();
+            default_acc.from_address = config.channels.email.from_address.clone();
+            default_acc.idle_timeout_secs = config.channels.email.idle_timeout_secs;
+            default_acc.allow_from = config.channels.email.allow_from.clone();
+            // Apply mode/notify/trigger from request
+            if let Some(mode_str) = &req.email_mode {
+                default_acc.mode = match mode_str.as_str() {
+                    "automatic" => crate::config::EmailMode::Automatic,
+                    "on_demand" => crate::config::EmailMode::OnDemand,
+                    _ => crate::config::EmailMode::Assisted,
+                };
+            }
+            if let Some(nc) = &req.email_notify_channel {
+                default_acc.notify_channel = if nc.is_empty() {
+                    None
+                } else {
+                    Some(nc.clone())
+                };
+            }
+            if let Some(ncid) = &req.email_notify_chat_id {
+                default_acc.notify_chat_id = if ncid.is_empty() {
+                    None
+                } else {
+                    Some(ncid.clone())
+                };
+            }
+            if let Some(tw) = &req.email_trigger_word {
+                default_acc.trigger_word = if tw.is_empty() {
+                    None
+                } else {
+                    Some(tw.clone())
+                };
+            }
+            // Auto-generate trigger word for on_demand mode if not set
+            if default_acc.mode == crate::config::EmailMode::OnDemand
+                && default_acc
+                    .trigger_word
+                    .as_ref()
+                    .map_or(true, |t| t.is_empty())
+            {
+                if let Ok(secrets) = crate::storage::global_secrets() {
+                    let key = crate::storage::SecretKey::custom("email.default.trigger_word");
+                    let existing = secrets.get(&key).ok().flatten();
+                    if existing.is_none() {
+                        let tw = generate_email_trigger_word();
+                        let _ = secrets.set(&key, &tw);
+                        tracing::info!(trigger_word = %tw, "Auto-generated trigger word on configure");
+                    }
+                }
+            }
         }
         _ => return Err(StatusCode::BAD_REQUEST),
     }
@@ -1997,6 +2232,142 @@ async fn test_channel(
                     ok: false,
                     message: "Not configured — enter phone number and pair".to_string(),
                 })
+            }
+        }
+        "slack" => {
+            let token = req.token.or_else(|| {
+                crate::storage::global_secrets().ok().and_then(|s| {
+                    let key = crate::storage::SecretKey::channel_token("slack");
+                    s.get(&key).ok().flatten()
+                })
+            });
+
+            let Some(token) = token else {
+                return Json(ChannelTestResponse {
+                    ok: false,
+                    message: "No token provided or stored".to_string(),
+                });
+            };
+
+            // Call Slack auth.test API
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_default();
+
+            match client
+                .get("https://slack.com/api/auth.test")
+                .bearer_auth(&token)
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    #[derive(Deserialize)]
+                    struct SlackAuth {
+                        ok: bool,
+                        user: Option<String>,
+                        team: Option<String>,
+                        error: Option<String>,
+                    }
+                    match resp.json::<SlackAuth>().await {
+                        Ok(auth) if auth.ok => {
+                            let user = auth.user.unwrap_or_default();
+                            let team = auth.team.unwrap_or_default();
+                            Json(ChannelTestResponse {
+                                ok: true,
+                                message: format!("Connected as {} in {}", user, team),
+                            })
+                        }
+                        Ok(auth) => Json(ChannelTestResponse {
+                            ok: false,
+                            message: format!(
+                                "Slack auth failed: {}",
+                                auth.error.unwrap_or_else(|| "unknown error".into())
+                            ),
+                        }),
+                        Err(e) => Json(ChannelTestResponse {
+                            ok: false,
+                            message: format!("Failed to parse Slack response: {}", e),
+                        }),
+                    }
+                }
+                Err(e) => Json(ChannelTestResponse {
+                    ok: false,
+                    message: format!("Connection failed: {}", e),
+                }),
+            }
+        }
+        "email" => {
+            let config = state.config.read().await;
+            let imap_host = config.channels.email.imap_host.clone();
+            let imap_port = config.channels.email.imap_port;
+            let smtp_host = config.channels.email.smtp_host.clone();
+            let username = config.channels.email.username.clone();
+            let password_stored = config.channels.email.password.clone();
+            drop(config);
+
+            if imap_host.is_empty() {
+                return Json(ChannelTestResponse {
+                    ok: false,
+                    message: "IMAP host is required".to_string(),
+                });
+            }
+            if username.is_empty() {
+                return Json(ChannelTestResponse {
+                    ok: false,
+                    message: "Username is required".to_string(),
+                });
+            }
+
+            // Resolve password from vault if encrypted
+            let has_password = if password_stored == "***ENCRYPTED***" {
+                crate::storage::global_secrets()
+                    .ok()
+                    .and_then(|s| {
+                        let key = crate::storage::SecretKey::channel_token("email");
+                        s.get(&key).ok().flatten()
+                    })
+                    .is_some()
+            } else {
+                !password_stored.is_empty()
+            };
+
+            if !has_password {
+                return Json(ChannelTestResponse {
+                    ok: false,
+                    message: "No password configured".to_string(),
+                });
+            }
+
+            // Test TCP connection to IMAP server
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                tokio::net::TcpStream::connect(format!("{}:{}", imap_host, imap_port)),
+            )
+            .await
+            {
+                Ok(Ok(_)) => {
+                    let smtp_status = if !smtp_host.is_empty() {
+                        " SMTP configured."
+                    } else {
+                        " SMTP not configured (send disabled)."
+                    };
+                    Json(ChannelTestResponse {
+                        ok: true,
+                        message: format!(
+                            "IMAP reachable at {}:{}.{}",
+                            imap_host, imap_port, smtp_status
+                        ),
+                    })
+                }
+                Ok(Err(e)) => Json(ChannelTestResponse {
+                    ok: false,
+                    message: format!("Cannot reach {}:{} — {}", imap_host, imap_port, e),
+                }),
+                Err(_) => Json(ChannelTestResponse {
+                    ok: false,
+                    message: format!("Connection to {}:{} timed out (10s)", imap_host, imap_port),
+                }),
             }
         }
         "web" => Json(ChannelTestResponse {
@@ -3949,6 +4320,7 @@ async fn webhook_ingress(
         chat_id: session_key.clone(),
         content: body.message,
         timestamp: chrono::Utc::now(),
+        metadata: None,
     };
 
     // Send to agent
@@ -4674,6 +5046,732 @@ async fn put_approval_config(
     }))
 }
 
+// --- Automations ---
+
+#[derive(Deserialize)]
+struct CreateAutomationRequest {
+    name: String,
+    prompt: String,
+    schedule: Option<String>,
+    cron: Option<String>,
+    every: Option<u64>,
+    trigger: Option<String>,
+    trigger_value: Option<String>,
+    enabled: Option<bool>,
+    deliver_to: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PatchAutomationRequest {
+    name: Option<String>,
+    prompt: Option<String>,
+    schedule: Option<String>,
+    cron: Option<String>,
+    every: Option<u64>,
+    trigger: Option<String>,
+    trigger_value: Option<String>,
+    clear_trigger_value: Option<bool>,
+    enabled: Option<bool>,
+    status: Option<String>,
+    deliver_to: Option<String>,
+    clear_deliver_to: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct AutomationHistoryQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct RunAutomationResponse {
+    run_id: String,
+    status: String,
+    message: String,
+}
+
+#[derive(Serialize)]
+struct AutomationListItem {
+    #[serde(flatten)]
+    row: crate::storage::AutomationRow,
+    next_run: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AutomationTarget {
+    value: String,
+    label: String,
+}
+
+fn automation_channel_label(channel: &str) -> String {
+    match channel {
+        "telegram" => "Telegram".to_string(),
+        "discord" => "Discord".to_string(),
+        "slack" => "Slack".to_string(),
+        "whatsapp" => "WhatsApp".to_string(),
+        "web" => "Web".to_string(),
+        ch if ch.starts_with("email:") => format!("Email ({})", &ch[6..]),
+        "email" => "Email".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn resolve_automation_target_chat_id(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if !trimmed.starts_with("vault://") {
+        return trimmed.to_string();
+    }
+
+    let Some(key) = trimmed.strip_prefix("vault://") else {
+        return trimmed.to_string();
+    };
+    let vault_key = key.trim();
+    if vault_key.is_empty() {
+        return trimmed.to_string();
+    }
+
+    if let Ok(secrets) = crate::storage::global_secrets() {
+        let secret_key = crate::storage::SecretKey::custom(&format!("vault.{vault_key}"));
+        if let Ok(Some(value)) = secrets.get(&secret_key) {
+            let resolved = value.trim();
+            if !resolved.is_empty() {
+                return resolved.to_string();
+            }
+        }
+    }
+    trimmed.to_string()
+}
+
+fn build_automation_schedule(
+    schedule: Option<&str>,
+    cron: Option<&str>,
+    every: Option<u64>,
+) -> Result<String, (StatusCode, String)> {
+    if let Some(s) = schedule {
+        return crate::scheduler::AutomationSchedule::parse_stored(s)
+            .map(|v| v.as_stored())
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()));
+    }
+
+    match (cron, every) {
+        (Some(expr), None) => crate::scheduler::AutomationSchedule::from_cron(expr)
+            .map(|v| v.as_stored())
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string())),
+        (None, Some(secs)) => crate::scheduler::AutomationSchedule::from_every(secs)
+            .map(|v| v.as_stored())
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string())),
+        _ => Err((
+            StatusCode::BAD_REQUEST,
+            "Provide either `schedule` or one of (`cron`, `every`)".to_string(),
+        )),
+    }
+}
+
+fn parse_deliver_to(deliver_to: &str) -> Result<(String, String), (StatusCode, String)> {
+    let (channel, chat_id) = deliver_to.rsplit_once(':').ok_or((
+        StatusCode::BAD_REQUEST,
+        "deliver_to must be in format channel:chat_id".to_string(),
+    ))?;
+    let channel = channel.trim();
+    let chat_id = chat_id.trim();
+    if channel.is_empty() || chat_id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "deliver_to must be in format channel:chat_id".to_string(),
+        ));
+    }
+    Ok((channel.to_string(), chat_id.to_string()))
+}
+
+fn normalize_automation_trigger(
+    trigger: Option<&str>,
+    trigger_value: Option<&str>,
+) -> Result<(String, Option<String>), (StatusCode, String)> {
+    let trigger = trigger
+        .unwrap_or("always")
+        .trim()
+        .to_ascii_lowercase()
+        .replace('-', "_");
+
+    match trigger.as_str() {
+        "always" => Ok(("always".to_string(), None)),
+        "on_change" | "changed" => Ok(("on_change".to_string(), None)),
+        "contains" => {
+            let value = trigger_value
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .ok_or((
+                    StatusCode::BAD_REQUEST,
+                    "trigger_value is required when trigger=contains".to_string(),
+                ))?;
+            Ok(("contains".to_string(), Some(value.to_string())))
+        }
+        _ => Err((
+            StatusCode::BAD_REQUEST,
+            "trigger must be one of: always, on_change, contains".to_string(),
+        )),
+    }
+}
+
+/// GET /api/v1/automations/targets
+async fn list_automation_targets(
+    State(state): State<Arc<AppState>>,
+) -> Json<Vec<AutomationTarget>> {
+    let mut channels = {
+        let cfg = state.config.read().await;
+        cfg.channels.clone()
+    };
+    channels.migrate_legacy_email();
+
+    let mut seen = HashSet::new();
+    let mut targets = vec![AutomationTarget {
+        value: "cli:default".to_string(),
+        label: "CLI (default)".to_string(),
+    }];
+    seen.insert("cli:default".to_string());
+
+    for (channel, chat_id) in channels.active_channels_with_chat_ids() {
+        let chat_id = resolve_automation_target_chat_id(&chat_id);
+        if chat_id.is_empty() || chat_id.starts_with("vault://") {
+            continue;
+        }
+        let value = format!("{channel}:{chat_id}");
+        if !seen.insert(value.clone()) {
+            continue;
+        }
+        let label = format!("{} ({chat_id})", automation_channel_label(&channel));
+        targets.push(AutomationTarget { value, label });
+    }
+
+    if let Some(db) = &state.db {
+        if let Ok(users) = db.load_all_users().await {
+            if let Some(owner) = users.into_iter().next() {
+                if let Ok(identities) = db.load_user_identities(&owner.id).await {
+                    for identity in identities {
+                        let channel = identity.channel.trim().to_ascii_lowercase();
+                        let platform_id = identity.platform_id.trim().to_string();
+                        if channel.is_empty() || platform_id.is_empty() {
+                            continue;
+                        }
+
+                        let value = format!("{channel}:{platform_id}");
+                        if !seen.insert(value.clone()) {
+                            continue;
+                        }
+
+                        let label_suffix = identity
+                            .display_name
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|v| !v.is_empty())
+                            .unwrap_or(&platform_id);
+                        let label =
+                            format!("{} ({label_suffix})", automation_channel_label(&channel));
+                        targets.push(AutomationTarget { value, label });
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(cli_idx) = targets.iter().position(|t| t.value == "cli:default") {
+        let cli = targets.remove(cli_idx);
+        targets.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+        targets.insert(0, cli);
+    } else {
+        targets.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    }
+
+    Json(targets)
+}
+
+/// GET /api/v1/automations
+async fn list_automations(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<AutomationListItem>>, (StatusCode, String)> {
+    let db = state.db.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Database not available".to_string(),
+    ))?;
+    let rows = db.load_automations().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to list automations: {e}"),
+        )
+    })?;
+    let now = chrono::Utc::now();
+    let items = rows
+        .into_iter()
+        .map(|row| AutomationListItem {
+            next_run: crate::scheduler::AutomationSchedule::next_run_from_stored(
+                &row.schedule,
+                row.last_run.as_deref(),
+                now,
+            )
+            .map(|dt| dt.to_rfc3339()),
+            row,
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(items))
+}
+
+/// POST /api/v1/automations
+async fn create_automation(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateAutomationRequest>,
+) -> Result<Json<crate::storage::AutomationRow>, (StatusCode, String)> {
+    let db = state.db.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Database not available".to_string(),
+    ))?;
+
+    if req.name.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "Name cannot be empty".to_string()));
+    }
+    if req.prompt.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Prompt cannot be empty".to_string(),
+        ));
+    }
+    if let Some(deliver_to) = req.deliver_to.as_deref() {
+        parse_deliver_to(deliver_to)?;
+    }
+    let (trigger_kind, trigger_value) =
+        normalize_automation_trigger(req.trigger.as_deref(), req.trigger_value.as_deref())?;
+
+    let schedule =
+        build_automation_schedule(req.schedule.as_deref(), req.cron.as_deref(), req.every)?;
+    let prompt = req.prompt.trim().to_string();
+    let compiled_plan = {
+        let cfg = state.config.read().await.clone();
+        crate::scheduler::automations::compile_automation_plan(&prompt, &cfg)
+    };
+    let id = uuid::Uuid::new_v4().to_string();
+    let enabled = req.enabled.unwrap_or(true);
+    let status = if !enabled {
+        "paused"
+    } else if compiled_plan.is_valid() {
+        "active"
+    } else {
+        "invalid_config"
+    };
+
+    let plan_json = compiled_plan.plan_json();
+    let dependencies_json = compiled_plan.dependencies_json();
+    let validation_errors_json = compiled_plan.validation_errors_json();
+    db.insert_automation_with_plan(
+        &id,
+        req.name.trim(),
+        &prompt,
+        &schedule,
+        enabled,
+        status,
+        req.deliver_to.as_deref(),
+        &trigger_kind,
+        trigger_value.as_deref(),
+        Some(&plan_json),
+        &dependencies_json,
+        compiled_plan.plan.version,
+        validation_errors_json.as_deref(),
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create automation: {e}"),
+        )
+    })?;
+
+    let created = db.load_automation(&id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to load created automation: {e}"),
+        )
+    })?;
+
+    created.map(Json).ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Automation not found after insert".to_string(),
+    ))
+}
+
+/// PATCH /api/v1/automations/{id}
+async fn patch_automation(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PatchAutomationRequest>,
+) -> Result<Json<crate::storage::AutomationRow>, (StatusCode, String)> {
+    let db = state.db.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Database not available".to_string(),
+    ))?;
+
+    let current = db.load_automation(&id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to load automation: {e}"),
+        )
+    })?;
+    let Some(current) = current else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("Automation '{id}' not found"),
+        ));
+    };
+
+    let requested_status = req.status.as_deref().map(|v| v.trim().to_string());
+    let mut update = crate::storage::AutomationUpdate {
+        name: req.name.map(|v| v.trim().to_string()),
+        prompt: req.prompt.map(|v| v.trim().to_string()),
+        enabled: req.enabled,
+        status: requested_status.clone(),
+        ..Default::default()
+    };
+
+    if req.clear_deliver_to.unwrap_or(false) {
+        update.deliver_to = Some(None);
+    } else if let Some(deliver_to) = req.deliver_to {
+        parse_deliver_to(&deliver_to)?;
+        update.deliver_to = Some(Some(deliver_to));
+    }
+
+    if req.schedule.is_some() || req.cron.is_some() || req.every.is_some() {
+        update.schedule = Some(build_automation_schedule(
+            req.schedule.as_deref(),
+            req.cron.as_deref(),
+            req.every,
+        )?);
+    }
+
+    if req.clear_trigger_value.unwrap_or(false) {
+        update.trigger_value = Some(None);
+        if req.trigger.is_none() && current.trigger_kind == "contains" {
+            update.trigger_kind = Some("always".to_string());
+        }
+    }
+
+    if req.trigger.is_some() || req.trigger_value.is_some() {
+        let desired_trigger = req.trigger.as_deref().unwrap_or(&current.trigger_kind);
+        let desired_trigger_value = if req.trigger_value.is_some() {
+            req.trigger_value.as_deref()
+        } else {
+            current.trigger_value.as_deref()
+        };
+        let (trigger_kind, trigger_value) =
+            normalize_automation_trigger(Some(desired_trigger), desired_trigger_value)?;
+        update.trigger_kind = Some(trigger_kind);
+        update.trigger_value = Some(trigger_value);
+    }
+
+    let final_prompt = update
+        .prompt
+        .clone()
+        .unwrap_or_else(|| current.prompt.clone());
+    let final_enabled = update.enabled.unwrap_or(current.enabled);
+    let compiled_plan = {
+        let cfg = state.config.read().await.clone();
+        crate::scheduler::automations::compile_automation_plan(&final_prompt, &cfg)
+    };
+    update.plan_json = Some(Some(compiled_plan.plan_json()));
+    update.dependencies_json = Some(Some(compiled_plan.dependencies_json()));
+    update.plan_version = Some(compiled_plan.plan.version);
+    update.validation_errors = Some(compiled_plan.validation_errors_json());
+
+    let mut next_status = update
+        .status
+        .clone()
+        .unwrap_or_else(|| current.status.clone());
+    if final_enabled && !compiled_plan.is_valid() {
+        next_status = "invalid_config".to_string();
+        let summary = compiled_plan.validation_errors.join(" | ");
+        update.last_result = Some(Some(format!("Automation configuration invalid: {summary}")));
+    } else if !final_enabled && requested_status.is_none() {
+        next_status = "paused".to_string();
+    } else if final_enabled
+        && compiled_plan.is_valid()
+        && requested_status.is_none()
+        && current.status.eq_ignore_ascii_case("invalid_config")
+    {
+        next_status = "active".to_string();
+    }
+    update.status = Some(next_status);
+
+    let updated = db.update_automation(&id, update).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to update automation: {e}"),
+        )
+    })?;
+
+    if !updated {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("Automation '{id}' not found (or no fields to update)"),
+        ));
+    }
+
+    let row = db.load_automation(&id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to load updated automation: {e}"),
+        )
+    })?;
+
+    row.map(Json).ok_or((
+        StatusCode::NOT_FOUND,
+        format!("Automation '{id}' not found"),
+    ))
+}
+
+/// DELETE /api/v1/automations/{id}
+async fn delete_automation(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let db = state.db.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Database not available".to_string(),
+    ))?;
+
+    let removed = db.delete_automation(&id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to delete automation: {e}"),
+        )
+    })?;
+
+    if !removed {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("Automation '{id}' not found"),
+        ));
+    }
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "id": id
+    })))
+}
+
+/// GET /api/v1/automations/{id}/history
+async fn get_automation_history(
+    Path(id): Path<String>,
+    Query(q): Query<AutomationHistoryQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<crate::storage::AutomationRunRow>>, (StatusCode, String)> {
+    let db = state.db.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Database not available".to_string(),
+    ))?;
+    let limit = q.limit.unwrap_or(50).clamp(1, 500);
+    let runs = db.load_automation_runs(&id, limit).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to load automation history: {e}"),
+        )
+    })?;
+    Ok(Json(runs))
+}
+
+/// POST /api/v1/automations/{id}/run
+async fn run_automation_now(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<RunAutomationResponse>, (StatusCode, String)> {
+    let db = state.db.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Database not available".to_string(),
+    ))?;
+
+    let automation = db.load_automation(&id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to load automation: {e}"),
+        )
+    })?;
+    let Some(automation) = automation else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("Automation '{id}' not found"),
+        ));
+    };
+
+    let compiled_plan = {
+        let cfg = state.config.read().await.clone();
+        crate::scheduler::automations::compile_automation_plan(&automation.prompt, &cfg)
+    };
+    let plan_json = compiled_plan.plan_json();
+    let dependencies_json = compiled_plan.dependencies_json();
+    let validation_errors_json = compiled_plan.validation_errors_json();
+    let derived_status = if !automation.enabled {
+        "paused".to_string()
+    } else if compiled_plan.is_valid() {
+        "active".to_string()
+    } else {
+        "invalid_config".to_string()
+    };
+    let _ = db
+        .update_automation(
+            &automation.id,
+            crate::storage::AutomationUpdate {
+                status: Some(derived_status.clone()),
+                plan_json: Some(Some(plan_json)),
+                dependencies_json: Some(Some(dependencies_json)),
+                plan_version: Some(compiled_plan.plan.version),
+                validation_errors: Some(validation_errors_json.clone()),
+                ..Default::default()
+            },
+        )
+        .await;
+
+    if derived_status.eq_ignore_ascii_case("invalid_config") {
+        let errors = crate::scheduler::automations::parse_validation_errors_json(
+            validation_errors_json.as_deref(),
+        );
+        let reason = if errors.is_empty() {
+            "Automation configuration is invalid. Update dependencies before running.".to_string()
+        } else {
+            format!(
+                "Automation configuration is invalid: {}",
+                errors.join(" | ")
+            )
+        };
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let _ = db
+            .insert_automation_run(&run_id, &automation.id, "error", Some(&reason))
+            .await;
+        let _ = db
+            .update_automation(
+                &automation.id,
+                crate::storage::AutomationUpdate {
+                    status: Some("invalid_config".to_string()),
+                    last_result: Some(Some(reason.clone())),
+                    touch_last_run: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+        return Ok(Json(RunAutomationResponse {
+            run_id,
+            status: "error".to_string(),
+            message: reason,
+        }));
+    }
+
+    let target = automation
+        .deliver_to
+        .clone()
+        .unwrap_or_else(|| "cli:default".to_string());
+    let (channel, chat_id) = parse_deliver_to(&target)?;
+
+    let run_id = uuid::Uuid::new_v4().to_string();
+    db.insert_automation_run(
+        &run_id,
+        &automation.id,
+        "queued",
+        Some("Manual run requested"),
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create automation run: {e}"),
+        )
+    })?;
+
+    let Some(inbound_tx) = &state.inbound_tx else {
+        let _ = db
+            .complete_automation_run(
+                &run_id,
+                "error",
+                Some("Agent queue unavailable (setup-only mode)"),
+            )
+            .await;
+        let _ = db
+            .update_automation(
+                &automation.id,
+                crate::storage::AutomationUpdate {
+                    status: Some("error".to_string()),
+                    last_result: Some(Some(
+                        "Manual run failed: agent queue unavailable".to_string(),
+                    )),
+                    touch_last_run: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+        return Ok(Json(RunAutomationResponse {
+            run_id,
+            status: "error".to_string(),
+            message: "Agent queue unavailable (setup-only mode)".to_string(),
+        }));
+    };
+
+    let runtime_prompt = crate::scheduler::automations::build_runtime_run_input_from_plan(
+        automation.plan_json.as_deref(),
+        &automation.prompt,
+    );
+
+    let msg = crate::bus::InboundMessage {
+        channel,
+        sender_id: format!("automation:{}", automation.id),
+        chat_id,
+        content: runtime_prompt,
+        timestamp: chrono::Utc::now(),
+        metadata: Some(crate::bus::MessageMetadata {
+            is_system: true,
+            scheduler_kind: Some("automation".to_string()),
+            scheduler_job_id: Some(automation.id.clone()),
+            automation_run_id: Some(run_id.clone()),
+            ..Default::default()
+        }),
+    };
+
+    match inbound_tx.send(msg).await {
+        Ok(()) => {
+            let result_msg = format!("Run queued to {target}");
+            let _ = db
+                .update_automation(
+                    &automation.id,
+                    crate::storage::AutomationUpdate {
+                        status: Some("active".to_string()),
+                        last_result: Some(Some(result_msg.clone())),
+                        touch_last_run: true,
+                        ..Default::default()
+                    },
+                )
+                .await;
+            Ok(Json(RunAutomationResponse {
+                run_id,
+                status: "queued".to_string(),
+                message: result_msg,
+            }))
+        }
+        Err(e) => {
+            let msg = format!("Failed to enqueue automation run: {e}");
+            let _ = db
+                .complete_automation_run(&run_id, "error", Some(&msg))
+                .await;
+            let _ = db
+                .update_automation(
+                    &automation.id,
+                    crate::storage::AutomationUpdate {
+                        status: Some("error".to_string()),
+                        last_result: Some(Some(msg.clone())),
+                        touch_last_run: true,
+                        ..Default::default()
+                    },
+                )
+                .await;
+            Ok(Json(RunAutomationResponse {
+                run_id,
+                status: "error".to_string(),
+                message: msg,
+            }))
+        }
+    }
+}
+
 // --- Token Usage ---
 
 #[derive(Deserialize)]
@@ -4727,4 +5825,442 @@ async fn get_usage(
         models: rows,
         totals,
     }))
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Email Accounts (multi-account)
+// ─────────────────────────────────────────────────────────────────────────
+
+/// List all email accounts (passwords masked).
+async fn list_email_accounts(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let config = state.config.read().await;
+    let accounts: Vec<serde_json::Value> = config
+        .channels
+        .emails
+        .iter()
+        .map(|(name, acc)| {
+            let has_password = if acc.password == "***ENCRYPTED***" {
+                crate::storage::global_secrets()
+                    .ok()
+                    .and_then(|s| {
+                        let key =
+                            crate::storage::SecretKey::custom(&format!("email.{name}.password"));
+                        s.get(&key).ok().flatten()
+                    })
+                    .is_some()
+            } else {
+                !acc.password.is_empty()
+            };
+            serde_json::json!({
+                "name": name,
+                "enabled": acc.enabled,
+                "configured": acc.is_configured(),
+                "imap_host": acc.imap_host,
+                "imap_port": acc.imap_port,
+                "imap_folder": acc.imap_folder,
+                "smtp_host": acc.smtp_host,
+                "smtp_port": acc.smtp_port,
+                "smtp_tls": acc.smtp_tls,
+                "username": acc.username,
+                "has_password": has_password,
+                "from_address": acc.from_address,
+                "idle_timeout_secs": acc.idle_timeout_secs,
+                "allow_from": acc.allow_from,
+                "mode": acc.mode,
+                "notify_channel": acc.notify_channel,
+                "notify_chat_id": acc.notify_chat_id,
+                "trigger_word": acc.trigger_word,
+                "batch_threshold": acc.batch_threshold,
+                "batch_window_secs": acc.batch_window_secs,
+                "send_delay_secs": acc.send_delay_secs,
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({ "accounts": accounts }))
+}
+
+/// Get a single email account by name (password masked).
+async fn get_email_account(
+    Path(name): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let config = state.config.read().await;
+    let acc = config
+        .channels
+        .emails
+        .get(&name)
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let has_password = if acc.password == "***ENCRYPTED***" {
+        crate::storage::global_secrets()
+            .ok()
+            .and_then(|s| {
+                let key = crate::storage::SecretKey::custom(&format!("email.{name}.password"));
+                s.get(&key).ok().flatten()
+            })
+            .is_some()
+    } else {
+        !acc.password.is_empty()
+    };
+
+    Ok(Json(serde_json::json!({
+        "name": name,
+        "enabled": acc.enabled,
+        "configured": acc.is_configured(),
+        "imap_host": acc.imap_host,
+        "imap_port": acc.imap_port,
+        "imap_folder": acc.imap_folder,
+        "smtp_host": acc.smtp_host,
+        "smtp_port": acc.smtp_port,
+        "smtp_tls": acc.smtp_tls,
+        "username": acc.username,
+        "has_password": has_password,
+        "from_address": acc.from_address,
+        "idle_timeout_secs": acc.idle_timeout_secs,
+        "allow_from": acc.allow_from,
+        "mode": acc.mode,
+        "notify_channel": acc.notify_channel,
+        "notify_chat_id": acc.notify_chat_id,
+        "trigger_word": acc.trigger_word,
+        "batch_threshold": acc.batch_threshold,
+        "batch_window_secs": acc.batch_window_secs,
+        "send_delay_secs": acc.send_delay_secs,
+    })))
+}
+
+#[derive(Deserialize)]
+struct EmailAccountRequest {
+    name: String,
+    // IMAP
+    imap_host: Option<String>,
+    imap_port: Option<u16>,
+    imap_folder: Option<String>,
+    // SMTP
+    smtp_host: Option<String>,
+    smtp_port: Option<u16>,
+    smtp_tls: Option<bool>,
+    // Credentials
+    username: Option<String>,
+    password: Option<String>,
+    from_address: Option<String>,
+    // Behaviour
+    idle_timeout_secs: Option<u64>,
+    #[serde(default)]
+    allow_from: Option<Vec<String>>,
+    mode: Option<crate::config::EmailMode>,
+    notify_channel: Option<String>,
+    notify_chat_id: Option<String>,
+    trigger_word: Option<String>,
+    // Batching
+    batch_threshold: Option<u32>,
+    batch_window_secs: Option<u64>,
+    send_delay_secs: Option<u64>,
+}
+
+/// Create or update an email account.
+async fn configure_email_account(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<EmailAccountRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mut config = state.config.read().await.clone();
+
+    let acc = config
+        .channels
+        .emails
+        .entry(req.name.clone())
+        .or_insert_with(crate::config::EmailAccountConfig::default);
+
+    // IMAP
+    if let Some(v) = &req.imap_host {
+        acc.imap_host = v.clone();
+    }
+    if let Some(v) = req.imap_port {
+        acc.imap_port = v;
+    }
+    if let Some(v) = &req.imap_folder {
+        acc.imap_folder = v.clone();
+    }
+    // SMTP
+    if let Some(v) = &req.smtp_host {
+        acc.smtp_host = v.clone();
+    }
+    if let Some(v) = req.smtp_port {
+        acc.smtp_port = v;
+    }
+    if let Some(v) = req.smtp_tls {
+        acc.smtp_tls = v;
+    }
+    // Credentials
+    if let Some(v) = &req.username {
+        acc.username = v.clone();
+    }
+    if let Some(password) = &req.password {
+        if !password.is_empty() {
+            let secrets =
+                crate::storage::global_secrets().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let key = crate::storage::SecretKey::custom(&format!("email.{}.password", req.name));
+            secrets
+                .set(&key, password)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            acc.password = "***ENCRYPTED***".to_string();
+        }
+    }
+    if let Some(v) = &req.from_address {
+        acc.from_address = v.clone();
+    }
+    // Behaviour
+    if let Some(v) = req.idle_timeout_secs {
+        acc.idle_timeout_secs = v;
+    }
+    if let Some(v) = &req.allow_from {
+        acc.allow_from = v.clone();
+    }
+    if let Some(v) = &req.mode {
+        acc.mode = v.clone();
+    }
+    if let Some(v) = &req.notify_channel {
+        acc.notify_channel = Some(v.clone());
+    }
+    if let Some(v) = &req.notify_chat_id {
+        acc.notify_chat_id = Some(v.clone());
+    }
+    if let Some(v) = &req.trigger_word {
+        acc.trigger_word = Some(v.clone());
+    }
+    // Batching
+    if let Some(v) = req.batch_threshold {
+        acc.batch_threshold = v;
+    }
+    if let Some(v) = req.batch_window_secs {
+        acc.batch_window_secs = v;
+    }
+    if let Some(v) = req.send_delay_secs {
+        acc.send_delay_secs = v;
+    }
+
+    acc.enabled = true;
+
+    state
+        .save_config(config)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "message": format!("Email account '{}' configured", req.name),
+    })))
+}
+
+#[derive(Deserialize)]
+struct EmailAccountNameRequest {
+    name: String,
+}
+
+/// Deactivate an email account (keeps config, sets enabled=false).
+async fn deactivate_email_account(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<EmailAccountNameRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mut config = state.config.read().await.clone();
+
+    let acc = config
+        .channels
+        .emails
+        .get_mut(&req.name)
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    acc.enabled = false;
+
+    state
+        .save_config(config)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "message": format!("Email account '{}' deactivated", req.name),
+    })))
+}
+
+/// Delete an email account entirely (removes config + vault password).
+async fn delete_email_account(
+    Path(name): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mut config = state.config.read().await.clone();
+
+    if config.channels.emails.remove(&name).is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    // Clean up vault password
+    if let Ok(secrets) = crate::storage::global_secrets() {
+        let key = crate::storage::SecretKey::custom(&format!("email.{name}.password"));
+        let _ = secrets.delete(&key);
+        let trigger_key = crate::storage::SecretKey::custom(&format!("email.{name}.trigger_word"));
+        let _ = secrets.delete(&trigger_key);
+    }
+
+    state
+        .save_config(config)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "message": format!("Email account '{}' deleted", name),
+    })))
+}
+
+/// Test IMAP/SMTP connection for an email account.
+async fn test_email_account(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<EmailAccountNameRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let config = state.config.read().await;
+    let acc = config
+        .channels
+        .emails
+        .get(&req.name)
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    if !acc.is_configured() {
+        return Ok(Json(serde_json::json!({
+            "ok": false,
+            "message": "Account is not fully configured (missing IMAP/SMTP/credentials).",
+        })));
+    }
+
+    // Resolve password from vault
+    let password = if acc.password == "***ENCRYPTED***" {
+        let secrets =
+            crate::storage::global_secrets().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let key = crate::storage::SecretKey::custom(&format!("email.{}.password", req.name));
+        secrets
+            .get(&key)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
+    } else {
+        acc.password.clone()
+    };
+
+    // Test IMAP connection
+    let imap_result =
+        test_imap_connection(&acc.imap_host, acc.imap_port, &acc.username, &password).await;
+
+    match imap_result {
+        Ok(()) => Ok(Json(serde_json::json!({
+            "ok": true,
+            "message": format!("IMAP connection to {}:{} successful", acc.imap_host, acc.imap_port),
+        }))),
+        Err(e) => Ok(Json(serde_json::json!({
+            "ok": false,
+            "message": format!("IMAP connection failed: {e}"),
+        }))),
+    }
+}
+
+/// Test IMAP connection by attempting a login.
+#[cfg(feature = "channel-email")]
+async fn test_imap_connection(
+    host: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+) -> Result<(), String> {
+    use std::sync::Arc as StdArc;
+    use tokio::net::TcpStream;
+    use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+    use tokio_rustls::TlsConnector;
+
+    let addr = format!("{host}:{port}");
+    let tcp = TcpStream::connect(&addr)
+        .await
+        .map_err(|e| format!("TCP connect failed: {e}"))?;
+
+    let certs = RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.into(),
+    };
+    let rustls_config = ClientConfig::builder()
+        .with_root_certificates(certs)
+        .with_no_client_auth();
+    let tls_connector: TlsConnector = StdArc::new(rustls_config).into();
+    let sni: rustls_pki_types::DnsName = host
+        .to_string()
+        .try_into()
+        .map_err(|_| format!("Invalid hostname: {host}"))?;
+    let tls = tls_connector
+        .connect(sni.into(), tcp)
+        .await
+        .map_err(|e| format!("TLS handshake failed: {e}"))?;
+
+    let client = async_imap::Client::new(tls);
+    let mut session = client
+        .login(username, password)
+        .await
+        .map_err(|e| format!("IMAP login failed: {}", e.0))?;
+
+    let _ = session.logout().await;
+    Ok(())
+}
+
+#[cfg(not(feature = "channel-email"))]
+async fn test_imap_connection(
+    _host: &str,
+    _port: u16,
+    _username: &str,
+    _password: &str,
+) -> Result<(), String> {
+    Err("Email feature not enabled (compile with --features channel-email)".to_string())
+}
+
+/// Generate a random trigger word like "hm-x7k2p9" for on_demand email mode.
+/// Generate or retrieve trigger word for an email account.
+/// POST /api/v1/channels/email/trigger-word
+/// Body: { "account": "default" }  (optional, defaults to "default")
+async fn generate_or_get_trigger_word(
+    Json(req): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let account = req
+        .get("account")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default");
+    let vault_key = format!("email.{account}.trigger_word");
+
+    let secrets =
+        crate::storage::global_secrets().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let key = crate::storage::SecretKey::custom(&vault_key);
+
+    // Return existing or generate new
+    let trigger_word = match secrets.get(&key) {
+        Ok(Some(tw)) => tw,
+        _ => {
+            let tw = generate_email_trigger_word();
+            secrets
+                .set(&key, &tw)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            tracing::info!(account, trigger_word = %tw, "Generated trigger word via API");
+            tw
+        }
+    };
+
+    Ok(Json(serde_json::json!({ "trigger_word": trigger_word })))
+}
+
+fn generate_email_trigger_word() -> String {
+    use std::time::SystemTime;
+    let seed = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let chars: Vec<char> = "abcdefghijklmnopqrstuvwxyz0123456789".chars().collect();
+    let mut result = String::from("hm-");
+    let mut state = seed;
+    for _ in 0..6 {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let idx = (state >> 33) as usize % chars.len();
+        result.push(chars[idx]);
+    }
+    result
 }

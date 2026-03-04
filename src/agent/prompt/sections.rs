@@ -134,6 +134,14 @@ impl PromptSection for ToolsSection {
         // go via the API parameter but the LLM still needs behavioral guidance.
         let has_browser = ctx.registered_tool_names.iter().any(|n| n == "browser");
         let has_web_search = ctx.registered_tool_names.iter().any(|n| n == "web_search");
+        let has_create_automation = ctx
+            .registered_tool_names
+            .iter()
+            .any(|n| n == "create_automation");
+        let has_read_email_inbox = ctx
+            .registered_tool_names
+            .iter()
+            .any(|n| n == "read_email_inbox");
 
         if has_browser {
             prompt.push_str("\n### Tool Routing Rules\n\n");
@@ -169,6 +177,27 @@ impl PromptSection for ToolsSection {
                  8. Formulate your answer, then `close`\n\n\
                  CRITICAL: NEVER guess or invent URLs. ALWAYS click refs from the snapshot.\n\
                  Snapshot format: `- link \"Title\" [ref=e3]` → use `click ref=e3`\n",
+            );
+        }
+
+        if has_create_automation {
+            prompt.push_str("\n### Automation Rules\n\n");
+            prompt.push_str(
+                "When the user asks for recurring/proactive behavior, call **create_automation** instead of answering as one-off.\n\
+                 Triggers include phrases like: 'ogni', 'every', 'tutti i giorni', 'ogni mattina', 'each week', 'monitor'.\n\
+                 Convert natural timing into tool schedule format before the call (`cron:...` or `every:SECONDS`).\n\
+                 After tool success, confirm what was created (name + schedule + destination).\n",
+            );
+            prompt.push_str(
+                "If a request sounds repetitive but the user did not explicitly ask recurring execution, offer it proactively in one short sentence.\n",
+            );
+        }
+
+        if has_read_email_inbox {
+            prompt.push_str("\n### Email Rules\n\n");
+            prompt.push_str(
+                "When asked to read/check/summarize inbox emails, use **read_email_inbox** first.\n\
+                 Do not claim missing access before attempting this tool.\n",
             );
         }
 

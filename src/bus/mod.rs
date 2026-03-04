@@ -1,3 +1,3 @@
 pub mod queue;
 
-pub use queue::{InboundMessage, MessageBus, OutboundMessage, StreamMessage};
+pub use queue::{InboundMessage, MessageBus, MessageMetadata, OutboundMessage, StreamMessage};

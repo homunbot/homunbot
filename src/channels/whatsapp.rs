@@ -403,6 +403,7 @@ async fn handle_message(
         chat_id: chat_jid.to_string(), // Full JID as chat_id for replies
         content: text,
         timestamp: chrono::Utc::now(),
+        metadata: None,
     };
 
     if let Err(e) = inbound_tx.send(inbound).await {

@@ -1056,18 +1056,21 @@ if (chModal && channelCards.length > 0) {
     const chCloseBtn = chModal.querySelector('.ch-modal-close');
     const chCancelBtn = chModal.querySelector('.ch-modal-cancel');
     const chForm = document.getElementById('channel-config-form');
-    const chGuide = document.getElementById('channel-guide');
+    const chSubtitle = document.getElementById('channel-subtitle');
     const chTokenGroup = document.getElementById('ch-token-group');
     const chPhoneGroup = document.getElementById('ch-phone-group');
     const chAllowGroup = document.getElementById('ch-allow-from-group');
     const chDiscordGroup = document.getElementById('ch-discord-channel-group');
     const chSlackGroup = document.getElementById('ch-slack-channel-group');
-    const chEmailImapGroup = document.getElementById('ch-email-imap-group');
-    const chEmailSmtpGroup = document.getElementById('ch-email-smtp-group');
+    const chEmailServersGroup = document.getElementById('ch-email-servers-group');
     const chEmailCredsGroup = document.getElementById('ch-email-credentials-group');
+    const chEmailBehaviorGroup = document.getElementById('ch-email-behavior-group');
+    const chEmailNotifyGroup = document.getElementById('ch-email-notify-group');
+    const chEmailTriggerGroup = document.getElementById('ch-email-trigger-group');
     const chWebHostGroup = document.getElementById('ch-web-host-group');
     const chWebPortGroup = document.getElementById('ch-web-port-group');
     const chWaPairing = document.getElementById('ch-wa-pairing');
+    const chNotifyHint = document.getElementById('ch-notify-hint');
     const btnWaPair = document.getElementById('btn-wa-pair');
     const btnTestCh = document.getElementById('btn-test-channel');
     const btnChSave = document.getElementById('btn-ch-save');
@@ -1075,64 +1078,93 @@ if (chModal && channelCards.length > 0) {
 
     let currentChannel = null;
 
-    // --- Channel guides (plain text, built with safe DOM) ---
-    const GUIDES = {
-        telegram: [
-            'Open Telegram and search for @BotFather',
-            'Send /newbot and follow the instructions',
-            'Copy the bot token and paste it below',
-            'To find your User ID, search @userinfobot on Telegram',
-        ],
-        discord: [
-            'Go to discord.com/developers/applications',
-            'Create a new Application \u2192 Bot \u2192 Reset Token',
-            'Copy the token and paste it below',
-            'Enable Privileged Gateway Intents (Message Content)',
-            'Generate invite URL (OAuth2 \u2192 bot scope \u2192 Send Messages)',
-        ],
-        slack: [
-            'Go to api.slack.com/apps and create a new app',
-            'Go to OAuth & Permissions \u2192 Bot Token Scopes',
-            'Add scopes: chat:write, channels:history, groups:history',
-            'Install app to workspace and copy Bot User OAuth Token',
-            'Channel ID is optional \u2014 leave empty for auto-discovery',
-        ],
-        whatsapp: [
-            'Enter your phone number (international format without +)',
-            'Click "Start Pairing" \u2014 you will receive an 8-digit code',
-            'Open WhatsApp \u2192 Linked Devices \u2192 Link a Device',
-            'Select "Link with phone number" and enter the code',
-        ],
-        email: [
-            'Enter IMAP server (e.g., imap.gmail.com)',
-            'Enter SMTP server (e.g., smtp.gmail.com)',
-            'For Gmail: enable 2FA and create an App Password',
-            'Enter your email address as username',
-            'Paste the App Password (not your regular password)',
-            'Add allowed senders (emails or domains like @company.com)',
-        ],
-        web: [],
+    // --- Email mode field visibility logic ---
+    function updateEmailModeFields() {
+        var modeSelect = document.getElementById('ch-email-mode');
+        var modeHint = document.getElementById('ch-email-mode-hint');
+        if (!modeSelect) return;
+        var mode = modeSelect.value;
+        // Notify group: visible for assisted & automatic
+        if (chEmailNotifyGroup) {
+            chEmailNotifyGroup.style.display = (mode === 'assisted' || mode === 'automatic') ? 'block' : 'none';
+        }
+        // Trigger word: only for on_demand
+        if (chEmailTriggerGroup) {
+            chEmailTriggerGroup.style.display = mode === 'on_demand' ? 'block' : 'none';
+            // Auto-fetch/generate trigger word when switching to on_demand
+            if (mode === 'on_demand') {
+                var twInput = document.getElementById('ch-email-trigger-word');
+                if (twInput && !twInput.value.trim()) {
+                    fetch('/api/v1/channels/email/trigger-word', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ account: 'default' })
+                    })
+                    .then(function(r) { return r.json(); })
+                    .then(function(d) {
+                        if (d.trigger_word && !twInput.value.trim()) {
+                            twInput.value = d.trigger_word;
+                        }
+                    })
+                    .catch(function() {});
+                }
+            }
+        }
+        // Update hint text
+        if (modeHint) {
+            if (mode === 'assisted') {
+                modeHint.textContent = 'Generates summary and draft, sends to notification channel for approval.';
+            } else if (mode === 'automatic') {
+                modeHint.textContent = 'Responds directly to emails. Escalates to notification channel if unsure.';
+            } else if (mode === 'on_demand') {
+                modeHint.textContent = 'Only processes emails containing the trigger word. Others are ignored.';
+            }
+        }
+    }
+
+    // Attach mode change listener
+    var emailModeSelect = document.getElementById('ch-email-mode');
+    if (emailModeSelect) {
+        emailModeSelect.addEventListener('change', updateEmailModeFields);
+    }
+
+    // --- Channel subtitles (service description) ---
+    const SUBTITLES = {
+        telegram: 'Telegram Bot API \u2014 create a bot with @BotFather, paste the token, add your User ID (from @userinfobot).',
+        discord: 'Discord Bot gateway \u2014 create app at discord.com/developers, enable Message Content intent.',
+        slack: 'Slack Web API \u2014 create app at api.slack.com/apps, add bot scopes (chat:write, channels:history).',
+        whatsapp: 'Native WhatsApp Web \u2014 enter phone number, click Start Pairing, link device in WhatsApp settings.',
+        email: 'IMAP/SMTP \u2014 for Gmail enable 2FA and create an App Password.',
+        web: 'Built-in browser chat interface. Always enabled.',
     };
 
-    function buildGuide(channelName) {
-        clearChildren(chGuide);
-        const steps = GUIDES[channelName] || [];
-        if (steps.length === 0) {
-            chGuide.style.display = 'none';
-            return;
-        }
-        chGuide.style.display = 'block';
-        var title = document.createElement('strong');
-        title.textContent = 'Setup guide:';
-        chGuide.appendChild(title);
+    function updateSubtitle(channelName) {
+        if (chSubtitle) chSubtitle.textContent = SUBTITLES[channelName] || '';
+    }
 
-        var ol = document.createElement('ol');
-        steps.forEach(function(step) {
-            var li = document.createElement('li');
-            li.textContent = step;
-            ol.appendChild(li);
+    // --- Auto-populate Notify Chat ID from channel config ---
+    var notifyChannelSelect = document.getElementById('ch-email-notify-channel');
+    var notifyChatIdInput = document.getElementById('ch-email-notify-chat-id');
+    if (notifyChannelSelect) {
+        notifyChannelSelect.addEventListener('change', function() {
+            var ch = notifyChannelSelect.value;
+            if (chNotifyHint) chNotifyHint.textContent = '';
+            if (!ch) return;
+            fetch('/api/v1/channels/' + ch)
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(data) {
+                    if (!data) return;
+                    var id = '';
+                    if (ch === 'discord') id = data.default_channel_id || (data.allow_from || [])[0] || '';
+                    else if (ch === 'slack') id = data.channel_id || (data.allow_from || [])[0] || '';
+                    else id = (data.allow_from || [])[0] || '';
+                    if (id && notifyChatIdInput && !notifyChatIdInput.value.trim()) {
+                        notifyChatIdInput.value = id;
+                    }
+                    if (id && chNotifyHint) chNotifyHint.textContent = 'Suggested: ' + id;
+                })
+                .catch(function() {});
         });
-        chGuide.appendChild(ol);
     }
 
     // --- Card click handlers ---
@@ -1176,25 +1208,30 @@ if (chModal && channelCards.length > 0) {
         document.getElementById('modal-channel-name').textContent = display;
         document.getElementById('modal-channel-id').value = currentChannel;
 
-        // Build guide
-        buildGuide(currentChannel);
+        // Subtitle
+        updateSubtitle(currentChannel);
 
         // Show/hide form groups based on channel type
+        var isEmail = currentChannel === 'email';
         if (chTokenGroup) chTokenGroup.style.display = hasToken ? 'block' : 'none';
         if (chPhoneGroup) chPhoneGroup.style.display = currentChannel === 'whatsapp' ? 'block' : 'none';
-        if (chAllowGroup) chAllowGroup.style.display = (currentChannel !== 'web') ? 'block' : 'none';
+        if (chAllowGroup) chAllowGroup.style.display = (currentChannel !== 'web' && !isEmail) ? 'block' : 'none';
         if (chDiscordGroup) chDiscordGroup.style.display = currentChannel === 'discord' ? 'block' : 'none';
         if (chSlackGroup) chSlackGroup.style.display = currentChannel === 'slack' ? 'block' : 'none';
-        // Email fields
-        if (chEmailImapGroup) chEmailImapGroup.style.display = currentChannel === 'email' ? 'block' : 'none';
-        if (chEmailSmtpGroup) chEmailSmtpGroup.style.display = currentChannel === 'email' ? 'block' : 'none';
-        if (chEmailCredsGroup) chEmailCredsGroup.style.display = currentChannel === 'email' ? 'block' : 'none';
+        // Email groups (servers, credentials, behavior)
+        if (chEmailServersGroup) chEmailServersGroup.style.display = isEmail ? 'block' : 'none';
+        if (chEmailCredsGroup) chEmailCredsGroup.style.display = isEmail ? 'block' : 'none';
+        if (chEmailBehaviorGroup) chEmailBehaviorGroup.style.display = isEmail ? 'block' : 'none';
         if (chWebHostGroup) chWebHostGroup.style.display = isWeb ? 'block' : 'none';
         if (chWebPortGroup) chWebPortGroup.style.display = isWeb ? 'block' : 'none';
         if (chWaPairing) chWaPairing.style.display = 'none';
+        // Email notify/trigger shown by updateEmailModeFields
+        if (chEmailNotifyGroup) chEmailNotifyGroup.style.display = 'none';
+        if (chEmailTriggerGroup) chEmailTriggerGroup.style.display = 'none';
         if (btnWaPair) btnWaPair.style.display = currentChannel === 'whatsapp' ? 'inline-flex' : 'none';
         if (btnTestCh) btnTestCh.style.display = isWeb ? 'none' : 'inline-flex';
         if (btnChSave) btnChSave.style.display = isWeb ? 'none' : 'inline-flex';
+        if (chNotifyHint) chNotifyHint.textContent = '';
 
         // Set hints
         if (currentChannel === 'telegram') {
@@ -1208,6 +1245,8 @@ if (chModal && channelCards.length > 0) {
             document.getElementById('ch-allow-from-hint').textContent = 'Slack User IDs (U...). Use "*" to allow everyone.';
         } else if (currentChannel === 'whatsapp') {
             document.getElementById('ch-allow-from-hint').textContent = 'Phone numbers of allowed senders (e.g. 393331234567).';
+        } else if (currentChannel === 'email') {
+            document.getElementById('ch-allow-from-hint').textContent = 'Email addresses or domains (e.g. user@example.com, @company.com). Use "*" to allow everyone.';
         }
 
         // Clear fields first (defaults from card data attributes)
@@ -1219,6 +1258,35 @@ if (chModal && channelCards.length > 0) {
         document.getElementById('ch-slack-channel').value = card.dataset.slackChannel || '';
         document.getElementById('ch-web-host').value = card.dataset.webHost || '';
         document.getElementById('ch-web-port').value = card.dataset.webPort || '';
+
+        // Email fields from data attributes
+        var emailImapHost = document.getElementById('ch-email-imap-host');
+        var emailImapPort = document.getElementById('ch-email-imap-port');
+        var emailSmtpHost = document.getElementById('ch-email-smtp-host');
+        var emailSmtpPort = document.getElementById('ch-email-smtp-port');
+        var emailUsername = document.getElementById('ch-email-username');
+        var emailFrom = document.getElementById('ch-email-from');
+        var emailPassword = document.getElementById('ch-email-password');
+        if (emailImapHost) emailImapHost.value = card.dataset.emailImapHost || '';
+        if (emailImapPort) emailImapPort.value = card.dataset.emailImapPort || '';
+        if (emailSmtpHost) emailSmtpHost.value = card.dataset.emailSmtpHost || '';
+        if (emailSmtpPort) emailSmtpPort.value = card.dataset.emailSmtpPort || '';
+        if (emailUsername) emailUsername.value = card.dataset.emailUsername || '';
+        if (emailFrom) emailFrom.value = card.dataset.emailFrom || '';
+        if (emailPassword) { emailPassword.value = ''; emailPassword.placeholder = 'App password (stored encrypted)'; }
+
+        // Email mode/notify/trigger from data attributes
+        if (currentChannel === 'email') {
+            var modeEl = document.getElementById('ch-email-mode');
+            if (modeEl) modeEl.value = card.dataset.emailMode || 'assisted';
+            var notifyChEl = document.getElementById('ch-email-notify-channel');
+            if (notifyChEl) notifyChEl.value = card.dataset.emailNotifyChannel || '';
+            var notifyChatEl = document.getElementById('ch-email-notify-chat-id');
+            if (notifyChatEl) notifyChatEl.value = card.dataset.emailNotifyChatId || '';
+            var triggerEl = document.getElementById('ch-email-trigger-word');
+            if (triggerEl) triggerEl.value = card.dataset.emailTriggerWord || '';
+            updateEmailModeFields();
+        }
 
         // Reset test result
         chTestResult.textContent = '';
@@ -1287,6 +1355,22 @@ if (chModal && channelCards.length > 0) {
                 if (data.from_address) {
                     var emailFrom = document.getElementById('ch-email-from');
                     if (emailFrom) emailFrom.value = data.from_address;
+                }
+                // Email mode/notify/trigger from API
+                if (currentChannel === 'email') {
+                    var modeEl = document.getElementById('ch-email-mode');
+                    if (modeEl && data.email_mode) modeEl.value = data.email_mode;
+                    var notifyChEl = document.getElementById('ch-email-notify-channel');
+                    if (notifyChEl && data.email_notify_channel !== undefined) notifyChEl.value = data.email_notify_channel;
+                    var notifyChatEl = document.getElementById('ch-email-notify-chat-id');
+                    if (notifyChatEl && data.email_notify_chat_id !== undefined) notifyChatEl.value = data.email_notify_chat_id;
+                    var triggerEl = document.getElementById('ch-email-trigger-word');
+                    if (triggerEl && data.email_trigger_word !== undefined) triggerEl.value = data.email_trigger_word;
+                    updateEmailModeFields();
+                    // Auto-suggest chat ID if notify channel is set but chat ID is empty
+                    if (notifyChEl && notifyChEl.value && notifyChatEl && !notifyChatEl.value.trim()) {
+                        notifyChannelSelect.dispatchEvent(new Event('change'));
+                    }
                 }
             })
             .catch(function() { /* silently use card data fallback */ });
@@ -1366,16 +1450,12 @@ if (chModal && channelCards.length > 0) {
             if (chSlackGroup.style.display !== 'none') {
                 payload.default_channel_id = document.getElementById('ch-slack-channel').value.trim();
             }
-            // Email fields
-            if (chEmailImapGroup && chEmailImapGroup.style.display !== 'none') {
+            // Email fields (grouped under servers, credentials, behavior wrappers)
+            if (chEmailServersGroup && chEmailServersGroup.style.display !== 'none') {
                 var imapHost = document.getElementById('ch-email-imap-host');
                 var imapPort = document.getElementById('ch-email-imap-port');
                 if (imapHost) payload.imap_host = imapHost.value.trim();
                 if (imapPort && imapPort.value) payload.imap_port = parseInt(imapPort.value, 10);
-                var imapFolder = document.getElementById('ch-email-imap-folder');
-                if (imapFolder && imapFolder.value) payload.imap_folder = imapFolder.value.trim();
-            }
-            if (chEmailSmtpGroup && chEmailSmtpGroup.style.display !== 'none') {
                 var smtpHost = document.getElementById('ch-email-smtp-host');
                 var smtpPort = document.getElementById('ch-email-smtp-port');
                 if (smtpHost) payload.smtp_host = smtpHost.value.trim();
@@ -1388,6 +1468,17 @@ if (chModal && channelCards.length > 0) {
                 if (emailUser) payload.username = emailUser.value.trim();
                 if (emailPass) payload.password = emailPass.value;
                 if (emailFrom) payload.from_address = emailFrom.value.trim();
+            }
+            // Email mode/notify/trigger
+            if (chEmailBehaviorGroup && chEmailBehaviorGroup.style.display !== 'none') {
+                var modeEl = document.getElementById('ch-email-mode');
+                if (modeEl) payload.email_mode = modeEl.value;
+                var notifyChEl = document.getElementById('ch-email-notify-channel');
+                if (notifyChEl && notifyChEl.value) payload.email_notify_channel = notifyChEl.value;
+                var notifyChatEl = document.getElementById('ch-email-notify-chat-id');
+                if (notifyChatEl && notifyChatEl.value) payload.email_notify_chat_id = notifyChatEl.value;
+                var triggerEl = document.getElementById('ch-email-trigger-word');
+                if (triggerEl && triggerEl.value) payload.email_trigger_word = triggerEl.value;
             }
             if (chWebHostGroup.style.display !== 'none') {
                 payload.host = document.getElementById('ch-web-host').value.trim();

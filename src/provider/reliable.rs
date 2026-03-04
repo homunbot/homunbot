@@ -341,9 +341,7 @@ mod tests {
         );
 
         // "not a valid model ID" from OpenRouter
-        let err = anyhow::anyhow!(
-            "Provider openrouter error: some/model is not a valid model ID"
-        );
+        let err = anyhow::anyhow!("Provider openrouter error: some/model is not a valid model ID");
         assert_eq!(
             ReliableProvider::classify_error(&err),
             FailoverDecision::NextProvider

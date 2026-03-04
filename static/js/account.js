@@ -290,6 +290,234 @@ document.getElementById('create-token-form')?.addEventListener('submit', (e) => 
     e.target.reset();
 });
 
+// ─── Email Accounts Management ───
+(function() {
+    const modal = document.getElementById('email-account-modal');
+    const form = document.getElementById('email-account-form');
+    const grid = document.getElementById('email-accounts-grid');
+    const addBtn = document.getElementById('btn-add-email-account');
+    const testBtn = document.getElementById('btn-test-email-account');
+    const deleteBtn = document.getElementById('btn-delete-email-account');
+    const testResult = document.getElementById('ea-test-result');
+    const modeSelect = document.getElementById('ea-mode');
+    const modeHint = document.getElementById('ea-mode-hint');
+    const triggerField = document.getElementById('ea-trigger-field');
+    const nameInput = document.getElementById('ea-name');
+
+    if (!modal || !form) return;
+
+    const backdrop = modal.querySelector('.modal-backdrop');
+    const closeBtn = modal.querySelector('.ea-modal-close');
+    const cancelBtn = modal.querySelector('.ea-modal-cancel');
+
+    let editingName = null;
+
+    const MODE_HINTS = {
+        assisted: 'Generates summary and draft, sends to notification channel for approval.',
+        automatic: 'Agent responds directly. Escalates to assisted if lacking info or if response would include secrets.',
+        on_demand: 'Only processes emails containing the trigger word or @homun.'
+    };
+
+    function updateModeVisibility() {
+        const mode = modeSelect.value;
+        modeHint.textContent = MODE_HINTS[mode] || '';
+        triggerField.style.display = mode === 'on_demand' ? '' : 'none';
+        // Auto-fetch/generate trigger word when switching to on_demand
+        if (mode === 'on_demand') {
+            var twInput = document.getElementById('ea-trigger-word');
+            var acctName = editingName || nameInput.value.trim() || 'default';
+            if (twInput && !twInput.value.trim()) {
+                fetch('/api/v1/channels/email/trigger-word', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account: acctName })
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    if (d.trigger_word && !twInput.value.trim()) {
+                        twInput.value = d.trigger_word;
+                    }
+                })
+                .catch(function() {});
+            }
+        }
+    }
+
+    function openModal(accountData) {
+        if (accountData) {
+            editingName = accountData.name;
+            document.getElementById('email-modal-title').textContent = 'Edit: ' + accountData.name;
+            nameInput.value = accountData.name;
+            nameInput.readOnly = true;
+            document.getElementById('ea-imap-host').value = accountData.imapHost || '';
+            document.getElementById('ea-imap-port').value = accountData.imapPort || 993;
+            document.getElementById('ea-smtp-host').value = accountData.smtpHost || '';
+            document.getElementById('ea-smtp-port').value = accountData.smtpPort || 465;
+            document.getElementById('ea-username').value = accountData.username || '';
+            document.getElementById('ea-password').value = '';
+            document.getElementById('ea-from').value = accountData.fromAddress || '';
+            modeSelect.value = accountData.mode || 'assisted';
+            document.getElementById('ea-notify-channel').value = accountData.notifyChannel || '';
+            document.getElementById('ea-notify-chat-id').value = accountData.notifyChatId || '';
+            document.getElementById('ea-trigger-word').value = accountData.triggerWord || '';
+            document.getElementById('ea-allow-from').value = accountData.allowFrom || '';
+            document.getElementById('ea-batch-threshold').value = accountData.batchThreshold || 3;
+            document.getElementById('ea-batch-window').value = accountData.batchWindow || 120;
+            document.getElementById('ea-send-delay').value = accountData.sendDelay || 30;
+            if (deleteBtn) deleteBtn.style.display = '';
+        } else {
+            editingName = null;
+            document.getElementById('email-modal-title').textContent = 'Add Email Account';
+            form.reset();
+            nameInput.readOnly = false;
+            document.getElementById('ea-imap-port').value = 993;
+            document.getElementById('ea-smtp-port').value = 465;
+            document.getElementById('ea-batch-threshold').value = 3;
+            document.getElementById('ea-batch-window').value = 120;
+            document.getElementById('ea-send-delay').value = 30;
+            if (deleteBtn) deleteBtn.style.display = 'none';
+        }
+        updateModeVisibility();
+        if (eaNotifyHint) eaNotifyHint.textContent = '';
+        testResult.textContent = '';
+        modal.classList.add('open');
+        // Auto-suggest chat ID if notify channel is set but chat ID is empty
+        if (eaNotifyChannelSelect && eaNotifyChannelSelect.value &&
+            eaNotifyChatIdInput && !eaNotifyChatIdInput.value.trim()) {
+            eaNotifyChannelSelect.dispatchEvent(new Event('change'));
+        }
+    }
+
+    function closeModal() {
+        modal.classList.remove('open');
+    }
+
+    if (addBtn) addBtn.addEventListener('click', function() { openModal(null); });
+
+    if (backdrop) backdrop.addEventListener('click', closeModal);
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+    if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && modal.classList.contains('open')) closeModal();
+    });
+
+    if (modeSelect) modeSelect.addEventListener('change', updateModeVisibility);
+
+    // --- Auto-populate Notify Chat ID from channel config ---
+    var eaNotifyChannelSelect = document.getElementById('ea-notify-channel');
+    var eaNotifyChatIdInput = document.getElementById('ea-notify-chat-id');
+    var eaNotifyHint = document.getElementById('ea-notify-hint');
+    if (eaNotifyChannelSelect) {
+        eaNotifyChannelSelect.addEventListener('change', function() {
+            var ch = eaNotifyChannelSelect.value;
+            if (eaNotifyHint) eaNotifyHint.textContent = '';
+            if (!ch) return;
+            fetch('/api/v1/channels/' + ch)
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(data) {
+                    if (!data) return;
+                    var id = '';
+                    if (ch === 'discord') id = data.default_channel_id || (data.allow_from || [])[0] || '';
+                    else if (ch === 'slack') id = data.channel_id || (data.allow_from || [])[0] || '';
+                    else id = (data.allow_from || [])[0] || '';
+                    if (id && eaNotifyChatIdInput && !eaNotifyChatIdInput.value.trim()) {
+                        eaNotifyChatIdInput.value = id;
+                    }
+                    if (id && eaNotifyHint) eaNotifyHint.textContent = 'Suggested: ' + id;
+                })
+                .catch(function() {});
+        });
+    }
+
+    if (grid) grid.addEventListener('click', function(e) {
+        const card = e.target.closest('.email-account-card');
+        if (!card) return;
+        const d = card.dataset;
+        openModal({
+            name: d.emailName, imapHost: d.imapHost, imapPort: d.imapPort,
+            smtpHost: d.smtpHost, smtpPort: d.smtpPort, username: d.username,
+            fromAddress: d.fromAddress, allowFrom: d.allowFrom, mode: d.mode,
+            notifyChannel: d.notifyChannel, notifyChatId: d.notifyChatId,
+            triggerWord: d.triggerWord, batchThreshold: d.batchThreshold,
+            batchWindow: d.batchWindow, sendDelay: d.sendDelay,
+        });
+    });
+
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const name = nameInput.value.trim();
+        if (!name) { alert('Account name is required'); return; }
+
+        const allowFromRaw = document.getElementById('ea-allow-from').value.trim();
+        const allowFrom = allowFromRaw ? allowFromRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+        const body = {
+            name,
+            imap_host: document.getElementById('ea-imap-host').value.trim() || undefined,
+            imap_port: parseInt(document.getElementById('ea-imap-port').value) || undefined,
+            smtp_host: document.getElementById('ea-smtp-host').value.trim() || undefined,
+            smtp_port: parseInt(document.getElementById('ea-smtp-port').value) || undefined,
+            username: document.getElementById('ea-username').value.trim() || undefined,
+            password: document.getElementById('ea-password').value || undefined,
+            from_address: document.getElementById('ea-from').value.trim() || undefined,
+            mode: modeSelect.value,
+            notify_channel: document.getElementById('ea-notify-channel').value || undefined,
+            notify_chat_id: document.getElementById('ea-notify-chat-id').value.trim() || undefined,
+            trigger_word: document.getElementById('ea-trigger-word').value.trim() || undefined,
+            allow_from: allowFrom.length > 0 ? allowFrom : undefined,
+            batch_threshold: parseInt(document.getElementById('ea-batch-threshold').value) || undefined,
+            batch_window_secs: parseInt(document.getElementById('ea-batch-window').value) || undefined,
+            send_delay_secs: parseInt(document.getElementById('ea-send-delay').value) || undefined,
+        };
+
+        try {
+            const res = await fetch('/api/v1/email-accounts/configure', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const data = await res.json();
+            if (data.ok) { closeModal(); location.reload(); }
+            else { alert(data.message || 'Failed to save'); }
+        } catch (err) { alert('Error: ' + err.message); }
+    });
+
+    if (deleteBtn) deleteBtn.addEventListener('click', async function() {
+        if (!editingName) return;
+        if (!confirm('Delete email account "' + editingName + '"? This removes config and vault password.')) return;
+        try {
+            const res = await fetch('/api/v1/email-accounts/' + encodeURIComponent(editingName), { method: 'DELETE' });
+            const data = await res.json();
+            if (data.ok) { closeModal(); location.reload(); }
+            else { alert(data.message || 'Failed to delete'); }
+        } catch (err) { alert('Error: ' + err.message); }
+    });
+
+    if (testBtn) testBtn.addEventListener('click', async function() {
+        const name = nameInput.value.trim();
+        if (!name) { testResult.textContent = 'Enter an account name first'; return; }
+        if (!editingName) { testResult.textContent = 'Save the account first, then test.'; return; }
+
+        testResult.textContent = 'Testing IMAP connection...';
+        testResult.style.color = 'var(--text-secondary)';
+        try {
+            const res = await fetch('/api/v1/email-accounts/test', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name }),
+            });
+            const data = await res.json();
+            testResult.textContent = data.message;
+            testResult.style.color = data.ok ? 'var(--green)' : 'var(--red)';
+        } catch (err) {
+            testResult.textContent = 'Error: ' + err.message;
+            testResult.style.color = 'var(--red)';
+        }
+    });
+
+    console.log('[EmailAccounts] Handler initialized');
+})();
+
 // ─── Init ───
 document.addEventListener('DOMContentLoaded', () => {
     loadOwner();
