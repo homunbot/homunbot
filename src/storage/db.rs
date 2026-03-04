@@ -133,6 +133,38 @@ impl Database {
         )
         .await?;
 
+        // Migration 005 — email pending queue for assisted approval flow
+        Self::apply_migration(
+            pool,
+            "005_email_pending",
+            include_str!("../../migrations/005_email_pending.sql"),
+        )
+        .await?;
+
+        // Migration 006 — automations + runs
+        Self::apply_migration(
+            pool,
+            "006_automations",
+            include_str!("../../migrations/006_automations.sql"),
+        )
+        .await?;
+
+        // Migration 007 — automation trigger fields
+        Self::apply_migration(
+            pool,
+            "007_automation_triggers",
+            include_str!("../../migrations/007_automation_triggers.sql"),
+        )
+        .await?;
+
+        // Migration 008 — automation plan/dependencies metadata
+        Self::apply_migration(
+            pool,
+            "008_automation_plan",
+            include_str!("../../migrations/008_automation_plan.sql"),
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -589,6 +621,328 @@ impl Database {
         Ok(result.rows_affected() > 0)
     }
 
+    // --- Automation operations ---
+
+    /// Insert a new automation definition.
+    pub async fn insert_automation(
+        &self,
+        id: &str,
+        name: &str,
+        prompt: &str,
+        schedule: &str,
+        enabled: bool,
+        status: &str,
+        deliver_to: Option<&str>,
+        trigger_kind: &str,
+        trigger_value: Option<&str>,
+    ) -> Result<()> {
+        self.insert_automation_with_plan(
+            id,
+            name,
+            prompt,
+            schedule,
+            enabled,
+            status,
+            deliver_to,
+            trigger_kind,
+            trigger_value,
+            None,
+            "[]",
+            1,
+            None,
+        )
+        .await
+    }
+
+    /// Insert a new automation definition with compiled plan metadata.
+    pub async fn insert_automation_with_plan(
+        &self,
+        id: &str,
+        name: &str,
+        prompt: &str,
+        schedule: &str,
+        enabled: bool,
+        status: &str,
+        deliver_to: Option<&str>,
+        trigger_kind: &str,
+        trigger_value: Option<&str>,
+        plan_json: Option<&str>,
+        dependencies_json: &str,
+        plan_version: i64,
+        validation_errors: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO automations
+                 (id, name, prompt, schedule, enabled, status, deliver_to, trigger_kind, trigger_value,
+                  plan_json, dependencies_json, plan_version, validation_errors)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(prompt)
+        .bind(schedule)
+        .bind(enabled)
+        .bind(status)
+        .bind(deliver_to)
+        .bind(trigger_kind)
+        .bind(trigger_value)
+        .bind(plan_json)
+        .bind(dependencies_json)
+        .bind(plan_version)
+        .bind(validation_errors)
+        .execute(&self.pool)
+        .await
+        .context("Failed to insert automation")?;
+
+        Ok(())
+    }
+
+    /// Load all automations.
+    pub async fn load_automations(&self) -> Result<Vec<AutomationRow>> {
+        let rows = sqlx::query_as::<_, AutomationRow>(
+            "SELECT id, name, prompt, schedule, enabled, status, deliver_to,
+                    trigger_kind, trigger_value,
+                    last_run, last_result, created_at, updated_at,
+                    plan_json, dependencies_json, plan_version, validation_errors
+             FROM automations
+             ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to load automations")?;
+
+        Ok(rows)
+    }
+
+    /// Load one automation by ID.
+    pub async fn load_automation(&self, id: &str) -> Result<Option<AutomationRow>> {
+        let row = sqlx::query_as::<_, AutomationRow>(
+            "SELECT id, name, prompt, schedule, enabled, status, deliver_to,
+                    trigger_kind, trigger_value,
+                    last_run, last_result, created_at, updated_at,
+                    plan_json, dependencies_json, plan_version, validation_errors
+             FROM automations
+             WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to load automation")?;
+
+        Ok(row)
+    }
+
+    /// Apply a partial update to an automation.
+    pub async fn update_automation(&self, id: &str, update: AutomationUpdate) -> Result<bool> {
+        let Some(current) = self.load_automation(id).await? else {
+            return Ok(false);
+        };
+
+        let name = update.name.unwrap_or(current.name);
+        let prompt = update.prompt.unwrap_or(current.prompt);
+        let schedule = update.schedule.unwrap_or(current.schedule);
+        let enabled = update.enabled.unwrap_or(current.enabled);
+        let status = update.status.unwrap_or(current.status);
+        let deliver_to = update.deliver_to.unwrap_or(current.deliver_to);
+        let trigger_kind = update.trigger_kind.unwrap_or(current.trigger_kind);
+        let trigger_value = update.trigger_value.unwrap_or(current.trigger_value);
+        let last_result = update.last_result.unwrap_or(current.last_result);
+        let plan_json = match update.plan_json {
+            Some(v) => v,
+            None => current.plan_json,
+        };
+        let dependencies_json = match update.dependencies_json {
+            Some(Some(v)) => v,
+            Some(None) => "[]".to_string(),
+            None => current.dependencies_json,
+        };
+        let plan_version = update.plan_version.unwrap_or(current.plan_version);
+        let validation_errors = match update.validation_errors {
+            Some(v) => v,
+            None => current.validation_errors,
+        };
+
+        let result = sqlx::query(
+            "UPDATE automations
+             SET name = ?, prompt = ?, schedule = ?, enabled = ?, status = ?,
+                 deliver_to = ?, trigger_kind = ?, trigger_value = ?, last_result = ?,
+                 plan_json = ?, dependencies_json = ?, plan_version = ?, validation_errors = ?,
+                 last_run = CASE WHEN ? THEN datetime('now') ELSE last_run END,
+                 updated_at = datetime('now')
+             WHERE id = ?",
+        )
+        .bind(name)
+        .bind(prompt)
+        .bind(schedule)
+        .bind(enabled)
+        .bind(status)
+        .bind(deliver_to)
+        .bind(trigger_kind)
+        .bind(trigger_value)
+        .bind(last_result)
+        .bind(plan_json)
+        .bind(dependencies_json)
+        .bind(plan_version)
+        .bind(validation_errors)
+        .bind(update.touch_last_run)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .context("Failed to update automation")?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Delete an automation.
+    pub async fn delete_automation(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM automations WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete automation")?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Mark automations as invalid when a dependency is removed.
+    ///
+    /// Returns number of automations updated.
+    pub async fn invalidate_automations_by_dependency(
+        &self,
+        dependency_kind: &str,
+        dependency_name: &str,
+        reason: &str,
+    ) -> Result<u64> {
+        let rows = self.load_automations().await?;
+        let mut affected = 0_u64;
+
+        for row in rows {
+            if !crate::scheduler::automations::dependencies_include(
+                &row.dependencies_json,
+                dependency_kind,
+                dependency_name,
+            ) {
+                continue;
+            }
+
+            let mut errors = crate::scheduler::automations::parse_validation_errors_json(
+                row.validation_errors.as_deref(),
+            );
+            if !errors.iter().any(|e| e == reason) {
+                errors.push(reason.to_string());
+            }
+            let errors_json = serde_json::to_string(&errors).unwrap_or_else(|_| "[]".to_string());
+
+            let changed = self
+                .update_automation(
+                    &row.id,
+                    AutomationUpdate {
+                        status: Some("invalid_config".to_string()),
+                        validation_errors: Some(Some(errors_json)),
+                        last_result: Some(Some(format!("Automation invalidated: {reason}"))),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            if changed {
+                affected += 1;
+            }
+        }
+
+        Ok(affected)
+    }
+
+    /// Insert a new automation run.
+    pub async fn insert_automation_run(
+        &self,
+        id: &str,
+        automation_id: &str,
+        status: &str,
+        result: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO automation_runs (id, automation_id, status, result)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(automation_id)
+        .bind(status)
+        .bind(result)
+        .execute(&self.pool)
+        .await
+        .context("Failed to insert automation run")?;
+        Ok(())
+    }
+
+    /// Complete an automation run with final status/result.
+    pub async fn complete_automation_run(
+        &self,
+        run_id: &str,
+        status: &str,
+        result: Option<&str>,
+    ) -> Result<bool> {
+        let changed = sqlx::query(
+            "UPDATE automation_runs
+             SET status = ?, result = ?, finished_at = datetime('now')
+             WHERE id = ?",
+        )
+        .bind(status)
+        .bind(result)
+        .bind(run_id)
+        .execute(&self.pool)
+        .await
+        .context("Failed to complete automation run")?;
+        Ok(changed.rows_affected() > 0)
+    }
+
+    /// Load run history for an automation (latest first).
+    pub async fn load_automation_runs(
+        &self,
+        automation_id: &str,
+        limit: u32,
+    ) -> Result<Vec<AutomationRunRow>> {
+        let rows = sqlx::query_as::<_, AutomationRunRow>(
+            "SELECT id, automation_id, started_at, finished_at, status, result
+             FROM automation_runs
+             WHERE automation_id = ?
+             ORDER BY started_at DESC
+             LIMIT ?",
+        )
+        .bind(automation_id)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to load automation runs")?;
+        Ok(rows)
+    }
+
+    /// Load latest successful run result for an automation.
+    /// Optionally excludes a run ID (useful when finalizing that same run).
+    pub async fn load_last_successful_automation_result(
+        &self,
+        automation_id: &str,
+        exclude_run_id: Option<&str>,
+    ) -> Result<Option<String>> {
+        let row = sqlx::query_scalar::<_, String>(
+            "SELECT result
+             FROM automation_runs
+             WHERE automation_id = ?
+               AND status = 'success'
+               AND result IS NOT NULL
+               AND (? IS NULL OR id <> ?)
+             ORDER BY started_at DESC
+             LIMIT 1",
+        )
+        .bind(automation_id)
+        .bind(exclude_run_id)
+        .bind(exclude_run_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to load last successful automation result")?;
+
+        Ok(row)
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // MEMORY RETENTION - Prune old data based on retention policies
     // ═══════════════════════════════════════════════════════════════
@@ -1020,6 +1374,93 @@ impl Database {
             .await
             .context("Failed to query token usage")
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // EMAIL PENDING — assisted approval flow
+    // ═══════════════════════════════════════════════════════════════
+
+    /// Insert a new email pending record (draft awaiting approval).
+    pub async fn insert_email_pending(&self, row: &EmailPendingRow) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO email_pending (id, account_name, from_address, subject, body_preview,
+             message_id, draft_response, status, notify_session_key, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+        )
+        .bind(&row.id)
+        .bind(&row.account_name)
+        .bind(&row.from_address)
+        .bind(&row.subject)
+        .bind(&row.body_preview)
+        .bind(&row.message_id)
+        .bind(&row.draft_response)
+        .bind(&row.status)
+        .bind(&row.notify_session_key)
+        .execute(&self.pool)
+        .await
+        .context("Failed to insert email_pending")?;
+        Ok(())
+    }
+
+    /// Update the draft response for an existing pending email.
+    pub async fn update_email_pending_draft(&self, id: &str, draft: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE email_pending SET draft_response = ?, updated_at = datetime('now')
+             WHERE id = ? AND status = 'pending'",
+        )
+        .bind(draft)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .context("Failed to update email_pending draft")?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Change status of a pending email (e.g. pending → sent, pending → rejected).
+    /// Only updates rows that are currently 'pending' for atomicity.
+    pub async fn update_email_pending_status(&self, id: &str, status: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE email_pending SET status = ?, updated_at = datetime('now')
+             WHERE id = ? AND status = 'pending'",
+        )
+        .bind(status)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .context("Failed to update email_pending status")?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Load all pending emails for a given notify session key, ordered FIFO.
+    pub async fn load_pending_for_notify(&self, notify_key: &str) -> Result<Vec<EmailPendingRow>> {
+        let rows = sqlx::query_as::<_, EmailPendingRow>(
+            "SELECT id, account_name, from_address, subject, body_preview,
+                    message_id, draft_response, status, notify_session_key,
+                    created_at, updated_at
+             FROM email_pending
+             WHERE notify_session_key = ? AND status = 'pending'
+             ORDER BY created_at ASC",
+        )
+        .bind(notify_key)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to load pending emails for notify")?;
+        Ok(rows)
+    }
+
+    /// Load a single email_pending record by ID.
+    pub async fn load_email_pending_by_id(&self, id: &str) -> Result<Option<EmailPendingRow>> {
+        let row = sqlx::query_as::<_, EmailPendingRow>(
+            "SELECT id, account_name, from_address, subject, body_preview,
+                    message_id, draft_response, status, notify_session_key,
+                    created_at, updated_at
+             FROM email_pending WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to load email_pending by id")?;
+        Ok(row)
+    }
 }
 
 /// Result of memory cleanup operation.
@@ -1082,6 +1523,60 @@ pub struct CronJobRow {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow, Serialize)]
+pub struct AutomationRow {
+    pub id: String,
+    pub name: String,
+    pub prompt: String,
+    pub schedule: String,
+    pub enabled: bool,
+    pub status: String,
+    pub deliver_to: Option<String>,
+    pub trigger_kind: String,
+    pub trigger_value: Option<String>,
+    pub last_run: Option<String>,
+    pub last_result: Option<String>,
+    pub created_at: String,
+    pub updated_at: Option<String>,
+    pub plan_json: Option<String>,
+    pub dependencies_json: String,
+    pub plan_version: i64,
+    pub validation_errors: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AutomationUpdate {
+    pub name: Option<String>,
+    pub prompt: Option<String>,
+    pub schedule: Option<String>,
+    pub enabled: Option<bool>,
+    pub status: Option<String>,
+    /// Use `Some(None)` to clear `deliver_to`.
+    pub deliver_to: Option<Option<String>>,
+    pub trigger_kind: Option<String>,
+    /// Use `Some(None)` to clear trigger value.
+    pub trigger_value: Option<Option<String>>,
+    pub last_result: Option<Option<String>>,
+    /// Use `Some(None)` to clear plan JSON.
+    pub plan_json: Option<Option<String>>,
+    /// Use `Some(None)` to reset dependencies to an empty list.
+    pub dependencies_json: Option<Option<String>>,
+    pub plan_version: Option<i64>,
+    /// Use `Some(None)` to clear validation errors.
+    pub validation_errors: Option<Option<String>>,
+    pub touch_last_run: bool,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize)]
+pub struct AutomationRunRow {
+    pub id: String,
+    pub automation_id: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub status: String,
+    pub result: Option<String>,
+}
+
 // ═══════════════════════════════════════════════════════════════
 // USER SYSTEM ROW TYPES
 // ═══════════════════════════════════════════════════════════════
@@ -1124,6 +1619,25 @@ pub struct TokenUsageAggRow {
     pub completion_tokens: i64,
     pub total_tokens: i64,
     pub call_count: i64,
+}
+
+// ═══════════════════════════════════════════════════════════════
+// EMAIL PENDING (assisted approval flow)
+// ═══════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize)]
+pub struct EmailPendingRow {
+    pub id: String,
+    pub account_name: String,
+    pub from_address: String,
+    pub subject: Option<String>,
+    pub body_preview: Option<String>,
+    pub message_id: Option<String>,
+    pub draft_response: Option<String>,
+    pub status: String, // pending | sent | rejected
+    pub notify_session_key: Option<String>,
+    pub created_at: String,
+    pub updated_at: Option<String>,
 }
 
 /// Split SQL into individual statements, respecting BEGIN...END blocks.
@@ -1353,5 +1867,77 @@ END;
 
         let msgs = db.load_messages("cli:test", 1).await.unwrap();
         assert_eq!(msgs[0].tools_used, r#"["shell","file"]"#);
+    }
+
+    #[tokio::test]
+    async fn test_automation_crud_and_runs() {
+        let (db, _dir) = test_db().await;
+
+        db.insert_automation(
+            "auto-1",
+            "Daily brief",
+            "Send me a summary",
+            "cron:0 9 * * *",
+            true,
+            "active",
+            Some("cli:default"),
+            "always",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let rows = db.load_automations().await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "auto-1");
+        assert_eq!(rows[0].name, "Daily brief");
+        assert_eq!(rows[0].trigger_kind, "always");
+        assert!(rows[0].trigger_value.is_none());
+
+        let changed = db
+            .update_automation(
+                "auto-1",
+                AutomationUpdate {
+                    enabled: Some(false),
+                    status: Some("paused".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(changed);
+
+        let row = db.load_automation("auto-1").await.unwrap().unwrap();
+        assert!(!row.enabled);
+        assert_eq!(row.status, "paused");
+
+        db.insert_automation_run("run-1", "auto-1", "queued", Some("queued"))
+            .await
+            .unwrap();
+        db.complete_automation_run("run-1", "success", Some("ok"))
+            .await
+            .unwrap();
+        db.insert_automation_run("run-2", "auto-1", "queued", Some("queued"))
+            .await
+            .unwrap();
+        db.complete_automation_run("run-2", "error", Some("boom"))
+            .await
+            .unwrap();
+
+        let last_success = db
+            .load_last_successful_automation_result("auto-1", None)
+            .await
+            .unwrap();
+        assert_eq!(last_success.as_deref(), Some("ok"));
+
+        let runs = db.load_automation_runs("auto-1", 10).await.unwrap();
+        assert_eq!(runs.len(), 2);
+        let statuses = runs.iter().map(|r| r.status.as_str()).collect::<Vec<_>>();
+        assert!(statuses.contains(&"success"));
+        assert!(statuses.contains(&"error"));
+        assert!(runs.iter().any(|r| r.result.as_deref() == Some("ok")));
+
+        let deleted = db.delete_automation("auto-1").await.unwrap();
+        assert!(deleted);
     }
 }

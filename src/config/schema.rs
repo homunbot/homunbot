@@ -574,6 +574,13 @@ pub struct TelegramConfig {
     pub token: String,
     #[serde(default)]
     pub allow_from: Vec<String>,
+    /// Require OTP pairing for unknown senders (default: false).
+    /// When true, senders not in `allow_from` receive a 6-digit code to verify.
+    #[serde(default)]
+    pub pairing_required: bool,
+    /// In groups, only respond when @mentioned or replied to (default: true).
+    #[serde(default = "default_true")]
+    pub mention_required: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -590,6 +597,9 @@ pub struct WhatsAppConfig {
     pub skip_history_sync: bool,
     #[serde(default)]
     pub allow_from: Vec<String>,
+    /// Require OTP pairing for unknown senders (default: false).
+    #[serde(default)]
+    pub pairing_required: bool,
 }
 
 impl Default for WhatsAppConfig {
@@ -600,6 +610,7 @@ impl Default for WhatsAppConfig {
             db_path: "~/.homun/whatsapp.db".to_string(),
             skip_history_sync: true,
             allow_from: Vec::new(),
+            pairing_required: false,
         }
     }
 }
@@ -628,6 +639,12 @@ pub struct DiscordConfig {
     /// Without this, Discord can only reply to incoming messages.
     #[serde(default)]
     pub default_channel_id: String,
+    /// Require OTP pairing for unknown senders (default: false).
+    #[serde(default)]
+    pub pairing_required: bool,
+    /// In guilds, only respond when @mentioned (default: true).
+    #[serde(default = "default_true")]
+    pub mention_required: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -662,12 +679,34 @@ pub struct SlackConfig {
     /// List of user IDs allowed to interact (e.g., "U1234567890"). "*" = allow all.
     #[serde(default)]
     pub allow_from: Vec<String>,
+    /// Require OTP pairing for unknown senders (default: false).
+    #[serde(default)]
+    pub pairing_required: bool,
+    /// In channels, only respond when @mentioned (default: true).
+    #[serde(default = "default_true")]
+    pub mention_required: bool,
 }
 
-/// Email channel configuration (IMAP + SMTP)
+/// Email response mode for an account.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EmailMode {
+    /// Summarize incoming email and ask for approval on the notify channel (default).
+    #[default]
+    Assisted,
+    /// Respond automatically. Escalates to assisted if it lacks info or would leak vault secrets.
+    Automatic,
+    /// Only process when a trigger word (or `@homun`) is found in subject/body.
+    /// When triggered, behaves like assisted.
+    OnDemand,
+}
+
+/// Per-account email configuration (IMAP + SMTP + mode).
+///
+/// Stored under `[channels.emails.<name>]` in config.toml.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct EmailConfig {
+pub struct EmailAccountConfig {
     pub enabled: bool,
     /// IMAP server hostname
     pub imap_host: String,
@@ -692,6 +731,113 @@ pub struct EmailConfig {
     pub idle_timeout_secs: u64,
     /// Allowed sender addresses/domains (empty = deny all, ["*"] = allow all)
     pub allow_from: Vec<String>,
+    /// Require OTP pairing for unknown senders (default: false).
+    #[serde(default)]
+    pub pairing_required: bool,
+
+    // --- New fields ---
+    /// Response mode: assisted (default), automatic, on_demand.
+    #[serde(default)]
+    pub mode: EmailMode,
+    /// Channel to send notifications/approvals to (e.g. "telegram", "whatsapp", "slack").
+    #[serde(default)]
+    pub notify_channel: Option<String>,
+    /// Chat ID on the notify channel (e.g. Telegram user ID).
+    #[serde(default)]
+    pub notify_chat_id: Option<String>,
+    /// Trigger word for on_demand mode. Auto-generated if absent.
+    #[serde(default)]
+    pub trigger_word: Option<String>,
+
+    /// Batching: items before emitting a digest (default: 3).
+    #[serde(default = "default_batch_threshold")]
+    pub batch_threshold: u32,
+    /// Batching: accumulation window in seconds (default: 120).
+    #[serde(default = "default_batch_window_secs")]
+    pub batch_window_secs: u64,
+    /// Delay in seconds between sending successive responses (default: 30).
+    #[serde(default = "default_send_delay_secs")]
+    pub send_delay_secs: u64,
+}
+
+fn default_batch_threshold() -> u32 {
+    3
+}
+fn default_batch_window_secs() -> u64 {
+    120
+}
+fn default_send_delay_secs() -> u64 {
+    30
+}
+
+impl Default for EmailAccountConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            imap_host: String::new(),
+            imap_port: 993,
+            imap_folder: "INBOX".to_string(),
+            smtp_host: String::new(),
+            smtp_port: 465,
+            smtp_tls: true,
+            username: String::new(),
+            password: String::new(),
+            from_address: String::new(),
+            idle_timeout_secs: 1740,
+            allow_from: Vec::new(),
+            pairing_required: false,
+            mode: EmailMode::Assisted,
+            notify_channel: None,
+            notify_chat_id: None,
+            trigger_word: None,
+            batch_threshold: default_batch_threshold(),
+            batch_window_secs: default_batch_window_secs(),
+            send_delay_secs: default_send_delay_secs(),
+        }
+    }
+}
+
+impl EmailAccountConfig {
+    /// Check if this account is properly configured.
+    pub fn is_configured(&self) -> bool {
+        !self.imap_host.is_empty()
+            && !self.smtp_host.is_empty()
+            && !self.username.is_empty()
+            && !self.password.is_empty()
+    }
+
+    /// Build a `QueueConfig` from the batching fields.
+    pub fn queue_config(&self) -> crate::queue::QueueConfig {
+        crate::queue::QueueConfig {
+            batch_threshold: self.batch_threshold,
+            batch_window_secs: self.batch_window_secs,
+            process_delay_secs: self.send_delay_secs,
+        }
+    }
+}
+
+/// Legacy single-account email config.
+///
+/// Kept for backward compatibility: if `[channels.email]` is present in the
+/// config file, it is automatically migrated into `channels.emails` as a
+/// "default" account.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EmailConfig {
+    pub enabled: bool,
+    pub imap_host: String,
+    pub imap_port: u16,
+    pub imap_folder: String,
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub smtp_tls: bool,
+    pub username: String,
+    pub password: String,
+    pub from_address: String,
+    pub idle_timeout_secs: u64,
+    pub allow_from: Vec<String>,
+    #[serde(default)]
+    pub pairing_required: bool,
 }
 
 impl Default for EmailConfig {
@@ -707,8 +853,9 @@ impl Default for EmailConfig {
             username: String::new(),
             password: String::new(),
             from_address: String::new(),
-            idle_timeout_secs: 1740, // 29 minutes per RFC 2177
+            idle_timeout_secs: 1740,
             allow_from: Vec::new(),
+            pairing_required: false,
         }
     }
 }
@@ -721,6 +868,32 @@ impl EmailConfig {
             && !self.username.is_empty()
             && !self.password.is_empty()
     }
+
+    /// Convert legacy config into a new `EmailAccountConfig` (for migration).
+    pub fn into_account(self) -> EmailAccountConfig {
+        EmailAccountConfig {
+            enabled: self.enabled,
+            imap_host: self.imap_host,
+            imap_port: self.imap_port,
+            imap_folder: self.imap_folder,
+            smtp_host: self.smtp_host,
+            smtp_port: self.smtp_port,
+            smtp_tls: self.smtp_tls,
+            username: self.username,
+            password: self.password,
+            from_address: self.from_address,
+            idle_timeout_secs: self.idle_timeout_secs,
+            allow_from: self.allow_from,
+            pairing_required: self.pairing_required,
+            mode: EmailMode::Assisted,
+            notify_channel: None,
+            notify_chat_id: None,
+            trigger_word: None,
+            batch_threshold: default_batch_threshold(),
+            batch_window_secs: default_batch_window_secs(),
+            send_delay_secs: default_send_delay_secs(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -731,24 +904,45 @@ pub struct ChannelsConfig {
     pub discord: DiscordConfig,
     pub web: WebConfig,
     pub slack: SlackConfig,
+    /// Legacy single-account email config. Migrated into `emails` at startup.
     pub email: EmailConfig,
+    /// Multi-account email configuration. Keys are account names.
+    pub emails: HashMap<String, EmailAccountConfig>,
 }
 
 impl ChannelsConfig {
+    /// Migrate legacy `[channels.email]` into `[channels.emails.default]` if needed.
+    ///
+    /// Call this once after loading config. If the legacy `email` field is
+    /// configured and `emails` is empty, the legacy config is promoted.
+    pub fn migrate_legacy_email(&mut self) {
+        if self.emails.is_empty() && self.email.enabled && self.email.is_configured() {
+            let account = self.email.clone().into_account();
+            self.emails.insert("default".to_string(), account);
+            tracing::info!("Migrated legacy [channels.email] → [channels.emails.default]");
+        }
+    }
+
+    /// Get all enabled and configured email accounts.
+    pub fn active_email_accounts(&self) -> Vec<(&String, &EmailAccountConfig)> {
+        self.emails
+            .iter()
+            .filter(|(_, acc)| acc.enabled && acc.is_configured())
+            .collect()
+    }
+
     /// Return a list of enabled channels with their default chat IDs.
     /// Used to inject cross-channel routing info into the agent's system prompt.
     pub fn active_channels_with_chat_ids(&self) -> Vec<(String, String)> {
         let mut channels = Vec::new();
 
         if self.telegram.enabled && !self.telegram.token.is_empty() {
-            // Use the first allow_from user as the default chat_id
             if let Some(user_id) = self.telegram.allow_from.first() {
                 channels.push(("telegram".to_string(), user_id.clone()));
             }
         }
 
         if self.whatsapp.enabled && !self.whatsapp.phone_number.is_empty() {
-            // WhatsApp JID format: phone@s.whatsapp.net
             let jid = format!("{}@s.whatsapp.net", self.whatsapp.phone_number);
             channels.push(("whatsapp".to_string(), jid));
         }
@@ -763,8 +957,19 @@ impl ChannelsConfig {
             ));
         }
 
-        if self.email.enabled && self.email.is_configured() {
-            // Use from_address as the chat_id for email
+        if self.slack.enabled && !self.slack.token.is_empty() && !self.slack.channel_id.is_empty() {
+            channels.push(("slack".to_string(), self.slack.channel_id.clone()));
+        }
+
+        // Multi-account emails
+        for (name, acc) in &self.emails {
+            if acc.enabled && acc.is_configured() {
+                channels.push((format!("email:{name}"), acc.from_address.clone()));
+            }
+        }
+
+        // Legacy single-account fallback (only if no multi-account)
+        if self.emails.is_empty() && self.email.enabled && self.email.is_configured() {
             channels.push(("email".to_string(), self.email.from_address.clone()));
         }
 

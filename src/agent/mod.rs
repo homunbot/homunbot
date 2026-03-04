@@ -1,6 +1,7 @@
 mod agent_loop;
 pub mod bootstrap_watcher;
 mod context;
+pub mod email_approval;
 pub mod gateway;
 pub mod heartbeat;
 pub mod memory;

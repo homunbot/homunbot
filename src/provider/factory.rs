@@ -64,10 +64,7 @@ pub fn create_provider(config: &Config) -> Result<Arc<dyn Provider>> {
 /// Resolves the provider from config, retrieves the API key (from encrypted
 /// storage or plaintext with auto-migration), and constructs the appropriate
 /// provider type (Anthropic, Ollama, or OpenAI-compatible).
-pub fn create_single_provider(
-    config: &Config,
-    model: &str,
-) -> Result<(String, Arc<dyn Provider>)> {
+pub fn create_single_provider(config: &Config, model: &str) -> Result<(String, Arc<dyn Provider>)> {
     let (provider_name, provider_config) = config
         .resolve_provider(model)
         .with_context(|| format!("No provider configured for model '{}'", model))?;

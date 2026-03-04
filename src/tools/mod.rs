@@ -1,5 +1,8 @@
 pub mod approval;
+pub mod automation;
 pub mod cron;
+#[cfg(feature = "channel-email")]
+pub mod email_inbox;
 pub mod file;
 #[cfg(feature = "mcp")]
 pub mod mcp;
@@ -17,7 +20,10 @@ pub use approval::{
     global_approval_manager, init_approval_manager, ApprovalDecision, ApprovalId, ApprovalLogEntry,
     ApprovalManager, ApprovalResponse, PendingApproval,
 };
+pub use automation::CreateAutomationTool;
 pub use cron::CronTool;
+#[cfg(feature = "channel-email")]
+pub use email_inbox::ReadEmailInboxTool;
 pub use file::{EditFileTool, ListDirTool, ReadFileTool, WriteFileTool};
 #[cfg(feature = "mcp")]
 pub use mcp::{McpManager, McpServerInfo};

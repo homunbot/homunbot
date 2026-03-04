@@ -325,6 +325,20 @@ impl Channel for SlackChannel {
                             continue;
                         }
 
+                        // Mention gating: in channels, only respond when @mentioned
+                        let mention_tag = format!("<@{bot_user_id}>");
+                        let mut content = text.to_string();
+                        if self.config.mention_required {
+                            if !content.contains(&mention_tag) {
+                                continue; // Not addressed to us
+                            }
+                            // Strip mention from content
+                            content = content.replace(&mention_tag, "").trim().to_string();
+                            if content.is_empty() {
+                                continue;
+                            }
+                        }
+
                         // Update last seen timestamp
                         last_ts_by_channel.insert(channel_id.clone(), ts.to_string());
 
@@ -333,8 +347,9 @@ impl Channel for SlackChannel {
                             channel: "slack".to_string(),
                             chat_id: channel_id.clone(),
                             sender_id: user.to_string(),
-                            content: text.to_string(),
+                            content,
                             timestamp: Utc::now(),
+                            metadata: None,
                         };
 
                         tracing::info!(

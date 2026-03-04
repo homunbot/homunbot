@@ -613,7 +613,9 @@ mod tests {
             "anthropic/claude-sonnet-4-20250514"
         );
         assert_eq!(
-            provider.resolve_model("openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free"),
+            provider.resolve_model(
+                "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
+            ),
             "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
         );
     }

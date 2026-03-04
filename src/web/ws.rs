@@ -135,6 +135,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                             chat_id: chat_id.clone(),
                             content: content.to_string(),
                             timestamp: Utc::now(),
+                            metadata: None,
                         };
 
                         // Only send if agent is available

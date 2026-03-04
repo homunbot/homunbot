@@ -7,14 +7,23 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 use frankenstein::client_reqwest::Bot;
-use frankenstein::methods::{GetUpdatesParams, SendMessageParams};
-use frankenstein::types::{AllowedUpdate, ChatId};
+use frankenstein::methods::{GetUpdatesParams, SendChatActionParams, SendMessageParams};
+use frankenstein::types::{AllowedUpdate, ChatAction, ChatId, ChatType};
 use frankenstein::updates::UpdateContent;
 use frankenstein::{AsyncTelegramApi, ParseMode};
 use tokio::sync::mpsc;
 
 use crate::bus::{InboundMessage, OutboundMessage};
 use crate::config::TelegramConfig;
+
+/// Context passed to message handler (avoids too many function arguments).
+struct BotContext {
+    allow_from: HashSet<String>,
+    allow_all: bool,
+    mention_required: bool,
+    bot_id: u64,
+    bot_username: String,
+}
 
 /// Telegram channel — long polling bot via Frankenstein.
 pub struct TelegramChannel {
@@ -36,12 +45,28 @@ impl TelegramChannel {
 
         let allow_from: HashSet<String> = self.config.allow_from.iter().cloned().collect();
         let allow_all = allow_from.is_empty();
+        let mention_required = self.config.mention_required;
+
+        // Fetch bot identity for mention detection
+        let me = api.get_me().await?;
+        let bot_id = me.result.id;
+        let bot_username = me.result.username.unwrap_or_default().to_lowercase();
 
         tracing::info!(
             allow_from = ?self.config.allow_from,
             allow_all,
+            mention_required,
+            bot_username = %bot_username,
             "Telegram channel (Frankenstein) starting"
         );
+
+        let ctx = BotContext {
+            allow_from,
+            allow_all,
+            mention_required,
+            bot_id,
+            bot_username,
+        };
 
         // Spawn outbound handler
         let api_for_outbound = api.clone();
@@ -62,14 +87,7 @@ impl TelegramChannel {
                     for update in response.result {
                         offset = update.update_id + 1;
                         if let UpdateContent::Message(message) = update.content {
-                            Self::handle_message(
-                                &api,
-                                *message,
-                                &inbound_tx,
-                                &allow_from,
-                                allow_all,
-                            )
-                            .await;
+                            Self::handle_message(&api, *message, &inbound_tx, &ctx).await;
                         }
                     }
                 }
@@ -85,8 +103,7 @@ impl TelegramChannel {
         api: &Bot,
         msg: frankenstein::types::Message,
         inbound_tx: &mpsc::Sender<InboundMessage>,
-        allow_from: &HashSet<String>,
-        allow_all: bool,
+        ctx: &BotContext,
     ) {
         let sender_id = msg
             .from
@@ -95,13 +112,13 @@ impl TelegramChannel {
             .unwrap_or_default();
         let chat_id = msg.chat.id;
 
-        if !allow_all && !allow_from.contains(&sender_id) {
+        if !ctx.allow_all && !ctx.allow_from.contains(&sender_id) {
             tracing::warn!(sender_id = %sender_id, "Unauthorized user");
             return;
         }
 
         // Extract text content from message
-        let text = match msg.text {
+        let mut text = match msg.text {
             Some(ref t) if !t.is_empty() => t.clone(),
             _ => {
                 // Skip non-text messages (photos, stickers, etc.)
@@ -109,12 +126,35 @@ impl TelegramChannel {
             }
         };
 
+        // Mention gating: in groups, only respond when @mentioned or replied to
+        let is_group = matches!(msg.chat.type_field, ChatType::Group | ChatType::Supergroup);
+        if is_group && ctx.mention_required {
+            let is_reply_to_bot = msg
+                .reply_to_message
+                .as_ref()
+                .and_then(|r| r.from.as_ref())
+                .map(|u| u.id == ctx.bot_id)
+                .unwrap_or(false);
+
+            let mention_tag = format!("@{}", ctx.bot_username);
+            let has_mention = text.to_lowercase().contains(&mention_tag);
+
+            if !has_mention && !is_reply_to_bot {
+                return; // Not addressed to us
+            }
+
+            // Strip the mention from the text so the agent sees clean input
+            if has_mention && !ctx.bot_username.is_empty() {
+                text = strip_mention(&text, &ctx.bot_username);
+            }
+        }
+
         tracing::info!(sender = %sender_id, chat = %chat_id, len = text.len(), "Received Telegram message");
 
         // Handle commands
         if text == "/start" {
-            let _ = Self::send_text_message(api, chat_id, "🧪 Homun is ready! Send me a message.")
-                .await;
+            let _ =
+                Self::send_text_message(api, chat_id, "Homun is ready! Send me a message.").await;
             return;
         }
 
@@ -123,6 +163,9 @@ impl TelegramChannel {
             // Continue to forward to agent for session reset handling
         }
 
+        // Send typing indicator before forwarding to agent
+        Self::send_typing(api, chat_id).await;
+
         // Send to agent via bus
         let inbound = InboundMessage {
             channel: "telegram".to_string(),
@@ -130,6 +173,7 @@ impl TelegramChannel {
             chat_id: chat_id.to_string(),
             content: text,
             timestamp: chrono::Utc::now(),
+            metadata: None,
         };
 
         if let Err(e) = inbound_tx.send(inbound).await {
@@ -141,6 +185,15 @@ impl TelegramChannel {
             )
             .await;
         }
+    }
+
+    /// Send a "typing..." indicator to the chat.
+    async fn send_typing(api: &Bot, chat_id: i64) {
+        let params = SendChatActionParams::builder()
+            .chat_id(ChatId::Integer(chat_id))
+            .action(ChatAction::Typing)
+            .build();
+        let _ = api.send_chat_action(&params).await;
     }
 
     async fn send_text_message(api: &Bot, chat_id: i64, text: &str) -> Result<()> {
@@ -319,6 +372,26 @@ fn replace_paired_double(text: &str, marker: &str, open: &str, close: &str) -> S
     result
 }
 
+/// Strip @bot_username mention from message text (case-insensitive).
+fn strip_mention(text: &str, bot_username: &str) -> String {
+    let tag = format!("@{bot_username}");
+    // Case-insensitive removal
+    let lower = text.to_lowercase();
+    let mut result = String::with_capacity(text.len());
+    let mut pos = 0;
+    while let Some(idx) = lower[pos..].find(&tag) {
+        result.push_str(&text[pos..pos + idx]);
+        pos += idx + tag.len();
+    }
+    result.push_str(&text[pos..]);
+    let trimmed = result.trim().to_string();
+    if trimmed.is_empty() {
+        text.to_string()
+    } else {
+        trimmed
+    }
+}
+
 /// Split a message into chunks that fit within Telegram's character limit
 fn split_message(text: &str, max_len: usize) -> Vec<String> {
     if text.len() <= max_len {
@@ -421,5 +494,21 @@ mod tests {
     #[test]
     fn test_markdown_to_html_plain_text() {
         assert_eq!(markdown_to_html("just plain text"), "just plain text");
+    }
+
+    #[test]
+    fn test_strip_mention_basic() {
+        assert_eq!(strip_mention("@homun hello", "homun"), "hello");
+        assert_eq!(strip_mention("hello @homun", "homun"), "hello");
+        assert_eq!(
+            strip_mention("hey @Homun what's up", "homun"),
+            "hey  what's up"
+        );
+    }
+
+    #[test]
+    fn test_strip_mention_only_mention() {
+        // If stripping the mention leaves empty text, return original
+        assert_eq!(strip_mention("@homun", "homun"), "@homun");
     }
 }

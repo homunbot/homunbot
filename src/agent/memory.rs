@@ -581,10 +581,7 @@ impl MemoryConsolidator {
         };
 
         // Delete old messages
-        let deleted = self
-            .db
-            .delete_old_messages(session_key, keep_count)
-            .await?;
+        let deleted = self.db.delete_old_messages(session_key, keep_count).await?;
 
         // Insert summary as system message
         self.db

@@ -1,6 +1,6 @@
 # Homun — Development Roadmap
 
-> Last updated: 2026-03-03
+> Last updated: 2026-03-05
 > Basato su: Audit completo (`docs/AUDIT-2026-03.md`)
 > Gap analysis: Homun vs OpenClaw vs ZeroClaw
 
@@ -12,7 +12,7 @@
 |---------|--------|
 | LOC Rust | ~41,343 |
 | LOC Frontend | ~8,691 |
-| Test | 348 passing |
+| Test | 312 passing (verificato con `cargo test -q` il 2026-03-04) |
 | Binary (full) | ~50MB |
 | Provider LLM | 14 |
 | Canali | 6 (CLI, Telegram, Discord*, WhatsApp*, Slack*, Email*) |
@@ -88,21 +88,30 @@
 
 | # | Task | File principali | LOC stimate | Stato |
 |---|------|----------------|-------------|-------|
-| 3.1 | **DM Pairing** | `security/pairing.rs` (nuovo) | ~150 | TODO |
+| 3.1 | **DM Pairing** | `security/pairing.rs` (nuovo), `agent/gateway.rs` | ~175 | ✅ DONE |
 | | Senders sconosciuti ricevono un codice OTP | | | |
-| | Codice valido per 5 minuti | | | |
-| | Una volta approvato, l'utente e trusted | | | |
+| | Codice valido per 5 minuti, max 3 tentativi | | | |
+| | Una volta approvato, l'utente e trusted (via UserManager) | | | |
 | | Config: `pairing_required = true/false` per canale | | | |
-| 3.2 | **Mention gating (gruppi)** | `channels/*.rs` | ~80 | TODO |
-| | Nei gruppi: rispondere solo quando menzionato | | | |
-| | Config: `mention_required = true/false` per canale | | | |
-| | Supporto: @homun, /homun, nome bot | | | |
-| 3.3 | **Typing indicators** | `channels/*.rs` | ~60 | TODO |
-| | Inviare "typing..." durante elaborazione | | | |
+| 3.2 | **Mention gating (gruppi)** | `channels/telegram.rs`, `discord.rs`, `slack.rs` | ~100 | ✅ DONE |
+| | Nei gruppi: rispondere solo quando @menzionato o reply-to-bot | | | |
+| | Config: `mention_required = true/false` per canale (default true) | | | |
+| | Strip menzione dal testo prima di forwarding all'agent | | | |
+| 3.3 | **Typing indicators** | `channels/telegram.rs`, `discord.rs` | ~20 | ✅ DONE |
 | | Telegram: sendChatAction("typing") | | | |
-| | Discord: channel.broadcast_typing() | | | |
+| | Discord: broadcast_typing() | | | |
+| | Slack: nessun supporto nativo | | | |
 
-**Stima totale Sprint 3: ~290 LOC**
+**Sprint 3 completo: ~295 LOC**
+
+### Checklist Nuovo Canale
+
+Quando si aggiunge un nuovo canale, implementare sempre:
+
+- [ ] **Pairing**: integrare `PairingManager::check_sender()` nel gateway (config: `pairing_required`)
+- [ ] **Mention gating**: nei gruppi, rispondere solo se @menzionato o reply-to-bot (config: `mention_required`)
+- [ ] **Typing indicator**: inviare indicatore "typing..." prima di forwardare all'agent (se la piattaforma lo supporta)
+- [ ] **Web UI settings**: aggiungere card in `build_channels_cards_html()` + gestione nel JS `setup.js`
 
 ---
 
@@ -112,31 +121,31 @@
 
 | # | Task | File principali | LOC stimate | Stato |
 |---|------|----------------|-------------|-------|
-| 4.1 | **Automations — DB e backend** | `storage/db.rs`, `scheduler/automations.rs` (nuovo) | ~300 | TODO |
+| 4.1 | **Automations — DB e backend** | `storage/db.rs`, `scheduler/automations.rs` (nuovo) | ~300 | ✅ DONE |
 | | Migrazione DB: tabella `automations` (nome, prompt, schedule, enabled, stato) | | | |
 | | Tabella `automation_runs` (id, automation_id, started_at, result, status) | | | |
 | | Scheduler upgrade: eseguire prompt complessi (non solo messaggi) | | | |
 | | Supporto cron expression + intervallo + "esegui ora" manuale | | | |
 | | Salvataggio ultimo risultato + confronto con precedente (per trigger condizionali) | | | |
-| 4.2 | **Automations — API e CLI** | `web/api.rs`, `main.rs` | ~200 | TODO |
+| 4.2 | **Automations — API e CLI** | `web/api.rs`, `main.rs` | ~200 | ✅ DONE |
 | | CRUD API: GET/POST/PATCH/DELETE `/api/v1/automations` | | | |
 | | GET `/api/v1/automations/:id/history` (storico esecuzioni) | | | |
 | | POST `/api/v1/automations/:id/run` (esegui ora) | | | |
 | | CLI: `homun automations {list,add,run,toggle,remove,history}` | | | |
-| 4.3 | **Automations — Web UI** | `web/pages.rs`, `static/js/automations.js` (nuovo) | ~250 | TODO |
+| 4.3 | **Automations — Web UI** | `web/pages.rs`, `static/js/automations.js` (nuovo) | ~250 | ✅ DONE |
 | | Pagina `/automations` con lista, status, prossima esecuzione | | | |
 | | Form creazione: nome + prompt naturale + schedule (cron/intervallo) | | | |
 | | Modifica inline, toggle on/off, pulsante "Esegui ora" | | | |
 | | Storico esecuzioni con risultato di ogni run | | | |
-| 4.4 | **Real-time logs (SSE)** | `web/api.rs`, `static/js/logs.js` | ~150 | TODO |
+| 4.4 | **Real-time logs (SSE)** | `web/api.rs`, `static/js/logs.js` | ~150 | ✅ DONE |
 | | Endpoint GET /api/v1/logs/stream (SSE) | | | |
 | | Pagina logs con auto-scroll e filtro per livello | | | |
 | | tracing subscriber che forka eventi a SSE channel | | | |
-| 4.5 | **Token usage dashboard** | `web/api.rs`, `static/js/dashboard.js` | ~200 | TODO |
+| 4.5 | **Token usage dashboard (API done, UI/costi TODO)** | `web/api.rs`, `static/js/dashboard.js` | ~200 | ⚠️ PARTIAL |
 | | Endpoint GET /api/v1/usage (per giorno/modello) | | | |
 | | Grafici usage nel dashboard (Chart.js o inline SVG) | | | |
 | | Costo stimato per provider | | | |
-| 4.6 | **Config wizard web** | `static/js/setup.js` | ~100 | TODO |
+| 4.6 | **Config wizard web (setup presente, wizard incompleto)** | `static/js/setup.js` | ~100 | ⚠️ PARTIAL |
 | | Completare il wizard di setup iniziale | | | |
 | | Test connessione provider | | | |
 | | Validazione config in real-time | | | |
@@ -175,7 +184,7 @@
 | | Composizione: combinare logica da piu' skill in una nuova | | | |
 | | Test automatico: esegue la skill creata e verifica il risultato | | | |
 | | Installazione automatica in `~/.homun/skills/` | | | |
-| 5.3 | **Creazione automation da chat** | `agent/context.rs`, `tools/automation.rs` (nuovo) | ~200 | TODO |
+| 5.3 | **Creazione automation da chat** | `agent/context.rs`, `tools/automation.rs` (nuovo) | ~200 | ✅ DONE |
 | | Tool `create_automation` — l'agent crea automations dalla conversazione | | | |
 | | "Ogni mattina controllami le email" → automation creata + confermata | | | |
 | | Suggerimento proattivo: "Vuoi che lo faccia ogni giorno?" dopo task ripetitivi | | | |
@@ -184,7 +193,7 @@
 | | Conversione automatica a formato Homun (SKILL.md + YAML frontmatter) | | | |
 | | Mapping path script: `src/` → `scripts/`, adattamento entry point | | | |
 | | Gestione dipendenze: npm → warning, pip → requirements.txt auto-install | | | |
-| 5.5 | **Skill Shield (sicurezza pre-install)** | `skills/shield.rs` (nuovo) | ~250 | TODO |
+| 5.5 | **Skill Shield (sicurezza pre-install)** | `skills/security.rs` | ~250 | ⚠️ PARTIAL |
 | | Analisi statica: regex pattern sospetti (reverse shell, crypto mining, `eval`, `rm -rf`, network calls non dichiarate) | | | |
 | | VirusTotal API: upload hash script → check reputation (free tier: 4 req/min) | | | |
 | | Report di sicurezza pre-installazione con risk score | | | |
@@ -337,10 +346,11 @@ Tu: "si"
 | | Implementazione completa Bolt-style | | | |
 | | Slash commands | | | |
 | | Thread support | | | |
-| 7.3 | **Completare Email** | `channels/email.rs` | ~200 | TODO |
+| 7.3 | **Completare Email** | `channels/email.rs`, `web/pages.rs` | ~200 | TODO |
 | | IMAP polling + SMTP sending | | | |
 | | HTML parsing | | | |
 | | Attachment handling | | | |
+| | Web UI: card Email nei settings (IMAP/SMTP/credentials) | | | |
 | 7.4 | **WhatsApp stabilizzazione** | `channels/whatsapp.rs` | ~100 | TODO |
 | | Reconnect robusto | | | |
 | | Group support | | | |
@@ -355,11 +365,11 @@ Tu: "si"
 
 | # | Task | File principali | LOC stimate | Stato |
 |---|------|----------------|-------------|-------|
-| 8.1 | **CI Pipeline** | `.github/workflows/ci.yml` | ~80 | TODO |
+| 8.1 | **CI Pipeline** | `.github/workflows/ci.yml` | ~80 | ✅ DONE |
 | | cargo fmt, clippy, test | | | |
 | | Multi-feature matrix | | | |
 | | Release binaries | | | |
-| 8.2 | **Tool abort/timeout** | `tools/registry.rs`, `agent/agent_loop.rs` | ~80 | TODO |
+| 8.2 | **Tool abort/timeout** | `tools/registry.rs`, `agent/agent_loop.rs` | ~80 | ⚠️ PARTIAL |
 | | Timeout configurabile per tool (default 60s) | | | |
 | | Abort signal propagation | | | |
 | 8.3 | **Provider health monitoring** | `provider/health.rs` (nuovo) | ~100 | TODO |
@@ -369,7 +379,7 @@ Tu: "si"
 | | Kill all tool execution | | | |
 | | Network disable | | | |
 | | Web UI button | | | |
-| 8.5 | **Service install** | `service/launchd.rs`, `service/systemd.rs` | ~200 | TODO |
+| 8.5 | **Service install** | `service/launchd.rs`, `service/systemd.rs` | ~200 | ✅ DONE |
 | | `homun service install` (macOS/Linux) | | | |
 | | Auto-start on boot | | | |
 
@@ -408,16 +418,15 @@ Sprint 2: Memory Search (P1)               ✅ DONE (~240 LOC)
   2.2 Embedding API provider
   2.3 Web UI memory search
     |
-Sprint 3: Sicurezza Canali (P1)             TODO (~290 LOC)
+Sprint 3: Sicurezza Canali (P1)             ✅ DONE (~295 LOC)
   3.1 DM Pairing
   3.2 Mention gating
   3.3 Typing indicators
     |
-Sprint 4: Web UI + Automations (P1)        TODO (~1,200 LOC)
-  4.1-4.3 Automations (DB + API + Web UI)
-  4.4 Real-time logs (SSE)
-  4.5 Token usage dashboard
-  4.6 Config wizard web
+Sprint 4: Web UI + Automations (P1)        ✅ CORE DONE (~1,200 LOC)
+  ✅ 4.1-4.4 Automations + logs real-time
+  ⚠️ 4.5 Token usage dashboard (UI/costi)
+  ⚠️ 4.6 Config wizard web (rifiniture)
     |
 Sprint 5: Ecosistema (P1)                  TODO (~1,350 LOC)
   5.1 MCP Setup Guidato
@@ -436,15 +445,19 @@ Sprint 6: RAG Knowledge Base (P1)          TODO (~1,100 LOC)
 Sprint 7: Canali Phase 2 (P2)              TODO (~600 LOC)
   7.1-7.4 Discord, Slack, Email, WhatsApp
     |
-Sprint 8: Hardening (P2)                   TODO (~540 LOC)
-  8.1-8.5 CI, timeout, health, E-Stop, service
+Sprint 8: Hardening (P2)                   ⚠️ PARTIAL (~540 LOC)
+  ✅ 8.1 CI Pipeline
+  ⚠️ 8.2 Tool timeout (presente su tool singoli, manca abort unificato)
+  TODO 8.3 Provider health monitoring
+  TODO 8.4 E-Stop
+  ✅ 8.5 Service install
     |
 Sprint 9+: Future (P3)
   Voice, Extended thinking, Prometheus, distribuzione
 ```
 
-**Completato: Sprint 1-2 (~834 LOC)**
-**Rimanente: Sprint 3-8 (~5,080 LOC)**
+**Completato: Sprint 1-3 + Sprint 4 core + 5.3 + parte Sprint 8**
+**Rimanente: Sprint 5 (tranne 5.3), Sprint 6-7, hardening residuo, e finishing 4.5/4.6**
 
 ---
 

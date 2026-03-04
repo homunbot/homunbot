@@ -72,7 +72,9 @@ impl EmbeddingProvider for LocalEmbeddingProvider {
 
         tokio::task::spawn_blocking(move || {
             let str_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-            let mut model = model.lock().map_err(|e| anyhow::anyhow!("Model lock poisoned: {e}"))?;
+            let mut model = model
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Model lock poisoned: {e}"))?;
             model
                 .embed(str_refs, None)
                 .context("fastembed embedding failed")
@@ -240,8 +242,7 @@ impl EmbeddingEngine {
             tracing::info!("Created new HNSW vector index");
         }
 
-        let cache_cap =
-            NonZeroUsize::new(CACHE_CAPACITY).expect("CACHE_CAPACITY must be non-zero");
+        let cache_cap = NonZeroUsize::new(CACHE_CAPACITY).expect("CACHE_CAPACITY must be non-zero");
 
         Ok(Self {
             provider,
