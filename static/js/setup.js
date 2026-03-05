@@ -55,6 +55,76 @@ async function patchConfig(key, value) {
     return resp.json();
 }
 
+function setFieldValidation(inputEl, ok, message) {
+    if (!inputEl) return;
+    var hint = inputEl.parentElement ? inputEl.parentElement.querySelector('.form-hint') : null;
+    if (ok) {
+        inputEl.classList.remove('input-invalid');
+        if (hint && message) {
+            hint.classList.remove('validation-error');
+            hint.classList.add('validation-ok');
+            hint.textContent = message;
+        } else if (hint) {
+            hint.classList.remove('validation-error');
+            hint.classList.remove('validation-ok');
+        }
+        return;
+    }
+
+    inputEl.classList.add('input-invalid');
+    if (hint && message) {
+        hint.classList.remove('validation-ok');
+        hint.classList.add('validation-error');
+        hint.textContent = message;
+    }
+}
+
+function validateNumberField(inputEl, min, max) {
+    if (!inputEl) return true;
+    var raw = String(inputEl.value || '').trim();
+    if (!raw) {
+        setFieldValidation(inputEl, false, 'Required field');
+        return false;
+    }
+    var value = Number(raw);
+    if (!Number.isFinite(value)) {
+        setFieldValidation(inputEl, false, 'Must be a number');
+        return false;
+    }
+    if (value < min || value > max) {
+        setFieldValidation(inputEl, false, 'Expected range: ' + min + '-' + max);
+        return false;
+    }
+    setFieldValidation(inputEl, true);
+    return true;
+}
+
+function validateUrlField(inputEl, allowEmpty) {
+    if (!inputEl) return true;
+    var raw = String(inputEl.value || '').trim();
+    if (!raw) {
+        if (allowEmpty) {
+            setFieldValidation(inputEl, true);
+            return true;
+        }
+        setFieldValidation(inputEl, false, 'URL is required');
+        return false;
+    }
+    try {
+        var parsed = new URL(raw);
+        var ok = parsed.protocol === 'http:' || parsed.protocol === 'https:';
+        if (!ok) {
+            setFieldValidation(inputEl, false, 'URL must start with http:// or https://');
+            return false;
+        }
+        setFieldValidation(inputEl, true);
+        return true;
+    } catch (_) {
+        setFieldValidation(inputEl, false, 'Invalid URL format');
+        return false;
+    }
+}
+
 
 // ═══ Active Model Banner ═══
 
@@ -115,6 +185,94 @@ function updateActiveBanner(model) {
             if (badge) { badge.textContent = ''; badge.className = 'model-radio-badge'; }
         }
     });
+
+    if (typeof refreshSetupWizard === 'function') refreshSetupWizard();
+}
+
+var lastProviderTestOk = false;
+
+async function runProviderConnectionTest(card, opts) {
+    opts = opts || {};
+    if (!card) return null;
+
+    var provider = card.dataset.provider;
+    var resultEl = card.querySelector('.provider-test-result');
+    var btn = card.querySelector('.provider-test-connection');
+    var customInput = card.querySelector('.provider-custom-model');
+    var selected = card.querySelector('input[name="active-model"]:checked');
+    var model = selected ? selected.value : '';
+    if (!model && customInput && customInput.value.trim()) {
+        model = customInput.value.trim();
+    }
+    if (model && !model.startsWith(provider + '/')) {
+        model = provider + '/' + model;
+    }
+
+    var payload = {
+        name: provider,
+        model: model || undefined,
+    };
+    var keyInput = card.querySelector('.provider-api-key');
+    if (keyInput && keyInput.value.trim()) {
+        payload.api_key = keyInput.value.trim();
+    }
+    var baseInput = card.querySelector('.provider-api-base');
+    if (baseInput && baseInput.value.trim()) {
+        payload.api_base = baseInput.value.trim();
+    }
+
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Testing…';
+    }
+    if (resultEl) {
+        resultEl.textContent = 'Testing connection…';
+        resultEl.className = 'form-hint provider-test-result';
+    }
+
+    try {
+        var resp = await fetch('/api/v1/providers/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        var data = await resp.json();
+        lastProviderTestOk = !!data.ok;
+        if (resultEl) {
+            resultEl.textContent = (data.ok ? '✓ ' : '✗ ') + (data.message || '');
+            resultEl.className = 'form-hint provider-test-result ' + (data.ok ? 'pairing-status success' : 'pairing-status error');
+        }
+        if (!opts.silent) {
+            showToast(data.ok ? 'Provider connection OK' : 'Provider test failed', data.ok ? 'success' : 'error');
+        }
+        return data;
+    } catch (err) {
+        lastProviderTestOk = false;
+        if (resultEl) {
+            resultEl.textContent = '✗ Connection test failed';
+            resultEl.className = 'form-hint provider-test-result pairing-status error';
+        }
+        if (!opts.silent) showToast('Provider test failed', 'error');
+        return null;
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Test Connection';
+        }
+    }
+}
+
+function getActiveProviderCard() {
+    var activeCard = document.querySelector('.provider-card.provider-card--active');
+    if (activeCard) return activeCard;
+
+    var checkedModel = document.querySelector('input[name="active-model"]:checked');
+    var model = checkedModel ? checkedModel.value : '';
+    if (!model) return null;
+    var slash = model.indexOf('/');
+    if (slash <= 0) return null;
+    var provider = model.substring(0, slash);
+    return document.querySelector('.provider-card[data-provider="' + provider + '"]');
 }
 
 
@@ -173,6 +331,7 @@ if (providerGrid) {
                 loadProviderModels(card);
                 loadVisionDropdown();
                 populateFallbackDropdown();
+                refreshSetupWizard();
             } else {
                 showToast(data.message || 'Failed to save', 'error');
             }
@@ -194,6 +353,7 @@ if (providerGrid) {
         var urlInput = card.querySelector('.provider-api-base');
         var apiBase = urlInput ? urlInput.value.trim() : '';
         if (!apiBase) { showToast('Enter a base URL', 'error'); return; }
+        if (!validateUrlField(urlInput, false)) { return; }
 
         var payload = { name: provider, api_base: apiBase };
         btn.textContent = 'Saving\u2026';
@@ -213,6 +373,7 @@ if (providerGrid) {
                 loadProviderModels(card);
                 loadVisionDropdown();
                 populateFallbackDropdown();
+                refreshSetupWizard();
             } else {
                 showToast(data.message || 'Failed to save', 'error');
             }
@@ -246,6 +407,12 @@ if (providerGrid) {
         var input = card.querySelector('.provider-custom-model');
         var modelName = input ? input.value.trim() : '';
         if (!modelName) return;
+        if (/\s/.test(modelName)) {
+            input.classList.add('input-invalid');
+            showToast('Model name cannot contain spaces', 'error');
+            return;
+        }
+        input.classList.remove('input-invalid');
 
         if (!modelName.startsWith(provider + '/')) {
             modelName = provider + '/' + modelName;
@@ -259,6 +426,32 @@ if (providerGrid) {
         }).catch(function() {
             showToast('Failed to set model', 'error');
         });
+    });
+
+    // --- Provider connection test ---
+    providerGrid.addEventListener('click', function(e) {
+        var btn = e.target.closest('.provider-test-connection');
+        if (!btn) return;
+        var card = btn.closest('.provider-card');
+        runProviderConnectionTest(card).then(function() {
+            refreshSetupWizard();
+        });
+    });
+
+    // --- Realtime provider field validation ---
+    providerGrid.addEventListener('input', function(e) {
+        if (e.target.classList.contains('provider-api-base')) {
+            validateUrlField(e.target, true);
+            return;
+        }
+        if (e.target.classList.contains('provider-custom-model')) {
+            var val = e.target.value.trim();
+            if (!val || !/\s/.test(val)) {
+                e.target.classList.remove('input-invalid');
+            } else {
+                e.target.classList.add('input-invalid');
+            }
+        }
     });
 
     // --- Deactivate provider ---
@@ -291,6 +484,10 @@ if (providerGrid) {
     providerGrid.querySelectorAll('.provider-card-body:not([hidden])').forEach(function(body) {
         var card = body.closest('.provider-card');
         if (card) loadProviderModels(card);
+    });
+
+    providerGrid.querySelectorAll('.provider-api-base').forEach(function(input) {
+        if (input.value && input.value.trim()) validateUrlField(input, true);
     });
 }
 
@@ -347,6 +544,7 @@ if (providerGrid) {
             '</div>' +
             '<div class="provider-card-body">' +
                 '<div class="provider-credentials">' + keyField + urlField + '</div>' +
+                '<div class="provider-card-tools"><button type="button" class="btn btn-secondary btn--sm provider-test-connection">Test Connection</button><span class="form-hint provider-test-result"></span></div>' +
                 '<div class="provider-models" data-provider="' + provider + '"><label class="provider-models-label">Models</label><div class="provider-model-list"><div class="form-hint">Configure credentials to see models.</div></div><div class="custom-model-row"><input type="text" class="input input--inline provider-custom-model" placeholder="Custom model name\u2026"><button type="button" class="btn btn-secondary btn--sm provider-use-custom">Use</button></div><div class="form-hint">Enter a model name. Provider prefix is added automatically.</div></div>' +
                 '<button type="button" class="btn btn-ghost btn--sm provider-deactivate" style="margin-top:8px;color:var(--text-muted);">Remove credentials</button>' +
             '</div></div>';
@@ -363,7 +561,147 @@ if (providerGrid) {
             var firstInput = newCard.querySelector('.provider-api-key, .provider-api-base');
             if (firstInput) firstInput.focus();
         }
+        refreshSetupWizard();
     });
+})();
+
+
+// ═══ Setup Wizard ═══
+
+var wizardEls = {
+    section: document.getElementById('setup-wizard-section'),
+    root: document.getElementById('setup-wizard'),
+    status: document.getElementById('wizard-status'),
+    nextBtn: document.getElementById('wizard-next-step'),
+    testBtn: document.getElementById('wizard-test-active-provider'),
+    hideBtn: document.getElementById('wizard-hide'),
+    stepProvider: document.getElementById('wizard-step-provider'),
+    stepModel: document.getElementById('wizard-step-model'),
+    stepTest: document.getElementById('wizard-step-test'),
+};
+
+function setWizardStepState(stepEl, state) {
+    if (!stepEl) return;
+    stepEl.classList.remove('is-active');
+    stepEl.classList.remove('is-done');
+    if (state) stepEl.classList.add(state);
+}
+
+function getConfiguredProviders() {
+    return Array.from(document.querySelectorAll('.provider-card')).filter(function(card) {
+        return card.dataset.configured === 'true';
+    });
+}
+
+function hasActiveModelConfigured() {
+    if (!noModelBanner) return false;
+    return window.getComputedStyle(noModelBanner).display === 'none';
+}
+
+function refreshSetupWizard() {
+    if (!wizardEls.root) return;
+
+    var providers = getConfiguredProviders();
+    var hasProvider = providers.length > 0;
+    var hasModel = hasActiveModelConfigured();
+    var hasTest = !!lastProviderTestOk;
+
+    if (hasProvider) setWizardStepState(wizardEls.stepProvider, 'is-done');
+    else setWizardStepState(wizardEls.stepProvider, 'is-active');
+
+    if (!hasProvider) setWizardStepState(wizardEls.stepModel, null);
+    else if (hasModel) setWizardStepState(wizardEls.stepModel, 'is-done');
+    else setWizardStepState(wizardEls.stepModel, 'is-active');
+
+    if (!hasProvider || !hasModel) setWizardStepState(wizardEls.stepTest, null);
+    else if (hasTest) setWizardStepState(wizardEls.stepTest, 'is-done');
+    else setWizardStepState(wizardEls.stepTest, 'is-active');
+
+    if (wizardEls.status) {
+        wizardEls.status.classList.remove('validation-ok');
+        if (!hasProvider) {
+            wizardEls.status.textContent = 'Next: configure at least one provider.';
+        } else if (!hasModel) {
+            wizardEls.status.textContent = 'Next: choose an active model.';
+        } else if (!hasTest) {
+            wizardEls.status.textContent = 'Next: run provider connection test.';
+        } else {
+            wizardEls.status.textContent = 'Setup complete. You are ready to chat.';
+            wizardEls.status.classList.add('validation-ok');
+        }
+    }
+
+    if (wizardEls.nextBtn) {
+        wizardEls.nextBtn.textContent = (hasProvider && hasModel && hasTest) ? 'Setup complete' : 'Next step';
+        wizardEls.nextBtn.disabled = hasProvider && hasModel && hasTest;
+    }
+}
+
+async function runWizardNextStep() {
+    var providers = getConfiguredProviders();
+    var hasProvider = providers.length > 0;
+    var hasModel = hasActiveModelConfigured();
+
+    if (!hasProvider) {
+        if (providerGrid) providerGrid.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        var addBtn = document.getElementById('btn-add-provider');
+        if (addBtn) addBtn.click();
+        return;
+    }
+
+    if (!hasModel) {
+        var firstConfigured = providers[0];
+        if (!firstConfigured) return;
+        var body = firstConfigured.querySelector('.provider-card-body');
+        var header = firstConfigured.querySelector('.provider-card-header');
+        if (body && body.hidden && header) header.click();
+        firstConfigured.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        var radio = firstConfigured.querySelector('input[name="active-model"]');
+        var customInput = firstConfigured.querySelector('.provider-custom-model');
+        if (radio) radio.focus();
+        else if (customInput) customInput.focus();
+        return;
+    }
+
+    var activeCard = getActiveProviderCard() || providers[0];
+    if (activeCard) {
+        var body = activeCard.querySelector('.provider-card-body');
+        var header = activeCard.querySelector('.provider-card-header');
+        if (body && body.hidden && header) header.click();
+        activeCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        await runProviderConnectionTest(activeCard);
+        refreshSetupWizard();
+    }
+}
+
+(function initSetupWizard() {
+    if (!wizardEls.root) return;
+
+    var hidden = localStorage.getItem('homun-setup-wizard-hidden') === '1';
+    if (hidden && wizardEls.section) wizardEls.section.style.display = 'none';
+
+    if (wizardEls.nextBtn) {
+        wizardEls.nextBtn.addEventListener('click', runWizardNextStep);
+    }
+    if (wizardEls.testBtn) {
+        wizardEls.testBtn.addEventListener('click', async function() {
+            var active = getActiveProviderCard();
+            if (!active) {
+                showToast('No active provider selected', 'error');
+                return;
+            }
+            await runProviderConnectionTest(active);
+            refreshSetupWizard();
+        });
+    }
+    if (wizardEls.hideBtn) {
+        wizardEls.hideBtn.addEventListener('click', function() {
+            localStorage.setItem('homun-setup-wizard-hidden', '1');
+            if (wizardEls.section) wizardEls.section.style.display = 'none';
+        });
+    }
+
+    refreshSetupWizard();
 })();
 
 
@@ -913,8 +1251,32 @@ var visionModelSelect = document.getElementById('vision-model-select');
 var visionModelValue = document.getElementById('vision-model-value');
 
 if (agentForm) {
+    var maxTokensInput = agentForm.querySelector('input[name="max_tokens"]');
+    var temperatureInput = agentForm.querySelector('input[name="temperature"]');
+    var maxIterationsInput = agentForm.querySelector('input[name="max_iterations"]');
+    var xmlDelayInput = agentForm.querySelector('input[name="xml_fallback_delay_ms"]');
+
+    function validateAgentForm() {
+        var ok = true;
+        ok = validateNumberField(maxTokensInput, 1, 400000) && ok;
+        ok = validateNumberField(temperatureInput, 0, 2) && ok;
+        ok = validateNumberField(maxIterationsInput, 1, 50) && ok;
+        ok = validateNumberField(xmlDelayInput, 0, 60000) && ok;
+        return ok;
+    }
+
+    [maxTokensInput, temperatureInput, maxIterationsInput, xmlDelayInput].forEach(function(input) {
+        if (!input) return;
+        input.addEventListener('input', validateAgentForm);
+        input.addEventListener('blur', validateAgentForm);
+    });
+
     agentForm.addEventListener('submit', async function(e) {
         e.preventDefault();
+        if (!validateAgentForm()) {
+            showToast('Fix validation errors before saving', 'error');
+            return;
+        }
         var btn = agentForm.querySelector('button[type="submit"]');
         var originalText = btn.textContent;
         btn.textContent = 'Saving\u2026';
@@ -1754,11 +2116,34 @@ if (btnRunCleanup) {
     var btnTestBrowser = document.getElementById('btn-test-browser');
     var browserResult = document.getElementById('browser-result');
     var headlessToggle = document.getElementById('browser-headless');
+    var actionTimeout = document.getElementById('browser-action-timeout');
+    var navTimeout = document.getElementById('browser-nav-timeout');
+    var snapshotLimit = document.getElementById('browser-snapshot-limit');
+
+    function validateBrowserForm() {
+        var ok = true;
+        ok = validateNumberField(actionTimeout, 5, 300) && ok;
+        ok = validateNumberField(navTimeout, 5, 300) && ok;
+        ok = validateNumberField(snapshotLimit, 10, 500) && ok;
+        return ok;
+    }
+
+    [actionTimeout, navTimeout, snapshotLimit].forEach(function(input) {
+        if (!input) return;
+        input.addEventListener('input', validateBrowserForm);
+        input.addEventListener('blur', validateBrowserForm);
+    });
 
     if (browserForm) {
         browserForm.addEventListener('submit', async function(e) {
             e.preventDefault();
             e.stopPropagation();
+            if (!validateBrowserForm()) {
+                browserResult.textContent = '✗ Fix validation errors before saving.';
+                browserResult.className = 'form-hint pairing-status error';
+                showToast('Fix validation errors before saving', 'error');
+                return;
+            }
 
             var btn = browserForm.querySelector('button[type="submit"]');
             var originalText = btn.textContent;
@@ -1769,9 +2154,6 @@ if (btnRunCleanup) {
 
             var headless = headlessToggle ? headlessToggle.checked : true;
             var executablePath = document.getElementById('browser-executable');
-            var actionTimeout = document.getElementById('browser-action-timeout');
-            var navTimeout = document.getElementById('browser-nav-timeout');
-            var snapshotLimit = document.getElementById('browser-snapshot-limit');
 
             var patches = [
                 { key: 'browser.headless', value: String(headless) },
@@ -1850,6 +2232,7 @@ if (btnRunCleanup) {
             btnTestBrowser.disabled = false;
         });
     }
+    validateBrowserForm();
     console.log('[Browser] Form handler initialized');
 })();
 

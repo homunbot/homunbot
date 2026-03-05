@@ -141,11 +141,11 @@ Quando si aggiunge un nuovo canale, implementare sempre:
 | | Endpoint GET /api/v1/logs/stream (SSE) | | | |
 | | Pagina logs con auto-scroll e filtro per livello | | | |
 | | tracing subscriber che forka eventi a SSE channel | | | |
-| 4.5 | **Token usage dashboard (API done, UI/costi TODO)** | `web/api.rs`, `static/js/dashboard.js` | ~200 | ⚠️ PARTIAL |
+| 4.5 | **Token usage dashboard (API + UI + costi)** | `web/api.rs`, `web/pages.rs`, `static/js/dashboard.js`, `static/css/style.css`, `storage/db.rs` | ~200 | ✅ DONE |
 | | Endpoint GET /api/v1/usage (per giorno/modello) | | | |
 | | Grafici usage nel dashboard (Chart.js o inline SVG) | | | |
 | | Costo stimato per provider | | | |
-| 4.6 | **Config wizard web (setup presente, wizard incompleto)** | `static/js/setup.js` | ~100 | ⚠️ PARTIAL |
+| 4.6 | **Config wizard web (wizard + provider test + validazione realtime)** | `web/pages.rs`, `web/api.rs`, `static/js/setup.js`, `static/css/style.css` | ~100 | ✅ DONE |
 | | Completare il wizard di setup iniziale | | | |
 | | Test connessione provider | | | |
 | | Validazione config in real-time | | | |
@@ -423,10 +423,8 @@ Sprint 3: Sicurezza Canali (P1)             ✅ DONE (~295 LOC)
   3.2 Mention gating
   3.3 Typing indicators
     |
-Sprint 4: Web UI + Automations (P1)        ✅ CORE DONE (~1,200 LOC)
-  ✅ 4.1-4.4 Automations + logs real-time
-  ⚠️ 4.5 Token usage dashboard (UI/costi)
-  ⚠️ 4.6 Config wizard web (rifiniture)
+Sprint 4: Web UI + Automations (P1)        ✅ DONE (~1,200 LOC)
+  ✅ 4.1-4.6 Automations + logs + usage/costi + setup wizard
     |
 Sprint 5: Ecosistema (P1)                  TODO (~1,350 LOC)
   5.1 MCP Setup Guidato
@@ -456,8 +454,8 @@ Sprint 9+: Future (P3)
   Voice, Extended thinking, Prometheus, distribuzione
 ```
 
-**Completato: Sprint 1-3 + Sprint 4 core + 5.3 + parte Sprint 8**
-**Rimanente: Sprint 5 (tranne 5.3), Sprint 6-7, hardening residuo, e finishing 4.5/4.6**
+**Completato: Sprint 1-4 + 5.3 + parte Sprint 8**
+**Rimanente: Sprint 5 (tranne 5.3), Sprint 6-7, hardening residuo**
 
 ---
 

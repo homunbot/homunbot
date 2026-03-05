@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{Path, Query, State, WebSocketUpgrade};
@@ -48,6 +48,7 @@ pub fn router() -> Router<Arc<AppState>> {
             "/v1/providers/deactivate",
             axum::routing::post(deactivate_provider),
         )
+        .route("/v1/providers/test", axum::routing::post(test_provider))
         .route("/v1/providers/models", get(list_all_models))
         .route("/v1/providers/ollama/models", get(list_ollama_models))
         .route(
@@ -1184,6 +1185,179 @@ async fn deactivate_provider(
             req.name
         ),
     }))
+}
+
+#[derive(Deserialize)]
+struct ProviderTestRequest {
+    name: String,
+    model: Option<String>,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    timeout_secs: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct ProviderTestResponse {
+    ok: bool,
+    message: String,
+    provider: String,
+    model: String,
+    latency_ms: Option<u128>,
+}
+
+fn default_model_for_provider(provider: &str) -> String {
+    match provider {
+        "anthropic" => "anthropic/claude-sonnet-4-20250514".to_string(),
+        "openai" => "openai/gpt-4o-mini".to_string(),
+        "openrouter" => "openrouter/anthropic/claude-sonnet-4".to_string(),
+        "ollama" => "ollama/llama3:8b".to_string(),
+        "ollama_cloud" => "ollama_cloud/llama3.3".to_string(),
+        "gemini" => "gemini/gemini-2.0-flash".to_string(),
+        "deepseek" => "deepseek/deepseek-chat".to_string(),
+        "groq" => "groq/llama-3.1-8b-instant".to_string(),
+        "mistral" => "mistral/mistral-small-latest".to_string(),
+        "xai" => "xai/grok-beta".to_string(),
+        "together" => "together/meta-llama/Llama-3.3-70B-Instruct-Turbo".to_string(),
+        "fireworks" => "fireworks/accounts/fireworks/models/llama-v3p3-70b-instruct".to_string(),
+        "perplexity" => "perplexity/sonar-pro".to_string(),
+        "cohere" => "cohere/command-r".to_string(),
+        "venice" => "venice/llama-3.3-70b".to_string(),
+        "aihubmix" => "aihubmix/claude-sonnet-4".to_string(),
+        "vercel" => "vercel/claude-3-5-sonnet".to_string(),
+        "cloudflare" => "cloudflare/@cf/meta/llama-3.3-70b-instruct".to_string(),
+        "copilot" => "copilot/gpt-4o".to_string(),
+        "bedrock" => "bedrock/anthropic.claude-3-sonnet".to_string(),
+        "moonshot" => "moonshot/moonshot-v1-8k".to_string(),
+        "zhipu" => "zhipu/glm-4".to_string(),
+        "dashscope" => "dashscope/qwen-plus".to_string(),
+        "minimax" => "minimax/MiniMax-M2".to_string(),
+        "vllm" => "vllm/default".to_string(),
+        "custom" => "custom/default".to_string(),
+        _ => format!("{provider}/default"),
+    }
+}
+
+async fn test_provider(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ProviderTestRequest>,
+) -> Json<ProviderTestResponse> {
+    let mut config = state.config.read().await.clone();
+
+    // Provider must exist in config.
+    let Some(provider_cfg) = config.providers.get_mut(&req.name) else {
+        return Json(ProviderTestResponse {
+            ok: false,
+            message: format!("Unknown provider '{}'", req.name),
+            provider: req.name,
+            model: String::new(),
+            latency_ms: None,
+        });
+    };
+
+    // Apply temporary overrides from the form (without persisting them).
+    if let Some(api_key) = req.api_key.as_ref() {
+        provider_cfg.api_key = api_key.clone();
+    }
+    if let Some(api_base) = req.api_base.as_ref() {
+        provider_cfg.api_base = if api_base.trim().is_empty() {
+            None
+        } else {
+            Some(api_base.trim().to_string())
+        };
+    }
+
+    let model = match req.model.as_deref() {
+        Some(m) if !m.trim().is_empty() => {
+            let m = m.trim();
+            let prefix = format!("{}/", req.name);
+            if m.starts_with(&prefix) {
+                m.to_string()
+            } else {
+                format!("{prefix}{m}")
+            }
+        }
+        _ => {
+            let current = config.agent.model.clone();
+            let expected_prefix = format!("{}/", req.name);
+            if current.starts_with(&expected_prefix) {
+                current
+            } else {
+                default_model_for_provider(&req.name)
+            }
+        }
+    };
+
+    let provider = match crate::provider::create_single_provider(&config, &model) {
+        Ok((_, p)) => p,
+        Err(e) => {
+            return Json(ProviderTestResponse {
+                ok: false,
+                message: format!("Provider setup failed: {e}"),
+                provider: req.name,
+                model,
+                latency_ms: None,
+            });
+        }
+    };
+
+    let timeout_secs = req.timeout_secs.unwrap_or(20).clamp(3, 60);
+    let started = Instant::now();
+    let chat_req = crate::provider::ChatRequest {
+        messages: vec![
+            crate::provider::ChatMessage::system(
+                "Reply with exactly 'ok'. No extra text, no tools.",
+            ),
+            crate::provider::ChatMessage::user("connection test"),
+        ],
+        tools: vec![],
+        model: model.clone(),
+        max_tokens: 12,
+        temperature: 0.0,
+    };
+
+    let result =
+        tokio::time::timeout(Duration::from_secs(timeout_secs), provider.chat(chat_req)).await;
+
+    match result {
+        Ok(Ok(resp)) => {
+            let latency_ms = started.elapsed().as_millis();
+            let preview = resp
+                .content
+                .unwrap_or_default()
+                .trim()
+                .chars()
+                .take(80)
+                .collect::<String>();
+            Json(ProviderTestResponse {
+                ok: true,
+                message: if preview.is_empty() {
+                    format!(
+                        "Connection OK (no text content, finish={})",
+                        resp.finish_reason
+                    )
+                } else {
+                    format!("Connection OK: {}", preview)
+                },
+                provider: req.name,
+                model,
+                latency_ms: Some(latency_ms),
+            })
+        }
+        Ok(Err(e)) => Json(ProviderTestResponse {
+            ok: false,
+            message: format!("Connection failed: {e}"),
+            provider: req.name,
+            model,
+            latency_ms: None,
+        }),
+        Err(_) => Json(ProviderTestResponse {
+            ok: false,
+            message: format!("Connection timed out after {timeout_secs}s"),
+            provider: req.name,
+            model,
+            latency_ms: None,
+        }),
+    }
 }
 
 // --- All Models (aggregated from configured providers) ---

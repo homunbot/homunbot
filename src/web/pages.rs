@@ -434,6 +434,41 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     </div>
                 </div>
 
+                <section class="section setup-wizard-section" id="setup-wizard-section">
+                    <h2>Guided Setup</h2>
+                    <div class="setup-wizard" id="setup-wizard">
+                        <div class="setup-wizard-steps">
+                            <div class="setup-step" id="wizard-step-provider">
+                                <span class="setup-step-dot"></span>
+                                <div class="setup-step-content">
+                                    <div class="setup-step-title">1. Configure a provider</div>
+                                    <div class="setup-step-desc">Add API key or base URL for at least one provider.</div>
+                                </div>
+                            </div>
+                            <div class="setup-step" id="wizard-step-model">
+                                <span class="setup-step-dot"></span>
+                                <div class="setup-step-content">
+                                    <div class="setup-step-title">2. Select your active model</div>
+                                    <div class="setup-step-desc">Choose a model from the provider card or enter a custom one.</div>
+                                </div>
+                            </div>
+                            <div class="setup-step" id="wizard-step-test">
+                                <span class="setup-step-dot"></span>
+                                <div class="setup-step-content">
+                                    <div class="setup-step-title">3. Run a connection test</div>
+                                    <div class="setup-step-desc">Validate that provider credentials and endpoint work.</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="setup-wizard-actions">
+                            <button type="button" class="btn btn-primary btn-sm" id="wizard-next-step">Next step</button>
+                            <button type="button" class="btn btn-secondary btn-sm" id="wizard-test-active-provider">Test active provider</button>
+                            <button type="button" class="btn btn-ghost btn-sm" id="wizard-hide">Hide</button>
+                        </div>
+                        <div class="form-hint" id="wizard-status">Wizard ready.</div>
+                    </div>
+                </section>
+
                 <section class="section" id="section-providers">
                     <h2>Model &amp; Providers</h2>
 
@@ -2123,6 +2158,10 @@ mod build_providers_html {
                     <div class="provider-credentials">
                         {key_field}
                         {url_field}
+                    </div>
+                    <div class="provider-card-tools">
+                        <button type="button" class="btn btn-secondary btn--sm provider-test-connection">Test Connection</button>
+                        <span class="form-hint provider-test-result"></span>
                     </div>
                     <div class="provider-models" data-provider="{name}">
                         <label class="provider-models-label">Models</label>

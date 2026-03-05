@@ -946,6 +946,19 @@ html, body {
 
 .provider-card-body[hidden] { display: none; }
 
+.provider-card-tools {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+}
+
+.provider-test-result {
+    margin-top: 0;
+}
+
 .provider-credentials {
     padding-top: 12px;
 }
@@ -1219,6 +1232,90 @@ html, body {
 .active-model-provider {
     font-size: 11px;
     color: var(--t3);
+}
+
+/* ─── Setup wizard ─── */
+
+.setup-wizard {
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    background: var(--surface);
+    padding: 14px 16px;
+}
+
+.setup-wizard-steps {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.setup-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: var(--r-md);
+    border: 1px solid var(--border-subtle);
+}
+
+.setup-step-dot {
+    width: 10px;
+    height: 10px;
+    margin-top: 5px;
+    border-radius: 50%;
+    background: var(--border-strong);
+    flex-shrink: 0;
+}
+
+.setup-step-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--t2);
+}
+
+.setup-step-desc {
+    font-size: 11px;
+    color: var(--t4);
+    margin-top: 2px;
+}
+
+.setup-step.is-done {
+    background: var(--ok-bg);
+    border-color: color-mix(in srgb, var(--ok) 35%, var(--border) 65%);
+}
+
+.setup-step.is-done .setup-step-dot {
+    background: var(--ok);
+}
+
+.setup-step.is-active {
+    border-color: var(--accent-border);
+    background: color-mix(in srgb, var(--accent-light) 40%, var(--surface) 60%);
+}
+
+.setup-step.is-active .setup-step-dot {
+    background: var(--accent);
+}
+
+.setup-wizard-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+/* ─── Realtime validation ─── */
+
+.input.input-invalid {
+    border-color: var(--err);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--err) 32%, transparent);
+}
+
+.form-hint.validation-error {
+    color: var(--err);
+}
+
+.form-hint.validation-ok {
+    color: var(--ok);
 }
 
 /* ─── Advanced section ─── */
