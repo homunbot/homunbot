@@ -86,7 +86,7 @@ anyhow = "1"
 thiserror = "2"
 
 # Skill frontmatter parsing
-gray_matter = "0.2"
+gray_matter = "0.3"
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
