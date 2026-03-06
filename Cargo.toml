@@ -104,6 +104,7 @@ whoami = "1.5"
 # Security - Encrypted secrets storage (core)
 ring = "0.17"
 base64 = "0.22"
+sha2 = "0.10"
 # TLS: rustls requires explicit CryptoProvider since v0.23
 # Multiple transitive deps enable both ring and aws-lc-rs, so we pin ring
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }

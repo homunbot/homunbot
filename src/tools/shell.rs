@@ -3,10 +3,11 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
-use tokio::process::Command;
+use tokio::sync::RwLock;
 
 use super::registry::{get_optional_string, get_string_param, Tool, ToolContext, ToolResult};
-use crate::config::{OsShellProfile, ShellPermissions};
+use super::sandbox_exec::build_process_command;
+use crate::config::{Config, ExecutionSandboxConfig, OsShellProfile, ShellPermissions};
 
 /// Maximum output length before truncation (chars)
 const MAX_OUTPUT_LEN: usize = 10_000;
@@ -136,11 +137,13 @@ pub struct ShellTool {
     deny_regex: Vec<regex::Regex>,
     /// OS-specific profile for current platform
     os_profile: Option<OsShellProfile>,
+    sandbox_config: ExecutionSandboxConfig,
+    shared_config: Option<Arc<RwLock<Config>>>,
 }
 
 impl ShellTool {
     pub fn new(timeout_secs: u64, restrict_to_workspace: bool) -> Self {
-        Self::with_permissions(timeout_secs, restrict_to_workspace, None)
+        Self::with_permissions_and_sandbox(timeout_secs, restrict_to_workspace, None, None)
     }
 
     /// Create ShellTool with OS-specific permissions
@@ -148,6 +151,33 @@ impl ShellTool {
         timeout_secs: u64,
         restrict_to_workspace: bool,
         shell_perms: Option<Arc<ShellPermissions>>,
+    ) -> Self {
+        Self::with_permissions_and_sandbox(timeout_secs, restrict_to_workspace, shell_perms, None)
+    }
+
+    /// Create ShellTool with OS-specific permissions and sandbox settings.
+    pub fn with_permissions_and_sandbox(
+        timeout_secs: u64,
+        restrict_to_workspace: bool,
+        shell_perms: Option<Arc<ShellPermissions>>,
+        sandbox_config: Option<ExecutionSandboxConfig>,
+    ) -> Self {
+        Self::with_permissions_sandbox_and_config(
+            timeout_secs,
+            restrict_to_workspace,
+            shell_perms,
+            sandbox_config,
+            None,
+        )
+    }
+
+    /// Create ShellTool with OS permissions, sandbox, and shared runtime config.
+    pub fn with_permissions_sandbox_and_config(
+        timeout_secs: u64,
+        restrict_to_workspace: bool,
+        shell_perms: Option<Arc<ShellPermissions>>,
+        sandbox_config: Option<ExecutionSandboxConfig>,
+        shared_config: Option<Arc<RwLock<Config>>>,
     ) -> Self {
         // Pre-compile regex patterns at construction time
         let deny_regex = DENY_REGEX_PATTERNS
@@ -187,7 +217,17 @@ impl ShellTool {
             allow_risky: os_profile.as_ref().map(|p| p.allow_risky).unwrap_or(false),
             deny_regex,
             os_profile,
+            sandbox_config: sandbox_config.unwrap_or_default(),
+            shared_config,
         }
+    }
+
+    async fn sandbox_for_execution(&self) -> ExecutionSandboxConfig {
+        if let Some(cfg) = &self.shared_config {
+            let guard = cfg.read().await;
+            return guard.security.execution_sandbox.clone();
+        }
+        self.sandbox_config.clone()
     }
 
     /// Layer 1: Check exact deny patterns (case-insensitive, whitespace-normalized)
@@ -382,31 +422,21 @@ impl Tool for ShellTool {
 
         tracing::info!(command = %command, cwd = %working_dir, "Executing shell command");
 
-        // Spawn subprocess with clean environment — allowlist approach.
-        // Using env_clear() + explicit safe vars prevents ALL secret leakage,
-        // instead of trying to enumerate every possible sensitive env var.
-        let safe_env_keys: &[&str] = &[
-            "PATH", "HOME", "USER", "SHELL", "LANG", "LC_ALL", "TERM", "TMPDIR",
-        ];
-
         // Get OS-appropriate shell
-        let (shell, args) = self.get_shell_command();
-        let mut cmd = Command::new(shell);
-        cmd.args(&args)
-            .arg(&command)
-            .current_dir(&working_dir)
-            .env_clear();
+        let (shell, shell_args) = self.get_shell_command();
+        let mut args_vec: Vec<String> = shell_args.iter().map(|s| s.to_string()).collect();
+        args_vec.push(command.clone());
 
-        // Inject only safe env vars from the current process
-        for key in safe_env_keys {
-            if let Ok(val) = std::env::var(key) {
-                cmd.env(key, &val);
-            }
-        }
-        // Ensure PATH always has a sensible value
-        if std::env::var("PATH").is_err() {
-            cmd.env("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
-        }
+        let sandbox_config = self.sandbox_for_execution().await;
+        let mut cmd = build_process_command(
+            "shell",
+            shell,
+            &args_vec,
+            std::path::Path::new(&working_dir),
+            &std::collections::HashMap::new(),
+            true,
+            &sandbox_config,
+        )?;
 
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(self.timeout_secs),
@@ -643,6 +673,54 @@ mod tests {
         let result = tool.execute(args, &test_ctx()).await.unwrap();
         assert!(result.is_error);
         assert!(result.output.contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn test_hot_reload_sandbox_from_shared_config() {
+        let shared_config = Arc::new(RwLock::new(Config::default()));
+        {
+            let mut cfg = shared_config.write().await;
+            cfg.security.execution_sandbox.enabled = true;
+            cfg.security.execution_sandbox.backend = "none".to_string();
+            cfg.security.execution_sandbox.strict = false;
+        }
+
+        let tool = ShellTool::with_permissions_sandbox_and_config(
+            5,
+            false,
+            None,
+            Some(ExecutionSandboxConfig::default()),
+            Some(shared_config.clone()),
+        );
+
+        let ok = tool
+            .execute(
+                serde_json::json!({"command": "echo hot-reload"}),
+                &test_ctx(),
+            )
+            .await
+            .unwrap();
+        assert!(!ok.is_error);
+        assert!(ok.output.contains("hot-reload"));
+
+        {
+            let mut cfg = shared_config.write().await;
+            cfg.security.execution_sandbox.enabled = true;
+            cfg.security.execution_sandbox.backend = "invalid-backend".to_string();
+            cfg.security.execution_sandbox.strict = true;
+        }
+
+        let err = tool
+            .execute(
+                serde_json::json!({"command": "echo hot-reload"}),
+                &test_ctx(),
+            )
+            .await
+            .expect_err("strict invalid sandbox backend should fail command preparation");
+        assert!(
+            err.to_string().contains("Unsupported sandbox backend"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

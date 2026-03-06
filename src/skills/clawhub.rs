@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use super::installer::InstallResult;
 use super::loader::parse_skill_md_public;
+use super::{
+    adapt_legacy_skill_dir, parse_legacy_manifest, scan_skill_package, InstallSecurityOptions,
+};
 
 /// ClawHub skill installer — fetches skills from the OpenClaw skills registry on GitHub.
 ///
@@ -67,6 +70,13 @@ struct GitHubDirEntry {
 struct GitHubContent {
     content: Option<String>,
     encoding: Option<String>,
+}
+
+struct RemoteSkillManifest {
+    raw_content: String,
+    name: String,
+    description: String,
+    has_skill_md: bool,
 }
 
 /// GitHub API: code search response
@@ -155,6 +165,15 @@ impl ClawHubInstaller {
     ///
     /// `slug` format: `owner/skill-name` (maps to openclaw/skills repo path)
     pub async fn install(&self, slug: &str) -> Result<InstallResult> {
+        self.install_with_options(slug, InstallSecurityOptions::default())
+            .await
+    }
+
+    pub async fn install_with_options(
+        &self,
+        slug: &str,
+        options: InstallSecurityOptions,
+    ) -> Result<InstallResult> {
         let (owner, skill_name) = parse_clawhub_slug(slug)?;
         // The monorepo uses lowercase paths even if the ClawHub handle has mixed case
         let owner_lower = owner.to_lowercase();
@@ -166,13 +185,9 @@ impl ClawHubInstaller {
             "Installing skill from ClawHub"
         );
 
-        // 1. Fetch SKILL.md from the monorepo (paths are lowercase)
-        let skill_md_path = format!(
-            "{}/{}/{}/SKILL.md",
-            CLAWHUB_SKILLS_PATH, owner_lower, skill_lower
-        );
-        let skill_md_content = self
-            .fetch_file_from_monorepo(&skill_md_path)
+        let skill_repo_path = format!("{}/{}/{}", CLAWHUB_SKILLS_PATH, owner_lower, skill_lower);
+        let remote_manifest = self
+            .fetch_remote_manifest(&skill_repo_path)
             .await
             .with_context(|| {
                 format!(
@@ -182,7 +197,7 @@ impl ClawHubInstaller {
             })?;
 
         // 2. Security check before parsing/installing
-        let security_report = super::security::scan_skill_content(&skill_md_content);
+        let security_report = super::security::scan_skill_content(&remote_manifest.raw_content);
         if security_report.is_blocked() {
             tracing::warn!(
                 owner = %owner,
@@ -205,11 +220,8 @@ impl ClawHubInstaller {
             );
         }
 
-        // 3. Parse metadata
-        let (meta, _body) = parse_skill_md_public(&skill_md_content)
-            .with_context(|| "Failed to parse SKILL.md frontmatter from ClawHub skill")?;
-
-        let installed_name = meta.name.clone();
+        let installed_name = remote_manifest.name;
+        let installed_description = remote_manifest.description;
         let skill_dir = self.skills_dir.join(&installed_name);
 
         // 3. Check if already installed
@@ -218,22 +230,35 @@ impl ClawHubInstaller {
                 name: installed_name,
                 path: skill_dir,
                 already_existed: true,
-                description: meta.description,
+                description: installed_description,
+                security_report: None,
             });
         }
 
-        // 4. Write SKILL.md directly (we already have the content).
-        // Then try to download additional files from the monorepo.
-        tokio::fs::create_dir_all(&skill_dir).await?;
-        tokio::fs::write(skill_dir.join("SKILL.md"), &skill_md_content).await?;
+        // 4. Download the full skill directory, then adapt if it is still in legacy format.
+        self.download_skill_dir(&skill_repo_path, &skill_dir)
+            .await?;
+        let adapted = if remote_manifest.has_skill_md {
+            None
+        } else {
+            adapt_legacy_skill_dir(&skill_dir).await?
+        };
+        let final_description = adapted
+            .as_ref()
+            .map(|adapted| adapted.description.clone())
+            .unwrap_or(installed_description);
 
-        // Try to download any additional files (scripts/, etc.) — non-fatal if it fails
-        let skill_repo_path = format!("{}/{}/{}", CLAWHUB_SKILLS_PATH, owner_lower, skill_lower);
-        if let Err(e) = self
-            .download_extra_files(&skill_repo_path, &skill_dir)
-            .await
-        {
-            tracing::debug!(error = %e, "No extra files to download (most skills are SKILL.md only)");
+        make_scripts_executable(&skill_dir.join("scripts")).await;
+
+        let package_security = scan_skill_package(&skill_dir).await?;
+        if package_security.is_blocked() && !options.force {
+            tokio::fs::remove_dir_all(&skill_dir).await.ok();
+            anyhow::bail!(
+                "Skill '{}/{}' blocked by package security scan:\n{}",
+                owner,
+                skill_name,
+                package_security.summary()
+            );
         }
 
         // 5. Write a source marker so we know where it came from
@@ -252,7 +277,8 @@ impl ClawHubInstaller {
             name: installed_name,
             path: skill_dir,
             already_existed: false,
-            description: meta.description,
+            description: final_description,
+            security_report: Some(package_security),
         })
     }
 
@@ -855,20 +881,39 @@ impl ClawHubInstaller {
         }
     }
 
-    /// Download extra files (scripts, etc.) from a skill directory, skipping SKILL.md.
-    /// Non-fatal — most skills only have SKILL.md which is already written.
-    async fn download_extra_files(&self, repo_path: &str, dest: &Path) -> Result<()> {
-        self.download_dir_recursive(repo_path, dest).await?;
-
-        // Make scripts executable
-        let scripts_dir = dest.join("scripts");
-        if scripts_dir.exists() {
-            make_scripts_executable(&scripts_dir).await;
+    async fn fetch_remote_manifest(&self, skill_repo_path: &str) -> Result<RemoteSkillManifest> {
+        let skill_md_path = format!("{skill_repo_path}/SKILL.md");
+        if let Ok(content) = self.fetch_file_from_monorepo(&skill_md_path).await {
+            let (meta, _body) = parse_skill_md_public(&content)
+                .with_context(|| "Failed to parse SKILL.md frontmatter from ClawHub skill")?;
+            return Ok(RemoteSkillManifest {
+                raw_content: content,
+                name: meta.name,
+                description: meta.description,
+                has_skill_md: true,
+            });
         }
-        Ok(())
+
+        for candidate in ["SKILL.toml", "manifest.json"] {
+            let path = format!("{skill_repo_path}/{candidate}");
+            if let Ok(content) = self.fetch_file_from_monorepo(&path).await {
+                let manifest = parse_legacy_manifest(candidate, &content).with_context(|| {
+                    format!("Failed to parse legacy manifest {candidate} from ClawHub")
+                })?;
+                return Ok(RemoteSkillManifest {
+                    raw_content: content,
+                    name: manifest.name,
+                    description: manifest.description,
+                    has_skill_md: false,
+                });
+            }
+        }
+
+        anyhow::bail!("No SKILL.md, SKILL.toml, or manifest.json found for skill");
     }
 
-    /// Download all files in a skill directory from the monorepo.
+    /// Download extra files (scripts, etc.) from a skill directory, skipping SKILL.md.
+    /// Non-fatal — most skills only have SKILL.md which is already written.
     async fn download_skill_dir(&self, repo_path: &str, dest: &Path) -> Result<()> {
         tokio::fs::create_dir_all(dest)
             .await

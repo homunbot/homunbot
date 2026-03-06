@@ -13,7 +13,7 @@ use crate::provider::{
 };
 use crate::security::{redact, redact_vault_values};
 use crate::session::SessionManager;
-use crate::skills::loader::SkillRegistry;
+use crate::skills::{loader::SkillRegistry, suggest_mcp_presets, McpServerPreset};
 use crate::storage::Database;
 use crate::tools::{ToolContext, ToolRegistry};
 
@@ -269,6 +269,7 @@ impl AgentLoop {
         stream_tx: Option<mpsc::Sender<crate::provider::StreamChunk>>,
         blocked_tools: &[&str],
     ) -> Result<String> {
+        crate::agent::stop::clear_stop();
         let blocked_set: HashSet<&str> = blocked_tools.iter().copied().collect();
 
         // Snapshot config for this request — picks up any changes from web UI.
@@ -360,6 +361,10 @@ impl AgentLoop {
             }
         }
 
+        self.context
+            .set_mcp_suggestions(build_mcp_suggestions(&config, content))
+            .await;
+
         // Build initial messages for the LLM
         // Get tool definitions for the LLM (built-in tools + skills as tools)
         let mut tool_defs = self.tool_registry.get_definitions();
@@ -437,7 +442,11 @@ impl AgentLoop {
         let mut total_usage = Usage::default();
         let max_iterations = config.agent.max_iterations;
 
-        for iteration in 1..=max_iterations {
+        'agent_loop: for iteration in 1..=max_iterations {
+            if crate::agent::stop::is_stop_requested() {
+                final_content = Some("Stopped by user.".to_string());
+                break;
+            }
             tracing::debug!(
                 iteration,
                 max_iterations,
@@ -692,6 +701,10 @@ impl AgentLoop {
 
                 // Execute each tool call
                 for tool_call in &response.tool_calls {
+                    if crate::agent::stop::is_stop_requested() {
+                        final_content = Some("Stopped by user.".to_string());
+                        break 'agent_loop;
+                    }
                     tools_used.push(tool_call.name.clone());
 
                     tracing::info!(
@@ -772,6 +785,11 @@ impl AgentLoop {
                         &tool_call.name,
                         &result.output,
                     ));
+
+                    if crate::agent::stop::is_stop_requested() {
+                        final_content = Some("Stopped by user.".to_string());
+                        break 'agent_loop;
+                    }
                 }
 
                 // No reflection prompt needed — modern LLMs reason about
@@ -823,6 +841,68 @@ impl AgentLoop {
                         // Continue the loop — LLM must now actually use the tool
                         continue;
                     }
+                }
+            }
+        }
+
+        if final_content.is_none() && !crate::agent::stop::is_stop_requested() {
+            tracing::warn!(
+                max_iterations,
+                tools_used = tools_used.len(),
+                "Max iterations reached without final response; attempting forced finalization"
+            );
+
+            let mut finalization_messages = messages.clone();
+            finalization_messages.push(ChatMessage::user(
+                "The tool and iteration budget is exhausted. Do not call any tools, browser actions, functions, or MCP integrations. Using only the evidence, tool outputs, and sources already collected in this conversation, provide the best possible final answer now. If the information is incomplete, clearly separate confirmed findings, likely but unconfirmed points, and remaining unknowns. Do not ask to continue browsing unless it is strictly necessary.",
+            ));
+
+            let finalization_request = ChatRequest {
+                messages: finalization_messages,
+                tools: Vec::new(),
+                model: config.agent.model.clone(),
+                max_tokens: config.agent.effective_max_tokens(&config.agent.model),
+                temperature: config.agent.effective_temperature(&config.agent.model),
+            };
+
+            match provider.chat(finalization_request).await {
+                Ok(response) => {
+                    total_usage.prompt_tokens += response.usage.prompt_tokens;
+                    total_usage.completion_tokens += response.usage.completion_tokens;
+                    total_usage.total_tokens += response.usage.total_tokens;
+
+                    if let Some(text) = response.content.filter(|text| !text.trim().is_empty()) {
+                        tracing::info!(
+                            finish_reason = %response.finish_reason,
+                            "Forced finalization produced a final answer"
+                        );
+                        if let Some(ref tx) = stream_tx {
+                            if let Err(e) = tx
+                                .send(crate::provider::StreamChunk {
+                                    delta: text.clone(),
+                                    done: true,
+                                    event_type: None,
+                                    tool_call_data: None,
+                                })
+                                .await
+                            {
+                                tracing::warn!(
+                                    error = %e,
+                                    "Failed to send forced finalization stream chunk"
+                                );
+                            }
+                        }
+                        final_content = Some(text);
+                    } else {
+                        tracing::warn!(
+                            finish_reason = %response.finish_reason,
+                            tool_calls = response.tool_calls.len(),
+                            "Forced finalization returned no usable content"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Forced finalization failed");
                 }
             }
         }
@@ -1113,4 +1193,73 @@ impl AgentLoop {
             }
         }
     }
+}
+
+fn build_mcp_suggestions(config: &Config, content: &str) -> String {
+    let suggestions = suggest_mcp_presets(content);
+    if suggestions.is_empty() {
+        return String::new();
+    }
+
+    suggestions
+        .into_iter()
+        .filter(|preset| !has_configured_mcp_server(config, preset))
+        .take(2)
+        .map(|preset| {
+            format!(
+                "- {} (`{}`): suggest connecting it from the MCP page or with `homun mcp setup {}` if the user wants {}.",
+                preset.display_name,
+                preset.id,
+                preset.id,
+                mcp_user_value_hint(&preset)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn has_configured_mcp_server(config: &Config, preset: &McpServerPreset) -> bool {
+    config.mcp.servers.iter().any(|(name, server)| {
+        if !server.enabled {
+            return false;
+        }
+
+        let searchable = format!(
+            "{} {} {} {}",
+            name,
+            server.command.as_deref().unwrap_or_default(),
+            server.args.join(" "),
+            server.url.as_deref().unwrap_or_default()
+        )
+        .to_lowercase();
+
+        searchable.contains(&preset.id.to_lowercase())
+            || preset
+                .aliases
+                .iter()
+                .any(|alias| searchable.contains(&alias.to_lowercase()))
+    })
+}
+
+fn mcp_user_value_hint(preset: &McpServerPreset) -> &'static str {
+    let id = preset.id.to_lowercase();
+    if id.contains("gmail") {
+        return "email access";
+    }
+    if id.contains("calendar") {
+        return "calendar access";
+    }
+    if id.contains("github") {
+        return "repository or issue access";
+    }
+    if id.contains("notion") {
+        return "workspace or notes access";
+    }
+    if id.contains("fetch") {
+        return "web page access";
+    }
+    if id.contains("filesystem") {
+        return "local file access";
+    }
+    "that service"
 }

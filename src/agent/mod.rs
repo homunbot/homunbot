@@ -6,6 +6,7 @@ pub mod gateway;
 pub mod heartbeat;
 pub mod memory;
 pub mod prompt; // New modular prompt system
+pub mod stop;
 pub mod subagent; // Make public so spawn.rs can access it
 mod verifier;
 

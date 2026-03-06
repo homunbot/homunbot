@@ -1,0 +1,707 @@
+{
+  "source": "mcpmarket",
+  "source_url": "https://mcpmarket.com/leaderboards",
+  "captured_at": "2026-03-05",
+  "items": [
+    {
+      "rank": 1,
+      "name": "Superpowers",
+      "slug": "superpowers",
+      "popularity": 70834,
+      "url": "https://mcpmarket.com/server/superpowers"
+    },
+    {
+      "rank": 2,
+      "name": "TrendRadar",
+      "slug": "trendradar",
+      "popularity": 47977,
+      "url": "https://mcpmarket.com/server/trendradar"
+    },
+    {
+      "rank": 3,
+      "name": "Context7",
+      "slug": "context7-1",
+      "popularity": 47696,
+      "url": "https://mcpmarket.com/server/context7-1"
+    },
+    {
+      "rank": 4,
+      "name": "MindsDB",
+      "slug": "mindsdb",
+      "popularity": 38628,
+      "url": "https://mcpmarket.com/server/mindsdb"
+    },
+    {
+      "rank": 5,
+      "name": "Playwright",
+      "slug": "playwright-5",
+      "popularity": 28154,
+      "url": "https://mcpmarket.com/server/playwright-5"
+    },
+    {
+      "rank": 6,
+      "name": "OpenSpec",
+      "slug": "openspec",
+      "popularity": 27617,
+      "url": "https://mcpmarket.com/server/openspec"
+    },
+    {
+      "rank": 7,
+      "name": "GitHub",
+      "slug": "github-15",
+      "popularity": 27483,
+      "url": "https://mcpmarket.com/server/github-15"
+    },
+    {
+      "rank": 8,
+      "name": "Chrome DevTools",
+      "slug": "chrome-devtools-1",
+      "popularity": 27481,
+      "url": "https://mcpmarket.com/server/chrome-devtools-1"
+    },
+    {
+      "rank": 9,
+      "name": "Task Master",
+      "slug": "task-master",
+      "popularity": 25767,
+      "url": "https://mcpmarket.com/server/task-master"
+    },
+    {
+      "rank": 10,
+      "name": "GPT Researcher",
+      "slug": "gpt-researcher-1",
+      "popularity": 25541,
+      "url": "https://mcpmarket.com/server/gpt-researcher-1"
+    },
+    {
+      "rank": 11,
+      "name": "Graphiti",
+      "slug": "graphiti",
+      "popularity": 23269,
+      "url": "https://mcpmarket.com/server/graphiti"
+    },
+    {
+      "rank": 12,
+      "name": "FastMCP",
+      "slug": "fastmcp",
+      "popularity": 22898,
+      "url": "https://mcpmarket.com/server/fastmcp"
+    },
+    {
+      "rank": 13,
+      "name": "Next AI Draw.io",
+      "slug": "next-ai-draw-io",
+      "popularity": 22357,
+      "url": "https://mcpmarket.com/server/next-ai-draw-io"
+    },
+    {
+      "rank": 14,
+      "name": "Serena",
+      "slug": "serena",
+      "popularity": 21001,
+      "url": "https://mcpmarket.com/server/serena"
+    },
+    {
+      "rank": 15,
+      "name": "Ruflo",
+      "slug": "ruflo",
+      "popularity": 18828,
+      "url": "https://mcpmarket.com/server/ruflo"
+    },
+    {
+      "rank": 16,
+      "name": "Beads",
+      "slug": "beads",
+      "popularity": 18066,
+      "url": "https://mcpmarket.com/server/beads"
+    },
+    {
+      "rank": 17,
+      "name": "Blender Model Context Protocol",
+      "slug": "blender-model-context-protocol",
+      "popularity": 17496,
+      "url": "https://mcpmarket.com/server/blender-model-context-protocol"
+    },
+    {
+      "rank": 18,
+      "name": "Claude-Flow",
+      "slug": "claude-flow",
+      "popularity": 14997,
+      "url": "https://mcpmarket.com/server/claude-flow"
+    },
+    {
+      "rank": 19,
+      "name": "Model Context Protocol for Beginners",
+      "slug": "model-context-protocol-for-beginners",
+      "popularity": 14643,
+      "url": "https://mcpmarket.com/server/model-context-protocol-for-beginners"
+    },
+    {
+      "rank": 20,
+      "name": "N8n",
+      "slug": "n8n-9",
+      "popularity": 14333,
+      "url": "https://mcpmarket.com/server/n8n-9"
+    },
+    {
+      "rank": 21,
+      "name": "Trigger.dev",
+      "slug": "trigger-dev",
+      "popularity": 13932,
+      "url": "https://mcpmarket.com/server/trigger-dev"
+    },
+    {
+      "rank": 22,
+      "name": "Archon",
+      "slug": "archon",
+      "popularity": 13752,
+      "url": "https://mcpmarket.com/server/archon"
+    },
+    {
+      "rank": 23,
+      "name": "Figma Context",
+      "slug": "figma-context",
+      "popularity": 13395,
+      "url": "https://mcpmarket.com/server/figma-context"
+    },
+    {
+      "rank": 24,
+      "name": "MCP Toolbox for Databases",
+      "slug": "genai-toolbox",
+      "popularity": 13259,
+      "url": "https://mcpmarket.com/server/genai-toolbox"
+    },
+    {
+      "rank": 25,
+      "name": "Cognee",
+      "slug": "cognee",
+      "popularity": 12919,
+      "url": "https://mcpmarket.com/server/cognee"
+    },
+    {
+      "rank": 26,
+      "name": "Cua",
+      "slug": "cua",
+      "popularity": 12841,
+      "url": "https://mcpmarket.com/server/cua"
+    },
+    {
+      "rank": 27,
+      "name": "FastAPI",
+      "slug": "fastapi",
+      "popularity": 11616,
+      "url": "https://mcpmarket.com/server/fastapi"
+    },
+    {
+      "rank": 28,
+      "name": "PAL",
+      "slug": "pal",
+      "popularity": 11190,
+      "url": "https://mcpmarket.com/server/pal"
+    },
+    {
+      "rank": 29,
+      "name": "Pipedream",
+      "slug": "pipedream-1",
+      "popularity": 11126,
+      "url": "https://mcpmarket.com/server/pipedream-1"
+    },
+    {
+      "rank": 30,
+      "name": "Convex",
+      "slug": "convex",
+      "popularity": 10664,
+      "url": "https://mcpmarket.com/server/convex"
+    },
+    {
+      "rank": 31,
+      "name": "Chrome Browser",
+      "slug": "chrome-browser",
+      "popularity": 10620,
+      "url": "https://mcpmarket.com/server/chrome-browser"
+    },
+    {
+      "rank": 32,
+      "name": "XHS Downloader",
+      "slug": "xhs-downloader",
+      "popularity": 10249,
+      "url": "https://mcpmarket.com/server/xhs-downloader"
+    },
+    {
+      "rank": 33,
+      "name": "Skill Seeker",
+      "slug": "skill-seeker",
+      "popularity": 10207,
+      "url": "https://mcpmarket.com/server/skill-seeker"
+    },
+    {
+      "rank": 34,
+      "name": "Xiaohongshu",
+      "slug": "xiaohongshu-1",
+      "popularity": 10191,
+      "url": "https://mcpmarket.com/server/xiaohongshu-1"
+    },
+    {
+      "rank": 35,
+      "name": "Inbox Zero",
+      "slug": "inbox-zero",
+      "popularity": 10190,
+      "url": "https://mcpmarket.com/server/inbox-zero"
+    },
+    {
+      "rank": 36,
+      "name": "Zen",
+      "slug": "zen",
+      "popularity": 9890,
+      "url": "https://mcpmarket.com/server/zen"
+    },
+    {
+      "rank": 37,
+      "name": "Eino",
+      "slug": "eino",
+      "popularity": 9853,
+      "url": "https://mcpmarket.com/server/eino"
+    },
+    {
+      "rank": 38,
+      "name": "LanceDB",
+      "slug": "lancedb-4",
+      "popularity": 9263,
+      "url": "https://mcpmarket.com/server/lancedb-4"
+    },
+    {
+      "rank": 39,
+      "name": "OpenMetadata",
+      "slug": "openmetadata-1",
+      "popularity": 8833,
+      "url": "https://mcpmarket.com/server/openmetadata-1"
+    },
+    {
+      "rank": 40,
+      "name": "Xiaozhi ESP32",
+      "slug": "xiaozhi-esp32",
+      "popularity": 8758,
+      "url": "https://mcpmarket.com/server/xiaozhi-esp32"
+    },
+    {
+      "rank": 41,
+      "name": "Phoenix",
+      "slug": "phoenix",
+      "popularity": 8741,
+      "url": "https://mcpmarket.com/server/phoenix"
+    },
+    {
+      "rank": 42,
+      "name": "AWS",
+      "slug": "aws-3",
+      "popularity": 8336,
+      "url": "https://mcpmarket.com/server/aws-3"
+    },
+    {
+      "rank": 43,
+      "name": "Mcp-Go",
+      "slug": "mcp-go-1",
+      "popularity": 8280,
+      "url": "https://mcpmarket.com/server/mcp-go-1"
+    },
+    {
+      "rank": 44,
+      "name": "MCP Agent",
+      "slug": "mcp-agent",
+      "popularity": 8079,
+      "url": "https://mcpmarket.com/server/mcp-agent"
+    },
+    {
+      "rank": 45,
+      "name": "Ghidra",
+      "slug": "ghidra-1",
+      "popularity": 7792,
+      "url": "https://mcpmarket.com/server/ghidra-1"
+    },
+    {
+      "rank": 46,
+      "name": "Fonoster",
+      "slug": "fonoster",
+      "popularity": 7702,
+      "url": "https://mcpmarket.com/server/fonoster"
+    },
+    {
+      "rank": 47,
+      "name": "Git",
+      "slug": "git-4",
+      "popularity": 7698,
+      "url": "https://mcpmarket.com/server/git-4"
+    },
+    {
+      "rank": 48,
+      "name": "Higress",
+      "slug": "higress",
+      "popularity": 7636,
+      "url": "https://mcpmarket.com/server/higress"
+    },
+    {
+      "rank": 49,
+      "name": "HexStrike AI",
+      "slug": "hexstrike-ai",
+      "popularity": 7214,
+      "url": "https://mcpmarket.com/server/hexstrike-ai"
+    },
+    {
+      "rank": 50,
+      "name": "Code2Prompt",
+      "slug": "code2prompt",
+      "popularity": 7184,
+      "url": "https://mcpmarket.com/server/code2prompt"
+    },
+    {
+      "rank": 51,
+      "name": "BrowserTools",
+      "slug": "browsertools",
+      "popularity": 7103,
+      "url": "https://mcpmarket.com/server/browsertools"
+    },
+    {
+      "rank": 52,
+      "name": "YouTube Transcript",
+      "slug": "youtube-transcript-6",
+      "popularity": 6992,
+      "url": "https://mcpmarket.com/server/youtube-transcript-6"
+    },
+    {
+      "rank": 53,
+      "name": "ChatGPT AutoExpert",
+      "slug": "chatgpt-autoexpert",
+      "popularity": 6671,
+      "url": "https://mcpmarket.com/server/chatgpt-autoexpert"
+    },
+    {
+      "rank": 54,
+      "name": "Steel Browser",
+      "slug": "steel-browser",
+      "popularity": 6516,
+      "url": "https://mcpmarket.com/server/steel-browser"
+    },
+    {
+      "rank": 55,
+      "name": "Cursor Talk to Figma",
+      "slug": "cursor-talk-to-figma-4",
+      "popularity": 6419,
+      "url": "https://mcpmarket.com/server/cursor-talk-to-figma-4"
+    },
+    {
+      "rank": 56,
+      "name": "FLUJO",
+      "slug": "flujo-1",
+      "popularity": 6319,
+      "url": "https://mcpmarket.com/server/flujo-1"
+    },
+    {
+      "rank": 57,
+      "name": "RealChar",
+      "slug": "realchar",
+      "popularity": 6204,
+      "url": "https://mcpmarket.com/server/realchar"
+    },
+    {
+      "rank": 58,
+      "name": "MISP",
+      "slug": "misp-1",
+      "popularity": 6152,
+      "url": "https://mcpmarket.com/server/misp-1"
+    },
+    {
+      "rank": 59,
+      "name": "Ida Pro",
+      "slug": "ida-pro",
+      "popularity": 6012,
+      "url": "https://mcpmarket.com/server/ida-pro"
+    },
+    {
+      "rank": 60,
+      "name": "GreptimeDB",
+      "slug": "greptimedb-1",
+      "popularity": 6012,
+      "url": "https://mcpmarket.com/server/greptimedb-1"
+    },
+    {
+      "rank": 61,
+      "name": "Browser",
+      "slug": "browser",
+      "popularity": 5944,
+      "url": "https://mcpmarket.com/server/browser"
+    },
+    {
+      "rank": 62,
+      "name": "Airweave",
+      "slug": "airweave",
+      "popularity": 5939,
+      "url": "https://mcpmarket.com/server/airweave"
+    },
+    {
+      "rank": 63,
+      "name": "Serge",
+      "slug": "serge",
+      "popularity": 5745,
+      "url": "https://mcpmarket.com/server/serge"
+    },
+    {
+      "rank": 64,
+      "name": "Firecrawl",
+      "slug": "firecrawl-10",
+      "popularity": 5658,
+      "url": "https://mcpmarket.com/server/firecrawl-10"
+    },
+    {
+      "rank": 65,
+      "name": "Klavis AI",
+      "slug": "klavis-ai",
+      "popularity": 5652,
+      "url": "https://mcpmarket.com/server/klavis-ai"
+    },
+    {
+      "rank": 66,
+      "name": "Praison AI",
+      "slug": "praison-ai",
+      "popularity": 5619,
+      "url": "https://mcpmarket.com/server/praison-ai"
+    },
+    {
+      "rank": 67,
+      "name": "Desktop Commander",
+      "slug": "desktop-commander-1",
+      "popularity": 5589,
+      "url": "https://mcpmarket.com/server/desktop-commander-1"
+    },
+    {
+      "rank": 68,
+      "name": "Genkit",
+      "slug": "genkit",
+      "popularity": 5583,
+      "url": "https://mcpmarket.com/server/genkit"
+    },
+    {
+      "rank": 69,
+      "name": "Claude Context",
+      "slug": "claude-context",
+      "popularity": 5541,
+      "url": "https://mcpmarket.com/server/claude-context"
+    },
+    {
+      "rank": 70,
+      "name": "Trafilatura",
+      "slug": "trafilatura",
+      "popularity": 5417,
+      "url": "https://mcpmarket.com/server/trafilatura"
+    },
+    {
+      "rank": 71,
+      "name": "UltraRAG",
+      "slug": "ultrarag",
+      "popularity": 5389,
+      "url": "https://mcpmarket.com/server/ultrarag"
+    },
+    {
+      "rank": 72,
+      "name": "WhatsApp",
+      "slug": "whatsapp-3",
+      "popularity": 5377,
+      "url": "https://mcpmarket.com/server/whatsapp-3"
+    },
+    {
+      "rank": 73,
+      "name": "Jsondiffpatch",
+      "slug": "jsondiffpatch",
+      "popularity": 5287,
+      "url": "https://mcpmarket.com/server/jsondiffpatch"
+    },
+    {
+      "rank": 74,
+      "name": "Playwright",
+      "slug": "playwright-2",
+      "popularity": 5271,
+      "url": "https://mcpmarket.com/server/playwright-2"
+    },
+    {
+      "rank": 75,
+      "name": "Cursor Talk To Figma",
+      "slug": "cursor-talk-to-figma-2",
+      "popularity": 5006,
+      "url": "https://mcpmarket.com/server/cursor-talk-to-figma-2"
+    },
+    {
+      "rank": 76,
+      "name": "Viper",
+      "slug": "viper",
+      "popularity": 4980,
+      "url": "https://mcpmarket.com/server/viper"
+    },
+    {
+      "rank": 77,
+      "name": "Fullstack Dev Skills Plugin",
+      "slug": "fullstack-dev-skills-plugin",
+      "popularity": 4749,
+      "url": "https://mcpmarket.com/server/fullstack-dev-skills-plugin"
+    },
+    {
+      "rank": 78,
+      "name": "XcodeBuild",
+      "slug": "xcodebuild-3",
+      "popularity": 4559,
+      "url": "https://mcpmarket.com/server/xcodebuild-3"
+    },
+    {
+      "rank": 79,
+      "name": "Windows",
+      "slug": "windows-2",
+      "popularity": 4546,
+      "url": "https://mcpmarket.com/server/windows-2"
+    },
+    {
+      "rank": 80,
+      "name": "Deep Research",
+      "slug": "deep-research-8",
+      "popularity": 4497,
+      "url": "https://mcpmarket.com/server/deep-research-8"
+    },
+    {
+      "rank": 81,
+      "name": "Atlassian Integration",
+      "slug": "atlassian-integration",
+      "popularity": 4479,
+      "url": "https://mcpmarket.com/server/atlassian-integration"
+    },
+    {
+      "rank": 82,
+      "name": "Magic",
+      "slug": "magic-1",
+      "popularity": 4352,
+      "url": "https://mcpmarket.com/server/magic-1"
+    },
+    {
+      "rank": 83,
+      "name": "HttpRunner",
+      "slug": "httprunner",
+      "popularity": 4262,
+      "url": "https://mcpmarket.com/server/httprunner"
+    },
+    {
+      "rank": 84,
+      "name": "ENScan Go",
+      "slug": "enscan-go",
+      "popularity": 4228,
+      "url": "https://mcpmarket.com/server/enscan-go"
+    },
+    {
+      "rank": 85,
+      "name": "Firecrawl",
+      "slug": "firecrawl",
+      "popularity": 4195,
+      "url": "https://mcpmarket.com/server/firecrawl"
+    },
+    {
+      "rank": 86,
+      "name": "XcodeBuild",
+      "slug": "xcodebuild-2",
+      "popularity": 4181,
+      "url": "https://mcpmarket.com/server/xcodebuild-2"
+    },
+    {
+      "rank": 87,
+      "name": "Pollinations",
+      "slug": "pollinations-2",
+      "popularity": 4097,
+      "url": "https://mcpmarket.com/server/pollinations-2"
+    },
+    {
+      "rank": 88,
+      "name": "NotebookLM",
+      "slug": "notebooklm-4",
+      "popularity": 4096,
+      "url": "https://mcpmarket.com/server/notebooklm-4"
+    },
+    {
+      "rank": 89,
+      "name": "Kubefwd",
+      "slug": "kubefwd",
+      "popularity": 4059,
+      "url": "https://mcpmarket.com/server/kubefwd"
+    },
+    {
+      "rank": 90,
+      "name": "Mcpo",
+      "slug": "mcpo",
+      "popularity": 4020,
+      "url": "https://mcpmarket.com/server/mcpo"
+    },
+    {
+      "rank": 91,
+      "name": "Notion",
+      "slug": "notion-12",
+      "popularity": 3976,
+      "url": "https://mcpmarket.com/server/notion-12"
+    },
+    {
+      "rank": 92,
+      "name": "Microsandbox",
+      "slug": "microsandbox",
+      "popularity": 3968,
+      "url": "https://mcpmarket.com/server/microsandbox"
+    },
+    {
+      "rank": 93,
+      "name": "Spec Workflow",
+      "slug": "spec-workflow-1",
+      "popularity": 3947,
+      "url": "https://mcpmarket.com/server/spec-workflow-1"
+    },
+    {
+      "rank": 94,
+      "name": "Osaurus",
+      "slug": "osaurus-1",
+      "popularity": 3930,
+      "url": "https://mcpmarket.com/server/osaurus-1"
+    },
+    {
+      "rank": 95,
+      "name": "Langroid",
+      "slug": "langroid",
+      "popularity": 3922,
+      "url": "https://mcpmarket.com/server/langroid"
+    },
+    {
+      "rank": 96,
+      "name": "Exa",
+      "slug": "exa",
+      "popularity": 3919,
+      "url": "https://mcpmarket.com/server/exa"
+    },
+    {
+      "rank": 97,
+      "name": "Code Interpreter API",
+      "slug": "code-interpreter-api",
+      "popularity": 3860,
+      "url": "https://mcpmarket.com/server/code-interpreter-api"
+    },
+    {
+      "rank": 98,
+      "name": "Chart Generator",
+      "slug": "chart-generator",
+      "popularity": 3752,
+      "url": "https://mcpmarket.com/server/chart-generator"
+    },
+    {
+      "rank": 99,
+      "name": "Awesome MCP Servers",
+      "slug": "awesome-mcp-servers-2",
+      "popularity": 3696,
+      "url": "https://mcpmarket.com/server/awesome-mcp-servers-2"
+    },
+    {
+      "rank": 100,
+      "name": "Fast Agent",
+      "slug": "fast-agent",
+      "popularity": 3694,
+      "url": "https://mcpmarket.com/server/fast-agent"
+    }
+  ]
+}

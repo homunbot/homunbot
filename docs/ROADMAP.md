@@ -1,8 +1,9 @@
 # Homun — Development Roadmap
 
-> Last updated: 2026-03-05
+> Last updated: 2026-03-06
 > Basato su: Audit completo (`docs/AUDIT-2026-03.md`)
 > Gap analysis: Homun vs OpenClaw vs ZeroClaw
+> Source of truth: questo documento e' la roadmap/status operativa del progetto
 
 ---
 
@@ -171,13 +172,13 @@ Quando si aggiunge un nuovo canale, implementare sempre:
 
 | # | Task | File principali | LOC stimate | Stato |
 |---|------|----------------|-------------|-------|
-| 5.1 | **MCP Setup Guidato** | `tools/mcp.rs`, `skills/mcp_registry.rs` (nuovo) | ~300 | TODO |
+| 5.1 | **MCP Setup Guidato** | `tools/mcp.rs`, `skills/mcp_registry.rs` (nuovo), `web/api.rs`, `web/pages.rs`, `static/js/mcp.js` | ~600 | ✅ DONE |
 | | Registry di MCP server noti (Gmail, Calendar, GitHub, Notion, etc.) | | | |
 | | `homun mcp setup gmail` — scarica server, guida OAuth, testa connessione | | | |
 | | Web UI: pagina MCP con "Connect" one-click per servizi noti | | | |
 | | Auto-discovery: suggerire MCP server in base al contesto ("vuoi che legga le email? Posso collegarmi a Gmail") | | | |
 | | Gestione credenziali OAuth → vault | | | |
-| 5.2 | **Skill Creator (agente)** | `skills/creator.rs` (nuovo), `tools/skill_create.rs` (nuovo) | ~400 | TODO |
+| 5.2 | **Skill Creator (agente)** | `skills/creator.rs` (nuovo), `tools/skill_create.rs` (nuovo) | ~400 | ✅ DONE |
 | | Tool `create_skill` — l'agent crea nuove skill da prompt naturale | | | |
 | | Analizza skill esistenti per riusare pattern/pezzi utili | | | |
 | | Genera SKILL.md (frontmatter YAML + body) + script (Python/Bash/JS) | | | |
@@ -188,12 +189,12 @@ Quando si aggiunge un nuovo canale, implementare sempre:
 | | Tool `create_automation` — l'agent crea automations dalla conversazione | | | |
 | | "Ogni mattina controllami le email" → automation creata + confermata | | | |
 | | Suggerimento proattivo: "Vuoi che lo faccia ogni giorno?" dopo task ripetitivi | | | |
-| 5.4 | **Skill Adapter (ClawHub → Homun)** | `skills/adapter.rs` (nuovo) | ~200 | TODO |
+| 5.4 | **Skill Adapter (ClawHub → Homun)** | `skills/adapter.rs` (nuovo) | ~200 | ✅ DONE |
 | | Parsing formato OpenClaw (SKILL.toml / manifest.json) | | | |
 | | Conversione automatica a formato Homun (SKILL.md + YAML frontmatter) | | | |
 | | Mapping path script: `src/` → `scripts/`, adattamento entry point | | | |
 | | Gestione dipendenze: npm → warning, pip → requirements.txt auto-install | | | |
-| 5.5 | **Skill Shield (sicurezza pre-install)** | `skills/security.rs` | ~250 | ⚠️ PARTIAL |
+| 5.5 | **Skill Shield (sicurezza pre-install)** | `skills/security.rs` | ~250 | ✅ DONE |
 | | Analisi statica: regex pattern sospetti (reverse shell, crypto mining, `eval`, `rm -rf`, network calls non dichiarate) | | | |
 | | VirusTotal API: upload hash script → check reputation (free tier: 4 req/min) | | | |
 | | Report di sicurezza pre-installazione con risk score | | | |
@@ -201,6 +202,132 @@ Quando si aggiunge un nuovo canale, implementare sempre:
 | | Cache risultati VirusTotal per evitare re-check su skill gia' verificate | | | |
 
 **Stima totale Sprint 5: ~1,350 LOC**
+
+### 5.1 Stato Dettagliato (MCP Setup Guidato)
+
+- ✅ Catalogo MCP multi-sorgente attivo in Web UI:
+  - Official MCP Registry (`registry.modelcontextprotocol.io`)
+  - Top 100 MCPMarket (`/leaderboards`, con fallback locale)
+  - Preset curati (`skills/mcp_registry.rs`)
+- ✅ Installazione guidata in MCP page:
+  - prefill automatico form manuale (`command/args/url/env`)
+  - supporto `vault://...` per secret
+  - Quick Add disponibile per utenti avanzati
+- ✅ Install Assistant con endpoint dedicato:
+  - `POST /api/v1/mcp/install-guide`
+  - guida LLM + fallback strutturato per env vars
+  - loading state esplicito in UI
+- ✅ Gestione server MCP completa via Web UI:
+  - list/add/test/toggle/remove
+  - test connessione con sandbox condivisa
+- ✅ Auto-discovery proattiva nel loop conversazionale:
+  - suggerimento MCP nel prompt quando il task richiede Gmail/Calendar/GitHub/etc. e il server non e' ancora configurato
+- ✅ OAuth Google assistito end-to-end:
+  - consent URL + callback page + code exchange + salvataggio secret nel Vault + test immediato post-setup
+- ✅ OAuth GitHub assistito end-to-end:
+  - consent URL + callback page + code exchange + salvataggio token nel Vault + wiring automatico in `GITHUB_PERSONAL_ACCESS_TOKEN`
+- ✅ UX installazione/permessi molto piu' guidata:
+  - wizard MCP coerente, helper OAuth integrato, preset sandbox chiari e recommendation panel
+- ✅ Provider OAuth multipli supportati nel wizard:
+  - Google (Gmail, Calendar) + GitHub con callback provider-aware in Web UI
+
+### 5.5 Stato Dettagliato (Skill Shield)
+
+- ✅ Analisi statica estesa:
+  - scan di `SKILL.md` + script/package files (`scripts/`, shell/python/js/etc.)
+  - pattern sospetti: reverse shell, pipe-to-shell, obfuscation, sudo/SUID, accesso secret/system files, network activity non dichiarata
+- ✅ Report strutturato con risk score:
+  - `risk_score` 0-100, `score` normalizzato, count file scansionati, findings ordinati per severita'
+- ✅ Reputation check opzionale:
+  - lookup hash script su VirusTotal se `VIRUSTOTAL_API_KEY` e' presente
+  - nessun hard failure se la reputation API non e' disponibile
+- ✅ Cache locale:
+  - cache persistente per report package + reputazione hash in `~/.homun/skill-security-cache.json`
+- ✅ Enforcement installazione:
+  - preflight remoto su `SKILL.md`
+  - full scan post-download su package estratto
+  - blocco automatico sopra threshold
+  - override manuale via `homun skills add ... --force`
+
+### 5.2 Stato Dettagliato (Skill Creator)
+
+- ✅ Tool `create_skill` registrato nell'agent loop:
+  - genera una skill installata in `~/.homun/skills/<name>/`
+  - crea `SKILL.md` + script starter (`python|bash|javascript`)
+- ✅ Riuso pattern locale:
+  - cerca skill esistenti correlate, ne carica workflow/tools/scripts e le include come pattern di composizione
+- ✅ Composizione da piu' skill:
+  - genera `references/composition.md` con i pattern riusati
+  - fonde `allowed-tools` dalle skill correlate quando disponibili
+- ✅ Validazione automatica iniziale:
+  - parse frontmatter, syntax-check script, scan sicurezza package
+- ✅ Smoke test automatico:
+  - esegue lo script generato con `--smoke-test` e verifica il marker `homun_skill_smoke_ok`
+
+### 5.4 Stato Dettagliato (Skill Adapter)
+
+- ✅ Modulo adapter legacy introdotto:
+  - parsing `SKILL.toml` / `manifest.json`
+  - generazione automatica `SKILL.md`
+  - mapping script `src/`/entrypoint -> `scripts/`
+  - `requirements.txt` auto-generato da dipendenze pip quando possibile
+- ✅ Integrazione completa sugli installer supportati:
+  - fallback a manifest legacy se `SKILL.md` manca
+  - adattamento automatico post-download prima del security scan finale
+  - supporto attivo su GitHub, ClawHub e Open Skills
+- ✅ Note di compatibilita' esplicite:
+  - dipendenze pip convertite quando possibile
+  - dipendenze npm/runtime non Python lasciate come note operative nella skill adattata
+
+---
+
+## Programma Trasversale — Sandbox Unificata (P0/P1)
+
+> Obiettivo: eseguire Shell, MCP stdio e script skill in un runtime coerente, sicuro e multi-piattaforma.
+
+### Stato ad oggi (2026-03-06)
+
+- ✅ **Fondazioni implementate (milestone 1, macOS-first)**
+  - Config unica sandbox (`security.execution_sandbox`) con backend `auto|docker|none` + `strict`.
+  - Runtime wrapper condiviso (`src/tools/sandbox_exec.rs`) usato da:
+    - Shell tool (`src/tools/shell.rs`)
+    - MCP stdio (`src/tools/mcp.rs`)
+    - Skill executor (`src/skills/executor.rs`)
+  - API Web dedicate:
+    - `GET/PUT /api/v1/security/sandbox`
+    - `GET /api/v1/security/sandbox/status`
+    - `GET /api/v1/security/sandbox/presets`
+    - `GET /api/v1/security/sandbox/image`
+    - `POST /api/v1/security/sandbox/image/pull`
+    - `GET /api/v1/security/sandbox/events`
+  - UI Permissions con sezione Execution Sandbox (stato runtime, backend, limiti CPU/RAM, network, readonly rootfs, mount workspace, preset rapidi, runtime image status/pull, recent events).
+  - Badge/runtime status in Skills e MCP pages + link rapido a Permissions.
+- ✅ **Comportamento attuale robusto su macOS**
+  - Se Docker non e' disponibile e backend=`auto`, fallback controllato a native.
+  - Con `strict=true`, blocco esecuzione quando backend richiesto non disponibile.
+- ✅ **Osservabilita' e operativita'**
+  - Event log recente delle decisioni sandbox condiviso tra shell, MCP e skill scripts.
+  - Stato immagine runtime Docker ispezionabile dalla UI con pull manuale del runtime configurato.
+- ⚠️ **In corso / parziale**
+  - Lifecycle immagine presente a livello operativo, ma manca ancora versioning/policy di update piu' rigorosa.
+
+### Milestone Sandbox — Dove siamo
+
+| Milestone | Scope | Stato |
+|-----------|-------|-------|
+| SBX-1 | Backend unificato + wiring su Shell/MCP/Skills + API/UI runtime status | ✅ DONE |
+| SBX-2 | Hard isolation backend Linux (namespaces/seccomp/cgroups) oltre Docker fallback | TODO |
+| SBX-3 | Backend Windows nativo (Job Objects/AppContainer o equivalente) | TODO |
+| SBX-4 | Runtime image gestita (template immagine/toolchain per skill+MCP) + lifecycle/versioning | ⚠️ PARTIAL |
+| SBX-5 | UX finale Permissions/Sandbox semplificata (onboarding guidato + spiegazioni contestuali) | ✅ DONE |
+| SBX-6 | Test E2E cross-platform (macOS/Linux/Windows) e policy hardening finale | TODO |
+
+### Cosa manca per chiudere il cerchio Sandbox
+
+- Implementare backend hardened nativi per Linux e Windows (non solo strategia Docker/none).
+- Completare versioning/update policy dell'immagine runtime standard per skill/MCP.
+- Aggiungere policy di rete piu' granulari (es. allowlist host/domain per runtime isolato).
+- Chiudere hardening finale con test E2E cross-platform e verifiche sui fallback reali.
 
 ### Come funziona lo Skill Creator
 
@@ -266,6 +393,78 @@ homun skills add clawhub:user/data-scraper
 
 Skill 'data-scraper' installed. Ready to use.
 ```
+
+---
+
+## Programma Trasversale — Chat Web UI (P1)
+
+> Obiettivo: portare la chat Web UI da "funzionante" a esperienza primaria, persistente e robusta.
+
+### Stato ad oggi (2026-03-06)
+
+- ✅ **Fondazioni UX e loop migliorate**
+  - Chat shell ridisegnata con composer sticky, model picker minimale, timeline tool/reasoning piu' leggibile.
+  - Prompt/tool routing corretto: per ricerca informativa il sistema preferisce `web_search`/`web_fetch` prima del browser.
+  - Finalizzazione best-effort quando il loop esaurisce le iterazioni, per evitare `max iterations reached without final response`.
+  - Stop base end-to-end collegato tra UI e agent loop.
+- ✅ **Background/resume base**
+  - Run web attivo tracciato lato server con `run_id`, stato, user prompt, risposta parziale ed eventi tool.
+  - La pagina chat puo' riattaccarsi a un run in corso dopo navigation/tab switch finche' il processo resta acceso.
+- ⚠️ **Parziale / da chiudere**
+  - I run web non sono ancora persistiti nel DB: su restart del processo si perdono.
+  - Esiste ancora una sola sessione logica `web:default`: manca multi-chat reale con elenco conversazioni.
+  - Upload dal composer (`+`) ancora non completati end-to-end.
+  - Stop non e' ancora profondo su tutti i tool/provider lunghi.
+
+### Milestone Chat — Dove siamo
+
+| Milestone | Scope | Stato |
+|-----------|-------|-------|
+| CHAT-1 | Refresh UI chat (composer sticky, reasoning/tool timeline, stop base, minimal shell) | ✅ DONE |
+| CHAT-2 | Run web persistente in memoria con resume/background dopo page switch | ✅ DONE |
+| CHAT-3 | Sessioni multiple vere + sidebar/history conversazioni | TODO |
+| CHAT-4 | Persistenza run su DB + restore dopo restart processo | TODO |
+| CHAT-5 | Composer `+` completo (immagini, documenti, ingressi MCP reali) | TODO |
+| CHAT-6 | Stop profondo / cancellation propagation su provider e tool lunghi | ⚠️ PARTIAL |
+| CHAT-7 | Test E2E Playwright per streaming/stop/resume/multi-sessione | TODO |
+
+### Cosa manca per chiudere davvero la Chat
+
+- Implementare **multi-sessione reale**:
+  - `session_id`/`conversation_id` veri per la chat web
+  - lista conversazioni e "nuova sessione" reale, non solo clear/reset
+- Persistenza **run web su DB**:
+  - stato `running/stopping/completed/failed`
+  - prompt utente, risposta parziale, timeline tool/thinking
+  - restore corretto anche dopo restart del processo
+- Completare il **composer `+`**:
+  - upload immagini
+  - upload documenti
+  - ingressi MCP dal composer con flusso reale
+- Rafforzare **stop/cancel**:
+  - propagazione cancel verso provider streaming
+  - propagazione cancel verso tool lunghi/browser/task esterni
+  - UX di stop consistente anche durante tool gia' partiti
+- Fare **polish finale streaming/layout**:
+  - stabilita' layout durante risposta in corso
+  - auto-scroll affidabile durante streaming/tool activity, senza perdere il follow del fondo chat
+  - gestione robusta di error/offline/reconnect
+  - cleanup del vecchio codice UI residuo
+- Aggiungere **test E2E della chat**:
+  - invio messaggio
+  - streaming
+  - stop
+  - cambio pagina durante run
+  - restore run attivo
+  - nuova sessione / clear
+
+### Ordine consigliato per chiuderla
+
+1. CHAT-3 multi-sessione reale
+2. CHAT-4 persistenza run su DB
+3. CHAT-6 stop profondo
+4. CHAT-5 composer `+` completo
+5. CHAT-7 test E2E e hardening finale
 
 ---
 
@@ -426,12 +625,29 @@ Sprint 3: Sicurezza Canali (P1)             ✅ DONE (~295 LOC)
 Sprint 4: Web UI + Automations (P1)        ✅ DONE (~1,200 LOC)
   ✅ 4.1-4.6 Automations + logs + usage/costi + setup wizard
     |
-Sprint 5: Ecosistema (P1)                  TODO (~1,350 LOC)
-  5.1 MCP Setup Guidato
-  5.2 Skill Creator (agente)
-  5.3 Creazione automation da chat
-  5.4 Skill Adapter (ClawHub → Homun)
-  5.5 Skill Shield (sicurezza pre-install)
+Sprint 5: Ecosistema (P1)                  ✅ DONE (~1,350 LOC)
+  ✅ 5.1 MCP Setup Guidato (catalogo + guided install + auto-discovery + Google/GitHub OAuth)
+  ✅ 5.2 Skill Creator (agente)
+  ✅ 5.3 Creazione automation da chat
+  ✅ 5.4 Skill Adapter (ClawHub → Homun)
+  ✅ 5.5 Skill Shield (sicurezza pre-install)
+    |
+Programma Sandbox Trasversale (P0/P1)      ⚠️ PARTIAL
+  ✅ SBX-1 Fondazioni unificate (Shell/MCP/Skills + API/UI)
+  TODO SBX-2 Linux hardened backend
+  TODO SBX-3 Windows backend
+  ⚠️ SBX-4 Runtime image + lifecycle
+  ✅ SBX-5 UX finale Permissions/Sandbox
+  TODO SBX-6 E2E cross-platform hardening
+    |
+Programma Chat Web UI (P1)                 ⚠️ PARTIAL
+  ✅ CHAT-1 Refresh UI/UX base
+  ✅ CHAT-2 Run in-memory con resume/background dopo page switch
+  TODO CHAT-3 Sessioni multiple vere
+  TODO CHAT-4 Persistenza run su DB
+  TODO CHAT-5 Composer + completo
+  ⚠️ CHAT-6 Stop profondo / cancel propagation
+  TODO CHAT-7 Test E2E chat
     |
 Sprint 6: RAG Knowledge Base (P1)          TODO (~1,100 LOC)
   6.1 File ingestion pipeline
@@ -454,8 +670,9 @@ Sprint 9+: Future (P3)
   Voice, Extended thinking, Prometheus, distribuzione
 ```
 
-**Completato: Sprint 1-4 + 5.3 + parte Sprint 8**
-**Rimanente: Sprint 5 (tranne 5.3), Sprint 6-7, hardening residuo**
+**Completato: Sprint 1-4 + 5.3 + 5.5 + SBX-1 + parte Sprint 8**
+**Completato: Sprint 5 completo**
+**Rimanente: SBX-2..4 + SBX-6, CHAT-3..7, Sprint 6-7, hardening residuo**
 
 ---
 

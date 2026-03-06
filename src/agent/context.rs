@@ -45,6 +45,8 @@ pub struct ContextBuilder {
     /// Relevant memories retrieved by vector + FTS5 search for the current query.
     /// Uses RwLock for interior mutability — updated per-request via `&self`.
     relevant_memories: RwLock<String>,
+    /// Contextual MCP setup suggestions inferred from the active request.
+    mcp_suggestions: RwLock<String>,
     /// Known channels and their default chat IDs for cross-channel messaging
     channels_info: String,
     /// The modular prompt builder
@@ -68,6 +70,7 @@ impl ContextBuilder {
             bootstrap_files: Arc::new(RwLock::new(bootstrap_files)),
             memory_content: String::new(),
             relevant_memories: RwLock::new(String::new()),
+            mcp_suggestions: RwLock::new(String::new()),
             channels_info: String::new(),
             prompt_builder: SystemPromptBuilder::with_defaults(),
             model_name: RwLock::new(config.agent.model.clone()),
@@ -180,6 +183,12 @@ impl ContextBuilder {
         *guard = memories;
     }
 
+    /// Set contextual MCP setup suggestions for the current request.
+    pub async fn set_mcp_suggestions(&self, suggestions: String) {
+        let mut guard = self.mcp_suggestions.write().await;
+        *guard = suggestions;
+    }
+
     /// Update the model name shown in the system prompt (called on hot-reload).
     pub async fn set_model_name(&self, model: String) {
         *self.model_name.write().await = model;
@@ -268,6 +277,7 @@ impl ContextBuilder {
         let bootstrap_files = self.bootstrap_files.read().await;
         let skills_summary = self.skills_summary.read().await;
         let relevant_memories = self.relevant_memories.read().await;
+        let mcp_suggestions = self.mcp_suggestions.read().await;
         let model_name = self.model_name.read().await;
 
         // Build PromptContext
@@ -280,6 +290,7 @@ impl ContextBuilder {
             bootstrap_files: &bootstrap_files,
             memory_content: &self.memory_content,
             relevant_memories: &relevant_memories,
+            mcp_suggestions: &mcp_suggestions,
             channel: "main",
             prompt_mode: PromptMode::Full,
             channels_info: &self.channels_info,

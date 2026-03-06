@@ -39,6 +39,9 @@ pub struct MessageMetadata {
     /// Automation run identifier for end-to-end lifecycle tracking.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub automation_run_id: Option<String>,
+    /// Web UI run identifier for background/resume tracking.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web_run_id: Option<String>,
 }
 
 /// Message from a channel to the agent

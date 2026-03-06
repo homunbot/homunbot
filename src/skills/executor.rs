@@ -3,6 +3,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
+use crate::config::ExecutionSandboxConfig;
+use crate::tools::sandbox_exec::build_process_command;
+
 /// Execute a skill script from the skill's `scripts/` directory.
 ///
 /// Supports:
@@ -17,6 +20,38 @@ pub async fn execute_skill_script(
     script_name: &str,
     args: &[&str],
     timeout_secs: u64,
+) -> Result<ScriptOutput> {
+    execute_skill_script_inner(
+        skill_dir,
+        script_name,
+        args,
+        timeout_secs,
+        &ExecutionSandboxConfig::default(),
+        false,
+    )
+    .await
+}
+
+/// Execute a skill script with explicit sandbox configuration.
+///
+/// This path uses the shared process runner and env sanitization.
+pub async fn execute_skill_script_with_sandbox(
+    skill_dir: &Path,
+    script_name: &str,
+    args: &[&str],
+    timeout_secs: u64,
+    sandbox: &ExecutionSandboxConfig,
+) -> Result<ScriptOutput> {
+    execute_skill_script_inner(skill_dir, script_name, args, timeout_secs, sandbox, true).await
+}
+
+async fn execute_skill_script_inner(
+    skill_dir: &Path,
+    script_name: &str,
+    args: &[&str],
+    timeout_secs: u64,
+    sandbox: &ExecutionSandboxConfig,
+    sanitize_env: bool,
 ) -> Result<ScriptOutput> {
     let scripts_dir = skill_dir.join("scripts");
     let script_path = scripts_dir.join(script_name);
@@ -39,17 +74,24 @@ pub async fn execute_skill_script(
         None => "bash", // Default to bash for extensionless scripts
     };
 
-    // Build command
-    let mut cmd = tokio::process::Command::new(interpreter);
-
-    // For ts files, use ts-node or npx tsx
+    // For ts files, run via `npx tsx <script>`.
+    let mut command_args: Vec<String> = Vec::new();
     if interpreter == "npx" {
-        cmd.arg("tsx");
+        command_args.push("tsx".to_string());
     }
+    command_args.push(script_path.display().to_string());
+    command_args.extend(args.iter().map(|a| a.to_string()));
 
-    cmd.arg(&script_path);
-    cmd.args(args);
-    cmd.current_dir(skill_dir);
+    let mut cmd = build_process_command(
+        "skill",
+        interpreter,
+        &command_args,
+        skill_dir,
+        &std::collections::HashMap::new(),
+        sanitize_env,
+        sandbox,
+    )
+    .with_context(|| format!("Failed to prepare command for script '{}'", script_name))?;
 
     // Capture output
     cmd.stdout(std::process::Stdio::piped());

@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::response::{Html, IntoResponse};
 use axum::routing::get;
 use axum::Router;
+use serde::Deserialize;
 
 use super::server::AppState;
 
@@ -14,6 +15,15 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/chat", get(chat_page))
         .route("/automations", get(automations_page))
         .route("/skills", get(skills_page))
+        .route("/mcp", get(mcp_page))
+        .route(
+            "/mcp/oauth/google/callback",
+            get(mcp_google_oauth_callback_page),
+        )
+        .route(
+            "/mcp/oauth/github/callback",
+            get(mcp_github_oauth_callback_page),
+        )
         .route("/memory", get(memory_page))
         .route("/vault", get(vault_page))
         .route("/permissions", get(permissions_page))
@@ -29,6 +39,7 @@ const ICON_DASHBOARD: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="cur
 const ICON_CHAT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12.5V3.5A1.5 1.5 0 0 1 3.5 2h11A1.5 1.5 0 0 1 16 3.5v7a1.5 1.5 0 0 1-1.5 1.5H6L2 16V12.5z"/><line x1="6" y1="6" x2="12" y2="6"/><line x1="6" y1="9" x2="10" y2="9"/></svg>"#;
 const ICON_AUTOMATIONS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="6.5"/><path d="M9 5.5v4l2.8 1.8"/><path d="M9 1v1.5M9 15.5V17M1 9h1.5M15.5 9H17"/></svg>"#;
 const ICON_SKILLS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1L11.5 6.5 17 7.5 13 11.5 14 17 9 14.5 4 17 5 11.5 1 7.5 6.5 6.5z"/></svg>"#;
+const ICON_MCP: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h4"/><path d="M11 9h4"/><circle cx="9" cy="9" r="2.5"/><path d="M7.2 7.2l-2-2M10.8 10.8l2 2M10.8 7.2l2-2M7.2 10.8l-2 2"/></svg>"#;
 const ICON_SETTINGS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="2.5"/><path d="M14.7 11.1a1.2 1.2 0 0 0 .24 1.32l.04.04a1.44 1.44 0 1 1-2.04 2.04l-.04-.04a1.2 1.2 0 0 0-1.32-.24 1.2 1.2 0 0 0-.72 1.08v.12a1.44 1.44 0 0 1-2.88 0v-.06a1.2 1.2 0 0 0-.78-1.08 1.2 1.2 0 0 0-1.32.24l-.04.04a1.44 1.44 0 1 1-2.04-2.04l.04-.04a1.2 1.2 0 0 0 .24-1.32 1.2 1.2 0 0 0-1.08-.72h-.12a1.44 1.44 0 0 1 0-2.88h.06a1.2 1.2 0 0 0 1.08-.78 1.2 1.2 0 0 0-.24-1.32l-.04-.04a1.44 1.44 0 1 1 2.04-2.04l.04.04a1.2 1.2 0 0 0 1.32.24h.06a1.2 1.2 0 0 0 .72-1.08V2.88a1.44 1.44 0 0 1 2.88 0v.06a1.2 1.2 0 0 0 .72 1.08 1.2 1.2 0 0 0 1.32-.24l.04-.04a1.44 1.44 0 1 1 2.04 2.04l-.04.04a1.2 1.2 0 0 0-.24 1.32v.06a1.2 1.2 0 0 0 1.08.72h.12a1.44 1.44 0 0 1 0 2.88h-.06a1.2 1.2 0 0 0-1.08.72z"/></svg>"#;
 const ICON_LOGS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v12"/><line x1="6" y1="6" x2="12" y2="6"/><line x1="6" y1="9" x2="12" y2="9"/><line x1="6" y1="12" x2="9" y2="12"/></svg>"#;
 const ICON_MEMORY: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v14"/><path d="M3 9h12"/><circle cx="9" cy="9" r="3"/><circle cx="9" cy="9" r="7"/></svg>"#;
@@ -83,6 +94,10 @@ fn sidebar(active: &str) -> String {
             <span class="nav-icon">{icon_skills}</span>
             <span class="nav-label">Skills</span>
         </a>
+        <a href="/mcp" class="nav-link{mcp_active}">
+            <span class="nav-icon">{icon_mcp}</span>
+            <span class="nav-label">MCP</span>
+        </a>
         <a href="/memory" class="nav-link{memory_active}">
             <span class="nav-icon">{icon_memory}</span>
             <span class="nav-label">Memory</span>
@@ -123,6 +138,7 @@ fn sidebar(active: &str) -> String {
             ""
         },
         skills_active = if active == "skills" { " active" } else { "" },
+        mcp_active = if active == "mcp" { " active" } else { "" },
         memory_active = if active == "memory" { " active" } else { "" },
         vault_active = if active == "vault" { " active" } else { "" },
         perms_active = if active == "permissions" {
@@ -138,6 +154,7 @@ fn sidebar(active: &str) -> String {
         icon_dash = ICON_DASHBOARD,
         icon_automations = ICON_AUTOMATIONS,
         icon_skills = ICON_SKILLS,
+        icon_mcp = ICON_MCP,
         icon_memory = ICON_MEMORY,
         icon_vault = ICON_VAULT,
         icon_perms = ICON_PERMISSIONS,
@@ -191,6 +208,11 @@ fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String 
     <script>
     (function() {{
         const theme = localStorage.getItem('homun-theme') || 'system';
+        const configuredLanguage = localStorage.getItem('homun-language') || 'system';
+        const resolvedLanguage = configuredLanguage === 'system'
+            ? ((navigator.language || 'en').split('-')[0] || 'en')
+            : configuredLanguage;
+        document.documentElement.lang = resolvedLanguage;
         if (theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {{
             document.documentElement.classList.add('dark');
         }}
@@ -632,14 +654,25 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                 <section class="section" id="section-theme">
                     <h2>Appearance</h2>
                     <form class="form" id="appearance-form">
-                        <div class="form-group">
-                            <label>Theme</label>
-                            <select name="theme" class="input" id="theme-select">
-                                <option value="system" {theme_system}>System</option>
-                                <option value="light" {theme_light}>Light</option>
-                                <option value="dark" {theme_dark}>Dark</option>
-                            </select>
-                            <div class="form-hint">Choose the interface color scheme.</div>
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label>Theme</label>
+                                <select name="theme" class="input" id="theme-select">
+                                    <option value="system" {theme_system}>System</option>
+                                    <option value="light" {theme_light}>Light</option>
+                                    <option value="dark" {theme_dark}>Dark</option>
+                                </select>
+                                <div class="form-hint">Choose the interface color scheme.</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Assistant Language</label>
+                                <select name="language" class="input" id="language-select">
+                                    <option value="system" {language_system}>System</option>
+                                    <option value="it" {language_it}>Italiano</option>
+                                    <option value="en" {language_en}>English</option>
+                                </select>
+                                <div class="form-hint">Used for guided explanations and assistant text in the Web UI.</div>
+                            </div>
                         </div>
                         <button type="submit" class="btn btn-primary">Save Appearance</button>
                     </form>
@@ -864,6 +897,21 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
         } else {
             ""
         },
+        language_system = if config.ui.language == "system" {
+            "selected"
+        } else {
+            ""
+        },
+        language_it = if config.ui.language == "it" {
+            "selected"
+        } else {
+            ""
+        },
+        language_en = if config.ui.language == "en" {
+            "selected"
+        } else {
+            ""
+        },
         providers_html = providers_html,
         catalog_modal_html = catalog_modal_html,
         channels_html = build_channels_cards_html(&config),
@@ -874,37 +922,83 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
 
 // ─── Chat ───────────────────────────────────────────────────────
 
-async fn chat_page() -> Html<String> {
-    let body = r#"<main class="content chat-layout">
+async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
+    let config = state.config.read().await;
+    let current_model = config.agent.model.clone();
+    let current_vision_model = if config.agent.vision_model.trim().is_empty() {
+        current_model.clone()
+    } else {
+        config.agent.vision_model.clone()
+    };
+    drop(config);
+
+    let body = format!(
+        r#"<main class="content chat-layout">
             <div class="content-inner">
-                <div class="page-header">
-                    <div class="page-title-group">
-                        <h1 class="page-title">Chat</h1>
-                        <span class="badge badge-neutral" id="ws-status">Connecting…</span>
-                    </div>
-                    <div class="chat-actions">
-                        <button class="btn btn-ghost btn-sm" id="btn-new-chat" title="New conversation">
+                <div class="chat-shell">
+                    <div class="chat-topbar">
+                        <span class="chat-connection" id="ws-status">Connecting…</span>
+                        <div class="chat-actions">
+                            <button class="btn btn-ghost btn-sm" id="btn-new-chat" title="New conversation">
                             <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="3" x2="9" y2="15"/><line x1="3" y1="9" x2="15" y2="9"/></svg>
-                        </button>
-                        <button class="btn btn-ghost btn-sm" id="btn-compact-chat" title="Compact conversation">
+                            </button>
+                            <button class="btn btn-ghost btn-sm" id="btn-compact-chat" title="Compact conversation">
                             <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 9 12 15 6"/></svg>
-                        </button>
-                        <button class="btn btn-ghost btn-sm" id="btn-clear-chat" title="Clear screen">
+                            </button>
+                            <button class="btn btn-ghost btn-sm" id="btn-clear-chat" title="Clear screen">
                             <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 4 9 9 14 4"/><polyline points="4 14 9 9 14 14"/></svg>
-                        </button>
+                            </button>
+                        </div>
                     </div>
+                    <div class="chat-thread-wrap">
+                        <div class="chat-empty-state" id="chat-empty-state">
+                            <div class="chat-empty-kicker">Homun is ready</div>
+                            <h2>Ask, search, inspect tools, or connect services.</h2>
+                            <p>The chat will show reasoning blocks, tool activity and formatted answers in one continuous workspace.</p>
+                        </div>
+                        <div class="chat-messages" id="messages"></div>
+                    </div>
+                    <div class="chat-composer-dock">
+                        <div class="chat-composer-shell" id="chat-config" data-model="{current_model}" data-vision-model="{current_vision_model}">
+                            <div class="chat-composer-toolbar">
+                                <div class="chat-plus-wrap">
+                                    <button type="button" class="chat-plus-btn" id="btn-chat-plus" title="Add attachments or services">+</button>
+                                    <div class="chat-plus-menu" id="chat-plus-menu" hidden>
+                                        <button type="button" class="chat-plus-item" id="btn-chat-upload-image">Add image</button>
+                                        <button type="button" class="chat-plus-item" id="btn-chat-upload-doc">Add document</button>
+                                        <button type="button" class="chat-plus-item" id="btn-chat-open-mcp">Open MCP</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <form class="chat-input" id="chat-form">
+                                <textarea id="chat-text" placeholder="Reply to Homun…" autocomplete="off" class="input chat-textarea" rows="1"></textarea>
+                                <button type="button" class="chat-send-btn" id="btn-send" aria-label="Send message">
+                                    <span class="chat-send-spinner" aria-hidden="true"></span>
+                                    <svg class="chat-send-icon chat-send-icon--send" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h9"/><path d="M9 3l6 6-6 6"/></svg>
+                                    <svg class="chat-send-icon chat-send-icon--stop" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="7" height="7" rx="1.2"/></svg>
+                                </button>
+                            </form>
+                            <div class="chat-composer-footer">
+                                <div class="chat-model-selector">
+                                    <select id="chat-model-select" class="input input-sm" aria-label="Model">
+                                        <option value="{current_model}">{current_model}</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <input type="file" id="chat-image-input" accept="image/*" hidden>
+                    <input type="file" id="chat-doc-input" accept=".pdf,.md,.txt,.doc,.docx" hidden>
                 </div>
-                <div class="chat-messages" id="messages"></div>
-                <form class="chat-input" id="chat-form">
-                    <textarea id="chat-text" placeholder="Send a message… (Shift+Enter for new line)" autocomplete="off" class="input chat-textarea" rows="1"></textarea>
-                    <button type="submit" class="btn btn-primary">Send</button>
-                </form>
             </div>
         </main>
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-        <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>"#;
+        <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>"#,
+        current_model = current_model,
+        current_vision_model = current_vision_model,
+    );
 
-    Html(page_html("Chat", "chat", body, &["chat.js"]))
+    Html(page_html("Chat", "chat", &body, &["chat.js"]))
 }
 
 // ─── Automations ────────────────────────────────────────────────
@@ -1140,6 +1234,20 @@ async fn skills_page() -> Html<String> {
                     </div>
                 </div>
 
+                <section class="section">
+                    <div class="mcp-sandbox-panel">
+                        <div class="permission-mode-header" style="margin-bottom: 0.8rem;">
+                            <span class="permission-mode-name">Execution Sandbox (Skill scripts)</span>
+                            <span class="badge badge-neutral" id="skills-sandbox-runtime-badge">checking...</span>
+                        </div>
+                        <p class="form-hint" id="skills-sandbox-runtime-text">Checking sandbox runtime status...</p>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary btn-sm" id="skills-refresh-sandbox-status-btn">Refresh Sandbox Status</button>
+                            <a href="/permissions" class="btn btn-secondary btn-sm">Open Permissions</a>
+                        </div>
+                    </div>
+                </section>
+
                 <div class="skills-search">
                     <svg class="skills-search-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7.5" cy="7.5" r="5.5"/><path d="M12 12l4.5 4.5"/></svg>
                     <input type="text" id="skill-search-input" class="input skills-search-input" placeholder="Search ClawHub, GitHub &amp; Open Skills, or enter owner/repo to install..." autocomplete="off">
@@ -1206,6 +1314,289 @@ async fn skills_page() -> Html<String> {
     Html(page_html("Skills", "skills", &body, &["skills.js"]))
 }
 
+// ─── MCP ────────────────────────────────────────────────────────
+
+async fn mcp_page(State(state): State<Arc<AppState>>) -> Html<String> {
+    let config = state.config.read().await;
+    let ui_language = config.ui.language.clone();
+    let body = format!(
+        r#"<main class="content">
+            <div class="content-inner">
+                <input type="hidden" id="mcp-ui-language" value="{ui_language}">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">MCP Servers</h1>
+                        <span class="badge badge-info" id="mcp-server-count">Loading...</span>
+                    </div>
+                </div>
+
+                <section class="section">
+                    <div class="mcp-sandbox-panel">
+                        <div class="permission-mode-header" style="margin-bottom: 0.8rem;">
+                            <span class="permission-mode-name">Execution Sandbox (MCP stdio)</span>
+                            <span class="badge badge-neutral" id="mcp-sandbox-runtime-badge">checking...</span>
+                        </div>
+                        <p class="form-hint" id="mcp-sandbox-runtime-text">Checking sandbox runtime status...</p>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary btn-sm" id="mcp-refresh-sandbox-status-btn">Refresh Sandbox Status</button>
+                            <a href="/permissions" class="btn btn-secondary btn-sm">Open Permissions</a>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="section">
+                    <div class="skills-search mcp-search-shell">
+                        <svg class="skills-search-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7.5" cy="7.5" r="5.5"/><path d="M12 12l4.5 4.5"/></svg>
+                        <input type="text" id="mcp-suggest-input" class="input skills-search-input" placeholder="Search MCP servers or describe what you need..." autocomplete="off">
+                        <div class="skills-search-spinner" id="mcp-search-spinner" style="display:none"></div>
+                    </div>
+                    <div class="catalog-stats mcp-catalog-stats" id="mcp-suggest-status">Search the official MCP registry, then install from a guided template.</div>
+                </section>
+
+                <section class="section" id="mcp-configured-section" style="display:none;">
+                    <div class="skills-results-header">
+                        <h2>Configured Servers</h2>
+                        <span class="badge badge-neutral" id="mcp-configured-count">Loading...</span>
+                    </div>
+                    <div class="skill-list mcp-skill-list" id="mcp-servers-list">
+                        <div class="empty-state"><p>Loading servers...</p></div>
+                    </div>
+                </section>
+
+                <section class="section skills-results-section">
+                    <div class="skills-results-header">
+                        <h2>Connect Services</h2>
+                        <span class="badge badge-neutral" id="mcp-catalog-count"></span>
+                    </div>
+                    <div id="mcp-category-chips" class="mcp-category-chips"></div>
+                    <div class="skill-list mcp-skill-list" id="mcp-catalog-grid">
+                        <div class="empty-state"><p>Loading catalog...</p></div>
+                    </div>
+                </section>
+
+                <section class="section" id="mcp-install-section">
+                    <div class="skills-results-header">
+                        <h2>Manual Installer</h2>
+                        <button type="button" class="btn btn-secondary btn-sm" id="mcp-toggle-install-btn" aria-expanded="false">Open manual installer</button>
+                    </div>
+                    <div class="form-hint mcp-install-summary">Only needed for advanced/manual setup. Guided install opens directly from an MCP card.</div>
+                    <div id="mcp-install-panel-home" style="display:none;">
+                        <div id="mcp-install-panel" class="mcp-install-shell">
+                            <div class="mcp-install-intro">
+                                <div class="mcp-install-intro-copy">
+                                    <div class="mcp-install-intro-title">Reusable installer</div>
+                                    <div class="form-hint" id="mcp-install-hint">Select a card with <strong>Install (guided)</strong> to prefill this form.</div>
+                                </div>
+                            </div>
+                            <div id="mcp-install-assistant" class="mcp-install-assistant" style="display:none;"></div>
+                            <div id="mcp-oauth-helper" class="mcp-oauth-helper" style="display:none;"></div>
+                            <form class="form form--full" id="mcp-manual-form">
+                                <div class="form-row--2">
+                                    <div class="form-group">
+                                        <label for="mcp-name">Server Name</label>
+                                        <input id="mcp-name" name="name" class="input" type="text" placeholder="my-server" required>
+                                        <div class="form-hint">Unique identifier used in tool names (server__tool).</div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="mcp-transport">Transport</label>
+                                        <select id="mcp-transport" name="transport" class="input">
+                                            <option value="stdio" selected>stdio</option>
+                                            <option value="http">http</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="form-row--2" id="mcp-stdio-group">
+                                    <div class="form-group">
+                                        <label for="mcp-command">Command</label>
+                                        <input id="mcp-command" name="command" class="input" type="text" placeholder="npx">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="mcp-args">Args (space-separated)</label>
+                                        <input id="mcp-args" name="args" class="input" type="text" placeholder="-y @modelcontextprotocol/server-fetch">
+                                    </div>
+                                </div>
+                                <div class="form-group" id="mcp-http-group" style="display:none;">
+                                    <label for="mcp-url">Server URL</label>
+                                    <input id="mcp-url" name="url" class="input" type="url" placeholder="https://example.com/mcp">
+                                </div>
+                                <div class="form-group">
+                                    <label for="mcp-env">Environment Variables (KEY=VALUE, one per line)</label>
+                                    <textarea id="mcp-env" name="env" class="input" rows="5" placeholder="API_TOKEN=vault://mcp.custom.token"></textarea>
+                                    <div class="form-hint">For secrets, prefer vault references: <code>vault://my_key</code>.</div>
+                                </div>
+                                <div class="form-actions">
+                                    <button class="btn btn-primary" type="submit">Save Server</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </section>
+
+                <div class="skill-modal-overlay" id="mcp-modal-overlay">
+                    <div class="skill-modal" id="mcp-modal">
+                        <div class="skill-modal-header">
+                            <div>
+                                <div class="skill-modal-title" id="mcp-modal-title"></div>
+                                <div class="skill-modal-subtitle" id="mcp-modal-subtitle"></div>
+                            </div>
+                            <button class="skill-modal-close" id="mcp-modal-close">&times;</button>
+                        </div>
+                        <div class="skill-modal-meta" id="mcp-modal-meta"></div>
+                        <div class="skill-modal-body">
+                            <div class="skill-modal-content" id="mcp-modal-content"></div>
+                        </div>
+                        <div class="skill-modal-footer" id="mcp-modal-footer"></div>
+                    </div>
+                </div>
+            </div>
+        </main>"#
+    );
+
+    Html(page_html("MCP", "mcp", &body, &["mcp.js"]))
+}
+
+#[derive(serde::Deserialize)]
+struct McpGoogleOauthCallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+async fn mcp_google_oauth_callback_page(
+    Query(query): Query<McpGoogleOauthCallbackQuery>,
+) -> Html<String> {
+    render_mcp_oauth_callback_page(
+        "google",
+        "Google",
+        query.code.unwrap_or_default(),
+        query.state.unwrap_or_default(),
+        query.error.unwrap_or_default(),
+        query.error_description.unwrap_or_default(),
+    )
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct McpGitHubOauthCallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+async fn mcp_github_oauth_callback_page(
+    Query(query): Query<McpGitHubOauthCallbackQuery>,
+) -> Html<String> {
+    render_mcp_oauth_callback_page(
+        "github",
+        "GitHub",
+        query.code.unwrap_or_default(),
+        query.state.unwrap_or_default(),
+        query.error.unwrap_or_default(),
+        query.error_description.unwrap_or_default(),
+    )
+}
+
+fn render_mcp_oauth_callback_page(
+    provider_id: &str,
+    provider_label: &str,
+    code: String,
+    state: String,
+    error: String,
+    error_description: String,
+) -> Html<String> {
+    let title = if error.is_empty() {
+        format!("{provider_label} OAuth completed")
+    } else {
+        format!("{provider_label} OAuth failed")
+    };
+    let message = if error.is_empty() {
+        "The authorization code has been captured. You can return to the MCP setup window."
+            .to_string()
+    } else {
+        format!(
+            "{provider_label} returned an OAuth error. Review the message below and retry the consent flow."
+        )
+    };
+
+    Html(format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{title}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="oauth-callback-page">
+    <main class="oauth-callback-shell">
+        <div class="oauth-callback-card">
+            <span class="badge {badge_class}">{badge_text}</span>
+            <h1>{title}</h1>
+            <p>{message}</p>
+            <div class="oauth-callback-code-block">
+                <label for="oauth-code">Authorization Code</label>
+                <textarea id="oauth-code" readonly>{code}</textarea>
+            </div>
+            {error_block}
+            <div class="form-actions">
+                <button type="button" class="btn btn-primary" id="oauth-copy-btn">Copy code</button>
+                <button type="button" class="btn btn-secondary" onclick="window.close()">Close window</button>
+            </div>
+        </div>
+    </main>
+    <script>
+    (function() {{
+        const payload = {{
+            type: 'homun-mcp-oauth-code',
+            provider: {provider_json},
+            code: {code_json},
+            state: {state_json},
+            error: {error_json},
+            error_description: {error_description_json}
+        }};
+        if (window.opener && window.location.origin) {{
+            window.opener.postMessage(payload, window.location.origin);
+        }}
+        const copyBtn = document.getElementById('oauth-copy-btn');
+        const codeEl = document.getElementById('oauth-code');
+        if (copyBtn && codeEl) {{
+            copyBtn.addEventListener('click', function() {{
+                navigator.clipboard.writeText(codeEl.value || '').then(function() {{
+                    copyBtn.textContent = 'Copied';
+                }});
+            }});
+        }}
+    }})();
+    </script>
+</body>
+</html>"#,
+        title = title,
+        message = message,
+        badge_class = if error.is_empty() {
+            "badge-success"
+        } else {
+            "badge-error"
+        },
+        badge_text = if error.is_empty() { "Ready" } else { "Error" },
+        code = code,
+        provider_json = serde_json::to_string(provider_id).unwrap_or_else(|_| "\"\"".to_string()),
+        code_json = serde_json::to_string(&code).unwrap_or_else(|_| "\"\"".to_string()),
+        state_json = serde_json::to_string(&state).unwrap_or_else(|_| "\"\"".to_string()),
+        error_json = serde_json::to_string(&error).unwrap_or_else(|_| "\"\"".to_string()),
+        error_description_json =
+            serde_json::to_string(&error_description).unwrap_or_else(|_| "\"\"".to_string()),
+        error_block = if error.is_empty() {
+            String::new()
+        } else {
+            format!(
+                r#"<div class="oauth-callback-error"><strong>{}</strong><div>{}</div></div>"#,
+                error, error_description
+            )
+        },
+    ))
+}
+
 // ─── Logs ───────────────────────────────────────────────────────
 
 async fn logs_page() -> Html<String> {
@@ -1222,8 +1613,8 @@ async fn logs_page() -> Html<String> {
                         <span>Level</span>
                         <select id="logs-level" class="input">
                             <option value="trace">Trace+</option>
-                            <option value="debug">Debug+</option>
-                            <option value="info" selected>Info+</option>
+                            <option value="debug" selected>Debug+</option>
+                            <option value="info">Info+</option>
                             <option value="warn">Warn+</option>
                             <option value="error">Error only</option>
                         </select>
@@ -1714,6 +2105,153 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
                 </section>
 
                 <section class="section">
+                    <h2>Execution Sandbox</h2>
+                    <p class="form-hint">Shared process sandbox for shell, MCP stdio, and skill scripts.</p>
+                    <div class="sandbox-guide-panel">
+                        <div class="sandbox-guide-summary">
+                            <div class="permission-mode-header" style="margin-bottom: 0.8rem;">
+                                <span class="permission-mode-name">Recommended for this machine</span>
+                                <span class="badge badge-info" id="sandbox-guide-recommendation-badge">Loading...</span>
+                            </div>
+                            <div class="sandbox-guide-title" id="sandbox-guide-title">Checking sandbox runtime...</div>
+                            <p class="sandbox-guide-copy" id="sandbox-guide-copy">Inspecting Docker availability and fallback behavior.</p>
+                            <div class="sandbox-guide-facts" id="sandbox-guide-facts">
+                                <span class="sandbox-guide-fact">Loading runtime facts...</span>
+                            </div>
+                            <div class="form-actions">
+                                <button type="button" class="btn btn-primary btn-sm" id="btn-apply-sandbox-recommended">Apply Recommended Preset</button>
+                                <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-sandbox-status">Refresh Runtime Status</button>
+                            </div>
+                        </div>
+                        <div class="sandbox-profile-grid">
+                            <button type="button" class="sandbox-profile-card" data-sandbox-profile="safe">
+                                <div class="sandbox-profile-header">
+                                    <span class="sandbox-profile-title">Safe</span>
+                                    <span class="badge badge-neutral" id="sandbox-profile-safe-badge">Fallback allowed</span>
+                                </div>
+                                <p class="sandbox-profile-desc" id="sandbox-profile-safe-desc">Prefers isolation, but keeps working if Docker is unavailable.</p>
+                            </button>
+                            <button type="button" class="sandbox-profile-card" data-sandbox-profile="strict">
+                                <div class="sandbox-profile-header">
+                                    <span class="sandbox-profile-title">Strict</span>
+                                    <span class="badge badge-warning" id="sandbox-profile-strict-badge">Blocks on failure</span>
+                                </div>
+                                <p class="sandbox-profile-desc" id="sandbox-profile-strict-desc">Best isolation when Docker is installed and expected to be available.</p>
+                            </button>
+                            <button type="button" class="sandbox-profile-card" data-sandbox-profile="disabled">
+                                <div class="sandbox-profile-header">
+                                    <span class="sandbox-profile-title">Disabled</span>
+                                    <span class="badge badge-neutral">Native execution</span>
+                                </div>
+                                <p class="sandbox-profile-desc">No wrapper at all. Useful only for debugging or trusted local-only setups.</p>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="permission-mode-header" style="margin-bottom: 0.8rem;">
+                        <span class="permission-mode-name">Current</span>
+                        <span class="badge {sandbox_badge_class}" id="sandbox-current-badge">{sandbox_badge_text}</span>
+                    </div>
+                    <div class="permission-mode-header" style="margin-bottom: 0.8rem;">
+                        <span class="permission-mode-name">Runtime</span>
+                        <span class="badge badge-neutral" id="sandbox-runtime-backend">checking...</span>
+                    </div>
+                    <p class="form-hint" id="sandbox-runtime-status">Checking sandbox backend availability...</p>
+                    <div class="sandbox-runtime-grid">
+                        <div class="sandbox-runtime-card">
+                            <div class="permission-mode-header" style="margin-bottom: 0.8rem;">
+                                <span class="permission-mode-name">Runtime Image</span>
+                                <span class="badge badge-neutral" id="sandbox-image-status-badge">checking...</span>
+                            </div>
+                            <p class="form-hint" id="sandbox-image-status-text">Inspecting configured Docker image...</p>
+                            <div class="sandbox-guide-facts" id="sandbox-image-status-facts">
+                                <span class="sandbox-guide-fact">Loading runtime image facts...</span>
+                            </div>
+                            <div class="form-actions">
+                                <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-sandbox-image">Refresh Image Status</button>
+                                <button type="button" class="btn btn-primary btn-sm" id="btn-pull-sandbox-image">Pull Runtime Image</button>
+                            </div>
+                        </div>
+                        <div class="sandbox-runtime-card">
+                            <div class="permission-mode-header" style="margin-bottom: 0.8rem;">
+                                <span class="permission-mode-name">Recent Sandbox Events</span>
+                                <span class="badge badge-neutral" id="sandbox-events-count-badge">0 events</span>
+                            </div>
+                            <p class="form-hint">Latest wrapper decisions across shell, MCP and skills.</p>
+                            <div class="sandbox-events-list" id="sandbox-events-list">
+                                <div class="sandbox-events-empty">Loading sandbox events...</div>
+                            </div>
+                            <div class="form-actions">
+                                <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-sandbox-events">Refresh Events</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="shell-profile-content">
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="sandbox-enabled" {sandbox_enabled_checked}>
+                                <span>Enable sandbox wrapper</span>
+                            </label>
+                            <div class="form-hint">When enabled, process execution can be wrapped by selected backend.</div>
+                        </div>
+                        <div class="form-group">
+                            <label>Backend</label>
+                            <select id="sandbox-backend" class="input">
+                                <option value="auto">auto</option>
+                                <option value="docker">docker</option>
+                                <option value="none">none</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="sandbox-strict" {sandbox_strict_checked}>
+                                <span>Strict mode</span>
+                            </label>
+                            <div class="form-hint">Fail execution if backend is unavailable instead of falling back.</div>
+                        </div>
+                        <div id="sandbox-docker-fields">
+                            <div class="form-group">
+                                <label>Docker image</label>
+                                <input type="text" id="sandbox-docker-image" class="input" value="{sandbox_docker_image}">
+                            </div>
+                            <div class="form-group">
+                                <label>Docker network</label>
+                                <select id="sandbox-docker-network" class="input">
+                                    <option value="none">none</option>
+                                    <option value="bridge">bridge</option>
+                                    <option value="host">host</option>
+                                </select>
+                                <div class="form-hint">Recommended: <code>none</code>.</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Memory limit (MB)</label>
+                                <input type="number" min="0" step="64" id="sandbox-docker-memory" class="input" value="{sandbox_docker_memory}">
+                            </div>
+                            <div class="form-group">
+                                <label>CPU limit</label>
+                                <input type="number" min="0" step="0.1" id="sandbox-docker-cpus" class="input" value="{sandbox_docker_cpus}">
+                            </div>
+                            <div class="form-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="sandbox-docker-readonly" {sandbox_docker_readonly_checked}>
+                                    <span>Read-only root filesystem</span>
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="sandbox-docker-mount-workspace" {sandbox_docker_mount_workspace_checked}>
+                                    <span>Mount Homun workspace to /workspace</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <button class="btn btn-primary btn-sm" id="btn-save-sandbox">Save Sandbox Settings</button>
+                            <button type="button" class="btn btn-secondary btn-sm" id="btn-apply-sandbox-macos">Apply macOS Safe Preset</button>
+                            <button type="button" class="btn btn-secondary btn-sm" id="btn-apply-sandbox-macos-strict">Apply macOS Strict Preset</button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="section">
                     <h2>Quick Presets</h2>
                     <div class="preset-buttons">
                         <button class="btn btn-secondary" data-preset="developer">Developer</button>
@@ -1853,6 +2391,41 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
         } else {
             ""
         },
+        sandbox_badge_class = if config.security.execution_sandbox.enabled {
+            "badge-success"
+        } else {
+            "badge-neutral"
+        },
+        sandbox_badge_text = if config.security.execution_sandbox.enabled {
+            "Enabled"
+        } else {
+            "Disabled"
+        },
+        sandbox_enabled_checked = if config.security.execution_sandbox.enabled {
+            "checked"
+        } else {
+            ""
+        },
+        sandbox_strict_checked = if config.security.execution_sandbox.strict {
+            "checked"
+        } else {
+            ""
+        },
+        sandbox_docker_image = config.security.execution_sandbox.docker_image,
+        sandbox_docker_memory = config.security.execution_sandbox.docker_memory_mb,
+        sandbox_docker_cpus = config.security.execution_sandbox.docker_cpus,
+        sandbox_docker_readonly_checked =
+            if config.security.execution_sandbox.docker_read_only_rootfs {
+                "checked"
+            } else {
+                ""
+            },
+        sandbox_docker_mount_workspace_checked =
+            if config.security.execution_sandbox.docker_mount_workspace {
+                "checked"
+            } else {
+                ""
+            },
     );
 
     Html(page_html(

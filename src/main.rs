@@ -17,6 +17,7 @@ mod bus;
 mod channels;
 mod config;
 mod logs;
+mod mcp_setup;
 mod provider;
 mod queue;
 mod scheduler;
@@ -190,6 +191,9 @@ enum SkillsCommands {
     Add {
         /// Skill source: owner/repo (GitHub) or clawhub:owner/skill (ClawHub)
         repo: String,
+        /// Install even if the post-download security scan wants to block it
+        #[arg(long, default_value_t = false)]
+        force: bool,
     },
     /// Remove an installed skill
     Remove { name: String },
@@ -199,6 +203,8 @@ enum SkillsCommands {
 enum McpCommands {
     /// List configured MCP servers
     List,
+    /// List curated MCP setup presets
+    Catalog,
     /// Add an MCP server
     Add {
         /// Server name (unique identifier)
@@ -215,6 +221,23 @@ enum McpCommands {
         /// Server URL (for http transport)
         #[arg(long)]
         url: Option<String>,
+    },
+    /// Guided setup for a known MCP service
+    Setup {
+        /// Preset/service id (e.g. github, gmail, notion)
+        service: String,
+        /// Optional override for configured server name
+        #[arg(long)]
+        name: Option<String>,
+        /// Environment variables in KEY=VALUE format (repeatable)
+        #[arg(long, num_args = 0.., value_name = "KEY=VALUE")]
+        env: Vec<String>,
+        /// Overwrite an existing server config with the same name
+        #[arg(long, default_value_t = false)]
+        overwrite: bool,
+        /// Skip post-setup connection test
+        #[arg(long, default_value_t = false)]
+        skip_test: bool,
     },
     /// Remove an MCP server
     Remove { name: String },
@@ -372,7 +395,11 @@ enum ServiceCommands {
 // provider::create_provider / provider::create_single_provider).
 
 /// Create and register all tools from config
-fn create_tool_registry(config: &Config, db: Database) -> ToolRegistry {
+fn create_tool_registry(
+    config: &Config,
+    db: Database,
+    shared_config: Option<Arc<tokio::sync::RwLock<Config>>>,
+) -> ToolRegistry {
     let mut registry = ToolRegistry::new();
 
     // Workspace directory restriction
@@ -390,10 +417,12 @@ fn create_tool_registry(config: &Config, db: Database) -> ToolRegistry {
     tools::init_approval_manager(&config.permissions.approval);
 
     // Shell tool with OS-specific permissions
-    registry.register(Box::new(ShellTool::with_permissions(
+    registry.register(Box::new(ShellTool::with_permissions_sandbox_and_config(
         config.tools.exec.timeout,
         config.tools.exec.restrict_to_workspace,
         Some(shell_permissions),
+        Some(config.security.execution_sandbox.clone()),
+        shared_config,
     )));
 
     // File tools with ACL-based permissions
@@ -432,6 +461,9 @@ fn create_tool_registry(config: &Config, db: Database) -> ToolRegistry {
 
     // Automation creation tool (shared storage with scheduler + web API)
     registry.register(Box::new(CreateAutomationTool::new(db)));
+
+    // Skill creation tool (generates and installs starter skills in ~/.homun/skills)
+    registry.register(Box::new(tools::CreateSkillTool::new()));
 
     // Email inbox reading tool (IMAP) for proactive automations and chat tasks.
     #[cfg(feature = "channel-email")]
@@ -573,6 +605,48 @@ fn stop_gateway() -> Result<bool> {
     }
 }
 
+fn print_install_security_summary(report: Option<&crate::skills::SecurityReport>, forced: bool) {
+    let Some(report) = report else {
+        return;
+    };
+
+    if report.warnings.is_empty() {
+        println!(
+            "  Security: clean (risk {}/100, {} file(s) scanned)",
+            report.risk_score, report.scanned_files
+        );
+        return;
+    }
+
+    let status = if report.is_blocked() {
+        if forced {
+            "forced override"
+        } else {
+            "blocked"
+        }
+    } else {
+        "review suggested"
+    };
+
+    println!(
+        "  Security: risk {}/100, {} finding(s), {}",
+        report.risk_score,
+        report.warnings.len(),
+        status
+    );
+    for warning in report.warnings.iter().take(3) {
+        let location = match (&warning.file, warning.line) {
+            (Some(file), Some(line)) => format!(" ({file}:{line})"),
+            (Some(file), None) => format!(" ({file})"),
+            _ => String::new(),
+        };
+        println!("    - {}{}", warning.description, location);
+    }
+    if report.warnings.len() > 3 {
+        println!("    - ...and {} more finding(s)", report.warnings.len() - 3);
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Install rustls CryptoProvider before any TLS usage.
@@ -588,7 +662,8 @@ async fn main() -> Result<()> {
     // TUI commands use alternate screen — logs on stderr would corrupt the display.
     // Write logs to a file instead, or suppress them entirely.
     let is_tui_command = matches!(&command, Commands::Config { command: None });
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,homun=debug"));
 
     if is_tui_command {
         // During TUI: log to ~/.homun/tui.log so stderr stays clean
@@ -620,11 +695,16 @@ async fn main() -> Result<()> {
             let config = Config::load()?;
             let db = Database::open(&config.storage.resolved_path()).await?;
             let provider = provider::create_provider(&config)?;
-            let mut tool_registry = create_tool_registry(&config, db.clone());
+            let mut tool_registry = create_tool_registry(&config, db.clone(), None);
 
             // Connect to MCP servers and register their tools
             #[cfg(feature = "mcp")]
-            let (mcp_manager, mcp_tools) = McpManager::start(&config.mcp.servers).await;
+            let (mcp_manager, mcp_tools) = McpManager::start_with_sandbox(
+                &config.mcp.servers,
+                Some(config.security.execution_sandbox.clone()),
+                None,
+            )
+            .await;
             #[cfg(feature = "mcp")]
             for tool in mcp_tools {
                 tool_registry.register(tool);
@@ -787,7 +867,8 @@ async fn main() -> Result<()> {
             let cron_scheduler = Arc::new(CronScheduler::new(db.clone(), cron_event_tx));
 
             // Build tool registry with CronTool + MessageTool + SpawnTool + MCP tools
-            let mut tool_registry = create_tool_registry(&config, db.clone());
+            let mut tool_registry =
+                create_tool_registry(&config, db.clone(), Some(shared_config.clone()));
             tool_registry.register(Box::new(CronTool::new(cron_scheduler.clone())));
             tool_registry.register(Box::new(MessageTool::new()));
 
@@ -797,7 +878,12 @@ async fn main() -> Result<()> {
 
             // Connect to MCP servers and register their tools
             #[cfg(feature = "mcp")]
-            let (_mcp_manager, mcp_tools) = McpManager::start(&config.mcp.servers).await;
+            let (_mcp_manager, mcp_tools) = McpManager::start_with_sandbox(
+                &config.mcp.servers,
+                Some(config.security.execution_sandbox.clone()),
+                Some(shared_config.clone()),
+            )
+            .await;
             #[cfg(feature = "mcp")]
             for tool in mcp_tools {
                 tool_registry.register(tool);
@@ -1221,13 +1307,17 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-            SkillsCommands::Add { repo } => {
+            SkillsCommands::Add { repo, force } => {
+                let security_options = crate::skills::InstallSecurityOptions { force };
                 if let Some(clawhub_slug) = repo.strip_prefix("clawhub:") {
                     // Install from ClawHub
                     use crate::skills::ClawHubInstaller;
                     println!("Installing skill from ClawHub: {clawhub_slug}...");
                     let hub = ClawHubInstaller::new();
-                    match hub.install(clawhub_slug).await {
+                    match hub
+                        .install_with_options(clawhub_slug, security_options.clone())
+                        .await
+                    {
                         Ok(result) => {
                             if result.already_existed {
                                 println!(
@@ -1246,6 +1336,10 @@ async fn main() -> Result<()> {
                                 );
                                 println!("  Source: clawhub:{clawhub_slug}");
                                 println!("  Path: {}", result.path.display());
+                                print_install_security_summary(
+                                    result.security_report.as_ref(),
+                                    force,
+                                );
                             }
                         }
                         Err(e) => {
@@ -1258,7 +1352,10 @@ async fn main() -> Result<()> {
                     use crate::skills::SkillInstaller;
                     println!("Installing skill from GitHub: {repo}...");
                     let installer = SkillInstaller::new();
-                    match installer.install(&repo).await {
+                    match installer
+                        .install_with_options(&repo, security_options)
+                        .await
+                    {
                         Ok(result) => {
                             if result.already_existed {
                                 println!(
@@ -1276,6 +1373,10 @@ async fn main() -> Result<()> {
                                     result.name, result.description
                                 );
                                 println!("  Path: {}", result.path.display());
+                                print_install_security_summary(
+                                    result.security_report.as_ref(),
+                                    force,
+                                );
                             }
                         }
                         Err(e) => {
@@ -1357,6 +1458,52 @@ async fn main() -> Result<()> {
                         println!("\n{} server(s) configured.", config.mcp.servers.len());
                     }
                 }
+                McpCommands::Catalog => {
+                    let presets = crate::skills::all_mcp_presets();
+                    println!("Curated MCP presets:\n");
+                    for preset in presets {
+                        println!("  {:<18} {}", preset.id, preset.display_name);
+                        println!("      {}", preset.description);
+                        println!(
+                            "      Command: {} {}",
+                            preset.command,
+                            preset
+                                .args
+                                .iter()
+                                .map(|a| crate::mcp_setup::render_mcp_arg_template(a))
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        );
+                        if preset.env.is_empty() {
+                            println!("      Env: none");
+                        } else {
+                            let env = preset
+                                .env
+                                .iter()
+                                .map(|e| {
+                                    if e.secret {
+                                        format!(
+                                            "{} (secret{})",
+                                            e.key,
+                                            if e.required { ", required" } else { "" }
+                                        )
+                                    } else if e.required {
+                                        format!("{} (required)", e.key)
+                                    } else {
+                                        e.key.clone()
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            println!("      Env: {env}");
+                        }
+                        if let Some(url) = &preset.docs_url {
+                            println!("      Docs: {url}");
+                        }
+                        println!();
+                    }
+                    println!("Use: homun mcp setup <service> [--env KEY=VALUE ...]");
+                }
                 McpCommands::Add {
                     name,
                     transport,
@@ -1375,6 +1522,92 @@ async fn main() -> Result<()> {
                     config.mcp.servers.insert(name.clone(), server);
                     config.save()?;
                     println!("MCP server '{name}' added.");
+                }
+                McpCommands::Setup {
+                    service,
+                    name,
+                    env,
+                    overwrite,
+                    skip_test,
+                } => {
+                    let Some(preset) = crate::skills::find_mcp_preset(&service) else {
+                        eprintln!("Unknown MCP preset '{service}'.");
+                        eprintln!("Run 'homun mcp catalog' to see available services.");
+                        std::process::exit(1);
+                    };
+
+                    let server_name = name.unwrap_or_else(|| preset.id.clone());
+                    let env_overrides = crate::mcp_setup::parse_env_assignments(&env)?;
+
+                    let result = crate::mcp_setup::apply_mcp_preset_setup(
+                        &mut config,
+                        &preset,
+                        &server_name,
+                        &env_overrides,
+                        overwrite,
+                    )?;
+
+                    config.save()?;
+                    println!(
+                        "MCP preset '{}' configured as server '{}'.",
+                        preset.id, server_name
+                    );
+
+                    if !result.stored_vault_keys.is_empty() {
+                        println!(
+                            "Stored {} secret(s) in vault:",
+                            result.stored_vault_keys.len()
+                        );
+                        for key in &result.stored_vault_keys {
+                            println!("  - vault://{key}");
+                        }
+                    }
+
+                    if !result.missing_required_env.is_empty() {
+                        println!("\nSetup saved, but required env vars are still missing:");
+                        for env_key in &result.missing_required_env {
+                            println!("  - {env_key}");
+                        }
+                        println!("\nProvide them with:");
+                        println!(
+                            "  homun mcp setup {} --name {} --overwrite --env KEY=VALUE ...",
+                            preset.id, server_name
+                        );
+                    } else if skip_test {
+                        println!("Connection test skipped (--skip-test).");
+                    } else {
+                        #[cfg(feature = "mcp")]
+                        {
+                            if let Some(server) = config.mcp.servers.get(&server_name) {
+                                print!("Testing MCP connection... ");
+                                let report = crate::mcp_setup::test_mcp_server_connection(
+                                    &server_name,
+                                    server,
+                                    Some(config.security.execution_sandbox.clone()),
+                                )
+                                .await;
+                                if report.connected {
+                                    println!("OK");
+                                } else {
+                                    println!("FAILED");
+                                    eprintln!(
+                                        "Server is configured but connection test failed. Verify command/env values."
+                                    );
+                                    if let Some(err) = report.error {
+                                        eprintln!("Reason: {err}");
+                                    }
+                                    std::process::exit(1);
+                                }
+                            }
+                        }
+
+                        #[cfg(not(feature = "mcp"))]
+                        {
+                            println!(
+                                "MCP runtime feature is disabled in this build; skipping connection test."
+                            );
+                        }
+                    }
                 }
                 McpCommands::Remove { name } => {
                     if config.mcp.servers.remove(&name).is_some() {

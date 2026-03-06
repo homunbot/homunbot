@@ -1,6 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket};
@@ -19,6 +19,7 @@ pub fn router() -> Router<Arc<AppState>> {
     let api_router = Router::new()
         .route("/health", get(health))
         .route("/v1/logs/stream", get(stream_logs))
+        .route("/v1/logs/recent", get(recent_logs))
         .route("/v1/status", get(status))
         .route("/v1/config", get(get_config))
         .route("/v1/config", axum::routing::patch(patch_config))
@@ -54,6 +55,47 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/v1/providers/ollama-cloud/models",
             get(list_ollama_cloud_models),
+        )
+        // --- MCP ---
+        .route("/v1/mcp/catalog", get(list_mcp_catalog))
+        .route("/v1/mcp/suggest", get(suggest_mcp_catalog))
+        .route("/v1/mcp/search", get(search_mcp_catalog))
+        .route(
+            "/v1/mcp/install-guide",
+            axum::routing::post(mcp_install_guide),
+        )
+        .route(
+            "/v1/mcp/oauth/google/start",
+            axum::routing::post(start_google_mcp_oauth),
+        )
+        .route(
+            "/v1/mcp/oauth/google/exchange",
+            axum::routing::post(exchange_google_mcp_oauth_code),
+        )
+        .route(
+            "/v1/mcp/oauth/github/start",
+            axum::routing::post(start_github_mcp_oauth),
+        )
+        .route(
+            "/v1/mcp/oauth/github/exchange",
+            axum::routing::post(exchange_github_mcp_oauth_code),
+        )
+        .route(
+            "/v1/mcp/servers",
+            get(list_mcp_servers).post(upsert_mcp_server),
+        )
+        .route("/v1/mcp/setup", axum::routing::post(setup_mcp_server))
+        .route(
+            "/v1/mcp/servers/{name}/toggle",
+            axum::routing::post(toggle_mcp_server),
+        )
+        .route(
+            "/v1/mcp/servers/{name}/test",
+            axum::routing::post(test_mcp_server),
+        )
+        .route(
+            "/v1/mcp/servers/{name}",
+            axum::routing::delete(delete_mcp_server),
         )
         // --- Channels ---
         .route("/v1/channels/{name}", get(get_channel))
@@ -111,7 +153,9 @@ pub fn router() -> Router<Arc<AppState>> {
             "/v1/chat/history",
             get(chat_history).delete(clear_chat_history),
         )
+        .route("/v1/chat/run", get(current_chat_run))
         .route("/v1/chat/compact", axum::routing::post(compact_chat))
+        .route("/v1/chat/stop", axum::routing::post(stop_chat_run))
         // --- Vault ---
         .route("/v1/vault", get(list_vault_keys).post(set_vault_secret))
         .route(
@@ -152,6 +196,30 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/v1/permissions/presets", get(get_permission_presets))
         .route("/v1/permissions/browse", get(browse_directories))
+        .route(
+            "/v1/security/sandbox",
+            get(get_execution_sandbox).put(put_execution_sandbox),
+        )
+        .route(
+            "/v1/security/sandbox/status",
+            get(get_execution_sandbox_status),
+        )
+        .route(
+            "/v1/security/sandbox/presets",
+            get(get_execution_sandbox_presets),
+        )
+        .route(
+            "/v1/security/sandbox/image",
+            get(get_execution_sandbox_image_status),
+        )
+        .route(
+            "/v1/security/sandbox/image/pull",
+            axum::routing::post(pull_execution_sandbox_image),
+        )
+        .route(
+            "/v1/security/sandbox/events",
+            get(get_execution_sandbox_events),
+        )
         // --- Approvals (P0-4) ---
         .route("/v1/approvals", get(list_approvals))
         .route("/v1/approvals/pending", get(list_pending_approvals))
@@ -246,6 +314,10 @@ async fn stream_logs() -> Sse<impl futures::Stream<Item = Result<Event, Infallib
                         message: format!(
                             "Log stream dropped {skipped} events because the client was too slow"
                         ),
+                        module_path: None,
+                        file: None,
+                        line: None,
+                        fields: Vec::new(),
                     };
                     let payload =
                         serde_json::to_string(&lag_record).unwrap_or_else(|_| "{}".to_string());
@@ -262,6 +334,17 @@ async fn stream_logs() -> Sse<impl futures::Stream<Item = Result<Event, Infallib
             .interval(Duration::from_secs(15))
             .text("keepalive"),
     )
+}
+
+#[derive(Deserialize)]
+struct RecentLogsQuery {
+    limit: Option<usize>,
+}
+
+/// GET /api/v1/logs/recent
+async fn recent_logs(Query(query): Query<RecentLogsQuery>) -> Json<Vec<crate::logs::LogRecord>> {
+    let limit = query.limit.unwrap_or(250).clamp(1, 1000);
+    Json(crate::logs::recent(limit))
 }
 
 // --- Status ---
@@ -462,6 +545,8 @@ async fn list_skills() -> Json<Vec<SkillView>> {
 #[derive(serde::Deserialize)]
 struct InstallRequest {
     source: String,
+    #[serde(default)]
+    force: bool,
 }
 
 #[derive(Serialize)]
@@ -469,20 +554,48 @@ struct InstallResponse {
     ok: bool,
     name: String,
     message: String,
+    security_report: Option<InstallSecurityReportView>,
+}
+
+#[derive(Serialize)]
+struct InstallSecurityReportView {
+    risk_score: u8,
+    blocked: bool,
+    warnings: usize,
+    scanned_files: usize,
+    summary: String,
+}
+
+fn install_security_view(
+    report: Option<&crate::skills::SecurityReport>,
+) -> Option<InstallSecurityReportView> {
+    report.map(|report| InstallSecurityReportView {
+        risk_score: report.risk_score,
+        blocked: report.blocked,
+        warnings: report.warnings.len(),
+        scanned_files: report.scanned_files,
+        summary: report.summary(),
+    })
 }
 
 async fn install_skill(
     Json(req): Json<InstallRequest>,
 ) -> Result<Json<InstallResponse>, StatusCode> {
+    let security_options = crate::skills::InstallSecurityOptions { force: req.force };
     let result = if let Some(slug) = req.source.strip_prefix("clawhub:") {
         let hub = crate::skills::ClawHubInstaller::new();
-        hub.install(slug).await
+        hub.install_with_options(slug, security_options.clone())
+            .await
     } else if let Some(dir_name) = req.source.strip_prefix("openskills:") {
         let source = crate::skills::OpenSkillsSource::new();
-        source.install(dir_name).await
+        source
+            .install_with_options(dir_name, security_options.clone())
+            .await
     } else {
         let installer = crate::skills::SkillInstaller::new();
-        installer.install(&req.source).await
+        installer
+            .install_with_options(&req.source, security_options)
+            .await
     };
 
     match result {
@@ -490,11 +603,13 @@ async fn install_skill(
             ok: true,
             name: r.name,
             message: r.description,
+            security_report: install_security_view(r.security_report.as_ref()),
         })),
         Err(e) => Ok(Json(InstallResponse {
             ok: false,
             name: String::new(),
             message: e.to_string(),
+            security_report: None,
         })),
     }
 }
@@ -513,6 +628,158 @@ struct SkillSearchResultView {
     source: String,
     downloads: u64,
     stars: u64,
+    recommended: bool,
+    recommended_reason: Option<String>,
+    decision_tags: Vec<String>,
+    why_choose: Option<String>,
+    tradeoff: Option<String>,
+}
+
+fn skill_query_terms(query: &str) -> Vec<String> {
+    query
+        .to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|part| part.len() >= 2)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+}
+
+fn skill_searchable_text(skill: &SkillSearchResultView) -> String {
+    format!("{} {}", skill.name, skill.description).to_ascii_lowercase()
+}
+
+fn skill_recommendation_score(skill: &SkillSearchResultView, query: &str) -> i64 {
+    let query_lower = query.trim().to_ascii_lowercase();
+    let searchable = skill_searchable_text(skill);
+    let mut score = 0i64;
+
+    if !query_lower.is_empty() && searchable.contains(&query_lower) {
+        score += 80;
+    }
+    for term in skill_query_terms(query) {
+        if searchable.contains(&term) {
+            score += 18;
+        }
+    }
+
+    score += match skill.source.as_str() {
+        "clawhub" => 40,
+        "openskills" => 24,
+        "github" => 12,
+        _ => 0,
+    };
+    score += (skill.stars.min(5000) / 50) as i64;
+    score += (skill.downloads.min(500_000) / 5_000) as i64;
+    if skill.description.to_ascii_lowercase().contains("agent")
+        || skill.description.to_ascii_lowercase().contains("workflow")
+    {
+        score += 6;
+    }
+
+    score
+}
+
+fn skill_recommended_reason(skill: &SkillSearchResultView) -> String {
+    let mut reasons = Vec::new();
+    match skill.source.as_str() {
+        "clawhub" => reasons.push("curated in ClawHub".to_string()),
+        "openskills" => reasons.push("community-curated in Open Skills".to_string()),
+        "github" => reasons.push("direct GitHub source".to_string()),
+        _ => {}
+    }
+    if skill.downloads > 0 {
+        reasons.push(format!("{} downloads", skill.downloads));
+    }
+    if skill.stars > 0 {
+        reasons.push(format!("{} GitHub stars", skill.stars));
+    }
+    if reasons.is_empty() {
+        "best overall match for this search".to_string()
+    } else {
+        reasons.truncate(3);
+        reasons.join(", ")
+    }
+}
+
+fn skill_decision_tags(skill: &SkillSearchResultView) -> Vec<String> {
+    let mut tags = Vec::new();
+    match skill.source.as_str() {
+        "clawhub" => tags.push("Curated".to_string()),
+        "openskills" => tags.push("Open Skills".to_string()),
+        "github" => tags.push("GitHub".to_string()),
+        _ => {}
+    }
+    if skill.downloads >= 1_000 {
+        tags.push("Popular".to_string());
+    }
+    if skill.stars >= 100 {
+        tags.push("High signal".to_string());
+    }
+    tags.truncate(4);
+    tags
+}
+
+fn skill_why_choose(skill: &SkillSearchResultView) -> String {
+    match skill.source.as_str() {
+        "clawhub" => {
+            "Choose this if you want the safest default pick from a curated catalog.".to_string()
+        }
+        "openskills" => {
+            "Choose this if you want a community-curated option with a cleaner install path."
+                .to_string()
+        }
+        "github" => {
+            "Choose this if you want the original repository or the broadest ecosystem coverage."
+                .to_string()
+        }
+        _ => "Choose this if it matches your use case better than the default option.".to_string(),
+    }
+}
+
+fn skill_tradeoff(skill: &SkillSearchResultView) -> String {
+    match skill.source.as_str() {
+        "clawhub" => {
+            "Tradeoff: more opinionated curation, so niche variants may be missing.".to_string()
+        }
+        "openskills" => {
+            "Tradeoff: quality varies by contributor and popularity signals may be weaker."
+                .to_string()
+        }
+        "github" => {
+            "Tradeoff: less curated, so install quality and maintenance can vary more.".to_string()
+        }
+        _ => "Tradeoff: not the clearest default option for a non-technical user.".to_string(),
+    }
+}
+
+fn annotate_skill_search_results(results: &mut [SkillSearchResultView], query: &str) {
+    if results.is_empty() {
+        return;
+    }
+
+    for item in results.iter_mut() {
+        item.recommended = false;
+        item.recommended_reason = None;
+        item.decision_tags = skill_decision_tags(item);
+        item.why_choose = Some(skill_why_choose(item));
+        item.tradeoff = Some(skill_tradeoff(item));
+    }
+
+    results.sort_by(|a, b| {
+        skill_recommendation_score(b, query)
+            .cmp(&skill_recommendation_score(a, query))
+            .then_with(|| b.downloads.cmp(&a.downloads))
+            .then_with(|| b.stars.cmp(&a.stars))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    if let Some(first) = results.first_mut() {
+        first.recommended = true;
+        first.recommended_reason = Some(skill_recommended_reason(first));
+        if !first.decision_tags.iter().any(|tag| tag == "Recommended") {
+            first.decision_tags.insert(0, "Recommended".to_string());
+        }
+    }
 }
 
 async fn search_skills(Query(params): Query<SkillSearchQuery>) -> Json<Vec<SkillSearchResultView>> {
@@ -552,6 +819,11 @@ async fn search_skills(Query(params): Query<SkillSearchQuery>) -> Json<Vec<Skill
                 source: "clawhub".to_string(),
                 downloads: r.downloads,
                 stars: r.stars,
+                recommended: false,
+                recommended_reason: None,
+                decision_tags: vec![],
+                why_choose: None,
+                tradeoff: None,
             }));
         }
         Err(e) => {
@@ -568,6 +840,11 @@ async fn search_skills(Query(params): Query<SkillSearchQuery>) -> Json<Vec<Skill
                 source: "openskills".to_string(),
                 downloads: 0,
                 stars: 0,
+                recommended: false,
+                recommended_reason: None,
+                decision_tags: vec![],
+                why_choose: None,
+                tradeoff: None,
             }));
         }
         Err(e) => {
@@ -584,6 +861,11 @@ async fn search_skills(Query(params): Query<SkillSearchQuery>) -> Json<Vec<Skill
                 source: "github".to_string(),
                 downloads: 0,
                 stars: r.stars as u64,
+                recommended: false,
+                recommended_reason: None,
+                decision_tags: vec![],
+                why_choose: None,
+                tradeoff: None,
             }));
         }
         Err(e) => {
@@ -591,6 +873,7 @@ async fn search_skills(Query(params): Query<SkillSearchQuery>) -> Json<Vec<Skill
         }
     }
 
+    annotate_skill_search_results(&mut results, &query);
     Json(results)
 }
 
@@ -1772,6 +2055,3161 @@ async fn list_ollama_cloud_models(
             error: Some(format!("Connection failed: {}", e)),
         }),
     }
+}
+
+// ═══════════════════════════════════════════════════
+// MCP — catalog, guided setup, CRUD, test
+// ═══════════════════════════════════════════════════
+
+#[derive(Clone, Serialize)]
+struct McpCatalogEnvView {
+    key: String,
+    description: String,
+    required: bool,
+    secret: bool,
+}
+
+#[derive(Clone, Serialize)]
+struct McpCatalogItemView {
+    kind: String, // preset | npm
+    source: String,
+    id: String,
+    display_name: String,
+    description: String,
+    command: String,
+    args: Vec<String>,
+    transport: Option<String>, // stdio | http
+    url: Option<String>,       // set when transport=http
+    install_supported: bool,
+    package_name: Option<String>,
+    downloads_monthly: Option<u64>,
+    score: Option<f64>,
+    popularity_rank: Option<u32>,
+    popularity_value: Option<u64>,
+    popularity_source: Option<String>,
+    env: Vec<McpCatalogEnvView>,
+    docs_url: Option<String>,
+    aliases: Vec<String>,
+    keywords: Vec<String>,
+    recommended: bool,
+    recommended_reason: Option<String>,
+    decision_tags: Vec<String>,
+    setup_effort: String,
+    auth_profile: String,
+    preflight_checks: Vec<String>,
+    why_choose: Option<String>,
+    tradeoff: Option<String>,
+}
+
+fn preset_to_view(preset: crate::skills::McpServerPreset) -> McpCatalogItemView {
+    McpCatalogItemView {
+        kind: "preset".to_string(),
+        source: "curated".to_string(),
+        id: preset.id,
+        display_name: preset.display_name,
+        description: preset.description,
+        command: preset.command,
+        args: preset
+            .args
+            .iter()
+            .map(|arg| crate::mcp_setup::render_mcp_arg_template(arg))
+            .collect(),
+        transport: Some("stdio".to_string()),
+        url: None,
+        install_supported: true,
+        package_name: None,
+        downloads_monthly: None,
+        score: None,
+        popularity_rank: None,
+        popularity_value: None,
+        popularity_source: None,
+        env: preset
+            .env
+            .into_iter()
+            .map(|e| McpCatalogEnvView {
+                key: e.key,
+                description: e.description,
+                required: e.required,
+                secret: e.secret,
+            })
+            .collect(),
+        docs_url: preset.docs_url,
+        aliases: preset.aliases,
+        keywords: preset.keywords,
+        recommended: false,
+        recommended_reason: None,
+        decision_tags: vec![],
+        setup_effort: "Moderate".to_string(),
+        auth_profile: "Unknown".to_string(),
+        preflight_checks: vec![],
+        why_choose: None,
+        tradeoff: None,
+    }
+}
+
+#[derive(Clone, Debug)]
+struct McpLeaderboardEntry {
+    rank: u32,
+    popularity: u64,
+    url: String,
+}
+
+#[derive(Debug)]
+struct McpMarketItem {
+    rank: u32,
+    name: String,
+    slug: String,
+    popularity: u64,
+    url: String,
+}
+
+#[derive(Deserialize)]
+struct McpMarketFallback {
+    items: Vec<McpMarketFallbackItem>,
+}
+
+#[derive(Deserialize)]
+struct McpMarketFallbackItem {
+    rank: u32,
+    name: String,
+    slug: String,
+    popularity: u64,
+    url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OfficialRegistryResponse {
+    servers: Option<Vec<OfficialRegistryServerEntry>>,
+}
+
+#[derive(Deserialize)]
+struct OfficialRegistryServerEntry {
+    server: OfficialRegistryServer,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OfficialRegistryServer {
+    name: String,
+    title: Option<String>,
+    description: Option<String>,
+    website_url: Option<String>,
+    repository: Option<OfficialRegistryRepository>,
+    packages: Option<Vec<OfficialRegistryPackage>>,
+    remotes: Option<Vec<OfficialRegistryRemote>>,
+}
+
+#[derive(Deserialize)]
+struct OfficialRegistryRepository {
+    url: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OfficialRegistryPackage {
+    registry_type: Option<String>,
+    identifier: Option<String>,
+    version: Option<String>,
+    runtime_hint: Option<String>,
+    environment_variables: Option<Vec<OfficialRegistryInput>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OfficialRegistryRemote {
+    #[serde(rename = "type")]
+    transport_type: Option<String>,
+    url: Option<String>,
+    headers: Option<Vec<OfficialRegistryInput>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OfficialRegistryInput {
+    name: Option<String>,
+    description: Option<String>,
+    is_required: Option<bool>,
+    is_secret: Option<bool>,
+}
+
+fn normalize_mcp_lookup_key(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+fn trim_numeric_suffix(value: &str) -> &str {
+    if let Some((base, suffix)) = value.rsplit_once('-') {
+        if suffix.chars().all(|c| c.is_ascii_digit()) {
+            return base;
+        }
+    }
+    value
+}
+
+fn add_market_lookup_keys<'a>(
+    map: &mut HashMap<String, McpLeaderboardEntry>,
+    item: &'a McpMarketItem,
+    key: &'a str,
+) {
+    let normalized = normalize_mcp_lookup_key(key);
+    if normalized.is_empty() {
+        return;
+    }
+    let incoming = McpLeaderboardEntry {
+        rank: item.rank,
+        popularity: item.popularity,
+        url: item.url.clone(),
+    };
+    match map.get(&normalized) {
+        Some(existing) if existing.rank <= incoming.rank => {}
+        _ => {
+            map.insert(normalized, incoming);
+        }
+    }
+}
+
+fn build_market_index(items: &[McpMarketItem]) -> HashMap<String, McpLeaderboardEntry> {
+    let mut out = HashMap::new();
+    for item in items {
+        add_market_lookup_keys(&mut out, item, &item.name);
+        add_market_lookup_keys(&mut out, item, &item.slug);
+        add_market_lookup_keys(&mut out, item, trim_numeric_suffix(&item.slug));
+    }
+    out
+}
+
+fn find_market_entry(
+    leaderboard: &HashMap<String, McpLeaderboardEntry>,
+    display_name: &str,
+    id: &str,
+    package_name: Option<&str>,
+) -> Option<McpLeaderboardEntry> {
+    let mut keys = Vec::new();
+    keys.push(display_name.to_string());
+    keys.push(id.to_string());
+    if let Some((_, tail)) = id.rsplit_once('/') {
+        keys.push(tail.to_string());
+    }
+    if let Some((_, tail)) = id.rsplit_once('.') {
+        keys.push(tail.to_string());
+    }
+    if let Some(pkg) = package_name {
+        keys.push(pkg.to_string());
+        if let Some((_, tail)) = pkg.rsplit_once('/') {
+            keys.push(tail.to_string());
+        }
+    }
+
+    for key in keys {
+        let normalized = normalize_mcp_lookup_key(&key);
+        if normalized.is_empty() {
+            continue;
+        }
+        if let Some(entry) = leaderboard.get(&normalized) {
+            return Some(entry.clone());
+        }
+    }
+    None
+}
+
+fn apply_market_entry(
+    item: &mut McpCatalogItemView,
+    leaderboard: &HashMap<String, McpLeaderboardEntry>,
+) {
+    if let Some(entry) = find_market_entry(
+        leaderboard,
+        &item.display_name,
+        &item.id,
+        item.package_name.as_deref(),
+    ) {
+        item.popularity_rank = Some(entry.rank);
+        item.popularity_value = Some(entry.popularity);
+        item.popularity_source = Some("mcpmarket".to_string());
+        if item.docs_url.is_none() {
+            item.docs_url = Some(entry.url);
+        }
+    }
+}
+
+fn sort_mcp_catalog(items: &mut [McpCatalogItemView]) {
+    items.sort_by(|a, b| {
+        let a_rank = a.popularity_rank.unwrap_or(u32::MAX);
+        let b_rank = b.popularity_rank.unwrap_or(u32::MAX);
+        let a_kind = if a.kind == "preset" { 0u8 } else { 1u8 };
+        let b_kind = if b.kind == "preset" { 0u8 } else { 1u8 };
+        a_rank
+            .cmp(&b_rank)
+            .then_with(|| a_kind.cmp(&b_kind))
+            .then_with(|| a.display_name.cmp(&b.display_name))
+    });
+}
+
+fn mcp_query_terms(query: &str) -> Vec<String> {
+    query
+        .to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|part| part.len() >= 2)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+}
+
+fn mcp_searchable_text(item: &McpCatalogItemView) -> String {
+    format!(
+        "{} {} {} {} {} {}",
+        item.id,
+        item.display_name,
+        item.description,
+        item.aliases.join(" "),
+        item.keywords.join(" "),
+        item.docs_url.clone().unwrap_or_default()
+    )
+    .to_ascii_lowercase()
+}
+
+fn required_env_count(item: &McpCatalogItemView) -> usize {
+    item.env.iter().filter(|env| env.required).count()
+}
+
+fn mcp_supports_oauth(item: &McpCatalogItemView) -> bool {
+    let text = mcp_searchable_text(item);
+    item.env.iter().any(|env| {
+        let key = env.key.to_ascii_lowercase();
+        key.contains("client_id")
+            || key.contains("client_secret")
+            || key.contains("refresh_token")
+            || key.contains("access_token")
+            || key.contains("oauth")
+    }) || text.contains("oauth")
+}
+
+fn mcp_requires_remote_auth(item: &McpCatalogItemView) -> bool {
+    item.transport.as_deref() == Some("http")
+        && item.env.iter().any(|env| {
+            let key = env.key.to_ascii_lowercase();
+            key.contains("authorization")
+                || key.contains("header")
+                || key.contains("token")
+                || key.contains("api_key")
+        })
+}
+
+fn mcp_requires_token(item: &McpCatalogItemView) -> bool {
+    item.env.iter().any(|env| {
+        let key = env.key.to_ascii_lowercase();
+        key.contains("token") || key.contains("api_key") || key.contains("secret")
+    })
+}
+
+fn auth_profile(item: &McpCatalogItemView) -> &'static str {
+    if mcp_supports_oauth(item) {
+        "OAuth"
+    } else if mcp_requires_remote_auth(item) {
+        "Remote auth"
+    } else if mcp_requires_token(item) {
+        "API key / token"
+    } else if item.env.is_empty() {
+        "No credentials"
+    } else {
+        "Manual configuration"
+    }
+}
+
+fn setup_effort_label(item: &McpCatalogItemView) -> &'static str {
+    let required_env = required_env_count(item);
+    if mcp_supports_oauth(item) || required_env >= 4 {
+        "Advanced"
+    } else if mcp_requires_remote_auth(item)
+        || mcp_requires_token(item)
+        || required_env >= 2
+        || item.transport.as_deref() == Some("http")
+    {
+        "Moderate"
+    } else {
+        "Easy"
+    }
+}
+
+fn preflight_checks(item: &McpCatalogItemView, query: &str) -> Vec<String> {
+    let mut checks = Vec::new();
+    let query_trimmed = query.trim();
+    if !query_trimmed.is_empty() {
+        checks.push(format!(
+            "Confirm this server really matches your intent: {}.",
+            query_trimmed
+        ));
+    }
+    if mcp_supports_oauth(item) {
+        checks.push(
+            "Have access to the provider developer console to create an OAuth app/client."
+                .to_string(),
+        );
+        checks.push(
+            "Be ready to configure redirect/consent settings and approve the required scopes."
+                .to_string(),
+        );
+    } else if mcp_requires_token(item) {
+        checks.push(
+            "Make sure you can generate an API key or access token in the provider dashboard."
+                .to_string(),
+        );
+    }
+    if item.transport.as_deref() == Some("http") {
+        checks.push("Verify the remote MCP endpoint is already live and that you know the required headers.".to_string());
+    } else if !item.command.trim().is_empty() {
+        checks.push(format!(
+            "Local runtime will execute: {} {}.",
+            item.command,
+            item.args.join(" ")
+        ));
+    }
+    if required_env_count(item) > 0 {
+        checks.push(format!(
+            "Prepare {} required environment value(s) before starting the wizard.",
+            required_env_count(item)
+        ));
+    }
+    if item.docs_url.is_some() {
+        checks.push("Keep the linked documentation open while filling credentials.".to_string());
+    }
+    checks.truncate(4);
+    checks
+}
+
+fn decision_tags(item: &McpCatalogItemView) -> Vec<String> {
+    let mut tags = Vec::new();
+    match item.source.as_str() {
+        "curated" => tags.push("Curated".to_string()),
+        "official-registry" => tags.push("Official".to_string()),
+        _ => {}
+    }
+    if let Some(rank) = item.popularity_rank {
+        if rank <= 20 {
+            tags.push("Popular".to_string());
+        }
+    }
+    match setup_effort_label(item) {
+        "Easy" => tags.push("Easiest setup".to_string()),
+        "Advanced" => tags.push("Advanced".to_string()),
+        _ => {}
+    }
+    match auth_profile(item) {
+        "OAuth" => tags.push("Requires OAuth".to_string()),
+        "Remote auth" => tags.push("Remote endpoint".to_string()),
+        "API key / token" => tags.push("Needs token".to_string()),
+        _ => {}
+    }
+    tags.truncate(4);
+    tags
+}
+
+fn why_choose_reason(item: &McpCatalogItemView) -> String {
+    if item.source == "curated" {
+        "Choose this if you want the cleanest guided setup inside Homun.".to_string()
+    } else if item.source == "official-registry" {
+        "Choose this if you prefer an MCP listed in the official registry.".to_string()
+    } else if item.transport.as_deref() == Some("http") {
+        "Choose this if you prefer a hosted endpoint instead of installing a local runtime."
+            .to_string()
+    } else if item.popularity_rank.unwrap_or(u32::MAX) <= 25 {
+        "Choose this if you want a widely used option with stronger community validation."
+            .to_string()
+    } else {
+        "Choose this only if its features match your use case better than the recommended option."
+            .to_string()
+    }
+}
+
+fn tradeoff_reason(item: &McpCatalogItemView) -> String {
+    if mcp_supports_oauth(item) {
+        "Tradeoff: setup is heavier because OAuth credentials and consent flow are required."
+            .to_string()
+    } else if item.transport.as_deref() == Some("http") {
+        "Tradeoff: depends on a remote endpoint and usually on custom authorization headers."
+            .to_string()
+    } else if required_env_count(item) >= 3 {
+        "Tradeoff: you need several environment values before the connection can work.".to_string()
+    } else if item.source == "npm" {
+        "Tradeoff: package is less curated, so documentation and defaults may be rougher."
+            .to_string()
+    } else {
+        "Tradeoff: not the simplest default starting point for a non-technical user.".to_string()
+    }
+}
+
+fn annotate_query_items(items: &mut [McpCatalogItemView], query: &str) {
+    for item in items.iter_mut() {
+        item.setup_effort = setup_effort_label(item).to_string();
+        item.auth_profile = auth_profile(item).to_string();
+        item.preflight_checks = preflight_checks(item, query);
+        item.decision_tags = decision_tags(item);
+        item.why_choose = Some(why_choose_reason(item));
+        item.tradeoff = Some(tradeoff_reason(item));
+    }
+}
+
+fn recommendation_score(item: &McpCatalogItemView, query: &str) -> i64 {
+    let query_lower = query.trim().to_ascii_lowercase();
+    let terms = mcp_query_terms(query);
+    let searchable = mcp_searchable_text(item);
+    let name_text = format!("{} {}", item.display_name, item.id).to_ascii_lowercase();
+    let mut score = 0i64;
+
+    if !query_lower.is_empty() && searchable.contains(&query_lower) {
+        score += 80;
+    }
+    if !query_lower.is_empty() && name_text.contains(&query_lower) {
+        score += 70;
+    }
+    for term in terms {
+        if name_text.contains(&term) {
+            score += 24;
+        } else if searchable.contains(&term) {
+            score += 10;
+        }
+    }
+
+    score += match item.source.as_str() {
+        "curated" => 42,
+        "official-registry" => 34,
+        "npm" => 8,
+        _ => 12,
+    };
+    score += if item.install_supported { 18 } else { -20 };
+    score += if item.docs_url.is_some() { 12 } else { 0 };
+    score += match item.transport.as_deref() {
+        Some("stdio") => 8,
+        Some("http") => 4,
+        _ => 0,
+    };
+    score += (22usize.saturating_sub(required_env_count(item) * 4)) as i64;
+    if item.env.len() > 5 {
+        score -= ((item.env.len() - 5) as i64) * 2;
+    }
+    if let Some(rank) = item.popularity_rank {
+        score += 120i64.saturating_sub(rank.min(120) as i64);
+    }
+    if item.package_name.is_some() {
+        score += 4;
+    }
+
+    score
+}
+
+fn recommendation_reason(item: &McpCatalogItemView) -> String {
+    let mut reasons = Vec::new();
+    match item.source.as_str() {
+        "curated" => reasons.push("curated by Homun for guided setup".to_string()),
+        "official-registry" => reasons.push("listed in the official MCP registry".to_string()),
+        _ => {}
+    }
+    if item.install_supported {
+        reasons.push("works with the guided installer".to_string());
+    }
+    if let Some(rank) = item.popularity_rank {
+        reasons.push(format!("ranked #{} in the MCPMarket Top 100", rank));
+    }
+    let required_env = required_env_count(item);
+    if required_env <= 2 {
+        reasons.push("requires only a small number of credentials".to_string());
+    } else if required_env <= 4 {
+        reasons.push("setup stays reasonably compact".to_string());
+    }
+    if item.docs_url.is_some() {
+        reasons.push("documentation is linked for credential lookup".to_string());
+    }
+
+    if reasons.is_empty() {
+        "best overall match for the requested service".to_string()
+    } else {
+        reasons.truncate(3);
+        reasons.join(", ")
+    }
+}
+
+fn apply_query_recommendation(items: &mut [McpCatalogItemView], query: &str) {
+    for item in items.iter_mut() {
+        item.recommended = false;
+        item.recommended_reason = None;
+    }
+    if query.trim().is_empty() || items.is_empty() {
+        return;
+    }
+
+    let best_index = items
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| {
+            recommendation_score(a, query)
+                .cmp(&recommendation_score(b, query))
+                .then_with(|| {
+                    let a_rank = a.popularity_rank.unwrap_or(u32::MAX);
+                    let b_rank = b.popularity_rank.unwrap_or(u32::MAX);
+                    b_rank.cmp(&a_rank)
+                })
+        })
+        .map(|(idx, _)| idx);
+
+    if let Some(idx) = best_index {
+        items[idx].recommended = true;
+        items[idx].recommended_reason = Some(recommendation_reason(&items[idx]));
+        if !items[idx]
+            .decision_tags
+            .iter()
+            .any(|tag| tag == "Recommended")
+        {
+            items[idx]
+                .decision_tags
+                .insert(0, "Recommended".to_string());
+        }
+    }
+}
+
+fn sort_mcp_catalog_for_query(items: &mut [McpCatalogItemView], query: &str) {
+    items.sort_by(|a, b| {
+        recommendation_score(b, query)
+            .cmp(&recommendation_score(a, query))
+            .then_with(|| {
+                let a_rank = a.popularity_rank.unwrap_or(u32::MAX);
+                let b_rank = b.popularity_rank.unwrap_or(u32::MAX);
+                a_rank.cmp(&b_rank)
+            })
+            .then_with(|| a.display_name.cmp(&b.display_name))
+    });
+}
+
+fn parse_market_item_list(value: &serde_json::Value, limit: usize) -> Vec<McpMarketItem> {
+    let Some(item_list) = value
+        .get("@type")
+        .and_then(|v| v.as_str())
+        .filter(|t| *t == "ItemList")
+        .and_then(|_| value.get("itemListElement"))
+        .and_then(|v| v.as_array())
+    else {
+        return Vec::new();
+    };
+
+    item_list
+        .iter()
+        .filter_map(|entry| {
+            let rank = entry
+                .get("position")
+                .and_then(|v| v.as_u64())
+                .and_then(|n| u32::try_from(n).ok())?;
+            let item = entry.get("item")?;
+            let name = item.get("name").and_then(|v| v.as_str())?.to_string();
+            let url = item.get("url").and_then(|v| v.as_str())?.to_string();
+            let slug = url
+                .split("/server/")
+                .nth(1)
+                .unwrap_or_default()
+                .split('?')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if slug.is_empty() {
+                return None;
+            }
+            let popularity = item
+                .get("interactionStatistic")
+                .and_then(|v| v.get("userInteractionCount"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            Some(McpMarketItem {
+                rank,
+                name,
+                slug,
+                popularity,
+                url,
+            })
+        })
+        .take(limit)
+        .collect()
+}
+
+async fn fetch_mcpmarket_live(limit: usize) -> Option<Vec<McpMarketItem>> {
+    let client = reqwest::Client::builder()
+        .user_agent("homun")
+        .timeout(Duration::from_secs(10))
+        .build()
+        .ok()?;
+    let response = client
+        .get("https://mcpmarket.com/leaderboards")
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let html = response.text().await.ok()?;
+    let script_re = regex::Regex::new(
+        r#"(?s)<script[^>]*type=["']application/ld\+json["'][^>]*>(.*?)</script>"#,
+    )
+    .ok()?;
+    for cap in script_re.captures_iter(&html) {
+        let payload = cap.get(1).map(|m| m.as_str()).unwrap_or_default();
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) {
+            let items = parse_market_item_list(&value, limit);
+            if !items.is_empty() {
+                return Some(items);
+            }
+        }
+    }
+    None
+}
+
+async fn load_mcpmarket_fallback(limit: usize) -> Vec<McpMarketItem> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("static")
+        .join("data")
+        .join("mcpmarket-top100-fallback.json");
+    let Ok(content) = tokio::fs::read_to_string(path).await else {
+        return Vec::new();
+    };
+    let Ok(parsed) = serde_json::from_str::<McpMarketFallback>(&content) else {
+        return Vec::new();
+    };
+    parsed
+        .items
+        .into_iter()
+        .map(|i| McpMarketItem {
+            rank: i.rank,
+            name: i.name,
+            slug: i.slug.clone(),
+            popularity: i.popularity,
+            url: i
+                .url
+                .unwrap_or_else(|| format!("https://mcpmarket.com/server/{}", i.slug)),
+        })
+        .take(limit)
+        .collect()
+}
+
+async fn load_mcpmarket_index(limit: usize) -> HashMap<String, McpLeaderboardEntry> {
+    static MCPMARKET_INDEX_CACHE: OnceLock<
+        Mutex<Option<(Instant, HashMap<String, McpLeaderboardEntry>)>>,
+    > = OnceLock::new();
+    const CACHE_TTL: Duration = Duration::from_secs(15 * 60);
+
+    let cache = MCPMARKET_INDEX_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some((cached_at, data)) = guard.as_ref() {
+            if cached_at.elapsed() < CACHE_TTL {
+                return data.clone();
+            }
+        }
+    }
+
+    let fresh = if let Some(items) = fetch_mcpmarket_live(limit).await {
+        build_market_index(&items)
+    } else {
+        let fallback = load_mcpmarket_fallback(limit).await;
+        if fallback.is_empty() {
+            tracing::warn!(
+                "MCPMarket leaderboard unavailable; continuing without popularity ranking"
+            );
+            HashMap::new()
+        } else {
+            tracing::warn!(
+                "Using bundled MCPMarket leaderboard fallback (live source unavailable)"
+            );
+            build_market_index(&fallback)
+        }
+    };
+
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((Instant::now(), fresh.clone()));
+    }
+
+    fresh
+}
+
+fn package_command_and_args(package: &OfficialRegistryPackage) -> Option<(String, Vec<String>)> {
+    let identifier = package.identifier.as_deref()?.trim();
+    if identifier.is_empty() {
+        return None;
+    }
+    let runtime_hint = package
+        .runtime_hint
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let registry_type = package
+        .registry_type
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let version = package
+        .version
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+
+    if runtime_hint == "npx" || registry_type == "npm" {
+        let mut package_ref = identifier.to_string();
+        if let Some(ver) = version {
+            package_ref = format!("{}@{}", identifier, ver);
+        }
+        return Some((
+            "npx".to_string(),
+            vec!["-y".to_string(), package_ref.to_string()],
+        ));
+    }
+
+    if runtime_hint == "uvx" || registry_type == "pypi" {
+        let package_ref = if let Some(ver) = version {
+            format!("{}=={}", identifier, ver)
+        } else {
+            identifier.to_string()
+        };
+        return Some(("uvx".to_string(), vec![package_ref]));
+    }
+
+    if runtime_hint == "docker" || registry_type == "oci" {
+        return Some((
+            "docker".to_string(),
+            vec![
+                "run".to_string(),
+                "--rm".to_string(),
+                "-i".to_string(),
+                identifier.to_string(),
+            ],
+        ));
+    }
+
+    None
+}
+
+fn build_env_view(specs: &[OfficialRegistryInput]) -> Vec<McpCatalogEnvView> {
+    specs
+        .iter()
+        .filter_map(|spec| {
+            let key = spec.name.clone()?.trim().to_string();
+            if key.is_empty() {
+                return None;
+            }
+            Some(McpCatalogEnvView {
+                key: key.clone(),
+                description: spec
+                    .description
+                    .clone()
+                    .unwrap_or_else(|| format!("Value for {}", key)),
+                required: spec.is_required.unwrap_or(false),
+                secret: spec.is_secret.unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
+fn official_registry_entry_to_view(
+    entry: OfficialRegistryServerEntry,
+) -> Option<McpCatalogItemView> {
+    let server = entry.server;
+    let id = server.name.trim().to_string();
+    if id.is_empty() {
+        return None;
+    }
+
+    let display_name = server
+        .title
+        .clone()
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| display_name_from_package(&id));
+
+    let description = server
+        .description
+        .clone()
+        .filter(|d| !d.trim().is_empty())
+        .unwrap_or_else(|| "MCP server from official registry".to_string());
+
+    let docs_url = server.website_url.or_else(|| {
+        server
+            .repository
+            .as_ref()
+            .and_then(|repo| repo.url.as_ref().map(ToString::to_string))
+    });
+
+    let packages = server.packages.unwrap_or_default();
+    if let Some(pkg) = packages
+        .iter()
+        .find(|p| package_command_and_args(p).is_some())
+    {
+        let (command, args) = package_command_and_args(pkg)?;
+        let env = build_env_view(pkg.environment_variables.as_deref().unwrap_or_default());
+        return Some(McpCatalogItemView {
+            kind: "registry".to_string(),
+            source: "official-registry".to_string(),
+            id,
+            display_name,
+            description,
+            command,
+            args,
+            transport: Some("stdio".to_string()),
+            url: None,
+            install_supported: true,
+            package_name: pkg.identifier.clone(),
+            downloads_monthly: None,
+            score: None,
+            popularity_rank: None,
+            popularity_value: None,
+            popularity_source: None,
+            env,
+            docs_url,
+            aliases: vec![],
+            keywords: vec![],
+            recommended: false,
+            recommended_reason: None,
+            decision_tags: vec![],
+            setup_effort: "Moderate".to_string(),
+            auth_profile: "Unknown".to_string(),
+            preflight_checks: vec![],
+            why_choose: None,
+            tradeoff: None,
+        });
+    }
+
+    let remotes = server.remotes.unwrap_or_default();
+    if let Some(remote) = remotes.into_iter().find(|r| {
+        matches!(
+            r.transport_type
+                .as_deref()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+                .as_str(),
+            "streamable-http" | "sse" | "http" | "https"
+        ) && r.url.as_deref().map(str::trim).is_some()
+    }) {
+        let env = build_env_view(remote.headers.as_deref().unwrap_or_default());
+        return Some(McpCatalogItemView {
+            kind: "registry".to_string(),
+            source: "official-registry".to_string(),
+            id,
+            display_name,
+            description,
+            command: String::new(),
+            args: vec![],
+            transport: Some("http".to_string()),
+            url: remote.url,
+            install_supported: true,
+            package_name: None,
+            downloads_monthly: None,
+            score: None,
+            popularity_rank: None,
+            popularity_value: None,
+            popularity_source: None,
+            env,
+            docs_url,
+            aliases: vec![],
+            keywords: vec![],
+            recommended: false,
+            recommended_reason: None,
+            decision_tags: vec![],
+            setup_effort: "Moderate".to_string(),
+            auth_profile: "Unknown".to_string(),
+            preflight_checks: vec![],
+            why_choose: None,
+            tradeoff: None,
+        });
+    }
+
+    Some(McpCatalogItemView {
+        kind: "registry".to_string(),
+        source: "official-registry".to_string(),
+        id,
+        display_name,
+        description,
+        command: String::new(),
+        args: vec![],
+        transport: None,
+        url: None,
+        install_supported: false,
+        package_name: None,
+        downloads_monthly: None,
+        score: None,
+        popularity_rank: None,
+        popularity_value: None,
+        popularity_source: None,
+        env: vec![],
+        docs_url,
+        aliases: vec![],
+        keywords: vec![],
+        recommended: false,
+        recommended_reason: None,
+        decision_tags: vec![],
+        setup_effort: "Moderate".to_string(),
+        auth_profile: "Unknown".to_string(),
+        preflight_checks: vec![],
+        why_choose: None,
+        tradeoff: None,
+    })
+}
+
+async fn fetch_official_registry_servers(
+    search: Option<&str>,
+    limit: usize,
+) -> Vec<OfficialRegistryServerEntry> {
+    let mut url = match reqwest::Url::parse("https://registry.modelcontextprotocol.io/v0/servers") {
+        Ok(u) => u,
+        Err(_) => return Vec::new(),
+    };
+
+    let safe_limit = limit.clamp(1, 100);
+    url.query_pairs_mut()
+        .append_pair("version", "latest")
+        .append_pair("limit", &safe_limit.to_string());
+    if let Some(q) = search.map(str::trim).filter(|q| !q.is_empty()) {
+        url.query_pairs_mut().append_pair("search", q);
+    }
+
+    let client = match reqwest::Client::builder()
+        .user_agent("homun")
+        .timeout(Duration::from_secs(12))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    match client.get(url).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.json::<OfficialRegistryResponse>().await {
+                Ok(parsed) => parsed.servers.unwrap_or_default(),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to parse official MCP registry response");
+                    Vec::new()
+                }
+            }
+        }
+        Ok(resp) => {
+            tracing::warn!(
+                status = %resp.status(),
+                "Official MCP registry request returned non-success status"
+            );
+            Vec::new()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Official MCP registry request failed");
+            Vec::new()
+        }
+    }
+}
+
+async fn list_mcp_catalog() -> Json<Vec<McpCatalogItemView>> {
+    let leaderboard = load_mcpmarket_index(100).await;
+    let mut items = crate::skills::all_mcp_presets()
+        .into_iter()
+        .map(preset_to_view)
+        .collect::<Vec<_>>();
+    for item in &mut items {
+        apply_market_entry(item, &leaderboard);
+    }
+
+    let mut seen = items
+        .iter()
+        .map(|i| i.id.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let official = fetch_official_registry_servers(None, 100).await;
+    for entry in official {
+        let Some(mut item) = official_registry_entry_to_view(entry) else {
+            continue;
+        };
+        let dedupe_key = item.id.to_ascii_lowercase();
+        if !seen.insert(dedupe_key) {
+            continue;
+        }
+        apply_market_entry(&mut item, &leaderboard);
+        items.push(item);
+    }
+
+    sort_mcp_catalog(&mut items);
+    Json(items)
+}
+
+#[derive(Deserialize)]
+struct McpSuggestQuery {
+    q: String,
+}
+
+async fn suggest_mcp_catalog(
+    Query(query): Query<McpSuggestQuery>,
+) -> Json<Vec<McpCatalogItemView>> {
+    let leaderboard = load_mcpmarket_index(100).await;
+    let mut items = crate::skills::suggest_mcp_presets(&query.q)
+        .into_iter()
+        .map(preset_to_view)
+        .collect::<Vec<_>>();
+    for item in &mut items {
+        apply_market_entry(item, &leaderboard);
+    }
+    sort_mcp_catalog(&mut items);
+    Json(items)
+}
+
+async fn start_google_mcp_oauth(
+    Json(req): Json<GoogleMcpOauthStartRequest>,
+) -> Result<Json<GoogleMcpOauthStartResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if req.client_id.trim().is_empty() || req.redirect_uri.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "client_id and redirect_uri are required"
+            })),
+        ));
+    }
+
+    let state = uuid::Uuid::new_v4().to_string();
+    let (auth_url, scopes) =
+        build_google_mcp_oauth_url(&req.service, &req.client_id, &req.redirect_uri, &state)
+            .map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+            })?;
+
+    Ok(Json(GoogleMcpOauthStartResponse {
+        ok: true,
+        auth_url: auth_url.to_string(),
+        redirect_uri: req.redirect_uri.trim().to_string(),
+        scopes,
+        state,
+    }))
+}
+
+async fn exchange_google_mcp_oauth_code(
+    Json(req): Json<GoogleMcpOauthExchangeRequest>,
+) -> Result<Json<GoogleMcpOauthExchangeResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if req.client_id.trim().is_empty()
+        || req.client_secret.trim().is_empty()
+        || req.code.trim().is_empty()
+        || req.redirect_uri.trim().is_empty()
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "service, code, client_id, client_secret, and redirect_uri are required"
+            })),
+        ));
+    }
+
+    if google_mcp_scopes(&req.service).is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("Unsupported Google MCP OAuth service: {}", req.service)
+            })),
+        ));
+    }
+
+    let client = reqwest::Client::builder()
+        .use_rustls_tls()
+        .build()
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    let response = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&[
+            ("code", req.code.trim()),
+            ("client_id", req.client_id.trim()),
+            ("client_secret", req.client_secret.trim()),
+            ("redirect_uri", req.redirect_uri.trim()),
+            ("grant_type", "authorization_code"),
+        ])
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    let status = response.status();
+    let body = response
+        .json::<GoogleMcpOauthTokenResponse>()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    if !status.is_success() {
+        let detail = body
+            .error_description
+            .clone()
+            .or(body.error.clone())
+            .unwrap_or_else(|| "Google OAuth token exchange failed".to_string());
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": detail })),
+        ));
+    }
+
+    let message = if body.refresh_token.as_deref().unwrap_or_default().is_empty() {
+        Some(
+            "Token exchange succeeded, but Google did not return a refresh token. Retry consent with prompt=consent and offline access."
+                .to_string(),
+        )
+    } else {
+        Some("Google OAuth token exchange succeeded.".to_string())
+    };
+
+    Ok(Json(GoogleMcpOauthExchangeResponse {
+        ok: true,
+        access_token: body.access_token,
+        refresh_token: body.refresh_token,
+        expires_in: body.expires_in,
+        scope: body.scope,
+        token_type: body.token_type,
+        message,
+    }))
+}
+
+async fn start_github_mcp_oauth(
+    Json(req): Json<GitHubMcpOauthStartRequest>,
+) -> Result<Json<GitHubMcpOauthStartResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if req.client_id.trim().is_empty() || req.redirect_uri.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "client_id and redirect_uri are required"
+            })),
+        ));
+    }
+
+    let state = uuid::Uuid::new_v4().to_string();
+    let (auth_url, scopes) =
+        build_github_mcp_oauth_url(&req.service, &req.client_id, &req.redirect_uri, &state)
+            .map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+            })?;
+
+    Ok(Json(GitHubMcpOauthStartResponse {
+        ok: true,
+        auth_url: auth_url.to_string(),
+        redirect_uri: req.redirect_uri.trim().to_string(),
+        scopes,
+        state,
+    }))
+}
+
+async fn exchange_github_mcp_oauth_code(
+    Json(req): Json<GitHubMcpOauthExchangeRequest>,
+) -> Result<Json<GitHubMcpOauthExchangeResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if req.client_id.trim().is_empty()
+        || req.client_secret.trim().is_empty()
+        || req.code.trim().is_empty()
+        || req.redirect_uri.trim().is_empty()
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "service, code, client_id, client_secret, and redirect_uri are required"
+            })),
+        ));
+    }
+
+    if github_mcp_scopes(&req.service).is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("Unsupported GitHub MCP OAuth service: {}", req.service)
+            })),
+        ));
+    }
+
+    let client = reqwest::Client::builder()
+        .use_rustls_tls()
+        .build()
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    let response = client
+        .post("https://github.com/login/oauth/access_token")
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id", req.client_id.trim()),
+            ("client_secret", req.client_secret.trim()),
+            ("code", req.code.trim()),
+            ("redirect_uri", req.redirect_uri.trim()),
+        ])
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    let status = response.status();
+    let body = response
+        .json::<GitHubMcpOauthTokenResponse>()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    if !status.is_success() || body.access_token.is_none() {
+        let detail = body
+            .error_description
+            .clone()
+            .or(body.error.clone())
+            .unwrap_or_else(|| "GitHub OAuth token exchange failed".to_string());
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": detail })),
+        ));
+    }
+
+    Ok(Json(GitHubMcpOauthExchangeResponse {
+        ok: true,
+        access_token: body.access_token,
+        scope: body.scope,
+        token_type: body.token_type,
+        message: Some("GitHub OAuth token exchange succeeded.".to_string()),
+    }))
+}
+
+#[derive(Deserialize)]
+struct McpSearchQuery {
+    q: String,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoogleMcpOauthStartRequest {
+    service: String,
+    client_id: String,
+    redirect_uri: String,
+}
+
+#[derive(Debug, Serialize)]
+struct GoogleMcpOauthStartResponse {
+    ok: bool,
+    auth_url: String,
+    redirect_uri: String,
+    scopes: Vec<String>,
+    state: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoogleMcpOauthExchangeRequest {
+    service: String,
+    code: String,
+    client_id: String,
+    client_secret: String,
+    redirect_uri: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoogleMcpOauthTokenResponse {
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+    expires_in: Option<u64>,
+    scope: Option<String>,
+    token_type: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct GoogleMcpOauthExchangeResponse {
+    ok: bool,
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+    expires_in: Option<u64>,
+    scope: Option<String>,
+    token_type: Option<String>,
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubMcpOauthStartRequest {
+    service: String,
+    client_id: String,
+    redirect_uri: String,
+}
+
+#[derive(Debug, Serialize)]
+struct GitHubMcpOauthStartResponse {
+    ok: bool,
+    auth_url: String,
+    redirect_uri: String,
+    scopes: Vec<String>,
+    state: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubMcpOauthExchangeRequest {
+    service: String,
+    code: String,
+    client_id: String,
+    client_secret: String,
+    redirect_uri: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubMcpOauthTokenResponse {
+    access_token: Option<String>,
+    scope: Option<String>,
+    token_type: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct GitHubMcpOauthExchangeResponse {
+    ok: bool,
+    access_token: Option<String>,
+    scope: Option<String>,
+    token_type: Option<String>,
+    message: Option<String>,
+}
+
+fn google_mcp_scopes(service: &str) -> Option<&'static [&'static str]> {
+    let normalized = service.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "gmail" => Some(&["https://www.googleapis.com/auth/gmail.readonly"]),
+        "google-calendar" | "gcal" | "calendar" => {
+            Some(&["https://www.googleapis.com/auth/calendar"])
+        }
+        _ => None,
+    }
+}
+
+fn github_mcp_scopes(service: &str) -> Option<&'static [&'static str]> {
+    let normalized = service.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "github" | "gh" => Some(&["repo", "read:org", "read:user"]),
+        _ => None,
+    }
+}
+
+fn build_google_mcp_oauth_url(
+    service: &str,
+    client_id: &str,
+    redirect_uri: &str,
+    state: &str,
+) -> anyhow::Result<(reqwest::Url, Vec<String>)> {
+    let scopes = google_mcp_scopes(service)
+        .ok_or_else(|| anyhow::anyhow!("unsupported Google MCP OAuth service"))?
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+    let mut url = reqwest::Url::parse("https://accounts.google.com/o/oauth2/v2/auth")?;
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("client_id", client_id.trim());
+        qp.append_pair("redirect_uri", redirect_uri.trim());
+        qp.append_pair("response_type", "code");
+        qp.append_pair("scope", &scopes.join(" "));
+        qp.append_pair("access_type", "offline");
+        qp.append_pair("prompt", "consent");
+        qp.append_pair("include_granted_scopes", "true");
+        qp.append_pair("state", state);
+    }
+    Ok((url, scopes))
+}
+
+fn build_github_mcp_oauth_url(
+    service: &str,
+    client_id: &str,
+    redirect_uri: &str,
+    state: &str,
+) -> anyhow::Result<(reqwest::Url, Vec<String>)> {
+    let scopes = github_mcp_scopes(service)
+        .ok_or_else(|| anyhow::anyhow!("unsupported GitHub MCP OAuth service"))?
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+    let mut url = reqwest::Url::parse("https://github.com/login/oauth/authorize")?;
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("client_id", client_id.trim());
+        qp.append_pair("redirect_uri", redirect_uri.trim());
+        qp.append_pair("scope", &scopes.join(" "));
+        qp.append_pair("state", state);
+    }
+    Ok((url, scopes))
+}
+
+#[cfg(test)]
+mod google_oauth_tests {
+    use super::{
+        build_github_mcp_oauth_url, build_google_mcp_oauth_url, github_mcp_scopes,
+        google_mcp_scopes,
+    };
+
+    #[test]
+    fn google_oauth_scopes_support_known_services() {
+        assert_eq!(
+            google_mcp_scopes("gmail"),
+            Some(&["https://www.googleapis.com/auth/gmail.readonly"][..])
+        );
+        assert_eq!(
+            google_mcp_scopes("google-calendar"),
+            Some(&["https://www.googleapis.com/auth/calendar"][..])
+        );
+        assert!(google_mcp_scopes("github").is_none());
+    }
+
+    #[test]
+    fn build_google_oauth_url_contains_offline_access_flags() {
+        let (url, scopes) = build_google_mcp_oauth_url(
+            "gmail",
+            "client-123",
+            "http://localhost:8080/mcp/oauth/google/callback",
+            "state-xyz",
+        )
+        .expect("oauth url");
+        let rendered = url.as_str().to_string();
+        assert_eq!(
+            scopes,
+            vec!["https://www.googleapis.com/auth/gmail.readonly"]
+        );
+        assert!(rendered.contains("access_type=offline"));
+        assert!(rendered.contains("prompt=consent"));
+        assert!(rendered.contains("state=state-xyz"));
+    }
+
+    #[test]
+    fn github_oauth_scopes_support_github_service() {
+        assert_eq!(
+            github_mcp_scopes("github"),
+            Some(&["repo", "read:org", "read:user"][..])
+        );
+        assert!(github_mcp_scopes("gmail").is_none());
+    }
+
+    #[test]
+    fn build_github_oauth_url_contains_state_and_scope() {
+        let (url, scopes) = build_github_mcp_oauth_url(
+            "github",
+            "gh-client",
+            "http://localhost:8080/mcp/oauth/github/callback",
+            "state-123",
+        )
+        .expect("oauth url");
+        let rendered = url.as_str().to_string();
+        assert_eq!(scopes, vec!["repo", "read:org", "read:user"]);
+        assert!(rendered.contains("client_id=gh-client"));
+        assert!(rendered.contains("state=state-123"));
+        assert!(rendered.contains("scope=repo+read%3Aorg+read%3Auser"));
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct McpInstallGuideEnvSpec {
+    key: String,
+    description: Option<String>,
+    required: Option<bool>,
+    secret: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct McpInstallGuideRequest {
+    id: String,
+    display_name: Option<String>,
+    description: Option<String>,
+    docs_url: Option<String>,
+    transport: Option<String>,
+    command: Option<String>,
+    args: Option<Vec<String>>,
+    env: Option<Vec<McpInstallGuideEnvSpec>>,
+    language: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct McpInstallGuideEnvHelp {
+    key: String,
+    why: String,
+    where_to_get: String,
+    format_hint: String,
+    vault_hint: String,
+    #[serde(default)]
+    retrieval_steps: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct McpInstallGuideDocumentation {
+    url: Option<String>,
+    summary: String,
+    #[serde(default)]
+    highlights: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct McpInstallGuideResponse {
+    ok: bool,
+    source: String, // llm | docs | fallback
+    summary: String,
+    steps: Vec<String>,
+    env_help: Vec<McpInstallGuideEnvHelp>,
+    notes: Vec<String>,
+    documentation: Option<McpInstallGuideDocumentation>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct McpInstallGuideLlmParsed {
+    summary: String,
+    #[serde(default)]
+    steps: Vec<String>,
+    #[serde(default)]
+    env_help: Vec<McpInstallGuideEnvHelp>,
+    #[serde(default)]
+    notes: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct McpInstallGuideDocsContext {
+    url: Option<String>,
+    summary: String,
+    highlights: Vec<String>,
+    text_excerpt: String,
+}
+
+#[derive(Clone, Copy)]
+enum GuideLanguage {
+    English,
+    Italian,
+}
+
+impl GuideLanguage {
+    fn from_request(value: Option<&str>) -> Self {
+        match value.unwrap_or("en").trim().to_ascii_lowercase().as_str() {
+            "it" | "it-it" | "italian" | "italiano" => Self::Italian,
+            _ => Self::English,
+        }
+    }
+
+    fn llm_label(self) -> &'static str {
+        match self {
+            Self::English => "English",
+            Self::Italian => "Italian",
+        }
+    }
+
+    fn is_italian(self) -> bool {
+        matches!(self, Self::Italian)
+    }
+}
+
+fn extract_json_object_block(input: &str) -> Option<&str> {
+    let start = input.find('{')?;
+    let end = input.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    Some(&input[start..=end])
+}
+
+fn strip_html_tags_for_docs(html: &str) -> String {
+    let mut result = String::with_capacity(html.len() / 2);
+    let mut in_tag = false;
+    let mut in_script = false;
+    let mut in_style = false;
+    let chars: Vec<char> = html.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if in_script || in_style {
+            if chars[i] == '<' && i + 1 < chars.len() && chars[i + 1] == '/' {
+                let rest: String = chars[i..].iter().take(20).collect();
+                let rest_lower = rest.to_ascii_lowercase();
+                if in_script && rest_lower.starts_with("</script") {
+                    in_script = false;
+                } else if in_style && rest_lower.starts_with("</style") {
+                    in_style = false;
+                }
+            }
+            i += 1;
+            continue;
+        }
+
+        if chars[i] == '<' {
+            let rest: String = chars[i..].iter().take(20).collect();
+            let rest_lower = rest.to_ascii_lowercase();
+            if rest_lower.starts_with("<script") {
+                in_script = true;
+            } else if rest_lower.starts_with("<style") {
+                in_style = true;
+            }
+            in_tag = true;
+            i += 1;
+            continue;
+        }
+
+        if chars[i] == '>' && in_tag {
+            in_tag = false;
+            result.push('\n');
+            i += 1;
+            continue;
+        }
+
+        if !in_tag {
+            result.push(chars[i]);
+        }
+        i += 1;
+    }
+
+    result
+}
+
+fn normalize_docs_text(input: &str) -> String {
+    input
+        .replace('\r', "\n")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn split_docs_fragments(input: &str) -> Vec<String> {
+    let normalized = normalize_docs_text(input);
+    let mut out = Vec::new();
+    for line in normalized.lines() {
+        for chunk in line.split(['.', ';']) {
+            let trimmed = chunk.trim();
+            if trimmed.len() < 12 || trimmed.len() > 260 {
+                continue;
+            }
+            out.push(trimmed.to_string());
+        }
+    }
+    out
+}
+
+fn docs_search_terms(spec: &McpInstallGuideEnvSpec) -> Vec<String> {
+    let key = spec.key.to_ascii_lowercase();
+    let mut terms = vec![key.clone(), key.replace('_', " ")];
+
+    if key.contains("token") {
+        terms.push("token".to_string());
+    }
+    if key.contains("api_key") || key.contains("apikey") {
+        terms.push("api key".to_string());
+    }
+    if key.contains("client_id") {
+        terms.push("client id".to_string());
+    }
+    if key.contains("client_secret") {
+        terms.push("client secret".to_string());
+    }
+    if key.contains("refresh_token") {
+        terms.push("refresh token".to_string());
+    }
+    if key.contains("access_token") {
+        terms.push("access token".to_string());
+    }
+    if key.contains("authorization") {
+        terms.push("authorization".to_string());
+        terms.push("bearer".to_string());
+    }
+
+    terms.sort();
+    terms.dedup();
+    terms
+}
+
+fn find_relevant_doc_fragments(
+    docs: &McpInstallGuideDocsContext,
+    spec: Option<&McpInstallGuideEnvSpec>,
+    limit: usize,
+) -> Vec<String> {
+    let mut terms = vec![
+        "install".to_string(),
+        "setup".to_string(),
+        "authentication".to_string(),
+        "oauth".to_string(),
+        "environment variable".to_string(),
+        "configuration".to_string(),
+    ];
+    if let Some(spec) = spec {
+        terms.extend(docs_search_terms(spec));
+    }
+
+    let mut results = Vec::new();
+    for fragment in docs.text_excerpt.lines() {
+        let lower = fragment.to_ascii_lowercase();
+        if terms.iter().any(|term| lower.contains(term)) {
+            let value = fragment.trim();
+            if !value.is_empty() && !results.iter().any(|r: &String| r == value) {
+                results.push(value.to_string());
+            }
+        }
+        if results.len() >= limit {
+            break;
+        }
+    }
+    results
+}
+
+fn docs_context_to_view(docs: &McpInstallGuideDocsContext) -> Option<McpInstallGuideDocumentation> {
+    if docs.summary.trim().is_empty() && docs.highlights.is_empty() {
+        return None;
+    }
+    Some(McpInstallGuideDocumentation {
+        url: docs.url.clone(),
+        summary: docs.summary.clone(),
+        highlights: docs.highlights.clone(),
+    })
+}
+
+fn parse_github_repo(url: &str) -> Option<(String, String)> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    if parsed.domain()? != "github.com" {
+        return None;
+    }
+    let mut segs = parsed
+        .path_segments()?
+        .filter(|seg| !seg.trim().is_empty())
+        .take(2);
+    let owner = segs.next()?.to_string();
+    let repo = segs.next()?.trim_end_matches(".git").to_string();
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some((owner, repo))
+}
+
+async fn fetch_docs_text(url: &str) -> Option<String> {
+    let client = reqwest::Client::builder()
+        .user_agent("homun")
+        .timeout(Duration::from_secs(12))
+        .build()
+        .ok()?;
+
+    if let Some((owner, repo)) = parse_github_repo(url) {
+        let api_url = format!("https://api.github.com/repos/{owner}/{repo}/readme");
+        if let Ok(resp) = client
+            .get(&api_url)
+            .header("Accept", "application/vnd.github.raw")
+            .send()
+            .await
+        {
+            if resp.status().is_success() {
+                if let Ok(text) = resp.text().await {
+                    let normalized = normalize_docs_text(&text);
+                    if !normalized.is_empty() {
+                        return Some(normalized);
+                    }
+                }
+            }
+        }
+    }
+
+    let resp = client.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let raw = resp.text().await.ok()?;
+    let stripped = if raw.contains("<html") || raw.contains("<HTML") {
+        strip_html_tags_for_docs(&raw)
+    } else {
+        raw
+    };
+    let normalized = normalize_docs_text(&stripped);
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+async fn fetch_install_docs_context(
+    req: &McpInstallGuideRequest,
+) -> Option<McpInstallGuideDocsContext> {
+    let url = req.docs_url.as_deref()?.trim();
+    if url.is_empty() {
+        return None;
+    }
+
+    let text = fetch_docs_text(url).await?;
+    let fragments = split_docs_fragments(&text);
+    if fragments.is_empty() {
+        return None;
+    }
+
+    let mut highlights = Vec::new();
+    let keywords = [
+        "install",
+        "setup",
+        "oauth",
+        "authentication",
+        "environment variable",
+        "token",
+        "api key",
+        "client id",
+        "client secret",
+        "refresh token",
+        "authorization",
+        "bearer",
+    ];
+    for fragment in &fragments {
+        let lower = fragment.to_ascii_lowercase();
+        if keywords.iter().any(|keyword| lower.contains(keyword))
+            && !highlights.iter().any(|line| line == fragment)
+        {
+            highlights.push(fragment.clone());
+        }
+        if highlights.len() >= 6 {
+            break;
+        }
+    }
+
+    let summary = if highlights.is_empty() {
+        fragments
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(". ")
+    } else {
+        highlights
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(". ")
+    };
+
+    let excerpt = fragments
+        .into_iter()
+        .take(120)
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(McpInstallGuideDocsContext {
+        url: Some(url.to_string()),
+        summary,
+        highlights,
+        text_excerpt: excerpt,
+    })
+}
+
+fn infer_service_tag(req: &McpInstallGuideRequest, spec: &McpInstallGuideEnvSpec) -> &'static str {
+    let text = format!(
+        "{} {} {} {} {}",
+        req.id,
+        req.display_name.clone().unwrap_or_default(),
+        req.description.clone().unwrap_or_default(),
+        req.docs_url.clone().unwrap_or_default(),
+        spec.description.clone().unwrap_or_default()
+    )
+    .to_ascii_lowercase();
+    if text.contains("google") || spec.key.to_ascii_lowercase().starts_with("google_") {
+        "google"
+    } else if text.contains("github") || spec.key.to_ascii_lowercase().contains("github") {
+        "github"
+    } else if text.contains("notion") || spec.key.to_ascii_lowercase().contains("notion") {
+        "notion"
+    } else if text.contains("aws") || spec.key.to_ascii_lowercase().contains("aws_") {
+        "aws"
+    } else {
+        "generic"
+    }
+}
+
+fn is_generic_where_to_get(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("open docs")
+        || lower.contains("apri la documentazione")
+        || lower.contains("apri i docs")
+        || lower.contains("service dashboard")
+        || lower.contains("dashboard del servizio")
+        || lower.contains("open the server documentation")
+}
+
+fn fallback_env_help_for_spec(
+    spec: &McpInstallGuideEnvSpec,
+    req: &McpInstallGuideRequest,
+    docs: Option<&McpInstallGuideDocsContext>,
+    language: GuideLanguage,
+) -> McpInstallGuideEnvHelp {
+    let key = spec.key.trim();
+    let k = key.to_ascii_lowercase();
+    let service = infer_service_tag(req, spec);
+    let is_secret = spec.secret.unwrap_or(false)
+        || k.contains("token")
+        || k.contains("secret")
+        || k.contains("password")
+        || k.contains("api_key")
+        || k.contains("authorization");
+
+    let mut out = McpInstallGuideEnvHelp {
+        key: key.to_string(),
+        why: spec
+            .description
+            .clone()
+            .filter(|d| !d.trim().is_empty())
+            .unwrap_or_else(|| {
+                if language.is_italian() {
+                    "Richiesto dal server MCP per autenticazione o configurazione dell'accesso."
+                        .to_string()
+                } else {
+                    "Required by the MCP server to authenticate or configure access.".to_string()
+                }
+            }),
+        where_to_get: req
+            .docs_url
+            .as_ref()
+            .map(|d| {
+                if language.is_italian() {
+                    format!(
+                        "Apri {} e cerca \"{}\" nelle sezioni installazione, autenticazione o variabili ambiente.",
+                        d, key
+                    )
+                } else {
+                    format!(
+                        "Open {} and search \"{}\" in Installation/Authentication/Environment Variables.",
+                        d, key
+                    )
+                }
+            })
+            .unwrap_or_else(|| {
+                if language.is_italian() {
+                    format!(
+                        "Apri la documentazione del server e cerca \"{}\" nelle sezioni autenticazione o environment.",
+                        key
+                    )
+                } else {
+                    format!(
+                        "Open server docs and search \"{}\" in authentication/environment sections.",
+                        key
+                    )
+                }
+            }),
+        format_hint: if k.contains("authorization") {
+            format!("{key}=Bearer <token>")
+        } else if is_secret {
+            format!("{key}=<secret>")
+        } else if k.contains("url") || k.contains("endpoint") {
+            format!("{key}=https://...")
+        } else {
+            format!("{key}=<value>")
+        },
+        vault_hint: if language.is_italian() {
+            format!(
+                "Preferisci un riferimento Vault: {key}=vault://mcp.{}",
+                k.replace('_', ".")
+            )
+        } else {
+            format!(
+                "Prefer vault reference: {key}=vault://mcp.{}",
+                k.replace('_', ".")
+            )
+        },
+        retrieval_steps: vec![
+            if language.is_italian() {
+                format!("Trova `{}` nella documentazione env/auth del server.", key)
+            } else {
+                format!("Find `{}` in the server env/auth documentation.", key)
+            },
+            if language.is_italian() {
+                "Genera o copia il valore richiesto dalla dashboard o console del provider."
+                    .to_string()
+            } else {
+                "Generate or copy the required value from the provider dashboard/console."
+                    .to_string()
+            },
+            if language.is_italian() {
+                "Salvalo nel Vault e usa un riferimento vault:// nelle env.".to_string()
+            } else {
+                "Save in Vault and use vault:// reference in env.".to_string()
+            },
+        ],
+    };
+
+    if service == "github" && (k.contains("token") || k.contains("pat")) {
+        out.why = if language.is_italian() {
+            "Token GitHub usato per accedere a repository, issue e pull request.".to_string()
+        } else {
+            "GitHub token used to access repositories, issues, and pull requests.".to_string()
+        };
+        out.where_to_get = if language.is_italian() {
+            "GitHub -> Settings -> Developer settings -> Personal access tokens.".to_string()
+        } else {
+            "GitHub -> Settings -> Developer settings -> Personal access tokens.".to_string()
+        };
+        out.retrieval_steps = vec![
+            if language.is_italian() {
+                "Apri la pagina GitHub Personal Access Tokens.".to_string()
+            } else {
+                "Open GitHub Personal Access Tokens page.".to_string()
+            },
+            if language.is_italian() {
+                "Crea un token con gli scope richiesti da questa integrazione MCP.".to_string()
+            } else {
+                "Create token with scopes required by this MCP integration.".to_string()
+            },
+            if language.is_italian() {
+                "Copia il token una sola volta e salvalo nel Vault.".to_string()
+            } else {
+                "Copy token once and store it in Vault.".to_string()
+            },
+        ];
+    } else if service == "notion" && k.contains("token") {
+        out.why = if language.is_italian() {
+            "Token di integrazione Notion per accedere a workspace e database.".to_string()
+        } else {
+            "Notion integration token for workspace/database access.".to_string()
+        };
+        out.where_to_get =
+            "Notion -> Settings & members -> Integrations -> Develop your own integrations."
+                .to_string();
+    } else if service == "google"
+        && (k.contains("google_client_id") || k.contains("google_client_secret"))
+    {
+        out.why = if language.is_italian() {
+            "Credenziali OAuth client usate per le API Google.".to_string()
+        } else {
+            "OAuth client credentials used for Google APIs.".to_string()
+        };
+        out.where_to_get =
+            "Google Cloud Console -> APIs & Services -> Credentials -> OAuth client ID."
+                .to_string();
+        out.retrieval_steps = vec![
+            if language.is_italian() {
+                "Crea o seleziona un progetto in Google Cloud.".to_string()
+            } else {
+                "Create/select project in Google Cloud.".to_string()
+            },
+            if language.is_italian() {
+                "Configura la schermata consenso OAuth e gli scope richiesti.".to_string()
+            } else {
+                "Configure OAuth consent screen and required scopes.".to_string()
+            },
+            if language.is_italian() {
+                "Crea un OAuth Client ID e copia client_id e client_secret.".to_string()
+            } else {
+                "Create OAuth Client ID and copy client_id/client_secret.".to_string()
+            },
+        ];
+    } else if service == "google" && k.contains("google_refresh_token") {
+        out.why = if language.is_italian() {
+            "Refresh token per ottenere nuovi access token Google senza rifare il login."
+                .to_string()
+        } else {
+            "Refresh token to obtain new Google access tokens without re-login.".to_string()
+        };
+        out.where_to_get = if language.is_italian() {
+            "Si genera durante il flusso OAuth con accesso offline abilitato.".to_string()
+        } else {
+            "Generate during OAuth consent flow with offline access enabled.".to_string()
+        };
+        out.retrieval_steps = vec![
+            if language.is_italian() {
+                "Esegui il flusso OAuth authorization code con offline access.".to_string()
+            } else {
+                "Run OAuth authorization code flow with offline access.".to_string()
+            },
+            if language.is_italian() {
+                "Scambia il codice autorizzativo con i token e copia refresh_token.".to_string()
+            } else {
+                "Exchange auth code for tokens and copy refresh_token.".to_string()
+            },
+            if language.is_italian() {
+                "Usa il refresh token nelle env per evitare aggiornamenti manuali frequenti."
+                    .to_string()
+            } else {
+                "Use refresh token in env to avoid frequent manual updates.".to_string()
+            },
+        ];
+    } else if service == "google" && k.contains("google_access_token") {
+        out.why = if language.is_italian() {
+            "Access token OAuth Google a breve durata usato per autorizzare le API.".to_string()
+        } else {
+            "Short-lived Google OAuth access token for API authorization.".to_string()
+        };
+        out.where_to_get = if language.is_italian() {
+            "Si ottiene dallo scambio token OAuth (OAuth Playground o il tuo flusso OAuth)."
+                .to_string()
+        } else {
+            "Generated by OAuth token exchange (OAuth Playground or your OAuth flow).".to_string()
+        };
+        out.retrieval_steps = vec![
+            if language.is_italian() {
+                "Autorizza l'app ed esegui lo scambio codice presso l'endpoint token OAuth Google."
+                    .to_string()
+            } else {
+                "Authorize and exchange code at Google OAuth token endpoint.".to_string()
+            },
+            if language.is_italian() {
+                "Copia `access_token` e annota la scadenza.".to_string()
+            } else {
+                "Copy `access_token` and note expiration time.".to_string()
+            },
+            if language.is_italian() {
+                "Se supportato, preferisci il refresh token invece di aggiornare manualmente l'access token."
+                    .to_string()
+            } else {
+                "If supported, prefer refresh token flow instead of manual access token updates."
+                    .to_string()
+            },
+        ];
+    } else if service == "aws"
+        && (k.contains("aws_access_key_id") || k.contains("aws_secret_access_key"))
+    {
+        out.why = if language.is_italian() {
+            "Credenziali AWS IAM usate dal server MCP.".to_string()
+        } else {
+            "AWS IAM credentials used by the MCP server.".to_string()
+        };
+        out.where_to_get =
+            "AWS Console -> IAM -> Users -> Security credentials -> Create access key.".to_string();
+    } else if k.contains("refresh_token") {
+        out.why = if language.is_italian() {
+            "Refresh token usato per ottenere automaticamente nuovi access token.".to_string()
+        } else {
+            "Refresh token used to obtain new access tokens automatically.".to_string()
+        };
+        out.where_to_get = if language.is_italian() {
+            "Generalo in un flusso OAuth Authorization Code con offline access o scope equivalente."
+                .to_string()
+        } else {
+            "Generate in OAuth Authorization Code flow with offline access/scope enabled."
+                .to_string()
+        };
+    } else if k.contains("access_token") {
+        out.why = if language.is_italian() {
+            "Access token usato per autorizzare le API, di solito con durata breve.".to_string()
+        } else {
+            "Access token used for API authorization, usually short-lived.".to_string()
+        };
+        out.where_to_get = if language.is_italian() {
+            "Generalo tramite endpoint OAuth/token del provider o dashboard API token.".to_string()
+        } else {
+            "Generate through provider OAuth/token endpoint or API token dashboard.".to_string()
+        };
+    } else if k.contains("token") || k.contains("api_key") || k.contains("secret") {
+        out.why = if language.is_italian() {
+            "Credenziale di autenticazione richiesta dal servizio o API di destinazione."
+                .to_string()
+        } else {
+            "Authentication credential required by the target API/service.".to_string()
+        };
+        out.where_to_get = req
+            .docs_url
+            .as_deref()
+            .map(|d| {
+                if language.is_italian() {
+                    format!(
+                        "Apri la documentazione e segui la sezione autenticazione: {}",
+                        d
+                    )
+                } else {
+                    format!("Open docs and follow authentication section: {}", d)
+                }
+            })
+            .unwrap_or_else(|| {
+                if language.is_italian() {
+                    "Apri la dashboard del servizio e crea un token o API key.".to_string()
+                } else {
+                    "Open the service dashboard and create an API token/key.".to_string()
+                }
+            });
+    } else if k.contains("authorization") {
+        out.why = if language.is_italian() {
+            "Valore dell'header Authorization richiesto dall'endpoint MCP remoto.".to_string()
+        } else {
+            "Authorization header value expected by the remote MCP endpoint.".to_string()
+        };
+        out.where_to_get = req
+            .docs_url
+            .as_deref()
+            .map(|d| {
+                if language.is_italian() {
+                    format!(
+                        "Controlla la documentazione per il formato dell'header (es. Bearer token): {}",
+                        d
+                    )
+                } else {
+                    format!("Check docs for header format (e.g. Bearer token): {}", d)
+                }
+            })
+            .unwrap_or_else(|| {
+                if language.is_italian() {
+                    "Controlla la documentazione dell'endpoint per il formato richiesto dell'header Authorization."
+                        .to_string()
+                } else {
+                    "Check endpoint docs for required Authorization header format.".to_string()
+                }
+            });
+        out.format_hint = format!("{key}=Bearer <token>");
+    }
+
+    if let Some(docs) = docs {
+        let clues = find_relevant_doc_fragments(docs, Some(spec), 3);
+        if !clues.is_empty() {
+            out.where_to_get = if let Some(url) = docs.url.as_deref() {
+                if language.is_italian() {
+                    format!("Apri {} e cerca questo passaggio: {}", url, clues[0])
+                } else {
+                    format!("Open {} and look for: {}", url, clues[0])
+                }
+            } else {
+                if language.is_italian() {
+                    format!("Cerca nella documentazione questo passaggio: {}", clues[0])
+                } else {
+                    format!("Look in documentation for: {}", clues[0])
+                }
+            };
+            out.retrieval_steps = clues
+                .iter()
+                .map(|clue| {
+                    if language.is_italian() {
+                        format!("Nella documentazione trova questo indizio: {}", clue)
+                    } else {
+                        format!("In the docs, locate this clue: {}", clue)
+                    }
+                })
+                .collect();
+            if out.retrieval_steps.len() < 3 {
+                out.retrieval_steps.push(if language.is_italian() {
+                    "Copia il formato esatto del valore dalla documentazione, poi salva i segreti nel Vault."
+                        .to_string()
+                } else {
+                    "Copy the exact value format from docs, then store secrets in Vault."
+                        .to_string()
+                });
+            }
+        }
+    }
+
+    out
+}
+
+fn build_fallback_install_guide(
+    req: &McpInstallGuideRequest,
+    docs: Option<&McpInstallGuideDocsContext>,
+    error: Option<String>,
+    language: GuideLanguage,
+) -> McpInstallGuideResponse {
+    let env_specs = req.env.clone().unwrap_or_default();
+    let env_help = env_specs
+        .iter()
+        .map(|spec| fallback_env_help_for_spec(spec, req, docs, language))
+        .collect::<Vec<_>>();
+
+    let display_name = req
+        .display_name
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or(&req.id);
+    let transport = req.transport.clone().unwrap_or_else(|| "stdio".to_string());
+    let command = req.command.clone().unwrap_or_default();
+    let args = req.args.clone().unwrap_or_default().join(" ");
+
+    let mut steps = vec![
+        if let Some(docs) = req.docs_url.clone().filter(|d| !d.trim().is_empty()) {
+            if language.is_italian() {
+                format!("Apri la documentazione di {}: {}", display_name, docs)
+            } else {
+                format!("Open docs for {}: {}", display_name, docs)
+            }
+        } else {
+            if language.is_italian() {
+                format!("Rivedi questo server: {} ({})", display_name, req.id)
+            } else {
+                format!("Review this server: {} ({})", display_name, req.id)
+            }
+        },
+        if language.is_italian() {
+            "Raccogli le credenziali richieste con la guida qui sotto e salva i segreti nel Vault (vault://...)".to_string()
+        } else {
+            "Collect required credentials with the guidance below and store secrets in Vault (vault://...)".to_string()
+        },
+        if language.is_italian() {
+            "Salva la configurazione del server ed esegui Test per verificare la connessione."
+                .to_string()
+        } else {
+            "Save the server configuration and run Test to validate connectivity.".to_string()
+        },
+    ];
+    if transport == "http" {
+        steps.insert(
+            1,
+            if language.is_italian() {
+                "Conferma URL endpoint e valori richiesti per Authorization/header.".to_string()
+            } else {
+                "Confirm endpoint URL and required Authorization/header values".to_string()
+            },
+        );
+    } else if !command.trim().is_empty() {
+        steps.insert(
+            1,
+            if language.is_italian() {
+                format!("Comando runtime: {} {}", command, args)
+            } else {
+                format!("Runtime command: {} {}", command, args)
+            },
+        );
+    }
+
+    McpInstallGuideResponse {
+        ok: true,
+        source: "fallback".to_string(),
+        summary: if language.is_italian() {
+            format!(
+                "Configurazione guidata per {}. Leggi i passaggi, compila le variabili env, salva ed esegui il test di connessione.",
+                display_name
+            )
+        } else {
+            format!(
+                "Guided setup for {}. Read the steps, fill env variables, save, and run connection test.",
+                display_name
+            )
+        },
+        steps,
+        env_help,
+        notes: vec![
+            if language.is_italian() {
+                "Usa riferimenti Vault per i segreti: KEY=vault://your.key".to_string()
+            } else {
+                "Use vault references for secrets: KEY=vault://your.key".to_string()
+            },
+            if language.is_italian() {
+                "Se il test fallisce, verifica scope API, permessi e impostazioni di consenso."
+                    .to_string()
+            } else {
+                "If test fails, verify API scopes/permissions and consent settings.".to_string()
+            },
+        ],
+        documentation: docs.and_then(docs_context_to_view),
+        error,
+    }
+}
+
+async fn try_generate_install_guide_with_llm(
+    config: &crate::config::Config,
+    req: &McpInstallGuideRequest,
+    docs: Option<&McpInstallGuideDocsContext>,
+    language: GuideLanguage,
+) -> anyhow::Result<McpInstallGuideResponse> {
+    let model = config.agent.model.trim().to_string();
+    if model.is_empty() {
+        anyhow::bail!("no active model configured");
+    }
+
+    let (_, provider) = crate::provider::create_single_provider(config, &model)
+        .map_err(|e| anyhow::anyhow!("provider unavailable: {e}"))?;
+
+    let req_json = serde_json::to_string_pretty(req)?;
+    let docs_block = docs
+        .map(|d| {
+            format!(
+                "Documentation summary:\n{}\n\nDocumentation highlights:\n{}\n\nDocumentation excerpt:\n{}",
+                d.summary,
+                d.highlights.join("\n"),
+                d.text_excerpt
+            )
+        })
+        .unwrap_or_else(|| "Documentation summary:\nUnavailable".to_string());
+    let system_prompt = format!(
+        "You are an MCP installation assistant. Return ONLY valid JSON with keys: summary (string), steps (string[]), env_help (array of {{key,why,where_to_get,format_hint,vault_hint,retrieval_steps}}), notes (string[]). Keep concise and practical. Write every response string in {}.",
+        language.llm_label()
+    );
+    let user_prompt = format!(
+        "Prepare setup guidance for this MCP server config.\nInput JSON:\n{}\n\n{}\n\nRules:\n- steps max 6\n- env_help must include all env keys from input\n- where_to_get must include exact dashboard/console/doc path\n- each env_help item must include retrieval_steps with 2-4 concrete actions\n- use the provided documentation when available\n- explain where a dummy user can actually retrieve the missing credentials\n- no markdown",
+        req_json,
+        docs_block
+    );
+
+    let response = tokio::time::timeout(
+        Duration::from_secs(20),
+        provider.chat(crate::provider::ChatRequest {
+            messages: vec![
+                crate::provider::ChatMessage::system(&system_prompt),
+                crate::provider::ChatMessage::user(&user_prompt),
+            ],
+            tools: vec![],
+            model,
+            max_tokens: 700,
+            temperature: 0.2,
+        }),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("llm timeout"))??;
+
+    let content = response
+        .content
+        .ok_or_else(|| anyhow::anyhow!("empty llm response"))?;
+    let json_block = extract_json_object_block(&content)
+        .ok_or_else(|| anyhow::anyhow!("could not extract JSON from llm response"))?;
+    let parsed: McpInstallGuideLlmParsed =
+        serde_json::from_str(json_block).map_err(|e| anyhow::anyhow!("invalid llm JSON: {e}"))?;
+
+    let mut by_key = parsed
+        .env_help
+        .iter()
+        .map(|h| (h.key.to_ascii_lowercase(), h.clone()))
+        .collect::<HashMap<_, _>>();
+    let env_help = req
+        .env
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|spec| {
+            let llm = by_key.remove(&spec.key.to_ascii_lowercase());
+            let fallback = fallback_env_help_for_spec(&spec, req, docs, language);
+            match llm {
+                Some(mut help) => {
+                    if help.key.trim().is_empty() {
+                        help.key = spec.key.clone();
+                    }
+                    if help.why.trim().is_empty() {
+                        help.why = fallback.why.clone();
+                    }
+                    if help.where_to_get.trim().is_empty()
+                        || is_generic_where_to_get(&help.where_to_get)
+                    {
+                        help.where_to_get = fallback.where_to_get.clone();
+                    }
+                    if help.format_hint.trim().is_empty() {
+                        help.format_hint = fallback.format_hint.clone();
+                    }
+                    if help.vault_hint.trim().is_empty() {
+                        help.vault_hint = fallback.vault_hint.clone();
+                    }
+                    if help.retrieval_steps.is_empty() {
+                        help.retrieval_steps = fallback.retrieval_steps.clone();
+                    }
+                    help
+                }
+                None => fallback,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    Ok(McpInstallGuideResponse {
+        ok: true,
+        source: if docs.is_some() {
+            "llm+docs".to_string()
+        } else {
+            "llm".to_string()
+        },
+        summary: parsed.summary,
+        steps: parsed.steps,
+        env_help,
+        notes: parsed.notes,
+        documentation: docs.and_then(docs_context_to_view),
+        error: None,
+    })
+}
+
+async fn mcp_install_guide(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<McpInstallGuideRequest>,
+) -> Json<McpInstallGuideResponse> {
+    let config = state.config.read().await.clone();
+    let language = GuideLanguage::from_request(req.language.as_deref());
+    let docs = fetch_install_docs_context(&req).await;
+    match try_generate_install_guide_with_llm(&config, &req, docs.as_ref(), language).await {
+        Ok(out) => Json(out),
+        Err(e) => {
+            let mut out =
+                build_fallback_install_guide(&req, docs.as_ref(), Some(e.to_string()), language);
+            if docs.is_some() {
+                out.source = "docs".to_string();
+            }
+            Json(out)
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct NpmSearchResponse {
+    objects: Vec<NpmSearchObject>,
+}
+
+#[derive(Deserialize)]
+struct NpmSearchObject {
+    package: NpmPackage,
+    score: NpmScore,
+    downloads: Option<NpmDownloads>,
+}
+
+#[derive(Deserialize)]
+struct NpmPackage {
+    name: String,
+    description: Option<String>,
+    links: Option<NpmLinks>,
+}
+
+#[derive(Deserialize)]
+struct NpmLinks {
+    npm: Option<String>,
+    repository: Option<String>,
+    homepage: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct NpmScore {
+    #[serde(rename = "final")]
+    final_score: f64,
+}
+
+#[derive(Deserialize)]
+struct NpmDownloads {
+    monthly: Option<u64>,
+}
+
+fn looks_like_mcp_server_package(name: &str, description: &str) -> bool {
+    let n = name.to_lowercase();
+    let d = description.to_lowercase();
+    n.contains("mcp")
+        || d.contains("model context protocol")
+        || d.contains("mcp server")
+        || d.contains("model-context-protocol")
+}
+
+fn display_name_from_package(pkg: &str) -> String {
+    let mut name = pkg.to_string();
+    if let Some((_, rest)) = name.split_once('/') {
+        name = rest.to_string();
+    }
+    name = name
+        .replace("server-", "")
+        .replace("-server", "")
+        .replace("mcp-", "")
+        .replace("-mcp", "")
+        .replace('.', " ")
+        .replace('_', " ")
+        .replace('-', " ");
+    name.split_whitespace()
+        .map(|w| {
+            let mut chars = w.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+async fn search_mcp_catalog(Query(query): Query<McpSearchQuery>) -> Json<Vec<McpCatalogItemView>> {
+    let q = query.q.trim();
+    let limit = query.limit.unwrap_or(20).clamp(1, 50);
+    let leaderboard = load_mcpmarket_index(100).await;
+
+    if q.is_empty() {
+        return list_mcp_catalog().await;
+    }
+
+    let mut out: Vec<McpCatalogItemView> = crate::skills::suggest_mcp_presets(q)
+        .into_iter()
+        .map(preset_to_view)
+        .collect();
+    for item in &mut out {
+        apply_market_entry(item, &leaderboard);
+    }
+
+    let mut seen = out
+        .iter()
+        .map(|r| r.id.to_lowercase())
+        .collect::<HashSet<_>>();
+
+    let official_results =
+        fetch_official_registry_servers(Some(q), (limit * 4).clamp(20, 100)).await;
+    for entry in official_results {
+        let Some(mut item) = official_registry_entry_to_view(entry) else {
+            continue;
+        };
+        let dedupe_key = item.id.to_ascii_lowercase();
+        if !seen.insert(dedupe_key) {
+            continue;
+        }
+        apply_market_entry(&mut item, &leaderboard);
+        out.push(item);
+        if out.len() >= limit {
+            break;
+        }
+    }
+
+    let mut url = match reqwest::Url::parse("https://registry.npmjs.org/-/v1/search") {
+        Ok(u) => u,
+        Err(_) => return Json(out.into_iter().take(limit).collect()),
+    };
+    url.query_pairs_mut()
+        .append_pair("text", &format!("{} mcp", q))
+        .append_pair("size", &(limit * 4).to_string());
+
+    let client = reqwest::Client::builder()
+        .user_agent("homun")
+        .timeout(Duration::from_secs(10))
+        .build();
+
+    if let Ok(client) = client {
+        match client.get(url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(parsed) = resp.json::<NpmSearchResponse>().await {
+                    for entry in parsed.objects {
+                        let description = entry.package.description.unwrap_or_default();
+                        if !looks_like_mcp_server_package(&entry.package.name, &description) {
+                            continue;
+                        }
+                        let id = entry.package.name.clone();
+                        if seen.contains(&id.to_lowercase()) {
+                            continue;
+                        }
+                        let docs_url = entry.package.links.as_ref().and_then(|l| {
+                            l.npm
+                                .clone()
+                                .or(l.repository.clone())
+                                .or(l.homepage.clone())
+                        });
+                        let mut item = McpCatalogItemView {
+                            kind: "npm".to_string(),
+                            source: "npm".to_string(),
+                            id: id.clone(),
+                            display_name: display_name_from_package(&id),
+                            description,
+                            command: "npx".to_string(),
+                            args: vec!["-y".to_string(), id.clone()],
+                            transport: Some("stdio".to_string()),
+                            url: None,
+                            install_supported: true,
+                            package_name: Some(id.clone()),
+                            downloads_monthly: entry.downloads.and_then(|d| d.monthly),
+                            score: Some(entry.score.final_score),
+                            popularity_rank: None,
+                            popularity_value: None,
+                            popularity_source: None,
+                            env: vec![],
+                            docs_url,
+                            aliases: vec![],
+                            keywords: vec![],
+                            recommended: false,
+                            recommended_reason: None,
+                            decision_tags: vec![],
+                            setup_effort: "Moderate".to_string(),
+                            auth_profile: "Unknown".to_string(),
+                            preflight_checks: vec![],
+                            why_choose: None,
+                            tradeoff: None,
+                        };
+                        apply_market_entry(&mut item, &leaderboard);
+                        out.push(item);
+                        seen.insert(id.to_lowercase());
+                        if out.len() >= limit {
+                            break;
+                        }
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, query = %q, "MCP npm search failed");
+            }
+        }
+    }
+
+    annotate_query_items(&mut out, q);
+    sort_mcp_catalog_for_query(&mut out, q);
+    apply_query_recommendation(&mut out, q);
+    Json(out.into_iter().take(limit).collect())
+}
+
+#[derive(Serialize)]
+struct McpServerEnvView {
+    key: String,
+    value_preview: String,
+    is_vault_ref: bool,
+}
+
+#[derive(Serialize)]
+struct McpServerView {
+    name: String,
+    transport: String,
+    command: Option<String>,
+    args: Vec<String>,
+    url: Option<String>,
+    enabled: bool,
+    env: Vec<McpServerEnvView>,
+}
+
+fn mcp_env_preview(value: &str) -> (String, bool) {
+    if value.starts_with("vault://") {
+        (value.to_string(), true)
+    } else if value.is_empty() {
+        (String::new(), false)
+    } else {
+        ("(set)".to_string(), false)
+    }
+}
+
+async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> Json<Vec<McpServerView>> {
+    let config = state.config.read().await;
+    let mut servers = config
+        .mcp
+        .servers
+        .iter()
+        .map(|(name, server)| {
+            let mut env = server
+                .env
+                .iter()
+                .map(|(key, value)| {
+                    let (value_preview, is_vault_ref) = mcp_env_preview(value);
+                    McpServerEnvView {
+                        key: key.clone(),
+                        value_preview,
+                        is_vault_ref,
+                    }
+                })
+                .collect::<Vec<_>>();
+            env.sort_by(|a, b| a.key.cmp(&b.key));
+
+            McpServerView {
+                name: name.clone(),
+                transport: server.transport.clone(),
+                command: server.command.clone(),
+                args: server.args.clone(),
+                url: server.url.clone(),
+                enabled: server.enabled,
+                env,
+            }
+        })
+        .collect::<Vec<_>>();
+    servers.sort_by(|a, b| a.name.cmp(&b.name));
+    Json(servers)
+}
+
+#[derive(Deserialize)]
+struct McpSetupRequest {
+    service: String,
+    name: Option<String>,
+    #[serde(default)]
+    env: HashMap<String, String>,
+    overwrite: Option<bool>,
+    skip_test: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct McpSetupResponse {
+    ok: bool,
+    message: String,
+    name: String,
+    missing_required_env: Vec<String>,
+    stored_vault_keys: Vec<String>,
+    tested: bool,
+    connected: Option<bool>,
+    tool_count: Option<usize>,
+}
+
+async fn setup_mcp_server(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<McpSetupRequest>,
+) -> Result<Json<McpSetupResponse>, StatusCode> {
+    let Some(preset) = crate::skills::find_mcp_preset(&req.service) else {
+        return Err(StatusCode::BAD_REQUEST);
+    };
+
+    let mut config = state.config.read().await.clone();
+    let server_name = req.name.clone().unwrap_or_else(|| preset.id.clone());
+    let overwrite = req.overwrite.unwrap_or(false);
+    let skip_test = req.skip_test.unwrap_or(false);
+
+    let setup = match crate::mcp_setup::apply_mcp_preset_setup(
+        &mut config,
+        &preset,
+        &server_name,
+        &req.env,
+        overwrite,
+    ) {
+        Ok(result) => result,
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("already exists") {
+                return Err(StatusCode::CONFLICT);
+            }
+            tracing::warn!(error = %e, service = %req.service, "MCP setup failed");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    state
+        .save_config(config.clone())
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !setup.missing_required_env.is_empty() {
+        return Ok(Json(McpSetupResponse {
+            ok: true,
+            message: "Configured, but required env vars are still missing.".to_string(),
+            name: server_name,
+            missing_required_env: setup.missing_required_env,
+            stored_vault_keys: setup.stored_vault_keys,
+            tested: false,
+            connected: None,
+            tool_count: None,
+        }));
+    }
+
+    if skip_test {
+        return Ok(Json(McpSetupResponse {
+            ok: true,
+            message: "Configured. Connection test skipped.".to_string(),
+            name: server_name,
+            missing_required_env: vec![],
+            stored_vault_keys: setup.stored_vault_keys,
+            tested: false,
+            connected: None,
+            tool_count: None,
+        }));
+    }
+
+    let Some(server) = config.mcp.servers.get(&server_name) else {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    };
+    let report = crate::mcp_setup::test_mcp_server_connection(
+        &server_name,
+        server,
+        Some(config.security.execution_sandbox.clone()),
+    )
+    .await;
+
+    Ok(Json(McpSetupResponse {
+        ok: true,
+        message: if report.connected {
+            format!(
+                "Configured and connected ({} tools discovered).",
+                report.tool_count
+            )
+        } else {
+            match report.error.as_deref() {
+                Some(err) => format!("Configured, but connection test failed: {err}"),
+                None => "Configured, but connection test failed.".to_string(),
+            }
+        },
+        name: server_name,
+        missing_required_env: vec![],
+        stored_vault_keys: setup.stored_vault_keys,
+        tested: true,
+        connected: Some(report.connected),
+        tool_count: Some(report.tool_count),
+    }))
+}
+
+#[derive(Deserialize)]
+struct McpServerUpsertRequest {
+    name: String,
+    transport: Option<String>,
+    command: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
+    url: Option<String>,
+    #[serde(default)]
+    env: HashMap<String, String>,
+    enabled: Option<bool>,
+    overwrite: Option<bool>,
+}
+
+async fn upsert_mcp_server(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<McpServerUpsertRequest>,
+) -> Result<Json<OkResponse>, StatusCode> {
+    let mut config = state.config.read().await.clone();
+    let exists = config.mcp.servers.contains_key(&req.name);
+    if exists && !req.overwrite.unwrap_or(false) {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    let transport = req.transport.unwrap_or_else(|| "stdio".to_string());
+    if transport != "stdio" && transport != "http" {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let command = req.command.map(|s| s.trim().to_string());
+    let url = req.url.map(|s| s.trim().to_string());
+    let args = req
+        .args
+        .iter()
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty())
+        .collect::<Vec<_>>();
+    let env = req
+        .env
+        .iter()
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .filter(|(k, _)| !k.is_empty())
+        .collect::<HashMap<_, _>>();
+
+    if transport == "stdio" && command.clone().unwrap_or_default().is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if transport == "http" && url.clone().unwrap_or_default().is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let server = crate::config::McpServerConfig {
+        transport,
+        command,
+        args,
+        url,
+        env,
+        enabled: req.enabled.unwrap_or(true),
+    };
+
+    config.mcp.servers.insert(req.name.clone(), server);
+    state
+        .save_config(config)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(OkResponse {
+        ok: true,
+        message: Some(format!("MCP server '{}' saved", req.name)),
+    }))
+}
+
+#[derive(Deserialize)]
+struct McpToggleRequest {
+    enabled: Option<bool>,
+}
+
+async fn toggle_mcp_server(
+    Path(name): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<McpToggleRequest>,
+) -> Result<Json<OkResponse>, StatusCode> {
+    let mut config = state.config.read().await.clone();
+    let Some(server) = config.mcp.servers.get_mut(&name) else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+
+    let new_enabled = req.enabled.unwrap_or(!server.enabled);
+    server.enabled = new_enabled;
+
+    state
+        .save_config(config)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !new_enabled {
+        if let Some(db) = &state.db {
+            let reason = format!("Missing or disabled MCP dependency: {name}");
+            if let Err(e) = db
+                .invalidate_automations_by_dependency("mcp", &name, &reason)
+                .await
+            {
+                tracing::warn!(
+                    error = %e,
+                    server = %name,
+                    "Failed to invalidate dependent automations after MCP disable"
+                );
+            }
+        }
+    }
+
+    Ok(Json(OkResponse {
+        ok: true,
+        message: Some(format!(
+            "MCP server '{}' {}",
+            name,
+            if new_enabled { "enabled" } else { "disabled" }
+        )),
+    }))
+}
+
+#[derive(Serialize)]
+struct McpTestResponse {
+    ok: bool,
+    connected: bool,
+    message: String,
+    tool_count: usize,
+    server_name: String,
+    server_version: String,
+    error: Option<String>,
+}
+
+async fn test_mcp_server(
+    Path(name): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<McpTestResponse>, StatusCode> {
+    let config = state.config.read().await;
+    let Some(server) = config.mcp.servers.get(&name) else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+    let server = server.clone();
+    let sandbox = config.security.execution_sandbox.clone();
+    drop(config);
+
+    let report = crate::mcp_setup::test_mcp_server_connection(&name, &server, Some(sandbox)).await;
+
+    Ok(Json(McpTestResponse {
+        ok: true,
+        connected: report.connected,
+        message: if report.connected {
+            format!("Connected: {} tool(s) discovered.", report.tool_count)
+        } else {
+            match report.error.as_deref() {
+                Some(err) => format!("Connection failed: {err}"),
+                None => {
+                    "Connection failed. Check command, args, and environment variables.".to_string()
+                }
+            }
+        },
+        tool_count: report.tool_count,
+        server_name: report.server_name,
+        server_version: report.server_version,
+        error: report.error,
+    }))
+}
+
+async fn delete_mcp_server(
+    Path(name): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<OkResponse>, StatusCode> {
+    let mut config = state.config.read().await.clone();
+    if config.mcp.servers.remove(&name).is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    state
+        .save_config(config)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if let Some(db) = &state.db {
+        let reason = format!("Missing or disabled MCP dependency: {name}");
+        if let Err(e) = db
+            .invalidate_automations_by_dependency("mcp", &name, &reason)
+            .await
+        {
+            tracing::warn!(
+                error = %e,
+                server = %name,
+                "Failed to invalidate dependent automations after MCP removal"
+            );
+        }
+    }
+
+    Ok(Json(OkResponse {
+        ok: true,
+        message: Some(format!("MCP server '{}' removed", name)),
+    }))
 }
 
 // ═══════════════════════════════════════════════════
@@ -3990,10 +7428,18 @@ async fn clear_chat_history(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    state.web_runs.clear_session("web:default");
+
     Ok(Json(OkResponse {
         ok: true,
         message: Some("Chat history cleared".to_string()),
     }))
+}
+
+async fn current_chat_run(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Option<super::run_state::WebChatRunSnapshot>>, StatusCode> {
+    Ok(Json(state.web_runs.active_snapshot("web:default")))
 }
 
 /// Compact chat conversation (trigger memory consolidation)
@@ -4025,6 +7471,20 @@ async fn compact_chat(State(state): State<Arc<AppState>>) -> Result<Json<OkRespo
     }))
 }
 
+/// Request cancellation of the current web chat run.
+async fn stop_chat_run(State(state): State<Arc<AppState>>) -> Result<Json<OkResponse>, StatusCode> {
+    let active = state.web_runs.request_stop("web:default");
+    crate::agent::stop::request_stop();
+    Ok(Json(OkResponse {
+        ok: true,
+        message: Some(if active {
+            "Stop requested".to_string()
+        } else {
+            "No active chat run".to_string()
+        }),
+    }))
+}
+
 // ─── Permissions API ─────────────────────────────────────────────
 
 /// Get current permissions configuration
@@ -4050,6 +7510,341 @@ async fn put_permissions(
     }
 
     Ok(Json(config.permissions.clone()))
+}
+
+/// Get process execution sandbox configuration.
+async fn get_execution_sandbox(
+    State(state): State<Arc<AppState>>,
+) -> Json<crate::config::ExecutionSandboxConfig> {
+    let config = state.config.read().await;
+    Json(config.security.execution_sandbox.clone())
+}
+
+/// Update process execution sandbox configuration.
+async fn put_execution_sandbox(
+    State(state): State<Arc<AppState>>,
+    Json(sandbox): Json<crate::config::ExecutionSandboxConfig>,
+) -> Result<Json<crate::config::ExecutionSandboxConfig>, (StatusCode, String)> {
+    let sandbox = normalize_execution_sandbox(sandbox)?;
+    let mut config = state.config.write().await;
+    config.security.execution_sandbox = sandbox;
+
+    if let Err(e) = config.save() {
+        tracing::error!("Failed to save execution sandbox config: {}", e);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to save execution sandbox config".to_string(),
+        ));
+    }
+
+    Ok(Json(config.security.execution_sandbox.clone()))
+}
+
+fn normalize_execution_sandbox(
+    mut sandbox: crate::config::ExecutionSandboxConfig,
+) -> Result<crate::config::ExecutionSandboxConfig, (StatusCode, String)> {
+    let backend = sandbox.backend.trim().to_ascii_lowercase();
+    let docker_network = sandbox.docker_network.trim().to_ascii_lowercase();
+    let docker_image = sandbox.docker_image.trim().to_string();
+
+    let backend = if backend.is_empty() {
+        "auto".to_string()
+    } else {
+        backend
+    };
+    if backend != "none" && backend != "auto" && backend != "docker" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid sandbox backend. Expected one of: auto, docker, none.".to_string(),
+        ));
+    }
+
+    let docker_network = if docker_network.is_empty() {
+        "none".to_string()
+    } else {
+        docker_network
+    };
+    if docker_network != "none" && docker_network != "bridge" && docker_network != "host" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid docker network. Expected one of: none, bridge, host.".to_string(),
+        ));
+    }
+
+    if !sandbox.docker_cpus.is_finite() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid docker CPU limit. Must be a finite number.".to_string(),
+        ));
+    }
+    if sandbox.docker_cpus < 0.0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid docker CPU limit. Must be >= 0.".to_string(),
+        ));
+    }
+    if sandbox.docker_cpus > 256.0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid docker CPU limit. Must be <= 256.".to_string(),
+        ));
+    }
+
+    if sandbox.docker_memory_mb > 1_048_576 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid docker memory limit. Must be <= 1048576 MB.".to_string(),
+        ));
+    }
+
+    sandbox.backend = backend;
+    sandbox.docker_network = docker_network;
+    sandbox.docker_image = if docker_image.is_empty() {
+        "node:22-alpine".to_string()
+    } else {
+        docker_image
+    };
+
+    Ok(sandbox)
+}
+
+#[cfg(test)]
+mod sandbox_config_tests {
+    use super::get_execution_sandbox_presets;
+    use super::normalize_execution_sandbox;
+    use crate::config::ExecutionSandboxConfig;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn normalize_sandbox_accepts_valid_values() {
+        let cfg = ExecutionSandboxConfig {
+            backend: "DoCkEr".to_string(),
+            docker_network: "Bridge".to_string(),
+            docker_image: " node:22-alpine ".to_string(),
+            ..ExecutionSandboxConfig::default()
+        };
+        let normalized = normalize_execution_sandbox(cfg).expect("valid sandbox config");
+        assert_eq!(normalized.backend, "docker");
+        assert_eq!(normalized.docker_network, "bridge");
+        assert_eq!(normalized.docker_image, "node:22-alpine");
+    }
+
+    #[test]
+    fn normalize_sandbox_rejects_invalid_backend() {
+        let cfg = ExecutionSandboxConfig {
+            backend: "firecracker".to_string(),
+            ..ExecutionSandboxConfig::default()
+        };
+        let err = normalize_execution_sandbox(cfg).expect_err("expected backend validation error");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn normalize_sandbox_rejects_invalid_network() {
+        let cfg = ExecutionSandboxConfig {
+            docker_network: "custom".to_string(),
+            ..ExecutionSandboxConfig::default()
+        };
+        let err = normalize_execution_sandbox(cfg).expect_err("expected network validation error");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn normalize_sandbox_defaults_empty_image() {
+        let cfg = ExecutionSandboxConfig {
+            docker_image: "   ".to_string(),
+            ..ExecutionSandboxConfig::default()
+        };
+        let normalized = normalize_execution_sandbox(cfg).expect("expected default image");
+        assert_eq!(normalized.docker_image, "node:22-alpine");
+    }
+
+    #[tokio::test]
+    async fn sandbox_presets_include_safe_and_strict() {
+        let presets = get_execution_sandbox_presets().await.0;
+        assert!(presets.iter().any(|p| p.id == "safe"));
+        assert!(presets.iter().any(|p| p.id == "strict"));
+
+        let recommended_count = presets.iter().filter(|p| p.recommended).count();
+        assert_eq!(recommended_count, 1);
+    }
+}
+
+#[derive(Serialize)]
+struct ExecutionSandboxStatusResponse {
+    enabled: bool,
+    host_os: String,
+    configured_backend: String,
+    resolved_backend: String,
+    strict: bool,
+    docker_available: bool,
+    valid: bool,
+    fallback_to_native: bool,
+    recommended_preset: String,
+    message: String,
+}
+
+#[derive(Serialize)]
+struct ExecutionSandboxPresetResponse {
+    id: String,
+    label: String,
+    description: String,
+    recommended: bool,
+    config: crate::config::ExecutionSandboxConfig,
+}
+
+#[derive(Deserialize)]
+struct ExecutionSandboxEventsQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct ExecutionSandboxImagePullResponse {
+    status: crate::tools::sandbox_exec::SandboxImageStatus,
+    output: String,
+}
+
+fn host_os_label() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "macos"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "linux"
+    }
+    #[cfg(target_os = "windows")]
+    {
+        "windows"
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        "unknown"
+    }
+}
+
+/// Get resolved runtime status for process execution sandbox.
+async fn get_execution_sandbox_status(
+    State(state): State<Arc<AppState>>,
+) -> Json<ExecutionSandboxStatusResponse> {
+    let config = state.config.read().await;
+    let sandbox = config.security.execution_sandbox.clone();
+    drop(config);
+
+    let configured_backend = sandbox.backend.trim().to_ascii_lowercase();
+    let docker_available = crate::tools::sandbox_exec::docker_backend_available();
+    let (resolved_backend, valid, mut message) =
+        match crate::tools::sandbox_exec::resolve_sandbox_backend(&sandbox) {
+            Ok(resolved) => (resolved.as_str().to_string(), true, String::new()),
+            Err(e) => ("none".to_string(), false, e.to_string()),
+        };
+    let fallback_to_native = sandbox.enabled
+        && resolved_backend == "none"
+        && configured_backend != "none"
+        && !sandbox.strict;
+    let recommended_preset = if docker_available { "strict" } else { "safe" };
+    if valid {
+        message = if !sandbox.enabled {
+            "Sandbox disabled.".to_string()
+        } else if fallback_to_native {
+            format!(
+                "Configured backend '{}' unavailable; using native fallback.",
+                configured_backend
+            )
+        } else if resolved_backend == "none" {
+            "Sandbox enabled with 'none' backend (native execution).".to_string()
+        } else {
+            format!("Sandbox active with '{}' backend.", resolved_backend)
+        };
+    }
+
+    Json(ExecutionSandboxStatusResponse {
+        enabled: sandbox.enabled,
+        host_os: host_os_label().to_string(),
+        configured_backend: configured_backend.clone(),
+        resolved_backend,
+        strict: sandbox.strict,
+        docker_available,
+        valid,
+        fallback_to_native,
+        recommended_preset: recommended_preset.to_string(),
+        message,
+    })
+}
+
+/// List opinionated execution sandbox presets for the current host.
+async fn get_execution_sandbox_presets() -> Json<Vec<ExecutionSandboxPresetResponse>> {
+    let mut safe_cfg = crate::config::ExecutionSandboxConfig::default();
+    safe_cfg.enabled = true;
+    safe_cfg.backend = "auto".to_string();
+    safe_cfg.strict = false;
+    safe_cfg.docker_network = "none".to_string();
+    safe_cfg.docker_read_only_rootfs = true;
+    safe_cfg.docker_mount_workspace = true;
+
+    let mut strict_cfg = safe_cfg.clone();
+    strict_cfg.strict = true;
+
+    let docker_available = crate::tools::sandbox_exec::docker_backend_available();
+    let host = host_os_label();
+
+    Json(vec![
+        ExecutionSandboxPresetResponse {
+            id: "safe".to_string(),
+            label: format!("{host} Safe"),
+            description: "Prefers sandbox backend but allows native fallback when unavailable."
+                .to_string(),
+            recommended: !docker_available,
+            config: safe_cfg,
+        },
+        ExecutionSandboxPresetResponse {
+            id: "strict".to_string(),
+            label: format!("{host} Strict"),
+            description: "Requires sandbox backend; blocks execution if backend is unavailable."
+                .to_string(),
+            recommended: docker_available,
+            config: strict_cfg,
+        },
+    ])
+}
+
+/// Inspect the configured sandbox runtime image.
+async fn get_execution_sandbox_image_status(
+    State(state): State<Arc<AppState>>,
+) -> Json<crate::tools::sandbox_exec::SandboxImageStatus> {
+    let config = state.config.read().await;
+    let image = config.security.execution_sandbox.docker_image.clone();
+    drop(config);
+
+    Json(crate::tools::sandbox_exec::get_docker_image_status(&image))
+}
+
+/// Pull the configured sandbox runtime image.
+async fn pull_execution_sandbox_image(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ExecutionSandboxImagePullResponse>, (StatusCode, String)> {
+    let config = state.config.read().await;
+    let image = config.security.execution_sandbox.docker_image.clone();
+    drop(config);
+
+    let result = crate::tools::sandbox_exec::pull_docker_image(&image)
+        .await
+        .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
+
+    Ok(Json(ExecutionSandboxImagePullResponse {
+        status: result.status,
+        output: result.output,
+    }))
+}
+
+/// Return the most recent sandbox preparation events.
+async fn get_execution_sandbox_events(
+    Query(query): Query<ExecutionSandboxEventsQuery>,
+) -> Json<Vec<crate::tools::sandbox_exec::SandboxEvent>> {
+    let limit = query.limit.unwrap_or(12).clamp(1, 50);
+    Json(crate::tools::sandbox_exec::list_recent_sandbox_events(
+        limit,
+    ))
 }
 
 #[derive(Deserialize)]

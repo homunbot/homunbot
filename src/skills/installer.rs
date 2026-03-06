@@ -5,6 +5,8 @@ use reqwest::Client;
 use serde::Deserialize;
 
 use super::loader::parse_skill_md_public;
+use super::{adapt_legacy_skill_dir, parse_legacy_manifest};
+use super::{scan_skill_package, InstallSecurityOptions, SecurityReport};
 
 /// Skill installer — fetches skills from GitHub and installs them locally.
 ///
@@ -35,6 +37,12 @@ struct GitHubContent {
     encoding: Option<String>,
 }
 
+struct RemoteSkillManifest {
+    raw_content: String,
+    name: String,
+    description: String,
+}
+
 impl SkillInstaller {
     pub fn new() -> Self {
         let skills_dir = dirs::home_dir()
@@ -52,6 +60,15 @@ impl SkillInstaller {
     ///
     /// `repo_spec` format: `owner/repo` or `owner/repo@ref`
     pub async fn install(&self, repo_spec: &str) -> Result<InstallResult> {
+        self.install_with_options(repo_spec, InstallSecurityOptions::default())
+            .await
+    }
+
+    pub async fn install_with_options(
+        &self,
+        repo_spec: &str,
+        options: InstallSecurityOptions,
+    ) -> Result<InstallResult> {
         let (owner, repo, git_ref) = parse_repo_spec(repo_spec)?;
 
         tracing::info!(
@@ -67,19 +84,11 @@ impl SkillInstaller {
             None => self.get_default_branch(&owner, &repo).await?,
         };
 
-        // 2. Fetch SKILL.md to validate and get skill name
-        let skill_md_content = self
-            .fetch_file(&owner, &repo, &branch, "SKILL.md")
-            .await
-            .with_context(|| {
-                format!(
-                    "No SKILL.md found in {}/{}. Is this an Agent Skill?",
-                    owner, repo
-                )
-            })?;
+        // 2. Fetch SKILL.md or a legacy manifest to validate and get skill name
+        let remote_manifest = self.fetch_remote_manifest(&owner, &repo, &branch).await?;
 
         // Security scan before installing
-        let security_report = super::security::scan_skill_content(&skill_md_content);
+        let security_report = super::security::scan_skill_content(&remote_manifest.raw_content);
         if security_report.is_blocked() {
             tracing::warn!(
                 owner = %owner,
@@ -87,7 +96,7 @@ impl SkillInstaller {
                 "Skill blocked by security check"
             );
             anyhow::bail!(
-                "Skill '{}/{}' blocked by security scan:\n{}",
+                "Skill '{}/{}' blocked by security preflight:\n{}",
                 owner,
                 repo,
                 security_report.summary()
@@ -102,10 +111,8 @@ impl SkillInstaller {
             );
         }
 
-        let (meta, _body) = parse_skill_md_public(&skill_md_content)
-            .with_context(|| "Failed to parse SKILL.md frontmatter")?;
-
-        let skill_name = meta.name.clone();
+        let skill_name = remote_manifest.name;
+        let skill_description = remote_manifest.description;
         let skill_dir = self.skills_dir.join(&skill_name);
 
         // 3. Check if already installed
@@ -114,13 +121,41 @@ impl SkillInstaller {
                 name: skill_name,
                 path: skill_dir,
                 already_existed: true,
-                description: meta.description,
+                description: skill_description,
+                security_report: None,
             });
         }
 
         // 4. Download and extract the repo
         self.download_and_extract(&owner, &repo, &branch, &skill_dir)
             .await?;
+
+        let adapted = adapt_legacy_skill_dir(&skill_dir).await?;
+        let final_description = adapted
+            .as_ref()
+            .map(|adapted| adapted.description.clone())
+            .unwrap_or(skill_description);
+
+        let package_security = scan_skill_package(&skill_dir).await?;
+        if package_security.is_blocked() && !options.force {
+            tokio::fs::remove_dir_all(&skill_dir).await.ok();
+            anyhow::bail!(
+                "Skill '{}/{}' blocked by package security scan:\n{}",
+                owner,
+                repo,
+                package_security.summary()
+            );
+        }
+        if !package_security.warnings.is_empty() {
+            tracing::info!(
+                owner = %owner,
+                repo = %repo,
+                risk = package_security.risk_score,
+                warnings = package_security.warnings.len(),
+                forced = options.force,
+                "Skill package scan completed with findings"
+            );
+        }
 
         tracing::info!(
             skill = %skill_name,
@@ -132,7 +167,8 @@ impl SkillInstaller {
             name: skill_name,
             path: skill_dir,
             already_existed: false,
-            description: meta.description,
+            description: final_description,
+            security_report: Some(package_security),
         })
     }
 
@@ -275,6 +311,42 @@ impl SkillInstaller {
         }
     }
 
+    async fn fetch_remote_manifest(
+        &self,
+        owner: &str,
+        repo: &str,
+        git_ref: &str,
+    ) -> Result<RemoteSkillManifest> {
+        if let Ok(content) = self.fetch_file(owner, repo, git_ref, "SKILL.md").await {
+            let (meta, _body) = parse_skill_md_public(&content)
+                .with_context(|| "Failed to parse SKILL.md frontmatter")?;
+            return Ok(RemoteSkillManifest {
+                raw_content: content,
+                name: meta.name,
+                description: meta.description,
+            });
+        }
+
+        for candidate in ["SKILL.toml", "manifest.json"] {
+            if let Ok(content) = self.fetch_file(owner, repo, git_ref, candidate).await {
+                let manifest = parse_legacy_manifest(candidate, &content).with_context(|| {
+                    format!("Failed to parse legacy manifest {candidate} from {owner}/{repo}")
+                })?;
+                return Ok(RemoteSkillManifest {
+                    raw_content: content,
+                    name: manifest.name,
+                    description: manifest.description,
+                });
+            }
+        }
+
+        anyhow::bail!(
+            "No SKILL.md, SKILL.toml, or manifest.json found in {}/{}. Is this a supported skill repo?",
+            owner,
+            repo
+        );
+    }
+
     /// Download the repo as a tarball and extract it to the skill directory
     async fn download_and_extract(
         &self,
@@ -356,6 +428,7 @@ pub struct InstallResult {
     pub path: PathBuf,
     pub already_existed: bool,
     pub description: String,
+    pub security_report: Option<SecurityReport>,
 }
 
 /// Info about an installed skill

@@ -9,7 +9,7 @@ use chrono::Utc;
 use futures::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 
-use crate::bus::InboundMessage;
+use crate::bus::{InboundMessage, MessageMetadata};
 
 use super::server::AppState;
 
@@ -44,6 +44,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
     // Channel for streaming text chunks and tool events (real-time delivery)
     let (stream_tx, mut stream_rx) = mpsc::channel::<WsStreamEvent>(128);
+    let client_stream_tx = stream_tx.clone();
 
     // Register this session for both full responses and streaming
     {
@@ -94,6 +95,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 "name": event.delta,
                                 "tool_call": event.tool_call_data,
                             })
+                        } else if evt == "error" {
+                            serde_json::json!({
+                                "type": evt,
+                                "message": event.delta,
+                            })
                         } else {
                             serde_json::json!({
                                 "type": evt,
@@ -129,22 +135,46 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 // Parse JSON message from client
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
                     if let Some(content) = parsed.get("content").and_then(|v| v.as_str()) {
+                        let content = content.trim();
+                        if content.is_empty() {
+                            continue;
+                        }
+
+                        let run = match state.web_runs.start_run("web:default", content) {
+                            Ok(run) => run,
+                            Err(message) => {
+                                let _ = client_stream_tx
+                                    .send(WsStreamEvent {
+                                        delta: message,
+                                        event_type: Some("error".to_string()),
+                                        tool_call_data: None,
+                                    })
+                                    .await;
+                                continue;
+                            }
+                        };
+
                         let inbound = InboundMessage {
                             channel: "web".to_string(),
                             sender_id: chat_id.clone(),
                             chat_id: chat_id.clone(),
                             content: content.to_string(),
                             timestamp: Utc::now(),
-                            metadata: None,
+                            metadata: Some(MessageMetadata {
+                                web_run_id: Some(run.run_id),
+                                ..MessageMetadata::default()
+                            }),
                         };
 
                         // Only send if agent is available
                         if let Some(ref tx) = state.inbound_tx {
                             if let Err(e) = tx.send(inbound).await {
+                                state.web_runs.clear_session("web:default");
                                 tracing::error!(error = %e, "Failed to send WebSocket message to agent");
                                 break;
                             }
                         } else {
+                            state.web_runs.clear_session("web:default");
                             tracing::warn!("No agent available. Configure a provider first.");
                             break;
                         }

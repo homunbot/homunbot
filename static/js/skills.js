@@ -14,6 +14,14 @@
     var installedCount = document.getElementById('installed-count');
     var toastEl = document.getElementById('skill-toast');
     var catalogStatsEl = document.getElementById('catalog-stats');
+    var sandboxBadgeEl = document.getElementById('skills-sandbox-runtime-badge');
+    var sandboxTextEl = document.getElementById('skills-sandbox-runtime-text');
+    var refreshSandboxBtn = document.getElementById('skills-refresh-sandbox-status-btn');
+    var skillsState = {
+        searchResults: [],
+        searchQuery: '',
+        showAlternatives: false,
+    };
 
     // Modal refs
     var modalOverlay = document.getElementById('skill-modal-overlay');
@@ -80,6 +88,53 @@
             .catch(function() { /* silently ignore */ });
     }
     checkCatalog();
+
+    function renderSandboxStatus(status) {
+        if (!sandboxBadgeEl || !sandboxTextEl) return;
+        if (!status) {
+            sandboxBadgeEl.textContent = 'unknown';
+            sandboxBadgeEl.classList.remove('badge-success', 'badge-warning', 'badge-error');
+            sandboxBadgeEl.classList.add('badge-neutral');
+            sandboxTextEl.textContent = 'Unable to determine execution sandbox status.';
+            return;
+        }
+
+        sandboxBadgeEl.textContent = status.enabled
+            ? ('resolved: ' + status.resolved_backend)
+            : 'disabled';
+        sandboxBadgeEl.classList.remove('badge-success', 'badge-warning', 'badge-error', 'badge-neutral');
+        if (!status.enabled) {
+            sandboxBadgeEl.classList.add('badge-neutral');
+        } else if (!status.valid) {
+            sandboxBadgeEl.classList.add('badge-error');
+        } else if (status.fallback_to_native) {
+            sandboxBadgeEl.classList.add('badge-warning');
+        } else {
+            sandboxBadgeEl.classList.add('badge-success');
+        }
+
+        var dockerText = status.docker_available ? 'available' : 'unavailable';
+        sandboxTextEl.textContent = (status.message || 'Sandbox status updated.') + ' Docker: ' + dockerText + '.';
+    }
+
+    function loadSandboxStatus() {
+        return fetch('/api/v1/security/sandbox/status')
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(status) {
+                renderSandboxStatus(status);
+            })
+            .catch(function() {
+                renderSandboxStatus(null);
+            });
+    }
+    loadSandboxStatus();
+    if (refreshSandboxBtn) {
+        refreshSandboxBtn.addEventListener('click', function() {
+            loadSandboxStatus().then(function() {
+                showToast('Sandbox status refreshed', 'success');
+            });
+        });
+    }
 
     // --- Catalog source stats (under search bar) ---
     function fetchCatalogStats() {
@@ -150,6 +205,16 @@
         return e;
     }
 
+    function escapeHtml(value) {
+        if (value === null || value === undefined) return '';
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     /** Map source id to display label */
     function sourceLabel(src) {
         if (src === 'clawhub') return 'ClawHub';
@@ -206,7 +271,13 @@
 
     function hideResults() {
         if (searchSection) searchSection.style.display = 'none';
-        if (searchGrid) searchGrid.textContent = '';
+        if (searchGrid) {
+            searchGrid.textContent = '';
+            searchGrid.className = 'skill-list';
+        }
+        skillsState.searchResults = [];
+        skillsState.searchQuery = '';
+        skillsState.showAlternatives = false;
     }
 
     async function doSearch(query) {
@@ -214,6 +285,9 @@
         try {
             var res = await fetch('/api/v1/skills/search?q=' + encodeURIComponent(query));
             var results = await res.json();
+            skillsState.searchResults = Array.isArray(results) ? results : [];
+            skillsState.searchQuery = query;
+            skillsState.showAlternatives = false;
             renderSearchResults(results);
         } catch (err) {
             showToast('Search failed: ' + err.message, 'error');
@@ -226,83 +300,158 @@
         if (!searchGrid || !searchSection) return;
         searchGrid.textContent = '';
         searchSection.style.display = 'block';
-        if (searchCount) searchCount.textContent = results.length + ' found';
+        searchGrid.className = 'skills-search-results-panel';
 
         if (results.length === 0) {
+            if (searchCount) searchCount.textContent = '0 found';
             var empty = el('div', 'empty-state');
             empty.appendChild(el('p', null, 'No skills found. Try a different search term.'));
             searchGrid.appendChild(empty);
             return;
         }
 
-        results.forEach(function(skill) {
-            searchGrid.appendChild(buildSearchCard(skill));
-        });
+        var recommendedIndex = results.findIndex(function(skill) { return !!skill.recommended; });
+        if (recommendedIndex < 0) recommendedIndex = 0;
+        var recommended = results[recommendedIndex];
+        var alternatives = results.filter(function(_, idx) { return idx !== recommendedIndex; });
+        if (searchCount) {
+            searchCount.textContent = '1 recommended' + (alternatives.length ? (' · ' + alternatives.length + ' alternatives') : '');
+        }
+
+        var recommendationMeta = [];
+        recommendationMeta.push('<span class="badge badge-info">Recommended choice</span>');
+        if (recommended.source) {
+            recommendationMeta.push('<span class="badge badge-neutral">' + escapeHtml(sourceLabel(recommended.source)) + '</span>');
+        }
+        if (recommended.downloads > 0) {
+            recommendationMeta.push('<span class="badge badge-neutral">' + escapeHtml(formatNum(recommended.downloads)) + ' downloads</span>');
+        }
+        if (recommended.stars > 0) {
+            recommendationMeta.push('<span class="badge badge-neutral">' + escapeHtml(formatNum(recommended.stars)) + ' stars</span>');
+        }
+
+        var html = '' +
+            '<section class="mcp-decision-shell">' +
+                '<div class="mcp-decision-header">' +
+                    '<div class="mcp-recommendation-label">Best match for "' + escapeHtml(skillsState.searchQuery) + '"</div>' +
+                    '<div class="mcp-recommendation-meta">' + recommendationMeta.join(' ') + '</div>' +
+                '</div>' +
+                '<div class="mcp-decision-lead">' + escapeHtml(recommended.recommended_reason || 'Best overall match for this search.') + '</div>' +
+                '<div class="mcp-decision-card-wrap">' +
+                    buildSearchCardHtml(recommended, 'featured') +
+                '</div>' +
+                (alternatives.length
+                    ? '<div class="mcp-recommendation-actions">' +
+                        '<button type="button" class="btn btn-secondary btn-sm skills-toggle-alternatives-btn" aria-expanded="' + (skillsState.showAlternatives ? 'true' : 'false') + '">' +
+                            (skillsState.showAlternatives ? 'Hide alternatives' : ('Show alternatives (' + alternatives.length + ')')) +
+                        '</button>' +
+                      '</div>'
+                    : '') +
+            '</section>';
+
+        if (alternatives.length && skillsState.showAlternatives) {
+            html += '' +
+                '<section class="mcp-alternatives">' +
+                    '<div class="mcp-alternatives-header">Alternative skills</div>' +
+                    '<div class="skill-list mcp-skill-list mcp-alternatives-grid">' +
+                        alternatives.map(function(skill) {
+                            return buildSearchCardHtml(skill, 'alternative');
+                        }).join('') +
+                    '</div>' +
+                '</section>';
+        }
+
+        searchGrid.innerHTML = html;
+        bindSearchResultActions();
     }
 
-    function buildSearchCard(skill) {
-        var card = el('div', 'skill-card');
-
+    function buildSearchCardHtml(skill, mode) {
+        mode = mode || 'default';
         var displayName = skill.name;
         if (displayName.indexOf('clawhub:') === 0) displayName = displayName.substring(8);
         if (displayName.indexOf('openskills:') === 0) displayName = displayName.substring(11);
 
         var skillBaseName = displayName.split('/').pop() || displayName;
         var isInstalled = installedNames.has(skillBaseName);
-
-        // Header
-        var header = el('div', 'skill-card-header');
-        header.appendChild(el('div', 'skill-name', displayName));
-        var badge = el('span', 'skill-source-badge skill-source-badge--' + skill.source);
-        badge.textContent = sourceLabel(skill.source);
-        header.appendChild(badge);
-        card.appendChild(header);
-
-        // Description
-        card.appendChild(el('div', 'skill-desc', skill.description || 'No description'));
-
-        // Meta row (stats)
+        var decisionTags = (skill.decision_tags || []).length
+            ? '<div class="mcp-card-tags">' + skill.decision_tags.map(function(tag) {
+                return '<span class="badge badge-neutral">' + escapeHtml(tag) + '</span>';
+            }).join('') + '</div>'
+            : '';
+        var rationale = '';
+        if (mode === 'alternative' && (skill.why_choose || skill.tradeoff)) {
+            rationale = '' +
+                '<div class="mcp-card-rationale mcp-card-rationale--compact">' +
+                    (skill.why_choose ? '<div><strong>Why choose this</strong> ' + escapeHtml(skill.why_choose) + '</div>' : '') +
+                    (skill.tradeoff ? '<div><strong>Tradeoff</strong> ' + escapeHtml(skill.tradeoff) + '</div>' : '') +
+                '</div>';
+        }
+        var stats = '';
         if (skill.stars > 0 || skill.downloads > 0) {
-            var meta = el('div', 'skill-meta');
+            var parts = [];
             if (skill.stars > 0) {
-                var starSpan = el('span', 'skill-stat');
-                starSpan.appendChild(svgStar());
-                starSpan.appendChild(document.createTextNode(' ' + formatNum(skill.stars)));
-                meta.appendChild(starSpan);
+                parts.push('<span class="skill-stat">' + svgStar().outerHTML + ' ' + escapeHtml(formatNum(skill.stars)) + '</span>');
             }
             if (skill.downloads > 0) {
-                var dlSpan = el('span', 'skill-stat');
-                dlSpan.appendChild(svgDownload());
-                dlSpan.appendChild(document.createTextNode(' ' + formatNum(skill.downloads)));
-                meta.appendChild(dlSpan);
+                parts.push('<span class="skill-stat">' + svgDownload().outerHTML + ' ' + escapeHtml(formatNum(skill.downloads)) + '</span>');
             }
-            card.appendChild(meta);
+            stats = '<div class="skill-meta">' + parts.join('') + '</div>';
         }
+        return '' +
+            '<div class="skill-card mcp-catalog-card mcp-catalog-card--decision ' +
+                (mode === 'featured' ? 'mcp-catalog-card--featured ' : '') +
+                (mode === 'alternative' ? 'mcp-catalog-card--alternative ' : '') +
+                '" data-skill-source="' + escapeHtml(skill.name) + '" data-skill-display-name="' + escapeHtml(displayName) + '" data-skill-base-name="' + escapeHtml(skillBaseName) + '">' +
+                '<div class="skill-card-header">' +
+                    '<div class="skill-name">' + escapeHtml(displayName) + (skill.recommended ? '<span class="mcp-card-flag">Recommended</span>' : '') + '</div>' +
+                    '<span class="skill-source-badge skill-source-badge--' + escapeHtml(skill.source) + '">' + escapeHtml(sourceLabel(skill.source)) + '</span>' +
+                '</div>' +
+                '<div class="skill-desc">' + escapeHtml(skill.description || 'No description') + '</div>' +
+                decisionTags +
+                stats +
+                rationale +
+                '<div class="skill-card-footer">' +
+                    '<span class="skill-path">' + escapeHtml(skill.name) + '</span>' +
+                    '<div class="skill-card-actions">' +
+                        (isInstalled
+                            ? '<button type="button" class="btn btn-sm btn-installed" disabled>Installed</button>'
+                            : '<button type="button" class="btn btn-sm btn-primary skills-install-btn" data-skill-source="' + escapeHtml(skill.name) + '">Install</button>') +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+    }
 
-        // Actions
-        var actions = el('div', 'skill-card-actions');
-        if (isInstalled) {
-            actions.appendChild(el('button', 'btn btn-sm btn-installed', 'Installed'));
-        } else {
-            var installBtn = el('button', 'btn btn-sm btn-primary', 'Install');
-            installBtn.addEventListener('click', function(e) {
+    function bindSearchResultActions() {
+        if (!searchGrid) return;
+        searchGrid.querySelectorAll('.skills-install-btn').forEach(function(btn) {
+            btn.addEventListener('click', function(e) {
                 e.stopPropagation();
-                installSkill(skill.name, installBtn, card);
+                var source = btn.getAttribute('data-skill-source');
+                var card = btn.closest('.skill-card');
+                if (!source) return;
+                installSkill(source, btn, card);
             });
-            actions.appendChild(installBtn);
-        }
-        card.appendChild(actions);
-
-        // Click card to show detail
-        card.addEventListener('click', function() {
-            if (isInstalled) {
-                openInstalledDetail(skillBaseName);
-            } else {
-                openSearchDetail(skill, displayName);
-            }
         });
-
-        return card;
+        searchGrid.querySelectorAll('.skill-card[data-skill-source]').forEach(function(card) {
+            card.addEventListener('click', function() {
+                var source = card.getAttribute('data-skill-source');
+                var displayName = card.getAttribute('data-skill-display-name') || source;
+                var skillBaseName = card.getAttribute('data-skill-base-name') || displayName;
+                var skill = skillsState.searchResults.find(function(item) { return item.name === source; });
+                if (!skill) return;
+                if (installedNames.has(skillBaseName)) {
+                    openInstalledDetail(skillBaseName);
+                } else {
+                    openSearchDetail(skill, displayName);
+                }
+            });
+        });
+        searchGrid.querySelectorAll('.skills-toggle-alternatives-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                skillsState.showAlternatives = !skillsState.showAlternatives;
+                renderSearchResults(skillsState.searchResults);
+            });
+        });
     }
 
     // --- Install ---
@@ -318,7 +467,11 @@
             });
             var data = await res.json();
             if (data.ok) {
-                showToast('Installed: ' + data.name, 'success');
+                var installMessage = 'Installed: ' + data.name;
+                if (data.security_report && data.security_report.warnings > 0) {
+                    installMessage += ' (risk ' + data.security_report.risk_score + '/100)';
+                }
+                showToast(installMessage, 'success');
                 installedNames.add(data.name);
                 if (btn) { btn.textContent = 'Installed'; btn.className = 'btn btn-sm btn-installed'; btn.disabled = true; }
                 if (card) card.classList.remove('skill-card--installing');
@@ -347,7 +500,11 @@
             });
             var data = await res.json();
             if (data.ok) {
-                showToast('Installed: ' + data.name, 'success');
+                var installMessage = 'Installed: ' + data.name;
+                if (data.security_report && data.security_report.warnings > 0) {
+                    installMessage += ' (risk ' + data.security_report.risk_score + '/100)';
+                }
+                showToast(installMessage, 'success');
                 installedNames.add(data.name);
                 searchInput.value = '';
                 refreshInstalled();

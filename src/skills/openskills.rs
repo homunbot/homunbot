@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use super::installer::InstallResult;
 use super::loader::parse_skill_md_public;
+use super::{
+    adapt_legacy_skill_dir, parse_legacy_manifest, scan_skill_package, InstallSecurityOptions,
+};
 
 const REPO_OWNER: &str = "besoeasy";
 const REPO_NAME: &str = "open-skills";
@@ -59,6 +62,21 @@ struct GitHubTreeEntry {
     entry_type: String,
 }
 
+#[derive(Deserialize)]
+struct GitHubContentDirEntry {
+    name: String,
+    path: String,
+    #[serde(rename = "type")]
+    entry_type: String,
+}
+
+struct RemoteSkillManifest {
+    raw_content: String,
+    name: String,
+    description: String,
+    has_skill_md: bool,
+}
+
 pub struct OpenSkillsSource {
     client: Client,
     skills_dir: PathBuf,
@@ -99,17 +117,25 @@ impl OpenSkillsSource {
     /// Install a skill from the Open Skills repository.
     /// `dir_name` is the directory name under `skills/` (e.g. "free-weather-data")
     pub async fn install(&self, dir_name: &str) -> Result<InstallResult> {
+        self.install_with_options(dir_name, InstallSecurityOptions::default())
+            .await
+    }
+
+    pub async fn install_with_options(
+        &self,
+        dir_name: &str,
+        options: InstallSecurityOptions,
+    ) -> Result<InstallResult> {
         tracing::info!(skill = %dir_name, "Installing skill from Open Skills");
 
-        // Fetch SKILL.md
-        let path = format!("{}/{}/SKILL.md", SKILLS_PATH, dir_name);
-        let content = self
-            .fetch_file(&path)
+        let skill_repo_path = format!("{}/{}", SKILLS_PATH, dir_name);
+        let remote_manifest = self
+            .fetch_remote_manifest(&skill_repo_path)
             .await
             .with_context(|| format!("Skill '{}' not found in Open Skills repo", dir_name))?;
 
         // Security check
-        let security_report = super::security::scan_skill_content(&content);
+        let security_report = super::security::scan_skill_content(&remote_manifest.raw_content);
         if security_report.is_blocked() {
             anyhow::bail!(
                 "Skill '{}' blocked by security scan:\n{}",
@@ -118,25 +144,30 @@ impl OpenSkillsSource {
             );
         }
 
-        // Parse metadata
-        let (meta, _body) = parse_skill_md_public(&content)
-            .with_context(|| "Failed to parse SKILL.md from Open Skills")?;
-
-        let skill_dir = self.skills_dir.join(&meta.name);
+        let skill_dir = self.skills_dir.join(&remote_manifest.name);
 
         // Check if already installed
         if skill_dir.exists() {
             return Ok(InstallResult {
-                name: meta.name,
+                name: remote_manifest.name,
                 path: skill_dir,
                 already_existed: true,
-                description: meta.description,
+                description: remote_manifest.description,
+                security_report: None,
             });
         }
 
-        // Write SKILL.md
-        tokio::fs::create_dir_all(&skill_dir).await?;
-        tokio::fs::write(skill_dir.join("SKILL.md"), &content).await?;
+        self.download_skill_dir(&skill_repo_path, &skill_dir)
+            .await?;
+        let adapted = if remote_manifest.has_skill_md {
+            None
+        } else {
+            adapt_legacy_skill_dir(&skill_dir).await?
+        };
+        let final_description = adapted
+            .as_ref()
+            .map(|adapted| adapted.description.clone())
+            .unwrap_or(remote_manifest.description);
 
         // Write source marker
         let source = format!("openskills:{}\n", dir_name);
@@ -144,17 +175,28 @@ impl OpenSkillsSource {
             .await
             .ok();
 
+        let package_security = scan_skill_package(&skill_dir).await?;
+        if package_security.is_blocked() && !options.force {
+            tokio::fs::remove_dir_all(&skill_dir).await.ok();
+            anyhow::bail!(
+                "Skill '{}' blocked by package security scan:\n{}",
+                dir_name,
+                package_security.summary()
+            );
+        }
+
         tracing::info!(
-            skill = %meta.name,
+            skill = %remote_manifest.name,
             source = %format!("openskills:{}", dir_name),
             "Open Skills skill installed"
         );
 
         Ok(InstallResult {
-            name: meta.name,
+            name: remote_manifest.name,
             path: skill_dir,
             already_existed: false,
-            description: meta.description,
+            description: final_description,
+            security_report: Some(package_security),
         })
     }
 
@@ -362,6 +404,93 @@ impl OpenSkillsSource {
             .text()
             .await
             .context("Failed to read Open Skills file content")
+    }
+
+    async fn fetch_remote_manifest(&self, skill_repo_path: &str) -> Result<RemoteSkillManifest> {
+        let skill_md_path = format!("{skill_repo_path}/SKILL.md");
+        if let Ok(content) = self.fetch_file(&skill_md_path).await {
+            let (meta, _body) = parse_skill_md_public(&content)
+                .with_context(|| "Failed to parse SKILL.md from Open Skills")?;
+            return Ok(RemoteSkillManifest {
+                raw_content: content,
+                name: meta.name,
+                description: meta.description,
+                has_skill_md: true,
+            });
+        }
+
+        for candidate in ["SKILL.toml", "manifest.json"] {
+            let path = format!("{skill_repo_path}/{candidate}");
+            if let Ok(content) = self.fetch_file(&path).await {
+                let manifest = parse_legacy_manifest(candidate, &content).with_context(|| {
+                    format!("Failed to parse legacy manifest {candidate} from Open Skills")
+                })?;
+                return Ok(RemoteSkillManifest {
+                    raw_content: content,
+                    name: manifest.name,
+                    description: manifest.description,
+                    has_skill_md: false,
+                });
+            }
+        }
+
+        anyhow::bail!("No SKILL.md, SKILL.toml, or manifest.json found for skill");
+    }
+
+    async fn download_skill_dir(&self, repo_path: &str, dest: &PathBuf) -> Result<()> {
+        tokio::fs::create_dir_all(dest).await?;
+        self.download_dir_recursive(repo_path, dest).await
+    }
+
+    fn download_dir_recursive<'a>(
+        &'a self,
+        repo_path: &'a str,
+        dest: &'a PathBuf,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let url = format!(
+                "https://api.github.com/repos/{}/{}/contents/{}?ref={}",
+                REPO_OWNER, REPO_NAME, repo_path, BRANCH
+            );
+
+            let response = self
+                .client
+                .get(&url)
+                .header("User-Agent", "homun")
+                .header("Accept", "application/vnd.github.v3+json")
+                .send()
+                .await
+                .with_context(|| format!("Failed to list directory {} in Open Skills", repo_path))?
+                .error_for_status()
+                .with_context(|| format!("Directory {} not found in Open Skills", repo_path))?;
+
+            let entries: Vec<GitHubContentDirEntry> = response
+                .json()
+                .await
+                .context("Failed to parse Open Skills directory listing")?;
+
+            for entry in &entries {
+                let local_path = dest.join(&entry.name);
+                match entry.entry_type.as_str() {
+                    "file" => {
+                        let content = self.fetch_file(&entry.path).await?;
+                        tokio::fs::write(&local_path, content)
+                            .await
+                            .with_context(|| {
+                                format!("Failed to write downloaded file {}", local_path.display())
+                            })?;
+                    }
+                    "dir" => {
+                        tokio::fs::create_dir_all(&local_path).await.ok();
+                        self.download_dir_recursive(&entry.path, &local_path)
+                            .await?;
+                    }
+                    _ => {}
+                }
+            }
+
+            Ok(())
+        })
     }
 
     fn cache_path() -> PathBuf {

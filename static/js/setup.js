@@ -2241,6 +2241,7 @@ if (btnRunCleanup) {
 (function() {
     var appearanceForm = document.getElementById('appearance-form');
     var themeSelect = document.getElementById('theme-select');
+    var languageSelect = document.getElementById('language-select');
 
     if (appearanceForm) {
         appearanceForm.addEventListener('submit', async function(e) {
@@ -2251,24 +2252,32 @@ if (btnRunCleanup) {
             btn.disabled = true;
 
             var theme = themeSelect ? themeSelect.value : 'system';
+            var language = languageSelect ? languageSelect.value : 'system';
 
             try {
-                var resp = await fetch('/api/v1/config', {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ key: 'ui.theme', value: theme }),
-                });
+                var responses = await Promise.all([
+                    fetch('/api/v1/config', {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ key: 'ui.theme', value: theme }),
+                    }),
+                    fetch('/api/v1/config', {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ key: 'ui.language', value: language }),
+                    }),
+                ]);
 
-                if (resp.ok) {
-                    // Apply theme immediately
+                if (responses.every(function(resp) { return resp.ok; })) {
                     applyTheme(theme);
+                    applyLanguage(language);
                     btn.textContent = 'Saved!';
                     setTimeout(function() {
                         btn.textContent = originalText;
                         btn.disabled = false;
                     }, 1500);
                 } else {
-                    throw new Error('Failed to save theme');
+                    throw new Error('Failed to save appearance');
                 }
             } catch (err) {
                 console.error('[Appearance] Save error:', err);
@@ -2283,10 +2292,7 @@ if (btnRunCleanup) {
 
     // Apply theme on page load
     function applyTheme(theme) {
-        // Save to localStorage for persistence across pages
         localStorage.setItem('homun-theme', theme);
-
-        // Remove any existing theme classes
         document.documentElement.classList.remove('dark');
 
         if (theme === 'system') {
@@ -2299,16 +2305,25 @@ if (btnRunCleanup) {
         }
     }
 
-    // Load and apply saved theme on startup
+    function applyLanguage(language) {
+        localStorage.setItem('homun-language', language);
+        var resolved = language === 'system'
+            ? ((navigator.language || 'en').split('-')[0] || 'en')
+            : language;
+        document.documentElement.lang = resolved;
+    }
+
     if (themeSelect) {
         applyTheme(themeSelect.value);
 
-        // Listen for system theme changes when in 'system' mode
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
             if (themeSelect.value === 'system') {
                 applyTheme('system');
             }
         });
+    }
+    if (languageSelect) {
+        applyLanguage(languageSelect.value);
     }
 
     console.log('[Appearance] Form handler initialized');

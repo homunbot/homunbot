@@ -14,6 +14,7 @@ use crate::storage::Database;
 
 use super::api;
 use super::pages;
+use super::run_state::WebRunStore;
 use super::ws;
 
 /// Shared state accessible by all web handlers.
@@ -23,6 +24,7 @@ pub struct AppState {
     pub config: Arc<tokio::sync::RwLock<Config>>,
     pub started_at: Instant,
     pub inbound_tx: Option<mpsc::Sender<InboundMessage>>,
+    pub web_runs: Arc<WebRunStore>,
     /// Active WebSocket sessions: chat_id → sender for outbound messages
     pub ws_sessions: tokio::sync::RwLock<std::collections::HashMap<String, mpsc::Sender<String>>>,
     /// Stream sessions: chat_id → sender for real-time stream chunks and tool events.
@@ -122,6 +124,7 @@ impl WebServer {
             config: self.config,
             started_at: Instant::now(),
             inbound_tx: self.inbound_tx,
+            web_runs: Arc::new(WebRunStore::default()),
             ws_sessions: tokio::sync::RwLock::new(std::collections::HashMap::new()),
             stream_sessions: tokio::sync::RwLock::new(std::collections::HashMap::new()),
             db: self.db,
@@ -134,6 +137,11 @@ impl WebServer {
             let state_for_outbound = state.clone();
             tokio::spawn(async move {
                 while let Some(msg) = outbound_rx.recv().await {
+                    if msg.channel == "web" {
+                        state_for_outbound
+                            .web_runs
+                            .complete_run("web:default", &msg.content);
+                    }
                     let sessions = state_for_outbound.ws_sessions.read().await;
                     if let Some(tx) = sessions.get(&msg.chat_id) {
                         if tx.send(msg.content).await.is_err() {
@@ -154,6 +162,11 @@ impl WebServer {
             let state_for_stream = state.clone();
             tokio::spawn(async move {
                 while let Some(msg) = stream_rx.recv().await {
+                    if msg.chat_id == "default" {
+                        state_for_stream
+                            .web_runs
+                            .append_stream_message("web:default", &msg);
+                    }
                     let streams = state_for_stream.stream_sessions.read().await;
                     if let Some(tx) = streams.get(&msg.chat_id) {
                         let event = super::ws::WsStreamEvent {

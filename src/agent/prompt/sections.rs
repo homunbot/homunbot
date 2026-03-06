@@ -134,6 +134,7 @@ impl PromptSection for ToolsSection {
         // go via the API parameter but the LLM still needs behavioral guidance.
         let has_browser = ctx.registered_tool_names.iter().any(|n| n == "browser");
         let has_web_search = ctx.registered_tool_names.iter().any(|n| n == "web_search");
+        let has_web_fetch = ctx.registered_tool_names.iter().any(|n| n == "web_fetch");
         let has_create_automation = ctx
             .registered_tool_names
             .iter()
@@ -143,41 +144,49 @@ impl PromptSection for ToolsSection {
             .iter()
             .any(|n| n == "read_email_inbox");
 
-        if has_browser {
+        if has_browser || has_web_search || has_web_fetch {
             prompt.push_str("\n### Tool Routing Rules\n\n");
-            prompt.push_str(
-                "When the user asks to browse, navigate, search, or interact with websites, \
-                 ALWAYS use the **browser** tool. Specific triggers:\n\
-                 - \"vai su\", \"apri\", \"naviga\", \"cerca su Google/Bing\" → browser navigate\n\
-                 - \"clicca\", \"compila\", \"scrivi nel campo\" → browser interact\n\
-                 - Any request involving a website with dynamic content → browser\n",
-            );
-            if !has_web_search {
+            if has_web_search {
                 prompt.push_str(
-                    "- No web_search tool is available. To search the web, use the **browser** \
-                     to navigate to a search engine (e.g. google.com) and search from there.\n",
+                    "For general web research, current events, news, or finding candidate sources, \
+                     prefer the **web_search** tool first.\n",
                 );
             }
-            prompt.push_str(
-                "- **web_fetch** is ONLY for reading static content at a known URL, \
-                 NOT for browsing or searching.\n",
-            );
+            if has_web_fetch {
+                prompt.push_str(
+                    "- Use **web_fetch** to read content from a specific known URL after you have identified the page to inspect.\n",
+                );
+            }
+            if has_browser {
+                prompt.push_str(
+                    "- Use the **browser** tool when the task requires interaction with a website: navigating dynamic pages, clicking, typing, logging in, uploading files, or reading JS-rendered content.\n\
+                     - Do NOT open the browser for routine research if **web_search** or **web_fetch** can answer the request more directly.\n",
+                );
+            }
+            if !has_web_search && has_browser {
+                prompt.push_str(
+                    "- No **web_search** tool is available. If you need to search the web, use the **browser** to navigate to a search engine and search from there.\n",
+                );
+            } else if !has_web_fetch && has_browser {
+                prompt.push_str(
+                    "- If you already know the URL but **web_fetch** is unavailable, use the **browser** to open and read the page.\n",
+                );
+            }
 
             // Browser workflow guidance (moved from tool description for better visibility)
-            prompt.push_str(
-                "\n### Browser Workflow\n\n\
-                 When using the browser for web research:\n\
-                 1. `navigate` to a search engine (e.g. google.com)\n\
-                 2. `snapshot` to see the page — find the search box ref\n\
-                 3. `type` your query in the search box with `submit: true`\n\
-                 4. `snapshot` to read search results — you see links with refs\n\
-                 5. `click` the most relevant link ref (do NOT navigate to a guessed URL)\n\
-                 6. `snapshot` to read the article content\n\
-                 7. If insufficient, use `back` and try another result\n\
-                 8. Formulate your answer, then `close`\n\n\
-                 CRITICAL: NEVER guess or invent URLs. ALWAYS click refs from the snapshot.\n\
-                 Snapshot format: `- link \"Title\" [ref=e3]` → use `click ref=e3`\n",
-            );
+            if has_browser {
+                prompt.push_str(
+                    "\n### Browser Workflow\n\n\
+                     Use this workflow only when browser interaction is actually required:\n\
+                     1. `navigate` to the site or search engine you need\n\
+                     2. `snapshot` to inspect visible elements and capture refs\n\
+                     3. `type`, `click`, `select`, or `upload` using refs from the snapshot\n\
+                     4. `snapshot` again to read the updated page or next step\n\
+                     5. Repeat only as needed, then formulate the answer and `close`\n\n\
+                     CRITICAL: NEVER guess or invent URLs. ALWAYS click refs from the snapshot.\n\
+                     Snapshot format: `- link \"Title\" [ref=e3]` → use `click ref=e3`\n",
+                );
+            }
         }
 
         if has_create_automation {
@@ -199,6 +208,16 @@ impl PromptSection for ToolsSection {
                 "When asked to read/check/summarize inbox emails, use **read_email_inbox** first.\n\
                  Do not claim missing access before attempting this tool.\n",
             );
+        }
+
+        if !ctx.mcp_suggestions.is_empty() {
+            prompt.push_str("\n### MCP Setup Opportunities\n\n");
+            prompt.push_str(
+                "If the user needs an external service that is not connected yet, do not pretend access exists.\n\
+                 Offer the relevant MCP integration briefly and only when it directly helps the active request.\n",
+            );
+            prompt.push_str(ctx.mcp_suggestions);
+            prompt.push('\n');
         }
 
         Ok(prompt)
@@ -450,6 +469,7 @@ mod tests {
             bootstrap_files: &[],
             memory_content: "",
             relevant_memories: "",
+            mcp_suggestions: "",
             channel: "test",
             prompt_mode: PromptMode::Full,
             channels_info: "",
@@ -520,8 +540,44 @@ mod tests {
             result.contains("NEVER guess or invent URLs"),
             "URL warning must be visible"
         );
+        assert!(
+            result.contains("Use the **browser** tool when the task requires interaction"),
+            "Browser guidance should describe interaction-oriented usage"
+        );
         // Should NOT have XML tool call format
         assert!(!result.contains("Tool Call Format"));
+    }
+
+    #[test]
+    fn test_tools_section_prefers_web_search_over_browser_for_research() {
+        let section = ToolsSection;
+        let tool_names = vec![
+            "browser".to_string(),
+            "web_search".to_string(),
+            "web_fetch".to_string(),
+        ];
+        let ctx = PromptContext {
+            tools: &[],
+            registered_tool_names: &tool_names,
+            ..make_ctx()
+        };
+        let result = section.build(&ctx).unwrap();
+        assert!(result.contains("prefer the **web_search** tool first"));
+        assert!(result.contains("Use **web_fetch** to read content from a specific known URL"));
+        assert!(result.contains("Do NOT open the browser for routine research"));
+    }
+
+    #[test]
+    fn test_tools_section_includes_mcp_setup_opportunities() {
+        let section = ToolsSection;
+        let ctx = PromptContext {
+            mcp_suggestions:
+                "- Gmail (`gmail`): suggest connecting it from the MCP page if the user wants inbox access.",
+            ..make_ctx()
+        };
+        let result = section.build(&ctx).unwrap();
+        assert!(result.contains("MCP Setup Opportunities"));
+        assert!(result.contains("Gmail"));
     }
 
     #[test]

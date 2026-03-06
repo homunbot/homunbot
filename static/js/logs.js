@@ -88,7 +88,7 @@ function initLogsPage() {
         viewerEl.innerHTML = visible
             .map((event) => {
                 const level = normalizeLevel(event.level);
-                const message = escapeHtml(event.message || '');
+                const message = renderMessageCell(event);
                 return `
                     <div class="log-line log-level-${level}">
                         <span class="log-cell-time">${escapeHtml(formatTimestamp(event.timestamp))}</span>
@@ -114,18 +114,49 @@ function initLogsPage() {
     }
 
     function pushEvent(rawEvent) {
-        events.push({
+        const event = {
             timestamp: rawEvent.timestamp,
             level: normalizeLevel(rawEvent.level),
             target: String(rawEvent.target || ''),
             message: String(rawEvent.message || ''),
-        });
+            module_path: rawEvent.module_path ? String(rawEvent.module_path) : '',
+            file: rawEvent.file ? String(rawEvent.file) : '',
+            line: Number.isFinite(Number(rawEvent.line)) ? Number(rawEvent.line) : null,
+            fields: Array.isArray(rawEvent.fields)
+                ? rawEvent.fields
+                    .filter((field) => field && field.key)
+                    .map((field) => ({
+                        key: String(field.key),
+                        value: String(field.value ?? '')
+                    }))
+                : [],
+        };
+
+        const last = events[events.length - 1];
+        if (last && eventFingerprint(last) === eventFingerprint(event)) {
+            return;
+        }
+
+        events.push(event);
 
         if (events.length > MAX_LOG_EVENTS) {
             events.splice(0, events.length - MAX_LOG_EVENTS);
         }
 
         queueRender();
+    }
+
+    async function loadRecent() {
+        try {
+            const resp = await fetch('/api/v1/logs/recent?limit=250');
+            if (!resp.ok) throw new Error('Failed to load recent logs');
+            const recent = await resp.json();
+            if (Array.isArray(recent)) {
+                recent.forEach(pushEvent);
+            }
+        } catch (_error) {
+            // Keep the live stream working even if backlog loading fails.
+        }
     }
 
     function connect() {
@@ -162,8 +193,42 @@ function initLogsPage() {
         if (source) source.close();
     });
 
-    connect();
-    queueRender();
+    loadRecent().finally(() => {
+        connect();
+        queueRender();
+    });
+}
+
+function eventFingerprint(event) {
+    return [
+        event.timestamp || '',
+        event.level || '',
+        event.target || '',
+        event.message || '',
+        event.module_path || '',
+        event.file || '',
+        event.line || ''
+    ].join('|');
+}
+
+function renderMessageCell(event) {
+    const main = `<div class="log-message-main">${escapeHtml(event.message || '-')}</div>`;
+    const sourceParts = [];
+    if (event.file) {
+        sourceParts.push(escapeHtml(event.line ? `${event.file}:${event.line}` : event.file));
+    }
+    if (event.module_path) {
+        sourceParts.push(escapeHtml(event.module_path));
+    }
+    const source = sourceParts.length
+        ? `<div class="log-message-source">${sourceParts.join(' · ')}</div>`
+        : '';
+    const fields = Array.isArray(event.fields) && event.fields.length
+        ? `<div class="log-message-fields">${event.fields.map((field) => (
+            `<span class="log-field-chip">${escapeHtml(field.key)}=${escapeHtml(field.value)}</span>`
+        )).join('')}</div>`
+        : '';
+    return `${main}${source}${fields}`;
 }
 
 initLogsPage();

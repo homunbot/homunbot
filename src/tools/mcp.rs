@@ -5,14 +5,15 @@ use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use rmcp::model::{CallToolRequestParams, RawContent, ResourceContents};
 use rmcp::service::{RunningService, ServiceExt};
-use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
+use rmcp::transport::TokioChildProcess;
 use serde_json::Value;
-use tokio::process::Command;
 use tokio::sync::RwLock;
 
-use crate::config::McpServerConfig;
+use crate::config::{Config, ExecutionSandboxConfig, McpServerConfig};
+use crate::storage::{global_secrets, SecretKey};
 
 use super::registry::{Tool, ToolContext, ToolResult};
+use super::sandbox_exec::build_process_command;
 
 /// Info about a connected MCP server (for TUI/status display)
 #[derive(Debug, Clone)]
@@ -40,6 +41,10 @@ pub struct McpClientTool {
     input_schema: Value,
     /// Shared reference to the running MCP service peer
     peer: Arc<McpPeer>,
+    /// MCP server alias from config (key in [mcp.servers]).
+    server_name: String,
+    /// Optional shared config for runtime hot-reload.
+    runtime_config: Option<Arc<RwLock<Config>>>,
 }
 
 /// Wrapper around the rmcp RunningService peer for shared access
@@ -141,6 +146,34 @@ impl Tool for McpClientTool {
     }
 
     async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolResult> {
+        if let Some(config_handle) = &self.runtime_config {
+            let (server_config, sandbox_config) = {
+                let cfg = config_handle.read().await;
+                let Some(server) = cfg.mcp.servers.get(&self.server_name) else {
+                    return Ok(ToolResult::error(format!(
+                        "MCP server '{}' is no longer configured",
+                        self.server_name
+                    )));
+                };
+                (server.clone(), cfg.security.execution_sandbox.clone())
+            };
+
+            match call_tool_once(
+                &self.server_name,
+                &server_config,
+                &sandbox_config,
+                &self.mcp_tool_name,
+                args,
+            )
+            .await
+            {
+                Ok(output) => return Ok(ToolResult::success(output)),
+                Err(e) => {
+                    return Ok(ToolResult::error(format!("MCP tool error: {e}")));
+                }
+            }
+        }
+
         match self.peer.call_tool(&self.mcp_tool_name, args).await {
             Ok(output) => Ok(ToolResult::success(output)),
             Err(e) => Ok(ToolResult::error(format!("MCP tool error: {e}"))),
@@ -163,9 +196,20 @@ impl McpManager {
     /// Connect to all enabled MCP servers from config.
     /// Returns the manager and a list of Tool trait objects to register.
     pub async fn start(servers: &HashMap<String, McpServerConfig>) -> (Self, Vec<Box<dyn Tool>>) {
+        Self::start_with_sandbox(servers, None, None).await
+    }
+
+    /// Connect to all enabled MCP servers using optional execution sandbox config.
+    pub async fn start_with_sandbox(
+        servers: &HashMap<String, McpServerConfig>,
+        sandbox_config: Option<ExecutionSandboxConfig>,
+        runtime_config: Option<Arc<RwLock<Config>>>,
+    ) -> (Self, Vec<Box<dyn Tool>>) {
         let mut peers = Vec::new();
         let mut tools: Vec<Box<dyn Tool>> = Vec::new();
         let mut server_infos = Vec::new();
+        let sandbox_config = sandbox_config.unwrap_or_default();
+        let runtime_hot_reload = runtime_config.is_some();
 
         for (name, config) in servers {
             if !config.enabled {
@@ -180,7 +224,7 @@ impl McpManager {
                 continue;
             }
 
-            match connect_server(name, config).await {
+            match connect_server(name, config, &sandbox_config).await {
                 Ok((peer, discovered_tools, info)) => {
                     let peer = Arc::new(peer);
                     tracing::info!(
@@ -208,11 +252,19 @@ impl McpManager {
                             tool_description: description,
                             input_schema,
                             peer: peer.clone(),
+                            server_name: name.clone(),
+                            runtime_config: runtime_config.clone(),
                         }));
                     }
 
                     server_infos.push(info);
-                    peers.push((name.clone(), peer));
+                    if runtime_hot_reload {
+                        // In runtime hot-reload mode we reconnect on each tool call,
+                        // so we can immediately release the startup discovery process.
+                        peer.shutdown().await;
+                    } else {
+                        peers.push((name.clone(), peer));
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(server = %name, error = %e, "Failed to connect MCP server");
@@ -252,17 +304,32 @@ impl McpManager {
 async fn connect_server(
     name: &str,
     config: &McpServerConfig,
+    sandbox_config: &ExecutionSandboxConfig,
 ) -> Result<(McpPeer, Vec<rmcp::model::Tool>, McpServerInfo)> {
     match config.transport.as_str() {
-        "stdio" => connect_stdio(name, config).await,
+        "stdio" => connect_stdio(name, config, sandbox_config).await,
         other => anyhow::bail!("Unsupported MCP transport: {other}. Only 'stdio' is supported."),
     }
+}
+
+async fn call_tool_once(
+    server_name: &str,
+    server_config: &McpServerConfig,
+    sandbox_config: &ExecutionSandboxConfig,
+    tool_name: &str,
+    args: Value,
+) -> Result<String> {
+    let (peer, _tools, _info) = connect_server(server_name, server_config, sandbox_config).await?;
+    let result = peer.call_tool(tool_name, args).await;
+    peer.shutdown().await;
+    result
 }
 
 /// Connect to an MCP server via stdio transport (child process)
 async fn connect_stdio(
     name: &str,
     config: &McpServerConfig,
+    sandbox_config: &ExecutionSandboxConfig,
 ) -> Result<(McpPeer, Vec<rmcp::model::Tool>, McpServerInfo)> {
     let cmd = config
         .command
@@ -272,19 +339,29 @@ async fn connect_stdio(
     let env_vars: Vec<(String, String)> = config
         .env
         .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
+        .map(|(k, v)| {
+            resolve_env_value(name, k, v)
+                .map(|resolved| (k.clone(), resolved))
+                .with_context(|| format!("Failed to resolve env var '{k}' for MCP '{name}'"))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let args = config.args.clone();
+    let env_map: HashMap<String, String> = env_vars.into_iter().collect();
+    let workspace_dir = crate::config::Config::workspace_dir();
+    let _ = std::fs::create_dir_all(&workspace_dir);
+    let process_cmd = build_process_command(
+        "mcp",
+        cmd,
+        &args,
+        &workspace_dir,
+        &env_map,
+        true,
+        sandbox_config,
+    )
+    .with_context(|| format!("Failed to prepare MCP command for server '{name}'"))?;
 
-    let transport = TokioChildProcess::new(Command::new(cmd).configure(move |c| {
-        for arg in &args {
-            c.arg(arg);
-        }
-        for (k, v) in &env_vars {
-            c.env(k, v);
-        }
-    }))
-    .with_context(|| format!("Failed to spawn MCP server '{name}': {cmd}"))?;
+    let transport = TokioChildProcess::new(process_cmd)
+        .with_context(|| format!("Failed to spawn MCP server '{name}': {cmd}"))?;
 
     // Connect and perform MCP initialization handshake
     // () implements ClientHandler with default client info
@@ -317,6 +394,29 @@ async fn connect_stdio(
     };
 
     Ok((McpPeer::new(service), tools, info))
+}
+
+/// Resolve MCP env value, supporting vault references (`vault://key_name`).
+fn resolve_env_value(server_name: &str, env_key: &str, raw_value: &str) -> Result<String> {
+    if !raw_value.starts_with("vault://") {
+        return Ok(raw_value.to_string());
+    }
+
+    let Some(vault_key) = raw_value.strip_prefix("vault://") else {
+        anyhow::bail!("Invalid vault reference in env var '{env_key}'");
+    };
+    if vault_key.trim().is_empty() {
+        anyhow::bail!("Empty vault key in env var '{env_key}'");
+    }
+
+    let secrets = global_secrets().context("Failed to access vault")?;
+    let key = SecretKey::custom(&format!("vault.{}", vault_key.trim()));
+    match secrets.get(&key)? {
+        Some(value) => Ok(value),
+        None => anyhow::bail!(
+            "Vault secret '{vault_key}' not found (required by MCP '{server_name}', env '{env_key}')"
+        ),
+    }
 }
 
 #[cfg(test)]

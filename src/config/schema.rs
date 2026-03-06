@@ -1514,10 +1514,61 @@ impl Default for ExfiltrationConfig {
 }
 
 /// Root security configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SecurityConfig {
     pub exfiltration: ExfiltrationConfig,
+    /// Process sandbox configuration for shell/MCP/skills execution.
+    pub execution_sandbox: ExecutionSandboxConfig,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            exfiltration: ExfiltrationConfig::default(),
+            execution_sandbox: ExecutionSandboxConfig::default(),
+        }
+    }
+}
+
+/// Sandbox configuration for process execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExecutionSandboxConfig {
+    /// Enable sandbox wrapping for process execution paths.
+    pub enabled: bool,
+    /// Backend selection: "none", "auto", or "docker".
+    pub backend: String,
+    /// When true, fail execution if requested backend is unavailable.
+    pub strict: bool,
+    /// Docker image used when backend resolves to docker.
+    pub docker_image: String,
+    /// Docker network mode (recommended: "none").
+    pub docker_network: String,
+    /// Memory limit (MB) for docker sandbox.
+    pub docker_memory_mb: u64,
+    /// CPU limit for docker sandbox.
+    pub docker_cpus: f32,
+    /// Mount root filesystem read-only inside docker container.
+    pub docker_read_only_rootfs: bool,
+    /// Mount Homun workspace into the container at `/workspace`.
+    pub docker_mount_workspace: bool,
+}
+
+impl Default for ExecutionSandboxConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            backend: "auto".to_string(),
+            strict: false,
+            docker_image: "node:22-alpine".to_string(),
+            docker_network: "none".to_string(),
+            docker_memory_mb: 512,
+            docker_cpus: 1.0,
+            docker_read_only_rootfs: false,
+            docker_mount_workspace: true,
+        }
+    }
 }
 
 // --- UI Config ---
@@ -1528,12 +1579,15 @@ pub struct SecurityConfig {
 pub struct UiConfig {
     /// Theme: "light", "dark", or "system"
     pub theme: String,
+    /// Preferred UI/assistant language: "system", "en", "it"
+    pub language: String,
 }
 
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
             theme: "system".to_string(),
+            language: "system".to_string(),
         }
     }
 }
