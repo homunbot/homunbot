@@ -26,7 +26,11 @@ impl Config {
     pub fn load() -> Result<Self> {
         let path = Self::default_path();
         if path.exists() {
-            Self::load_from(&path)
+            let mut config = Self::load_from(&path)?;
+            if config.maybe_migrate_legacy_browser_defaults() {
+                config.save_to(&path)?;
+            }
+            Ok(config)
         } else {
             tracing::warn!(
                 "Config file not found at {}, using defaults",
@@ -51,17 +55,30 @@ impl Config {
         self.save_to(&path)
     }
 
-    /// Save config to a specific path
+    /// Save config to a specific path.
+    ///
+    /// Strips auto-injected virtual MCP servers (e.g. the browser MCP server
+    /// generated from `[browser]` config) so they are not persisted to disk.
     pub fn save_to(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).with_context(|| {
                 format!("Failed to create config directory {}", parent.display())
             })?;
         }
-        let content = toml::to_string_pretty(self).context("Failed to serialize config")?;
+        // Clone to strip virtual servers before serialising.
+        // The browser MCP server is auto-injected from [browser] config at startup
+        // and must not be persisted to disk.
+        let mut snapshot = self.clone();
+        snapshot.mcp.servers.remove("playwright");
+        let content =
+            toml::to_string_pretty(&snapshot).context("Failed to serialize config")?;
         std::fs::write(path, content)
             .with_context(|| format!("Failed to write config to {}", path.display()))?;
         Ok(())
+    }
+
+    fn maybe_migrate_legacy_browser_defaults(&mut self) -> bool {
+        self.browser.maybe_auto_enable_for_legacy_config()
     }
 
     /// Default config file path: ~/.homun/config.toml
@@ -122,7 +139,14 @@ impl Config {
             return true;
         }
 
-        // 3. Auto-detect: Ollama models often have unreliable native tool calling
+        // 3. Per-model capability override
+        if let Some(overrides) = self.agent.model_overrides.get(model) {
+            if let Some(tool_calls) = overrides.tool_calls {
+                return !tool_calls;
+            }
+        }
+
+        // 4. Auto-detect: Ollama models often have unreliable native tool calling
         // Models with :cloud suffix or certain patterns may work better with XML
         if provider_name == "ollama" {
             // For Ollama cloud models, default to XML dispatch
@@ -319,6 +343,14 @@ pub struct AgentConfig {
     pub xml_fallback_delay_ms: u64,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ModelCapabilities {
+    pub multimodal: bool,
+    pub image_input: bool,
+    pub tool_calls: bool,
+}
+
 /// Per-model parameter overrides.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -327,6 +359,12 @@ pub struct ModelOverrides {
     pub temperature: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multimodal: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_input: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<bool>,
 }
 
 impl Default for AgentConfig {
@@ -362,6 +400,29 @@ impl AgentConfig {
             .get(model)
             .and_then(|o| o.max_tokens)
             .unwrap_or(self.max_tokens)
+    }
+
+    pub fn effective_model_capabilities(
+        &self,
+        provider_name: &str,
+        model: &str,
+    ) -> ModelCapabilities {
+        let mut capabilities =
+            crate::provider::capabilities::detect_model_capabilities(provider_name, model);
+
+        if let Some(overrides) = self.model_overrides.get(model) {
+            if let Some(multimodal) = overrides.multimodal {
+                capabilities.multimodal = multimodal;
+            }
+            if let Some(image_input) = overrides.image_input {
+                capabilities.image_input = image_input;
+            }
+            if let Some(tool_calls) = overrides.tool_calls {
+                capabilities.tool_calls = tool_calls;
+            }
+        }
+
+        capabilities
     }
 }
 
@@ -1047,6 +1108,9 @@ pub struct McpServerConfig {
     /// Environment variables to pass to the process
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Explicit attachment-analysis capabilities exposed by this server.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
     /// Whether this server is enabled
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -1060,6 +1124,7 @@ impl Default for McpServerConfig {
             args: Vec::new(),
             url: None,
             env: HashMap::new(),
+            capabilities: Vec::new(),
             enabled: true,
         }
     }
@@ -1598,22 +1663,33 @@ impl Default for UiConfig {
 pub struct BrowserConfig {
     /// Enable browser automation
     pub enabled: bool,
+    /// Internal one-shot migration marker for legacy browser defaults.
+    pub migration_version: u8,
+    /// Legacy field kept for TOML compat — always "playwright" now (MCP-based).
+    #[serde(default = "default_backend")]
+    pub backend: String,
     /// Run browser in headless mode
     pub headless: bool,
     /// Browser type: "chromium", "firefox", "webkit"
     pub browser_type: String,
     /// Path to browser executable (optional, uses system default if not set)
     pub executable_path: String,
-    /// Timeout for browser actions in seconds
-    pub action_timeout_secs: u64,
-    /// Timeout for navigation in seconds
-    pub navigation_timeout_secs: u64,
-    /// Maximum number of elements in snapshot
-    pub snapshot_limit: usize,
     /// Default profile to use (if not specified in action)
     pub default_profile: String,
     /// Named browser profiles for isolation
     pub profiles: HashMap<String, BrowserProfile>,
+}
+
+fn default_backend() -> String {
+    "playwright".to_string()
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowserRuntimeStatus {
+    pub enabled: bool,
+    pub available: bool,
+    pub executable_path: Option<String>,
+    pub reason: Option<String>,
 }
 
 /// A browser profile with isolated cookies, storage, and cache.
@@ -1667,12 +1743,11 @@ impl Default for BrowserConfig {
 
         Self {
             enabled: false,
+            migration_version: 0,
+            backend: "playwright".to_string(),
             headless: true,
             browser_type: "chromium".to_string(),
             executable_path: String::new(),
-            action_timeout_secs: 30,
-            navigation_timeout_secs: 30,
-            snapshot_limit: 100,
             default_profile: "default".to_string(),
             profiles,
         }
@@ -1680,9 +1755,60 @@ impl Default for BrowserConfig {
 }
 
 impl BrowserConfig {
-    /// Get the screenshot directory path
-    pub fn screenshot_path(&self) -> std::path::PathBuf {
-        Config::data_dir().join("screenshots")
+    pub fn maybe_auto_enable_for_legacy_config(&mut self) -> bool {
+        if self.migration_version >= 1 || self.enabled {
+            return false;
+        }
+
+        if !self.looks_like_legacy_default() || !self.mcp_prerequisites_available() {
+            return false;
+        }
+
+        self.enabled = true;
+        self.backend = "playwright".to_string();
+        self.migration_version = 1;
+        true
+    }
+
+    fn looks_like_legacy_default(&self) -> bool {
+        self.executable_path.trim().is_empty()
+            && self.browser_type.eq_ignore_ascii_case("chromium")
+            && self.default_profile == "default"
+            && self.profiles.len() <= 1
+    }
+
+    pub fn runtime_status(&self) -> BrowserRuntimeStatus {
+        let executable_path = self
+            .resolved_executable()
+            .map(|path| path.display().to_string());
+
+        if !self.enabled {
+            return BrowserRuntimeStatus {
+                enabled: false,
+                available: false,
+                executable_path,
+                reason: Some("Browser automation is disabled in configuration.".to_string()),
+            };
+        }
+
+        if !self.mcp_prerequisites_available() {
+            return BrowserRuntimeStatus {
+                enabled: true,
+                available: false,
+                executable_path,
+                reason: Some(
+                    "npx is not available on this machine. Install Node.js to use browser automation via @playwright/mcp."
+                        .to_string(),
+                ),
+            };
+        }
+
+        BrowserRuntimeStatus {
+            enabled: true,
+            available: true,
+            executable_path,
+            reason: None,
+        }
     }
 
     /// Get the browser user data directory path (for login persistence)
@@ -1744,7 +1870,12 @@ impl BrowserConfig {
     /// Get the resolved executable path (or try to find Chrome)
     pub fn resolved_executable(&self) -> Option<std::path::PathBuf> {
         if !self.executable_path.is_empty() {
-            Some(std::path::PathBuf::from(&self.executable_path))
+            let custom = std::path::PathBuf::from(&self.executable_path);
+            if custom.exists() {
+                Some(custom)
+            } else {
+                None
+            }
         } else {
             // Try common Chrome/Chromium paths
             let candidates = if cfg!(target_os = "macos") {
@@ -1768,6 +1899,20 @@ impl BrowserConfig {
                 .map(std::path::PathBuf::from)
         }
     }
+
+    /// Check if `npx` is available (needed to run `npx @playwright/mcp`).
+    pub fn mcp_prerequisites_available(&self) -> bool {
+        std::env::var_os("PATH").is_some_and(|paths| {
+            std::env::split_paths(&paths).any(|dir| {
+                let candidate = if cfg!(windows) {
+                    dir.join("npx.cmd")
+                } else {
+                    dir.join("npx")
+                };
+                candidate.exists()
+            })
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1780,6 +1925,31 @@ mod tests {
         assert_eq!(config.agent.model, "anthropic/claude-sonnet-4-20250514");
         assert_eq!(config.agent.max_iterations, 20);
         assert_eq!(config.agent.temperature, 0.7);
+        assert_eq!(config.browser.backend, "playwright");
+    }
+
+    #[test]
+    fn test_browser_mcp_prerequisites() {
+        let config = BrowserConfig::default();
+        // Just check the method doesn't panic; actual availability depends on env
+        let _ = config.mcp_prerequisites_available();
+    }
+
+    #[test]
+    fn test_legacy_browser_migration_is_one_shot() {
+        let mut browser = BrowserConfig::default();
+        browser.enabled = false;
+        browser.migration_version = 0;
+
+        if browser.mcp_prerequisites_available() {
+            assert!(browser.maybe_auto_enable_for_legacy_config());
+            assert!(browser.enabled);
+            assert_eq!(browser.migration_version, 1);
+
+            browser.enabled = false;
+            assert!(!browser.maybe_auto_enable_for_legacy_config());
+            assert!(!browser.enabled);
+        }
     }
 
     #[test]
@@ -1845,5 +2015,48 @@ api_key = "sk-or-test"
         let serialized = toml::to_string_pretty(&config).unwrap();
         let deserialized: Config = toml::from_str(&serialized).unwrap();
         assert_eq!(config.agent.model, deserialized.agent.model);
+    }
+
+    #[test]
+    fn test_effective_model_capabilities_apply_overrides() {
+        let mut config = Config::default();
+        config.agent.model_overrides.insert(
+            "ollama/custom-vision".to_string(),
+            ModelOverrides {
+                multimodal: Some(true),
+                image_input: Some(true),
+                tool_calls: Some(false),
+                ..Default::default()
+            },
+        );
+
+        let caps = config
+            .agent
+            .effective_model_capabilities("ollama", "ollama/custom-vision");
+        assert!(caps.multimodal);
+        assert!(caps.image_input);
+        assert!(!caps.tool_calls);
+    }
+
+    #[test]
+    fn test_xml_dispatch_uses_model_tool_call_override() {
+        let mut config = Config::default();
+        config.agent.model_overrides.insert(
+            "ollama/custom-vision".to_string(),
+            ModelOverrides {
+                tool_calls: Some(false),
+                ..Default::default()
+            },
+        );
+        assert!(config.should_use_xml_dispatch("ollama", "ollama/custom-vision"));
+
+        config.agent.model_overrides.insert(
+            "ollama/cloud-native-tools:cloud".to_string(),
+            ModelOverrides {
+                tool_calls: Some(true),
+                ..Default::default()
+            },
+        );
+        assert!(!config.should_use_xml_dispatch("ollama", "ollama/cloud-native-tools:cloud"));
     }
 }

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
@@ -59,6 +60,21 @@ impl OpenAICompatProvider {
         }
         model.to_string()
     }
+
+    fn convert_messages(messages: &[ChatMessage]) -> Result<Vec<OpenAIRequestMessage>> {
+        messages
+            .iter()
+            .map(|msg| {
+                Ok(OpenAIRequestMessage {
+                    role: msg.role.clone(),
+                    content: convert_openai_content(msg)?,
+                    tool_calls: msg.tool_calls.clone(),
+                    tool_call_id: msg.tool_call_id.clone(),
+                    name: msg.name.clone(),
+                })
+            })
+            .collect()
+    }
 }
 
 /// Default API base URLs for known providers.
@@ -106,7 +122,7 @@ fn default_api_base(provider_name: &str) -> String {
 #[derive(Serialize)]
 struct OpenAIRequest {
     model: String,
-    messages: Vec<ChatMessage>,
+    messages: Vec<OpenAIRequestMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -117,6 +133,38 @@ struct OpenAIRequest {
     tool_choice: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct OpenAIRequestMessage {
+    role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<OpenAIMessageContent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<ToolCallSerialized>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum OpenAIMessageContent {
+    Text(String),
+    Parts(Vec<OpenAIContentPart>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum OpenAIContentPart {
+    Text { text: String },
+    ImageUrl { image_url: OpenAIImageUrl },
+}
+
+#[derive(Serialize)]
+struct OpenAIImageUrl {
+    url: String,
 }
 
 /// SSE streaming chunk from OpenAI-compatible API
@@ -218,10 +266,12 @@ impl Provider for OpenAICompatProvider {
         let url = format!("{}/chat/completions", self.api_base);
 
         let has_tools = !request.tools.is_empty();
+        let messages = Self::convert_messages(&request.messages)
+            .context("Failed to prepare OpenAI-compatible messages")?;
 
         let body = OpenAIRequest {
             model,
-            messages: request.messages,
+            messages,
             max_tokens: Some(request.max_tokens.max(1)),
             temperature: Some(request.temperature),
             tools: request.tools,
@@ -343,10 +393,12 @@ impl Provider for OpenAICompatProvider {
     ) -> Result<ChatResponse> {
         let model = self.resolve_model(&request.model);
         let url = format!("{}/chat/completions", self.api_base);
+        let messages = Self::convert_messages(&request.messages)
+            .context("Failed to prepare OpenAI-compatible streaming messages")?;
 
         let body = OpenAIRequest {
             model,
-            messages: request.messages,
+            messages,
             max_tokens: Some(request.max_tokens.max(1)),
             temperature: Some(request.temperature),
             tools: request.tools,
@@ -595,6 +647,48 @@ fn repair_json(input: &str) -> String {
     s
 }
 
+fn convert_openai_content(msg: &ChatMessage) -> Result<Option<OpenAIMessageContent>> {
+    if let Some(parts) = &msg.content_parts {
+        let mut converted = Vec::new();
+        for part in parts {
+            match part {
+                ChatContentPart::Text { text } => {
+                    if !text.trim().is_empty() {
+                        converted.push(OpenAIContentPart::Text { text: text.clone() });
+                    }
+                }
+                ChatContentPart::Image { path, media_type } => {
+                    let bytes = std::fs::read(path)
+                        .with_context(|| format!("Failed to read image attachment '{}'", path))?;
+                    converted.push(OpenAIContentPart::ImageUrl {
+                        image_url: OpenAIImageUrl {
+                            url: format!("data:{};base64,{}", media_type, BASE64.encode(bytes)),
+                        },
+                    });
+                }
+                ChatContentPart::File {
+                    path,
+                    media_type,
+                    name,
+                } => {
+                    converted.push(OpenAIContentPart::Text {
+                        text: format!("Attached file: {} ({}) at {}", name, media_type, path),
+                    });
+                }
+            }
+        }
+        if !converted.is_empty() {
+            return Ok(Some(OpenAIMessageContent::Parts(converted)));
+        }
+    }
+
+    Ok(msg
+        .content
+        .clone()
+        .or_else(|| msg.rendered_text())
+        .map(OpenAIMessageContent::Text))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,5 +808,26 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&repaired).unwrap();
         assert_eq!(parsed["command"], "echo test");
         assert_eq!(parsed["working_dir"], "/tmp");
+    }
+
+    #[test]
+    fn test_convert_openai_multimodal_content() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp.path(), b"fake").unwrap();
+        let message = ChatMessage::user_parts(vec![
+            ChatContentPart::Text {
+                text: "Inspect this".to_string(),
+            },
+            ChatContentPart::Image {
+                path: temp.path().to_string_lossy().to_string(),
+                media_type: "image/png".to_string(),
+            },
+        ]);
+
+        let content = convert_openai_content(&message).unwrap().unwrap();
+        let OpenAIMessageContent::Parts(parts) = content else {
+            panic!("expected multipart OpenAI content");
+        };
+        assert_eq!(parts.len(), 2);
     }
 }

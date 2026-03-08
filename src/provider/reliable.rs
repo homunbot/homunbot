@@ -80,6 +80,11 @@ impl ReliableProvider {
             || err_str.contains("not support tool")
             || err_str.contains("no endpoints found")
             || err_str.contains("unsupported")
+            || err_str.contains("request body too large")
+            || err_str.contains("payload too large")
+            || err_str.contains("content too large")
+            || err_str.contains("entity too large")
+            || err_str.contains("http 413")
         {
             return FailoverDecision::NextProvider;
         }
@@ -349,6 +354,12 @@ mod tests {
 
         // Generic "bad request" should not be retried
         let err = anyhow::anyhow!("Bad Request: invalid parameters");
+        assert_eq!(
+            ReliableProvider::classify_error(&err),
+            FailoverDecision::NextProvider
+        );
+
+        let err = anyhow::anyhow!("Ollama error: http: request body too large");
         assert_eq!(
             ReliableProvider::classify_error(&err),
             FailoverDecision::NextProvider

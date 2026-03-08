@@ -165,6 +165,22 @@ impl Database {
         )
         .await?;
 
+        // Migration 009 — persisted web chat runs for restart restore
+        Self::apply_migration(
+            pool,
+            "009_web_chat_runs",
+            include_str!("../../migrations/009_web_chat_runs.sql"),
+        )
+        .await?;
+
+        // Migration 010 — effective model for persisted web chat runs
+        Self::apply_migration(
+            pool,
+            "010_web_chat_run_model",
+            include_str!("../../migrations/010_web_chat_run_model.sql"),
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -249,6 +265,33 @@ impl Database {
         Ok(())
     }
 
+    /// Update the JSON metadata blob for a session.
+    pub async fn set_session_metadata(&self, key: &str, metadata: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE sessions
+             SET metadata = ?, updated_at = datetime('now')
+             WHERE key = ?",
+        )
+        .bind(metadata)
+        .bind(key)
+        .execute(&self.pool)
+        .await
+        .context("Failed to update session metadata")?;
+
+        Ok(())
+    }
+
+    /// Delete a session and all related rows via cascade.
+    pub async fn delete_session(&self, key: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM sessions WHERE key = ?")
+            .bind(key)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete session")?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Load session metadata
     pub async fn load_session(&self, key: &str) -> Result<Option<SessionRow>> {
         let row = sqlx::query_as::<_, SessionRow>(
@@ -261,6 +304,95 @@ impl Database {
         .context("Failed to load session")?;
 
         Ok(row)
+    }
+
+    /// Persist or update a web chat run snapshot for restart-safe restore.
+    pub async fn upsert_web_chat_run(
+        &self,
+        run: &crate::web::run_state::WebChatRunSnapshot,
+    ) -> Result<()> {
+        let events_json = serde_json::to_string(&run.events)
+            .context("Failed to serialize web chat run events")?;
+
+        sqlx::query(
+            "INSERT INTO web_chat_runs (
+                run_id, session_key, status, user_message, assistant_response,
+                effective_model, events_json, error, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(run_id) DO UPDATE SET
+                status = excluded.status,
+                user_message = excluded.user_message,
+                assistant_response = excluded.assistant_response,
+                effective_model = excluded.effective_model,
+                events_json = excluded.events_json,
+                error = excluded.error,
+                updated_at = excluded.updated_at",
+        )
+        .bind(&run.run_id)
+        .bind(&run.session_key)
+        .bind(&run.status)
+        .bind(&run.user_message)
+        .bind(&run.assistant_response)
+        .bind(run.effective_model.as_deref())
+        .bind(events_json)
+        .bind(run.error.as_deref())
+        .bind(&run.created_at)
+        .bind(&run.updated_at)
+        .execute(&self.pool)
+        .await
+        .context("Failed to upsert web chat run")?;
+
+        Ok(())
+    }
+
+    /// Load the latest non-completed web chat run that should be restorable in the UI.
+    pub async fn load_restorable_web_chat_run(
+        &self,
+        session_key: &str,
+    ) -> Result<Option<crate::web::run_state::WebChatRunSnapshot>> {
+        let row = sqlx::query_as::<_, WebChatRunRow>(
+            "SELECT
+                run_id, session_key, status, user_message, assistant_response,
+                effective_model, events_json, error, created_at, updated_at
+             FROM web_chat_runs
+             WHERE session_key = ?
+               AND status IN ('running', 'stopping', 'interrupted', 'failed')
+             ORDER BY updated_at DESC
+             LIMIT 1",
+        )
+        .bind(session_key)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to load restorable web chat run")?;
+
+        row.map(TryInto::try_into).transpose()
+    }
+
+    /// Delete persisted web chat runs for a session.
+    pub async fn delete_web_chat_runs(&self, session_key: &str) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM web_chat_runs WHERE session_key = ?")
+            .bind(session_key)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete web chat runs")?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Mark runs left open by a previous process as interrupted.
+    pub async fn mark_incomplete_web_chat_runs_interrupted(&self) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE web_chat_runs
+             SET status = 'interrupted',
+                 error = COALESCE(error, 'Run interrupted after process restart'),
+                 updated_at = datetime('now')
+             WHERE status IN ('running', 'stopping')",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to interrupt stale web chat runs")?;
+
+        Ok(result.rows_affected())
     }
 
     // --- Message operations ---
@@ -286,6 +418,12 @@ impl Database {
         .execute(&self.pool)
         .await
         .context("Failed to insert message")?;
+
+        sqlx::query("UPDATE sessions SET updated_at = datetime('now') WHERE key = ?")
+            .bind(session_key)
+            .execute(&self.pool)
+            .await
+            .context("Failed to touch session after message insert")?;
 
         Ok(())
     }
@@ -340,6 +478,72 @@ impl Database {
         .context("Failed to reset session")?;
 
         Ok(())
+    }
+
+    /// List sessions by key prefix with lightweight message statistics.
+    pub async fn list_sessions_by_prefix(
+        &self,
+        prefix_like: &str,
+        limit: u32,
+    ) -> Result<Vec<SessionListRow>> {
+        let rows = sqlx::query_as::<_, SessionListRow>(
+            "SELECT
+                s.key,
+                s.created_at,
+                s.updated_at,
+                s.metadata,
+                (
+                    SELECT COUNT(*)
+                    FROM messages m
+                    WHERE m.session_key = s.key
+                      AND m.role IN ('user', 'assistant')
+                ) AS message_count,
+                (
+                    SELECT m.content
+                    FROM messages m
+                    WHERE m.session_key = s.key
+                      AND m.role = 'user'
+                    ORDER BY m.id ASC
+                    LIMIT 1
+                ) AS first_user_message,
+                (
+                    SELECT m.content
+                    FROM messages m
+                    WHERE m.session_key = s.key
+                      AND m.role IN ('user', 'assistant')
+                    ORDER BY m.id DESC
+                    LIMIT 1
+                ) AS last_message_preview,
+                (
+                    SELECT m.timestamp
+                    FROM messages m
+                    WHERE m.session_key = s.key
+                      AND m.role IN ('user', 'assistant')
+                    ORDER BY m.id DESC
+                    LIMIT 1
+                ) AS last_message_at
+             FROM sessions s
+             WHERE s.key LIKE ?
+             ORDER BY COALESCE(
+                 (
+                     SELECT m.timestamp
+                     FROM messages m
+                     WHERE m.session_key = s.key
+                       AND m.role IN ('user', 'assistant')
+                     ORDER BY m.id DESC
+                     LIMIT 1
+                 ),
+                 s.updated_at
+             ) DESC
+             LIMIT ?",
+        )
+        .bind(prefix_like)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to list sessions by prefix")?;
+
+        Ok(rows)
     }
 
     /// Load the oldest messages that would be pruned during compaction
@@ -1523,6 +1727,18 @@ pub struct SessionRow {
 }
 
 #[derive(Debug, sqlx::FromRow)]
+pub struct SessionListRow {
+    pub key: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub metadata: String,
+    pub message_count: i64,
+    pub first_user_message: Option<String>,
+    pub last_message_preview: Option<String>,
+    pub last_message_at: Option<String>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
 pub struct MessageRow {
     pub id: i64,
     pub session_key: String,
@@ -1539,6 +1755,41 @@ pub struct MemoryRow {
     pub content: String,
     pub memory_type: String,
     pub created_at: String,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct WebChatRunRow {
+    run_id: String,
+    session_key: String,
+    status: String,
+    user_message: String,
+    assistant_response: String,
+    effective_model: Option<String>,
+    events_json: String,
+    error: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+impl TryFrom<WebChatRunRow> for crate::web::run_state::WebChatRunSnapshot {
+    type Error = anyhow::Error;
+
+    fn try_from(row: WebChatRunRow) -> Result<Self, Self::Error> {
+        let events = serde_json::from_str(&row.events_json)
+            .context("Failed to deserialize web chat run events")?;
+        Ok(Self {
+            run_id: row.run_id,
+            session_key: row.session_key,
+            status: row.status,
+            user_message: row.user_message,
+            effective_model: row.effective_model,
+            assistant_response: row.assistant_response,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            events,
+            error: row.error,
+        })
+    }
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -1817,6 +2068,66 @@ END;
         db.upsert_session("cli:default", 5).await.unwrap();
         let session = db.load_session("cli:default").await.unwrap().unwrap();
         assert_eq!(session.last_consolidated, 5);
+    }
+
+    #[tokio::test]
+    async fn test_web_chat_runs_persist_and_interrupt() {
+        let (db, _dir) = test_db().await;
+        db.upsert_session("web:test", 0).await.unwrap();
+
+        let run = crate::web::run_state::WebChatRunSnapshot {
+            run_id: "run_test_1".to_string(),
+            session_key: "web:test".to_string(),
+            status: "running".to_string(),
+            user_message: "ciao".to_string(),
+            effective_model: Some("openai/gpt-4o".to_string()),
+            assistant_response: "parziale".to_string(),
+            created_at: "2026-03-06T10:00:00Z".to_string(),
+            updated_at: "2026-03-06T10:00:05Z".to_string(),
+            events: vec![crate::web::run_state::WebChatRunEvent {
+                event_type: "tool_start".to_string(),
+                name: "browser".to_string(),
+                tool_call: None,
+            }],
+            error: None,
+        };
+
+        db.upsert_web_chat_run(&run).await.unwrap();
+
+        let restored = db
+            .load_restorable_web_chat_run("web:test")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.run_id, run.run_id);
+        assert_eq!(restored.status, "running");
+        assert_eq!(restored.assistant_response, "parziale");
+        assert_eq!(restored.events.len(), 1);
+
+        let interrupted = db
+            .mark_incomplete_web_chat_runs_interrupted()
+            .await
+            .unwrap();
+        assert_eq!(interrupted, 1);
+
+        let restored = db
+            .load_restorable_web_chat_run("web:test")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.status, "interrupted");
+        assert_eq!(
+            restored.error.as_deref(),
+            Some("Run interrupted after process restart")
+        );
+
+        let deleted = db.delete_web_chat_runs("web:test").await.unwrap();
+        assert_eq!(deleted, 1);
+        assert!(db
+            .load_restorable_web_chat_run("web:test")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

@@ -44,6 +44,14 @@ function stripPrefix(model) {
     return idx >= 0 ? model.substring(idx + 1) : model;
 }
 
+function modelFromQuery() {
+    try {
+        return new URLSearchParams(window.location.search).get('model') || '';
+    } catch (_) {
+        return '';
+    }
+}
+
 /** Patch a single config key via API */
 async function patchConfig(key, value) {
     var resp = await fetch('/api/v1/config', {
@@ -391,6 +399,7 @@ if (providerGrid) {
         if (e.target.name !== 'active-model') return;
         var model = e.target.value;
         patchConfig('agent.model', model).then(function() {
+            _allModelsCache = null;
             updateActiveBanner(model);
             showToast('Model changed to ' + stripPrefix(model), 'success');
         }).catch(function() {
@@ -419,6 +428,7 @@ if (providerGrid) {
         }
 
         patchConfig('agent.model', modelName).then(function() {
+            _allModelsCache = null;
             updateActiveBanner(modelName);
             input.value = '';
             showToast('Model set to ' + stripPrefix(modelName), 'success');
@@ -709,6 +719,55 @@ async function runWizardNextStep() {
 
 var _allModelsCache = null;
 
+async function hydrateModelCapabilities(data) {
+    if (!data || !Array.isArray(data.models)) return data;
+
+    var existing = data.model_capabilities || {};
+    var merged = {};
+    Object.keys(existing).forEach(function(modelId) {
+        merged[modelId] = existing[modelId];
+    });
+
+    var modelIds = data.models.map(function(m) { return m.model; });
+    if (data.current) modelIds.push(data.current);
+    if (data.vision_model) modelIds.push(data.vision_model);
+    if (data.model_overrides) {
+        Object.keys(data.model_overrides).forEach(function(modelId) {
+            modelIds.push(modelId);
+        });
+    }
+    if (data.hidden_models) {
+        Object.keys(data.hidden_models).forEach(function(provider) {
+            data.hidden_models[provider].forEach(function(modelId) {
+                modelIds.push(modelId);
+            });
+        });
+    }
+
+    var missing = Array.from(new Set(modelIds)).filter(function(modelId) {
+        return modelId && !merged[modelId];
+    });
+
+    if (missing.length > 0) {
+        try {
+            var resp = await fetch('/api/v1/providers/model-capabilities', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ models: missing }),
+            });
+            var payload = await resp.json();
+            if (payload && payload.ok && payload.model_capabilities) {
+                Object.keys(payload.model_capabilities).forEach(function(modelId) {
+                    merged[modelId] = payload.model_capabilities[modelId];
+                });
+            }
+        } catch (_) {}
+    }
+
+    data.model_capabilities = merged;
+    return data;
+}
+
 async function fetchAllModels() {
     if (_allModelsCache) return _allModelsCache;
     try {
@@ -749,6 +808,7 @@ async function fetchAllModels() {
             } catch (_) {}
         }
 
+        await hydrateModelCapabilities(data);
         _allModelsCache = data;
         return data;
     } catch (err) {
@@ -1037,6 +1097,49 @@ function addModelRadio(item, model, setActive) {
     addModelRadioElement(modelList, model, stripPrefix(model), currentModel, provider, {});
 }
 
+async function focusModelSettingsFromQuery() {
+    var modelId = modelFromQuery();
+    if (!modelId || !providerGrid) return;
+
+    var slash = modelId.indexOf('/');
+    if (slash < 0) return;
+    var provider = modelId.substring(0, slash);
+    var card = providerGrid.querySelector('.provider-card[data-provider="' + CSS.escape(provider) + '"]');
+    if (!card) return;
+
+    var body = card.querySelector('.provider-card-body');
+    var header = card.querySelector('.provider-card-header');
+    var chevron = header ? header.querySelector('.provider-chevron') : null;
+    if (body && body.hidden) {
+        body.hidden = false;
+        if (header) header.setAttribute('aria-expanded', 'true');
+        if (chevron) chevron.classList.add('expanded');
+    }
+
+    if (!card.dataset.modelsLoaded) {
+        await loadProviderModels(card);
+    }
+
+    var wrapper = card.querySelector('input[name="active-model"][value="' + CSS.escape(modelId) + '"]');
+    if (!wrapper) {
+        addModelRadio(card, modelId, false);
+        wrapper = card.querySelector('input[name="active-model"][value="' + CSS.escape(modelId) + '"]');
+    }
+    var radioWrapper = wrapper ? wrapper.closest('.model-radio-wrapper') : null;
+    if (!radioWrapper) return;
+
+    var data = await fetchAllModels();
+    var overrides = data.model_overrides || {};
+    if (!radioWrapper.querySelector('.model-overrides-form')) {
+        toggleModelOverrides(radioWrapper, modelId, overrides);
+    }
+
+    card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    window.setTimeout(function() {
+        radioWrapper.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 120);
+}
+
 
 // ═══ Model Hiding ═══
 
@@ -1121,6 +1224,15 @@ function restoreModel(provider, modelId) {
 
 // ═══ Per-Model Settings ═══
 
+function getEffectiveModelCapabilities(modelId, data) {
+    var caps = (data && data.model_capabilities && data.model_capabilities[modelId]) || {};
+    return {
+        multimodal: !!caps.multimodal,
+        image_input: !!caps.image_input,
+        tool_calls: caps.tool_calls !== false,
+    };
+}
+
 function toggleModelOverrides(wrapper, modelId, overrides) {
     var existing = wrapper.querySelector('.model-overrides-form');
     if (existing) {
@@ -1129,6 +1241,7 @@ function toggleModelOverrides(wrapper, modelId, overrides) {
     }
 
     var current = (overrides && overrides[modelId]) || {};
+    var capabilityDefaults = getEffectiveModelCapabilities(modelId, _allModelsCache || {});
 
     var form = document.createElement('div');
     form.className = 'model-overrides-form';
@@ -1164,6 +1277,63 @@ function toggleModelOverrides(wrapper, modelId, overrides) {
     if (current.max_tokens != null) tokInput.value = current.max_tokens;
     form.appendChild(tokInput);
 
+    var capabilityHint = document.createElement('div');
+    capabilityHint.className = 'form-hint';
+    capabilityHint.textContent = 'Capabilities are prefilled from known model defaults. Adjust them for custom or BYOK models.';
+    form.appendChild(capabilityHint);
+
+    var capabilityFields = [
+        {
+            key: 'multimodal',
+            label: 'Multimodal',
+            help: 'Treat this model as non-text capable.',
+            checked: current.multimodal != null ? current.multimodal : capabilityDefaults.multimodal,
+        },
+        {
+            key: 'image_input',
+            label: 'Image input',
+            help: 'Use this model directly for image attachments.',
+            checked: current.image_input != null ? current.image_input : capabilityDefaults.image_input,
+        },
+        {
+            key: 'tool_calls',
+            label: 'Native tool calls',
+            help: 'Disable this if the model needs XML tool dispatch instead of native function calling.',
+            checked: current.tool_calls != null ? current.tool_calls : capabilityDefaults.tool_calls,
+        },
+    ];
+
+    var capabilityInputs = {};
+    capabilityFields.forEach(function(field) {
+        var row = document.createElement('label');
+        row.className = 'checkbox-row';
+
+        var checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = !!field.checked;
+        row.appendChild(checkbox);
+
+        var text = document.createElement('span');
+        text.textContent = field.label;
+        row.appendChild(text);
+        form.appendChild(row);
+
+        var help = document.createElement('div');
+        help.className = 'form-hint';
+        help.textContent = field.help;
+        form.appendChild(help);
+
+        capabilityInputs[field.key] = checkbox;
+    });
+
+    if (capabilityInputs.multimodal && capabilityInputs.image_input) {
+        capabilityInputs.multimodal.addEventListener('change', function() {
+            if (capabilityInputs.multimodal.checked) {
+                capabilityInputs.image_input.checked = true;
+            }
+        });
+    }
+
     // Buttons row
     var btnRow = document.createElement('div');
     btnRow.className = 'override-buttons';
@@ -1173,7 +1343,7 @@ function toggleModelOverrides(wrapper, modelId, overrides) {
     saveBtn.className = 'btn btn-xs btn-primary';
     saveBtn.textContent = 'Save';
     saveBtn.addEventListener('click', function() {
-        saveModelOverrides(modelId, tempInput.value, tokInput.value, form);
+        saveModelOverrides(modelId, tempInput.value, tokInput.value, capabilityInputs, capabilityDefaults, form);
     });
     btnRow.appendChild(saveBtn);
 
@@ -1190,13 +1360,22 @@ function toggleModelOverrides(wrapper, modelId, overrides) {
     wrapper.appendChild(form);
 }
 
-function saveModelOverrides(modelId, tempVal, tokensVal, formEl) {
+function saveModelOverrides(modelId, tempVal, tokensVal, capabilityInputs, capabilityDefaults, formEl) {
     var data = _allModelsCache || {};
     var allOverrides = Object.assign({}, data.model_overrides || {});
 
     var entry = {};
     if (tempVal !== '') entry.temperature = parseFloat(tempVal);
     if (tokensVal !== '') entry.max_tokens = parseInt(tokensVal, 10);
+    if (capabilityInputs.multimodal && capabilityInputs.multimodal.checked && capabilityInputs.image_input) {
+        capabilityInputs.image_input.checked = true;
+    }
+    ['multimodal', 'image_input', 'tool_calls'].forEach(function(key) {
+        if (!capabilityInputs[key]) return;
+        if (capabilityInputs[key].checked !== !!capabilityDefaults[key]) {
+            entry[key] = capabilityInputs[key].checked;
+        }
+    });
 
     if (Object.keys(entry).length === 0) {
         delete allOverrides[modelId];
@@ -2115,6 +2294,7 @@ if (btnRunCleanup) {
     var browserForm = document.getElementById('browser-form');
     var btnTestBrowser = document.getElementById('btn-test-browser');
     var browserResult = document.getElementById('browser-result');
+    var browserEnabledToggle = document.getElementById('browser-enabled');
     var headlessToggle = document.getElementById('browser-headless');
     var actionTimeout = document.getElementById('browser-action-timeout');
     var navTimeout = document.getElementById('browser-nav-timeout');
@@ -2153,9 +2333,11 @@ if (btnRunCleanup) {
             browserResult.className = 'form-hint';
 
             var headless = headlessToggle ? headlessToggle.checked : true;
+            var browserEnabled = browserEnabledToggle ? browserEnabledToggle.checked : true;
             var executablePath = document.getElementById('browser-executable');
 
             var patches = [
+                { key: 'browser.enabled', value: String(browserEnabled) },
                 { key: 'browser.headless', value: String(headless) },
                 { key: 'browser.executable_path', value: executablePath ? executablePath.value : '' },
                 { key: 'browser.action_timeout_secs', value: actionTimeout ? (actionTimeout.value || '10') : '10' },
@@ -2330,3 +2512,4 @@ if (btnRunCleanup) {
 })();
 
 console.log('[Setup] Script loaded completely');
+focusModelSettingsFromQuery();

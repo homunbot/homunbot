@@ -53,8 +53,6 @@ use crate::tools::McpManager;
 #[cfg(feature = "local-embeddings")]
 use crate::tools::RememberTool;
 
-#[cfg(feature = "browser")]
-use crate::browser::BrowserTool;
 
 #[cfg(feature = "cli")]
 #[derive(Parser)]
@@ -473,20 +471,9 @@ fn create_tool_registry(
     #[cfg(feature = "local-embeddings")]
     registry.register(Box::new(tools::RememberTool::new()));
 
-    // Browser tool — register if Chrome/Chromium is found on the system
-    #[cfg(feature = "browser")]
-    {
-        if let Some(executable) = config.browser.resolved_executable() {
-            registry.register(Box::new(tools::BrowserTool::new()));
-            tracing::info!(
-                executable = %executable.display(),
-                headless = config.browser.headless,
-                "Browser tool registered (Chrome found)"
-            );
-        } else {
-            tracing::debug!("Browser tool not registered: no Chrome/Chromium executable found");
-        }
-    }
+    // Browser automation is now handled by the Playwright MCP server.
+    // The browser MCP config is injected into the MCP servers map before
+    // McpManager::start_with_sandbox() — see inject_browser_mcp_server().
 
     tracing::info!(tools = registry.len(), "Tool registry initialized");
 
@@ -692,14 +679,26 @@ async fn main() -> Result<()> {
 
     match command {
         Commands::Chat { message } => {
-            let config = Config::load()?;
+            let mut config = Config::load()?;
+            // Inject browser MCP server into config so it's treated like any other MCP server
+            #[cfg(feature = "mcp")]
+            if let Some(browser_mcp) =
+                crate::browser::browser_mcp_server_config(&config.browser)
+            {
+                config.mcp.servers.insert(
+                    crate::browser::BROWSER_MCP_SERVER_NAME.to_string(),
+                    browser_mcp,
+                );
+            }
             let db = Database::open(&config.storage.resolved_path()).await?;
             let provider = provider::create_provider(&config)?;
             let mut tool_registry = create_tool_registry(&config, db.clone(), None);
 
-            // Connect to MCP servers and register their tools
+            // Connect to MCP servers and register their tools.
+            // Browser MCP tools are NOT registered individually — they are
+            // wrapped behind a single unified `browser` tool (BrowserTool).
             #[cfg(feature = "mcp")]
-            let (mcp_manager, mcp_tools) = McpManager::start_with_sandbox(
+            let (mut mcp_manager, mcp_tools) = McpManager::start_with_sandbox(
                 &config.mcp.servers,
                 Some(config.security.execution_sandbox.clone()),
                 None,
@@ -707,7 +706,17 @@ async fn main() -> Result<()> {
             .await;
             #[cfg(feature = "mcp")]
             for tool in mcp_tools {
-                tool_registry.register(tool);
+                if !crate::browser::is_browser_tool(tool.name()) {
+                    tool_registry.register(tool);
+                }
+            }
+            #[cfg(feature = "mcp")]
+            let mut _browser_session: Option<std::sync::Arc<crate::tools::BrowserSession>> = None;
+            #[cfg(feature = "mcp")]
+            if let Some(browser_peer) = mcp_manager.take_browser_peer() {
+                let browser_tool = crate::tools::BrowserTool::new(browser_peer);
+                _browser_session = Some(browser_tool.session());
+                tool_registry.register(Box::new(browser_tool));
             }
 
             let session_manager = SessionManager::new(db.clone());
@@ -733,6 +742,10 @@ async fn main() -> Result<()> {
             )
             .await;
             agent.set_registered_tool_names(tool_names);
+            #[cfg(feature = "mcp")]
+            if let Some(session) = _browser_session {
+                agent.set_browser_session(session);
+            }
 
             // Initialize memory searcher (vector + FTS5 hybrid search)
             #[cfg(feature = "local-embeddings")]
@@ -837,7 +850,19 @@ async fn main() -> Result<()> {
             // Write new PID file
             std::fs::write(&pid_file, std::process::id().to_string())?;
 
-            let config = Config::load()?;
+            let mut config = Config::load()?;
+            // Inject browser MCP server into config BEFORE wrapping in Arc<RwLock>,
+            // so runtime_config lookups in McpClientTool::execute() can find it.
+            #[cfg(feature = "mcp")]
+            if let Some(browser_mcp) =
+                crate::browser::browser_mcp_server_config(&config.browser)
+            {
+                config.mcp.servers.insert(
+                    crate::browser::BROWSER_MCP_SERVER_NAME.to_string(),
+                    browser_mcp,
+                );
+                tracing::info!("Browser MCP server injected into config from [browser] section");
+            }
             // Shared config: web UI writes → agent reads on next request (hot-reload)
             let shared_config = Arc::new(tokio::sync::RwLock::new(config));
             // Snapshot for one-time startup operations (provider, tools, channels, etc.)
@@ -876,9 +901,10 @@ async fn main() -> Result<()> {
             let spawn_manager_cell = Arc::new(tokio::sync::OnceCell::new());
             tool_registry.register(Box::new(tools::SpawnTool::new(spawn_manager_cell.clone())));
 
-            // Connect to MCP servers and register their tools
+            // Connect to MCP servers and register their tools.
+            // Browser tools wrapped behind unified BrowserTool (not registered individually).
             #[cfg(feature = "mcp")]
-            let (_mcp_manager, mcp_tools) = McpManager::start_with_sandbox(
+            let (mut _mcp_manager, mcp_tools) = McpManager::start_with_sandbox(
                 &config.mcp.servers,
                 Some(config.security.execution_sandbox.clone()),
                 Some(shared_config.clone()),
@@ -886,7 +912,17 @@ async fn main() -> Result<()> {
             .await;
             #[cfg(feature = "mcp")]
             for tool in mcp_tools {
-                tool_registry.register(tool);
+                if !crate::browser::is_browser_tool(tool.name()) {
+                    tool_registry.register(tool);
+                }
+            }
+            #[cfg(feature = "mcp")]
+            let mut _browser_session_gw: Option<std::sync::Arc<crate::tools::BrowserSession>> = None;
+            #[cfg(feature = "mcp")]
+            if let Some(browser_peer) = _mcp_manager.take_browser_peer() {
+                let browser_tool = crate::tools::BrowserTool::new(browser_peer);
+                _browser_session_gw = Some(browser_tool.session());
+                tool_registry.register(Box::new(browser_tool));
             }
 
             // Create tool message channel for proactive messaging (MessageTool → Gateway → Channel)
@@ -915,6 +951,10 @@ async fn main() -> Result<()> {
                 .await;
                 a.set_message_tx(tool_msg_tx);
                 a.set_registered_tool_names(tool_names);
+                #[cfg(feature = "mcp")]
+                if let Some(session) = _browser_session_gw {
+                    a.set_browser_session(session);
+                }
 
                 // Initialize memory searcher (vector + FTS5 hybrid search)
                 #[cfg(feature = "local-embeddings")]
@@ -1517,6 +1557,7 @@ async fn main() -> Result<()> {
                         args,
                         url,
                         env: std::collections::HashMap::new(),
+                        capabilities: Vec::new(),
                         enabled: true,
                     };
                     config.mcp.servers.insert(name.clone(), server);

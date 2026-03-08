@@ -1,8 +1,11 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
+use std::process::Stdio;
+use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock;
 
 use super::registry::{get_optional_string, get_string_param, Tool, ToolContext, ToolResult};
@@ -438,54 +441,97 @@ impl Tool for ShellTool {
             &sandbox_config,
         )?;
 
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(self.timeout_secs),
-            cmd.output(),
-        )
-        .await;
+        if crate::agent::stop::is_stop_requested() {
+            return Ok(ToolResult::error("Command cancelled by user"));
+        }
 
-        match result {
-            Ok(Ok(output)) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let exit_code = output.status.code().unwrap_or(-1);
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+        cmd.kill_on_drop(true);
 
-                let mut result_text = String::new();
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(e) => return Ok(ToolResult::error(format!("Failed to execute command: {e}"))),
+        };
 
-                if !stdout.is_empty() {
-                    result_text.push_str(&Self::truncate_output(&stdout));
-                }
+        let stdout_handle = child.stdout.take().map(|mut stdout| {
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let _ = stdout.read_to_end(&mut buf).await;
+                buf
+            })
+        });
+        let stderr_handle = child.stderr.take().map(|mut stderr| {
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let _ = stderr.read_to_end(&mut buf).await;
+                buf
+            })
+        });
 
-                if !stderr.is_empty() {
-                    if !result_text.is_empty() {
-                        result_text.push('\n');
-                    }
-                    result_text.push_str("[stderr]\n");
-                    result_text.push_str(&Self::truncate_output(&stderr));
-                }
-
-                if exit_code != 0 {
-                    if !result_text.is_empty() {
-                        result_text.push('\n');
-                    }
-                    result_text.push_str(&format!("[exit code: {exit_code}]"));
-                }
-
-                if result_text.is_empty() {
-                    result_text = "(no output)".to_string();
-                }
-
-                if exit_code == 0 {
-                    Ok(ToolResult::success(result_text))
-                } else {
-                    Ok(ToolResult::error(result_text))
-                }
+        let status = tokio::select! {
+            status = child.wait() => match status {
+                Ok(status) => status,
+                Err(e) => return Ok(ToolResult::error(format!("Failed to wait for command: {e}"))),
+            },
+            _ = tokio::time::sleep(Duration::from_secs(self.timeout_secs)) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                return Ok(ToolResult::error(format!(
+                    "Command timed out after {}s",
+                    self.timeout_secs
+                )));
             }
-            Ok(Err(e)) => Ok(ToolResult::error(format!("Failed to execute command: {e}"))),
-            Err(_) => Ok(ToolResult::error(format!(
-                "Command timed out after {}s",
-                self.timeout_secs
-            ))),
+            _ = crate::agent::stop::wait_for_stop() => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                return Ok(ToolResult::error("Command cancelled by user"));
+            }
+        };
+
+        let stdout = if let Some(handle) = stdout_handle {
+            handle.await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let stderr = if let Some(handle) = stderr_handle {
+            handle.await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let stdout = String::from_utf8_lossy(&stdout);
+        let stderr = String::from_utf8_lossy(&stderr);
+        let exit_code = status.code().unwrap_or(-1);
+
+        let mut result_text = String::new();
+
+        if !stdout.is_empty() {
+            result_text.push_str(&Self::truncate_output(&stdout));
+        }
+
+        if !stderr.is_empty() {
+            if !result_text.is_empty() {
+                result_text.push('\n');
+            }
+            result_text.push_str("[stderr]\n");
+            result_text.push_str(&Self::truncate_output(&stderr));
+        }
+
+        if exit_code != 0 {
+            if !result_text.is_empty() {
+                result_text.push('\n');
+            }
+            result_text.push_str(&format!("[exit code: {exit_code}]"));
+        }
+
+        if result_text.is_empty() {
+            result_text = "(no output)".to_string();
+        }
+
+        if exit_code == 0 {
+            Ok(ToolResult::success(result_text))
+        } else {
+            Ok(ToolResult::error(result_text))
         }
     }
 }
@@ -522,6 +568,24 @@ mod tests {
         let result = tool.execute(args, &test_ctx()).await.unwrap();
         assert!(result.is_error);
         assert!(result.output.contains("BLOCKED"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_shell_command_cancelled_by_stop_request() {
+        crate::agent::stop::clear_stop();
+        let tool = ShellTool::new(10, false);
+        let args = serde_json::json!({"command": "sleep 5"});
+
+        let task = tokio::spawn(async move { tool.execute(args, &test_ctx()).await.unwrap() });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        crate::agent::stop::request_stop();
+
+        let result = task.await.expect("shell task join");
+        assert!(result.is_error);
+        assert!(result.output.contains("cancelled by user"));
+
+        crate::agent::stop::clear_stop();
     }
 
     #[tokio::test]

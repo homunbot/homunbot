@@ -345,8 +345,8 @@ mod tests {
         config_set(&mut config, "browser.browser_type", "firefox").unwrap();
         assert_eq!(config.browser.browser_type, "firefox");
 
-        config_set(&mut config, "browser.action_timeout_secs", "30").unwrap();
-        assert_eq!(config.browser.action_timeout_secs, 30);
+        config_set(&mut config, "browser.executable_path", "/usr/bin/chromium").unwrap();
+        assert_eq!(config.browser.executable_path, "/usr/bin/chromium");
     }
 
     #[test]

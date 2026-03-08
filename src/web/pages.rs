@@ -572,8 +572,18 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
 
                 <section class="section" id="section-browser">
                     <h2>Browser Automation</h2>
-                    <div class="form-hint" style="margin-bottom:12px;">Uses Chrome/Chromium via CDP. Auto-detected: {browser_status}.</div>
+                    <div class="form-hint" style="margin-bottom:12px;">{browser_status}</div>
                     <form class="form" id="browser-form">
+                        <div class="setting-toggle-row">
+                            <div class="setting-toggle-info">
+                                <span class="setting-toggle-name">Enable Browser</span>
+                                <span class="setting-toggle-desc">Register the browser tool and use it for dynamic web tasks</span>
+                            </div>
+                            <div class="toggle-wrap">
+                                <input type="checkbox" id="browser-enabled" name="enabled" class="toggle-input" {browser_enabled_checked}>
+                                <label class="toggle-label" for="browser-enabled"></label>
+                            </div>
+                        </div>
                         <div class="setting-toggle-row">
                             <div class="setting-toggle-info">
                                 <span class="setting-toggle-name">Headless Mode</span>
@@ -589,25 +599,7 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <input type="text" id="browser-executable" name="executable_path" value="{executable_path}" class="input" placeholder="Auto-detect (leave empty)">
                             <div class="form-hint">Leave empty to auto-detect. Override if Chrome is in a custom location.</div>
                         </div>
-                        <div class="form-row--2">
-                            <div class="form-group">
-                                <label>Action Timeout (s)</label>
-                                <input type="number" id="browser-action-timeout" name="action_timeout_secs" value="{action_timeout_secs}" min="5" max="300" class="input">
-                                <div class="form-hint">Max time for click, type, etc.</div>
-                            </div>
-                            <div class="form-group">
-                                <label>Navigation Timeout (s)</label>
-                                <input type="number" id="browser-nav-timeout" name="navigation_timeout_secs" value="{navigation_timeout_secs}" min="5" max="300" class="input">
-                                <div class="form-hint">Max time for page loads.</div>
-                            </div>
-                        </div>
-                        <div class="form-row--2">
-                            <div class="form-group">
-                                <label>Snapshot Limit</label>
-                                <input type="number" id="browser-snapshot-limit" name="snapshot_limit" value="{snapshot_limit}" min="10" max="500" class="input">
-                                <div class="form-hint">Max elements in accessibility tree.</div>
-                            </div>
-                        </div>
+                        <div class="form-hint" style="margin-top:10px;">Timeouts and snapshot settings are managed by the Playwright MCP server.</div>
                         <div class="form-actions">
                             <button type="submit" class="btn btn-primary">Save Browser Config</button>
                             <button type="button" class="btn btn-secondary" id="btn-test-browser">Test Connection</button>
@@ -867,21 +859,44 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
         } else {
             ""
         },
+        browser_enabled_checked = if config.browser.enabled {
+            "checked"
+        } else {
+            ""
+        },
         browser_headless_checked = if config.browser.headless {
             "checked"
         } else {
             ""
         },
         executable_path = config.browser.executable_path,
-        browser_status = if config.browser.resolved_executable().is_some() {
-            let path = config.browser.resolved_executable().unwrap();
-            format!("Chrome found at {}", path.display())
-        } else {
-            "Chrome not found — install Chrome or set path below".to_string()
+        browser_status = {
+            let status = config.browser.runtime_status();
+            let enabled = if status.enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            };
+            let availability = if status.available {
+                "available"
+            } else {
+                "unavailable"
+            };
+            let executable = status
+                .executable_path
+                .map(|path| format!("Chrome: {}", path))
+                .unwrap_or_else(|| "Chrome: not detected".to_string());
+            match status.reason {
+                Some(reason) => format!(
+                    "{} • MCP (Playwright) • {}. {} {}",
+                    enabled, availability, executable, reason
+                ),
+                None => format!(
+                    "{} • MCP (Playwright) • {}. {}",
+                    enabled, availability, executable
+                ),
+            }
         },
-        action_timeout_secs = config.browser.action_timeout_secs,
-        navigation_timeout_secs = config.browser.navigation_timeout_secs,
-        snapshot_limit = config.browser.snapshot_limit,
         theme_system = if config.ui.theme == "system" {
             "selected"
         } else {
@@ -936,59 +951,143 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
         r#"<main class="content chat-layout">
             <div class="content-inner">
                 <div class="chat-shell">
-                    <div class="chat-topbar">
-                        <span class="chat-connection" id="ws-status">Connecting…</span>
-                        <div class="chat-actions">
+                    <aside class="chat-sidebar">
+                        <div class="chat-sidebar-header">
+                            <div>
+                                <div class="chat-sidebar-kicker">Chat</div>
+                                <h2 class="chat-sidebar-title">Conversations</h2>
+                            </div>
                             <button class="btn btn-ghost btn-sm" id="btn-new-chat" title="New conversation">
-                            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="3" x2="9" y2="15"/><line x1="3" y1="9" x2="15" y2="9"/></svg>
-                            </button>
-                            <button class="btn btn-ghost btn-sm" id="btn-compact-chat" title="Compact conversation">
-                            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 9 12 15 6"/></svg>
-                            </button>
-                            <button class="btn btn-ghost btn-sm" id="btn-clear-chat" title="Clear screen">
-                            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 4 9 9 14 4"/><polyline points="4 14 9 9 14 14"/></svg>
+                                <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="3" x2="9" y2="15"/><line x1="3" y1="9" x2="15" y2="9"/></svg>
                             </button>
                         </div>
-                    </div>
-                    <div class="chat-thread-wrap">
-                        <div class="chat-empty-state" id="chat-empty-state">
-                            <div class="chat-empty-kicker">Homun is ready</div>
-                            <h2>Ask, search, inspect tools, or connect services.</h2>
-                            <p>The chat will show reasoning blocks, tool activity and formatted answers in one continuous workspace.</p>
+                        <div class="chat-sidebar-search-row">
+                            <div class="skills-search chat-search-shell">
+                                <svg class="skills-search-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7.5" cy="7.5" r="5.5"/><path d="M12 12l4.5 4.5"/></svg>
+                                <input type="text" id="chat-conversation-search" class="input skills-search-input" placeholder="Search conversations" autocomplete="off">
+                            </div>
+                            <div class="chat-sidebar-menu-wrap">
+                                <button class="btn btn-ghost btn-sm chat-sidebar-menu-btn" id="btn-chat-sidebar-menu" title="Conversation options" aria-label="Conversation options">
+                                    <svg viewBox="0 0 18 18" fill="currentColor"><circle cx="4" cy="9" r="1.4"/><circle cx="9" cy="9" r="1.4"/><circle cx="14" cy="9" r="1.4"/></svg>
+                                </button>
+                                <div class="chat-sidebar-menu" id="chat-sidebar-menu" hidden>
+                                    <button type="button" class="chat-conversation-menu-item" id="btn-chat-toggle-archived">Show archived</button>
+                                </div>
+                            </div>
                         </div>
-                        <div class="chat-messages" id="messages"></div>
-                    </div>
-                    <div class="chat-composer-dock">
-                        <div class="chat-composer-shell" id="chat-config" data-model="{current_model}" data-vision-model="{current_vision_model}">
-                            <div class="chat-composer-toolbar">
-                                <div class="chat-plus-wrap">
-                                    <button type="button" class="chat-plus-btn" id="btn-chat-plus" title="Add attachments or services">+</button>
-                                    <div class="chat-plus-menu" id="chat-plus-menu" hidden>
-                                        <button type="button" class="chat-plus-item" id="btn-chat-upload-image">Add image</button>
-                                        <button type="button" class="chat-plus-item" id="btn-chat-upload-doc">Add document</button>
-                                        <button type="button" class="chat-plus-item" id="btn-chat-open-mcp">Open MCP</button>
+                        <div class="chat-conversation-list" id="chat-conversation-list"></div>
+                    </aside>
+                    <section class="chat-main">
+                        <div class="chat-topbar">
+                            <div class="chat-topbar-leading">
+                                <button class="btn btn-ghost btn-sm chat-sidebar-toggle-btn" id="btn-chat-sidebar" title="Toggle sidebar" aria-label="Toggle sidebar">
+                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="14" height="12" rx="1.5"/><line x1="7" y1="3" x2="7" y2="15"/><line x1="10.5" y1="6" x2="13" y2="6"/><line x1="10.5" y1="9" x2="13" y2="9"/><line x1="10.5" y1="12" x2="13" y2="12"/></svg>
+                                </button>
+                                <div class="chat-topbar-meta">
+                                    <div class="chat-topbar-title" id="chat-conversation-title">New conversation</div>
+                                    <div class="chat-topbar-statusline">
+                                        <span class="chat-connection" id="ws-status">Connecting…</span>
+                                        <span class="chat-run-model" id="chat-run-model" hidden></span>
+                                        <span class="chat-run-badge is-idle is-dot-only" id="chat-run-badge" aria-label="idle"></span>
                                     </div>
                                 </div>
                             </div>
-                            <form class="chat-input" id="chat-form">
-                                <textarea id="chat-text" placeholder="Reply to Homun…" autocomplete="off" class="input chat-textarea" rows="1"></textarea>
-                                <button type="button" class="chat-send-btn" id="btn-send" aria-label="Send message">
-                                    <span class="chat-send-spinner" aria-hidden="true"></span>
-                                    <svg class="chat-send-icon chat-send-icon--send" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h9"/><path d="M9 3l6 6-6 6"/></svg>
-                                    <svg class="chat-send-icon chat-send-icon--stop" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="7" height="7" rx="1.2"/></svg>
+                            <div class="chat-actions">
+                                <button class="btn btn-ghost btn-sm" id="btn-new-chat-topbar" title="New conversation">
+                                <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="3" x2="9" y2="15"/><line x1="3" y1="9" x2="15" y2="9"/></svg>
                                 </button>
-                            </form>
-                            <div class="chat-composer-footer">
-                                <div class="chat-model-selector">
-                                    <select id="chat-model-select" class="input input-sm" aria-label="Model">
-                                        <option value="{current_model}">{current_model}</option>
-                                    </select>
+                                <button class="btn btn-ghost btn-sm" id="btn-compact-chat" title="Compact conversation">
+                                <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 9 12 15 6"/></svg>
+                                </button>
+                                <button class="btn btn-ghost btn-sm" id="btn-clear-chat" title="Clear screen">
+                                <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 4 9 9 14 4"/><polyline points="4 14 9 9 14 14"/></svg>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="chat-thread-wrap">
+                            <section class="chat-plan-panel collapsed" id="chat-plan-panel" hidden>
+                                <button type="button" class="chat-plan-header" id="chat-plan-toggle" aria-expanded="false">
+                                    <span class="chat-plan-header-copy">
+                                        <span class="chat-plan-kicker">Task plan</span>
+                                        <span class="chat-plan-objective" id="chat-plan-objective"></span>
+                                    </span>
+                                    <span class="chat-plan-toggle-icon">›</span>
+                                </button>
+                                <div class="chat-plan-grid">
+                                    <div class="chat-plan-column" id="chat-plan-done-wrap" hidden>
+                                        <div class="chat-plan-label">Done</div>
+                                        <ul class="chat-plan-list" id="chat-plan-done"></ul>
+                                    </div>
+                                    <div class="chat-plan-column" id="chat-plan-remaining-wrap" hidden>
+                                        <div class="chat-plan-label">Remaining</div>
+                                        <ul class="chat-plan-list" id="chat-plan-remaining"></ul>
+                                    </div>
+                                </div>
+                                <div class="chat-plan-column chat-plan-constraints" id="chat-plan-constraints-wrap" hidden>
+                                    <div class="chat-plan-label">Constraints</div>
+                                    <ul class="chat-plan-list" id="chat-plan-constraints"></ul>
+                                </div>
+                            </section>
+                            <div class="chat-empty-state" id="chat-empty-state">
+                                <div class="chat-empty-kicker">Homun is ready</div>
+                                <h2>Ask, search, inspect tools, or connect services.</h2>
+                                <p>The chat will show reasoning blocks, tool activity and formatted answers in one continuous workspace.</p>
+                            </div>
+                            <div class="chat-messages" id="messages"></div>
+                        </div>
+                        <div class="chat-composer-dock">
+                            <div class="chat-composer-shell" id="chat-config" data-model="{current_model}" data-vision-model="{current_vision_model}">
+                                <div class="chat-composer-toolbar">
+                                    <div class="chat-plus-wrap">
+                                        <button type="button" class="chat-plus-btn" id="btn-chat-plus" title="Add attachments or services">+</button>
+                                        <div class="chat-plus-menu" id="chat-plus-menu" hidden>
+                                            <button type="button" class="chat-plus-item" id="btn-chat-upload-image">Add image</button>
+                                            <button type="button" class="chat-plus-item" id="btn-chat-upload-doc">Add document</button>
+                                            <button type="button" class="chat-plus-item" id="btn-chat-open-mcp">Open MCP</button>
+                                        </div>
+                                        <div class="chat-mcp-picker" id="chat-mcp-picker" hidden>
+                                            <div class="chat-mcp-picker-header">
+                                                <input type="text" id="chat-mcp-search" class="input chat-mcp-search" placeholder="Search MCP servers" autocomplete="off">
+                                                <a href="/mcp" class="chat-mcp-manage-link">Manage</a>
+                                            </div>
+                                            <div class="chat-mcp-picker-list" id="chat-mcp-picker-list"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="chat-attachment-strip" id="chat-attachment-strip" hidden></div>
+                                <form class="chat-input" id="chat-form">
+                                    <textarea id="chat-text" placeholder="Reply to Homun…" autocomplete="off" class="input chat-textarea" rows="1"></textarea>
+                                    <button type="button" class="chat-send-btn" id="btn-send" aria-label="Send message">
+                                        <span class="chat-send-spinner" aria-hidden="true"></span>
+                                        <svg class="chat-send-icon chat-send-icon--send" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h9"/><path d="M9 3l6 6-6 6"/></svg>
+                                        <svg class="chat-send-icon chat-send-icon--stop" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="7" height="7" rx="1.2"/></svg>
+                                    </button>
+                                </form>
+                                <div class="chat-composer-footer">
+                                    <div class="chat-model-selector">
+                                        <select id="chat-model-select" class="input input-sm" aria-label="Model">
+                                            <option value="{current_model}">{current_model}</option>
+                                        </select>
+                                    </div>
+                                    <div class="chat-model-capabilities" id="chat-model-capabilities" hidden></div>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                    <input type="file" id="chat-image-input" accept="image/*" hidden>
-                    <input type="file" id="chat-doc-input" accept=".pdf,.md,.txt,.doc,.docx" hidden>
+                        <input type="file" id="chat-image-input" accept="image/*" multiple hidden>
+                        <input type="file" id="chat-doc-input" accept=".pdf,.md,.txt,.doc,.docx" multiple hidden>
+                        <div class="chat-modal-backdrop" id="chat-modal-backdrop" hidden>
+                            <div class="chat-modal" role="dialog" aria-modal="true" aria-labelledby="chat-modal-title">
+                                <div class="chat-modal-header">
+                                    <h3 id="chat-modal-title">Confirm action</h3>
+                                </div>
+                                <p class="chat-modal-copy" id="chat-modal-copy"></p>
+                                <div class="chat-modal-actions">
+                                    <button type="button" class="btn btn-ghost btn-sm" id="chat-modal-cancel">Cancel</button>
+                                    <button type="button" class="btn btn-primary btn-sm" id="chat-modal-confirm">Confirm</button>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
                 </div>
             </div>
         </main>
@@ -1423,6 +1522,11 @@ async fn mcp_page(State(state): State<Arc<AppState>>) -> Html<String> {
                                     <label for="mcp-env">Environment Variables (KEY=VALUE, one per line)</label>
                                     <textarea id="mcp-env" name="env" class="input" rows="5" placeholder="API_TOKEN=vault://mcp.custom.token"></textarea>
                                     <div class="form-hint">For secrets, prefer vault references: <code>vault://my_key</code>.</div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="mcp-capabilities">Capabilities (comma-separated)</label>
+                                    <input id="mcp-capabilities" name="capabilities" class="input" type="text" placeholder="image-analysis, ocr">
+                                    <div class="form-hint">Used for automatic attachment fallback routing.</div>
                                 </div>
                                 <div class="form-actions">
                                     <button class="btn btn-primary" type="submit">Save Server</button>

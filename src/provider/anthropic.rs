@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
@@ -84,6 +85,8 @@ enum AnthropicContent {
 enum ContentBlock {
     #[serde(rename = "text")]
     Text { text: String },
+    #[serde(rename = "image")]
+    Image { source: ImageSource },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -95,6 +98,14 @@ enum ContentBlock {
         tool_use_id: String,
         content: String,
     },
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct ImageSource {
+    #[serde(rename = "type")]
+    source_type: String,
+    media_type: String,
+    data: String,
 }
 
 #[derive(Serialize)]
@@ -149,7 +160,9 @@ fn convert_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<AnthropicM
             "user" => {
                 anthropic_msgs.push(AnthropicMessage {
                     role: "user".to_string(),
-                    content: AnthropicContent::Text(msg.content.clone().unwrap_or_default()),
+                    content: message_content_to_anthropic(msg).unwrap_or_else(|_| {
+                        AnthropicContent::Text(msg.rendered_text().unwrap_or_default())
+                    }),
                 });
             }
             "assistant" => {
@@ -182,7 +195,7 @@ fn convert_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<AnthropicM
                 } else {
                     anthropic_msgs.push(AnthropicMessage {
                         role: "assistant".to_string(),
-                        content: AnthropicContent::Text(msg.content.clone().unwrap_or_default()),
+                        content: AnthropicContent::Text(msg.rendered_text().unwrap_or_default()),
                     });
                 }
             }
@@ -214,7 +227,7 @@ fn convert_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<AnthropicM
                 // Unknown role — treat as user
                 anthropic_msgs.push(AnthropicMessage {
                     role: "user".to_string(),
-                    content: AnthropicContent::Text(msg.content.clone().unwrap_or_default()),
+                    content: AnthropicContent::Text(msg.rendered_text().unwrap_or_default()),
                 });
             }
         }
@@ -225,6 +238,49 @@ fn convert_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<AnthropicM
     let merged = merge_consecutive_messages(anthropic_msgs);
 
     (system, merged)
+}
+
+fn message_content_to_anthropic(msg: &ChatMessage) -> Result<AnthropicContent> {
+    if let Some(parts) = &msg.content_parts {
+        let mut blocks = Vec::new();
+        for part in parts {
+            match part {
+                ChatContentPart::Text { text } => {
+                    if !text.trim().is_empty() {
+                        blocks.push(ContentBlock::Text { text: text.clone() });
+                    }
+                }
+                ChatContentPart::Image { path, media_type } => {
+                    let data =
+                        BASE64.encode(std::fs::read(path).with_context(|| {
+                            format!("Failed to read image attachment '{}'", path)
+                        })?);
+                    blocks.push(ContentBlock::Image {
+                        source: ImageSource {
+                            source_type: "base64".to_string(),
+                            media_type: media_type.clone(),
+                            data,
+                        },
+                    });
+                }
+                ChatContentPart::File {
+                    path,
+                    media_type,
+                    name,
+                } => blocks.push(ContentBlock::Text {
+                    text: format!("Attached file: {} ({}) at {}", name, media_type, path),
+                }),
+            }
+        }
+
+        if !blocks.is_empty() {
+            return Ok(AnthropicContent::Blocks(blocks));
+        }
+    }
+
+    Ok(AnthropicContent::Text(
+        msg.rendered_text().unwrap_or_default(),
+    ))
 }
 
 /// Merge consecutive messages with the same role into a single message.
@@ -338,6 +394,9 @@ impl Provider for AnthropicProvider {
                 ContentBlock::Text { text } => {
                     text_parts.push(text.clone());
                 }
+                ContentBlock::Image { .. } => {
+                    // Image blocks are only relevant on the request path.
+                }
                 ContentBlock::ToolUse { id, name, input } => {
                     tool_calls.push(ToolCallRequest {
                         id: id.clone(),
@@ -421,6 +480,7 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 content: Some("Hello!".to_string()),
+                content_parts: None,
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,
@@ -444,6 +504,7 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 content: Some("I'll do both.".to_string()),
+                content_parts: None,
                 tool_calls: Some(vec![
                     ToolCallSerialized {
                         id: "call_1".to_string(),
@@ -521,6 +582,28 @@ mod tests {
             assert_eq!(blocks.len(), 2);
         } else {
             panic!("Expected blocks after merge");
+        }
+    }
+
+    #[test]
+    fn test_convert_multimodal_user_message() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp.path(), b"fake").unwrap();
+        let messages = vec![ChatMessage::user_parts(vec![
+            ChatContentPart::Text {
+                text: "Look at this".to_string(),
+            },
+            ChatContentPart::Image {
+                path: temp.path().to_string_lossy().to_string(),
+                media_type: "image/png".to_string(),
+            },
+        ])];
+
+        let (_system, msgs) = convert_messages(&messages);
+        if let AnthropicContent::Blocks(blocks) = &msgs[0].content {
+            assert_eq!(blocks.len(), 2);
+        } else {
+            panic!("Expected anthropic blocks");
         }
     }
 }

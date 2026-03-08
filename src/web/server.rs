@@ -120,6 +120,16 @@ impl WebServer {
             (cfg.channels.web.host.clone(), cfg.channels.web.port)
         };
 
+        if let Some(db) = self.db.as_ref() {
+            let interrupted = db.mark_incomplete_web_chat_runs_interrupted().await?;
+            if interrupted > 0 {
+                tracing::warn!(
+                    count = interrupted,
+                    "Marked stale web chat runs as interrupted"
+                );
+            }
+        }
+
         let state = Arc::new(AppState {
             config: self.config,
             started_at: Instant::now(),
@@ -138,9 +148,17 @@ impl WebServer {
             tokio::spawn(async move {
                 while let Some(msg) = outbound_rx.recv().await {
                     if msg.channel == "web" {
-                        state_for_outbound
+                        let session_key = format!("web:{}", msg.chat_id);
+                        if let Some(run) = state_for_outbound
                             .web_runs
-                            .complete_run("web:default", &msg.content);
+                            .complete_run(&session_key, &msg.content)
+                        {
+                            if let Some(db) = state_for_outbound.db.as_ref() {
+                                if let Err(error) = db.upsert_web_chat_run(&run).await {
+                                    tracing::error!(run_id = %run.run_id, %error, "Failed to persist completed web chat run");
+                                }
+                            }
+                        }
                     }
                     let sessions = state_for_outbound.ws_sessions.read().await;
                     if let Some(tx) = sessions.get(&msg.chat_id) {
@@ -162,10 +180,18 @@ impl WebServer {
             let state_for_stream = state.clone();
             tokio::spawn(async move {
                 while let Some(msg) = stream_rx.recv().await {
-                    if msg.chat_id == "default" {
-                        state_for_stream
+                    if !msg.chat_id.is_empty() {
+                        let session_key = format!("web:{}", msg.chat_id);
+                        if let Some(run) = state_for_stream
                             .web_runs
-                            .append_stream_message("web:default", &msg);
+                            .append_stream_message(&session_key, &msg)
+                        {
+                            if let Some(db) = state_for_stream.db.as_ref() {
+                                if let Err(error) = db.upsert_web_chat_run(&run).await {
+                                    tracing::error!(run_id = %run.run_id, %error, "Failed to persist streaming web chat run");
+                                }
+                            }
+                        }
                     }
                     let streams = state_for_stream.stream_sessions.read().await;
                     if let Some(tx) = streams.get(&msg.chat_id) {

@@ -12,6 +12,7 @@
 //! 2. **Cloud direct**: `api_base = "https://ollama.com"`, api_key from ollama.com/settings/keys
 
 use anyhow::{Context as _, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures::StreamExt as _;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -50,7 +51,11 @@ impl OllamaProvider {
 
     /// Strip `ollama/` prefix from model name.
     fn resolve_model(&self, model: &str) -> String {
-        model.strip_prefix("ollama/").unwrap_or(model).to_string()
+        model
+            .strip_prefix("ollama/")
+            .or_else(|| model.strip_prefix("ollama_cloud/"))
+            .unwrap_or(model)
+            .to_string()
     }
 
     /// Cloud models (`:cloud` suffix) have reasoning enabled by default,
@@ -78,7 +83,7 @@ impl OllamaProvider {
     /// Key differences from OpenAI format:
     /// - Tool call arguments are JSON objects, not strings
     /// - No `tool_call_id` field (Ollama uses positional matching)
-    fn convert_messages(messages: &[ChatMessage]) -> Vec<OllamaMessage> {
+    fn convert_messages(messages: &[ChatMessage]) -> Result<Vec<OllamaMessage>> {
         messages
             .iter()
             .map(|msg| {
@@ -105,11 +110,47 @@ impl OllamaProvider {
                     }
                 });
 
-                OllamaMessage {
-                    role: msg.role.clone(),
-                    content: msg.content.clone().unwrap_or_default(),
-                    tool_calls,
+                let mut content_parts = Vec::new();
+                let mut images = Vec::new();
+                if let Some(parts) = &msg.content_parts {
+                    for part in parts {
+                        match part {
+                            ChatContentPart::Text { text } => {
+                                if !text.trim().is_empty() {
+                                    content_parts.push(text.clone());
+                                }
+                            }
+                            ChatContentPart::Image { path, .. } => {
+                                let bytes = std::fs::read(path).with_context(|| {
+                                    format!("Failed to read image attachment for Ollama: {path}")
+                                })?;
+                                images.push(BASE64.encode(bytes));
+                            }
+                            ChatContentPart::File { name, .. } => {
+                                content_parts.push(format!("Attached file: {name}"));
+                            }
+                        }
+                    }
                 }
+
+                if content_parts.is_empty() {
+                    if let Some(content) = msg.rendered_text() {
+                        if !content.trim().is_empty() {
+                            content_parts.push(content);
+                        }
+                    }
+                }
+
+                Ok(OllamaMessage {
+                    role: msg.role.clone(),
+                    content: content_parts.join("\n"),
+                    images: if images.is_empty() {
+                        None
+                    } else {
+                        Some(images)
+                    },
+                    tool_calls,
+                })
             })
             .collect()
     }
@@ -166,7 +207,7 @@ impl Provider for OllamaProvider {
 
         let body = OllamaRequest {
             model,
-            messages: Self::convert_messages(&request.messages),
+            messages: Self::convert_messages(&request.messages)?,
             tools: request.tools,
             stream: Some(false),
             think,
@@ -229,7 +270,7 @@ impl Provider for OllamaProvider {
 
         let body = OllamaRequest {
             model,
-            messages: Self::convert_messages(&request.messages),
+            messages: Self::convert_messages(&request.messages)?,
             tools: request.tools,
             stream: Some(true),
             think,
@@ -413,6 +454,8 @@ struct OllamaMessage {
     #[serde(skip_serializing_if = "String::is_empty")]
     content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    images: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<OllamaToolCallOut>>,
 }
 
@@ -497,6 +540,10 @@ mod tests {
     fn test_resolve_model_strip_prefix() {
         let provider = OllamaProvider::new("", None);
         assert_eq!(provider.resolve_model("ollama/llama3:8b"), "llama3:8b");
+        assert_eq!(
+            provider.resolve_model("ollama_cloud/qwen3.5:397b-cloud"),
+            "qwen3.5:397b-cloud"
+        );
         assert_eq!(provider.resolve_model("glm-5:cloud"), "glm-5:cloud");
         assert_eq!(provider.resolve_model("ollama/glm-5:cloud"), "glm-5:cloud");
     }
@@ -616,12 +663,13 @@ mod tests {
             ChatMessage::user("Hello"),
             ChatMessage::assistant("Hi!"),
         ];
-        let converted = OllamaProvider::convert_messages(&messages);
+        let converted = OllamaProvider::convert_messages(&messages).unwrap();
         assert_eq!(converted.len(), 3);
         assert_eq!(converted[0].role, "system");
         assert_eq!(converted[0].content, "You are helpful.");
         assert_eq!(converted[1].role, "user");
         assert_eq!(converted[2].role, "assistant");
+        assert!(converted[0].images.is_none());
         assert!(converted[0].tool_calls.is_none());
     }
 
@@ -630,6 +678,7 @@ mod tests {
         let msg = ChatMessage {
             role: "assistant".to_string(),
             content: None,
+            content_parts: None,
             tool_calls: Some(vec![ToolCallSerialized {
                 id: "call_1".to_string(),
                 call_type: "function".to_string(),
@@ -641,7 +690,7 @@ mod tests {
             tool_call_id: None,
             name: None,
         };
-        let converted = OllamaProvider::convert_messages(&[msg]);
+        let converted = OllamaProvider::convert_messages(&[msg]).unwrap();
         let tcs = converted[0].tool_calls.as_ref().unwrap();
         assert_eq!(tcs.len(), 1);
         assert_eq!(tcs[0].function.name, "shell");
@@ -651,10 +700,33 @@ mod tests {
     #[test]
     fn test_convert_messages_tool_result() {
         let msg = ChatMessage::tool_result("call_1", "shell", "file1.txt\nfile2.txt");
-        let converted = OllamaProvider::convert_messages(&[msg]);
+        let converted = OllamaProvider::convert_messages(&[msg]).unwrap();
         assert_eq!(converted[0].role, "tool");
         assert_eq!(converted[0].content, "file1.txt\nfile2.txt");
         assert!(converted[0].tool_calls.is_none());
+    }
+
+    #[test]
+    fn test_convert_messages_with_image_parts() {
+        let image_path =
+            std::env::temp_dir().join(format!("homun-ollama-image-{}.png", std::process::id()));
+        std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+        let msg = ChatMessage::user_parts(vec![
+            ChatContentPart::Text {
+                text: "Describe this image".to_string(),
+            },
+            ChatContentPart::Image {
+                path: image_path.display().to_string(),
+                media_type: "image/png".to_string(),
+            },
+        ]);
+
+        let converted = OllamaProvider::convert_messages(&[msg]).unwrap();
+        assert_eq!(converted[0].content, "Describe this image");
+        assert_eq!(converted[0].images.as_ref().unwrap().len(), 1);
+        assert!(converted[0].images.as_ref().unwrap()[0].starts_with("ZmFrZS1wbmct"));
+
+        let _ = std::fs::remove_file(image_path);
     }
 
     #[test]

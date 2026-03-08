@@ -342,6 +342,26 @@ impl Gateway {
                     tracing::warn!(error = %e, "Memory cleanup failed (non-fatal)");
                 }
             }
+            match crate::web::api::cleanup_chat_upload_dirs(
+                &self.db,
+                mem_config.conversation_retention_days,
+            )
+            .await
+            {
+                Ok(stats) => {
+                    if stats.files_deleted > 0 || stats.directories_deleted > 0 {
+                        tracing::info!(
+                            files = stats.files_deleted,
+                            directories = stats.directories_deleted,
+                            bytes = stats.bytes_deleted,
+                            "Chat upload cleanup completed"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Chat upload cleanup failed (non-fatal)");
+                }
+            }
         }
 
         if channels.is_empty() {
