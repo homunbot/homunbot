@@ -20,29 +20,52 @@ use super::{AnthropicProvider, OllamaProvider, OpenAICompatProvider, ReliablePro
 /// Each provider gets retry on transient errors (429, 5xx) and automatic
 /// failover to the next provider on non-transient errors (401, 403).
 pub fn create_provider(config: &Config) -> Result<Arc<dyn Provider>> {
-    let primary_model = &config.agent.model;
+    create_provider_for_model(config, &config.agent.model)
+}
+
+pub fn create_provider_for_model(
+    config: &Config,
+    primary_model: &str,
+) -> Result<Arc<dyn Provider>> {
+    create_provider_for_model_with_fallbacks(config, primary_model, true)
+}
+
+pub fn create_provider_for_model_without_fallbacks(
+    config: &Config,
+    primary_model: &str,
+) -> Result<Arc<dyn Provider>> {
+    create_provider_for_model_with_fallbacks(config, primary_model, false)
+}
+
+fn create_provider_for_model_with_fallbacks(
+    config: &Config,
+    primary_model: &str,
+    include_fallbacks: bool,
+) -> Result<Arc<dyn Provider>> {
     let (primary_name, primary) = create_single_provider(config, primary_model)
         .context("No provider configured. Add an API key to ~/.homun/config.toml")?;
 
-    let mut chain = vec![(primary_name, primary, primary_model.clone())];
+    let mut chain = vec![(primary_name, primary, primary_model.to_string())];
 
     // Add fallback providers from config
-    for fallback_model in &config.agent.fallback_models {
-        match create_single_provider(config, fallback_model) {
-            Ok((name, provider)) => {
-                tracing::info!(
-                    provider = %name,
-                    model = %fallback_model,
-                    "Registered fallback provider"
-                );
-                chain.push((name, provider, fallback_model.clone()));
-            }
-            Err(e) => {
-                tracing::warn!(
-                    model = %fallback_model,
-                    error = %e,
-                    "Skipping fallback model — provider not configured"
-                );
+    if include_fallbacks {
+        for fallback_model in &config.agent.fallback_models {
+            match create_single_provider(config, fallback_model) {
+                Ok((name, provider)) => {
+                    tracing::info!(
+                        provider = %name,
+                        model = %fallback_model,
+                        "Registered fallback provider"
+                    );
+                    chain.push((name, provider, fallback_model.clone()));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        model = %fallback_model,
+                        error = %e,
+                        "Skipping fallback model — provider not configured"
+                    );
+                }
             }
         }
     }
@@ -50,6 +73,7 @@ pub fn create_provider(config: &Config) -> Result<Arc<dyn Provider>> {
     tracing::info!(
         primary_model = %primary_model,
         chain_length = chain.len(),
+        include_fallbacks,
         "Provider chain ready"
     );
 
@@ -119,7 +143,7 @@ pub fn create_single_provider(config: &Config, model: &str) -> Result<(String, A
             provider_config.extra_headers.clone(),
         );
         Ok((name, Arc::new(provider)))
-    } else if provider_name == "ollama" {
+    } else if provider_name == "ollama" || provider_name == "ollama_cloud" {
         let provider = OllamaProvider::new(&api_key, provider_config.api_base.as_deref());
         Ok((name, Arc::new(provider)))
     } else {

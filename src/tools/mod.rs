@@ -5,6 +5,8 @@ pub mod cron;
 pub mod email_inbox;
 pub mod file;
 #[cfg(feature = "mcp")]
+pub mod browser;
+#[cfg(feature = "mcp")]
 pub mod mcp;
 pub mod message;
 pub mod registry;
@@ -28,7 +30,9 @@ pub use cron::CronTool;
 pub use email_inbox::ReadEmailInboxTool;
 pub use file::{EditFileTool, ListDirTool, ReadFileTool, WriteFileTool};
 #[cfg(feature = "mcp")]
-pub use mcp::{McpManager, McpServerInfo};
+pub use browser::{BrowserSession, BrowserTool};
+#[cfg(feature = "mcp")]
+pub use mcp::{McpManager, McpPeer, McpServerInfo};
 pub use message::MessageTool;
 pub use registry::{Tool, ToolContext, ToolRegistry, ToolResult};
 pub use shell::ShellTool;
@@ -40,5 +44,3 @@ pub use web::{WebFetchTool, WebSearchTool};
 #[cfg(feature = "local-embeddings")]
 pub use remember::RememberTool;
 
-#[cfg(feature = "browser")]
-pub use crate::browser::BrowserTool;

@@ -1070,6 +1070,9 @@
             var env = (server.env || []).map(function(e) {
                 return '<span class="badge badge-neutral">' + escapeHtml(e.key) + ': ' + escapeHtml(e.value_preview || '(empty)') + '</span>';
             }).join(' ');
+            var capabilityBadges = (server.capabilities || []).map(function(cap) {
+                return '<span class="badge badge-neutral">' + escapeHtml(cap) + '</span>';
+            }).join(' ');
             var detail = server.transport === 'stdio'
                 ? ((server.command || '?') + ' ' + (server.args || []).join(' '))
                 : (server.url || '?');
@@ -1087,6 +1090,7 @@
                     '<div class="mcp-card-tags">' +
                         '<span class="badge badge-neutral">' + escapeHtml(server.transport) + '</span>' +
                         '<span class="badge badge-neutral">' + escapeHtml((server.env || []).length) + ' env</span>' +
+                        capabilityBadges +
                     '</div>' +
                     '<div class="mcp-server-env">' + (env || '<span class="form-hint">No env vars.</span>') + '</div>' +
                     '<div class="skill-card-footer">' +
@@ -1611,6 +1615,10 @@
             var args = parseArgs(String(fd.get('args') || ''));
             var url = String(fd.get('url') || '').trim();
             var env = parseEnvLines(String(fd.get('env') || ''));
+            var capabilities = String(fd.get('capabilities') || '')
+                .split(',')
+                .map(function(item) { return item.trim().toLowerCase(); })
+                .filter(Boolean);
 
             if (!name) {
                 showToast('Server name is required', 'error');
@@ -1632,6 +1640,7 @@
                 args: transport === 'stdio' ? args : [],
                 url: transport === 'http' ? url : null,
                 env: env,
+                capabilities: capabilities,
                 enabled: true,
                 overwrite: true,
             };

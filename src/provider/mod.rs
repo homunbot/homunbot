@@ -1,4 +1,5 @@
 mod anthropic;
+pub mod capabilities;
 pub mod factory;
 mod ollama;
 mod openai_compat;

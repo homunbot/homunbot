@@ -334,7 +334,7 @@ impl ContextBuilder {
         history: &[ChatMessage],
         user_message: &str,
     ) -> Vec<ChatMessage> {
-        self.build_messages_with_tools(history, user_message, &[])
+        self.build_messages_with_user_message(history, ChatMessage::user(user_message), &[])
             .await
     }
 
@@ -343,6 +343,16 @@ impl ContextBuilder {
         &self,
         history: &[ChatMessage],
         user_message: &str,
+        tools: &[ToolInfo],
+    ) -> Vec<ChatMessage> {
+        self.build_messages_with_user_message(history, ChatMessage::user(user_message), tools)
+            .await
+    }
+
+    pub async fn build_messages_with_user_message(
+        &self,
+        history: &[ChatMessage],
+        user_message: ChatMessage,
         tools: &[ToolInfo],
     ) -> Vec<ChatMessage> {
         let mut messages = Vec::with_capacity(history.len() + 2);
@@ -356,7 +366,7 @@ impl ContextBuilder {
         messages.extend_from_slice(history);
 
         // Current user message
-        messages.push(ChatMessage::user(user_message));
+        messages.push(user_message);
 
         messages
     }
@@ -400,6 +410,7 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 content: Some("Hi!".to_string()),
+                content_parts: None,
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,

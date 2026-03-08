@@ -1,6 +1,6 @@
 # Homun — Development Roadmap
 
-> Last updated: 2026-03-06
+> Last updated: 2026-03-08
 > Basato su: Audit completo (`docs/AUDIT-2026-03.md`)
 > Gap analysis: Homun vs OpenClaw vs ZeroClaw
 > Source of truth: questo documento e' la roadmap/status operativa del progetto
@@ -406,15 +406,23 @@ Skill 'data-scraper' installed. Ready to use.
   - Chat shell ridisegnata con composer sticky, model picker minimale, timeline tool/reasoning piu' leggibile.
   - Prompt/tool routing corretto: per ricerca informativa il sistema preferisce `web_search`/`web_fetch` prima del browser.
   - Finalizzazione best-effort quando il loop esaurisce le iterazioni, per evitare `max iterations reached without final response`.
-  - Stop base end-to-end collegato tra UI e agent loop.
-- ✅ **Background/resume base**
-  - Run web attivo tracciato lato server con `run_id`, stato, user prompt, risposta parziale ed eventi tool.
-  - La pagina chat puo' riattaccarsi a un run in corso dopo navigation/tab switch finche' il processo resta acceso.
+  - Stop end-to-end con cancel propagation reale su provider streaming e tool lunghi.
+- ✅ **Persistenza e multi-chat**
+  - Sessioni multiple vere con sidebar conversazioni, rename/archive/delete e ricerca.
+  - Run web persistiti su DB con `run_id`, stato, prompt utente, risposta parziale, eventi tool ed `effective_model`.
+  - Restore corretto dopo page switch e dopo restart del processo, con run interrotti marcati come tali.
+- ✅ **Composer `+` e allegati**
+  - Upload immagini e documenti end-to-end dal composer.
+  - Ingressi MCP reali dal composer, persistiti nella history della chat.
+  - Auto-scroll affidabile sul fondo chat durante history load, streaming e tool activity.
+- ✅ **Routing multimodale e BYOK capability-based**
+  - Il turno usa il modello chat attivo se supporta input immagine, altrimenti `vision_model`, altrimenti fallback MCP capability-based.
+  - Supporto multimodale nativo nel provider layer per modelli compatibili (incl. OpenAI-compatible, Anthropic e Ollama vision).
+  - Capability per modello configurabili dalla UI (`multimodal`, `image_input`, `native tool calls`), con prefill automatico per modelli noti e override manuale per custom/BYOK.
 - ⚠️ **Parziale / da chiudere**
-  - I run web non sono ancora persistiti nel DB: su restart del processo si perdono.
-  - Esiste ancora una sola sessione logica `web:default`: manca multi-chat reale con elenco conversazioni.
-  - Upload dal composer (`+`) ancora non completati end-to-end.
-  - Stop non e' ancora profondo su tutti i tool/provider lunghi.
+  - Mancano ancora i test E2E completi della chat (streaming, stop, resume, multi-sessione, attachment flow).
+  - Il supporto documento resta ibrido: testo locale quando possibile, altrimenti vision/MCP; il passaggio a document input nativo provider-specific e' da espandere.
+  - Resta del polish UI finale da consolidare, ma non blocca l'uso primario della chat.
 
 ### Milestone Chat — Dove siamo
 
@@ -422,49 +430,137 @@ Skill 'data-scraper' installed. Ready to use.
 |-----------|-------|-------|
 | CHAT-1 | Refresh UI chat (composer sticky, reasoning/tool timeline, stop base, minimal shell) | ✅ DONE |
 | CHAT-2 | Run web persistente in memoria con resume/background dopo page switch | ✅ DONE |
-| CHAT-3 | Sessioni multiple vere + sidebar/history conversazioni | TODO |
-| CHAT-4 | Persistenza run su DB + restore dopo restart processo | TODO |
-| CHAT-5 | Composer `+` completo (immagini, documenti, ingressi MCP reali) | TODO |
-| CHAT-6 | Stop profondo / cancellation propagation su provider e tool lunghi | ⚠️ PARTIAL |
+| CHAT-3 | Sessioni multiple vere + sidebar/history conversazioni | ✅ DONE |
+| CHAT-4 | Persistenza run su DB + restore dopo restart processo | ✅ DONE |
+| CHAT-5 | Composer `+` completo (immagini, documenti, ingressi MCP reali) + routing multimodale capability-based | ✅ DONE |
+| CHAT-6 | Stop profondo / cancellation propagation su provider e tool lunghi | ✅ DONE |
 | CHAT-7 | Test E2E Playwright per streaming/stop/resume/multi-sessione | TODO |
 
 ### Cosa manca per chiudere davvero la Chat
 
-- Implementare **multi-sessione reale**:
-  - `session_id`/`conversation_id` veri per la chat web
-  - lista conversazioni e "nuova sessione" reale, non solo clear/reset
-- Persistenza **run web su DB**:
-  - stato `running/stopping/completed/failed`
-  - prompt utente, risposta parziale, timeline tool/thinking
-  - restore corretto anche dopo restart del processo
-- Completare il **composer `+`**:
-  - upload immagini
-  - upload documenti
-  - ingressi MCP dal composer con flusso reale
-- Rafforzare **stop/cancel**:
-  - propagazione cancel verso provider streaming
-  - propagazione cancel verso tool lunghi/browser/task esterni
-  - UX di stop consistente anche durante tool gia' partiti
-- Fare **polish finale streaming/layout**:
-  - stabilita' layout durante risposta in corso
-  - auto-scroll affidabile durante streaming/tool activity, senza perdere il follow del fondo chat
-  - gestione robusta di error/offline/reconnect
-  - cleanup del vecchio codice UI residuo
-- Aggiungere **test E2E della chat**:
+- Completare **CHAT-7 / test E2E**:
   - invio messaggio
   - streaming
   - stop
   - cambio pagina durante run
   - restore run attivo
-  - nuova sessione / clear
+  - multi-sessione
+  - upload allegati + MCP context
+- Estendere il **multimodale oltre il v1 attuale**:
+  - input documento nativo dove il provider/model lo supporta chiaramente
+  - OCR / pipeline documento binario piu' robusta
+  - fallback MCP multipli con policy piu' ricca e reporting migliore
+- Fare **polish finale streaming/layout**:
+  - stabilita' layout durante risposta in corso
+  - gestione robusta di error/offline/reconnect
+  - cleanup del vecchio codice UI residuo
+- Coprire anche la **UX dei model capability settings**:
+  - deep-link Settings dal composer per i badge capability
+  - verifica capability per modello custom/BYOK
 
 ### Ordine consigliato per chiuderla
 
-1. CHAT-3 multi-sessione reale
-2. CHAT-4 persistenza run su DB
-3. CHAT-6 stop profondo
-4. CHAT-5 composer `+` completo
-5. CHAT-7 test E2E e hardening finale
+1. CHAT-7 test E2E completi
+2. hardening multimodale/document pipeline
+3. polish finale streaming/layout
+
+---
+
+## Programma Trasversale — Browser Automation (P1)
+
+> Obiettivo: browser automation robusta, usabile anche da modelli deboli (Ollama, DeepSeek).
+> Riferimento architetturale: [agent-browser.dev](https://github.com/vercel-labs/agent-browser) (Vercel Labs)
+
+### Architettura
+
+```
+config.toml [browser]
+       │
+       ▼
+mcp_bridge.rs ─── genera McpServerConfig per @playwright/mcp
+       │
+       ▼
+McpPeer (persistente) ─── connessione stdio al server MCP Playwright
+       │
+       ▼
+BrowserTool ─── tool unificato "browser" con ~17 azioni
+       │          │
+       │          ├── inject_stealth() ─── anti-bot detection (addInitScript)
+       │          ├── wait_for_stable_snapshot() ─── attesa SPA con stability check
+       │          ├── compact_browser_snapshot() ─── compaction tree (agent-browser style)
+       │          ├── extract_autocomplete_suggestions() ─── auto-detect dopo type
+       │          └── normalize_ref() ─── fix ref malformati da modelli deboli
+       │
+       ▼
+agent_loop.rs ─── browser_task_plan (veto/guard), execution_plan, supersede context
+```
+
+### Stato ad oggi (2026-03-08)
+
+- ✅ **Migrazione da custom Playwright sidecar a MCP**
+  - Eliminati `src/browser/{actions,manager,snapshot,tool}.rs` (~4,500 LOC rimossi)
+  - Browser gestito come MCP server `@playwright/mcp` via `npx`
+  - Connessione persistente (peer sopravvive tra tool call)
+  - Supporto profili persistenti con `--user-data-dir`
+  - Config: `[browser] enabled/headless/browser_type/executable`
+- ✅ **Tool unificato `browser`** (`src/tools/browser.rs`)
+  - ~40 tool MCP individuali → 1 tool con enum `action`
+  - Azioni: `navigate`, `snapshot`, `click`, `type`, `fill`, `select_option`,
+    `press_key`, `hover`, `scroll`, `drag`, `tab_*`, `evaluate`, `wait`, `close`
+  - Schema piatto (no `anyOf`) — compatibile con tutti i provider
+  - Ref normalization: `"ref=e42"`, `"42"`, `"e42"` → `"e42"`
+- ✅ **Stealth anti-bot detection**
+  - `addInitScript` iniettato prima della prima navigazione via `browser_run_code`
+  - Patch: `navigator.webdriver=false`, `window.chrome.runtime`, `navigator.plugins`,
+    `navigator.permissions.query`
+  - Equivalente a `playwright-extra-plugin-stealth` senza dipendenza npm
+  - Nota: agent-browser.dev NON fa stealth di default (lo delega a cloud provider Kernel)
+- ✅ **Snapshot compaction** (ispirato a agent-browser.dev `compact_tree`)
+  - Tree-preserving: mantiene gerarchia con indentazione
+  - Tiene: elementi con `[ref=]`, content roles (`heading`, `cell`, `listitem`), value text
+  - Ricostruisce antenati per contesto (bottone dentro dialog, risultato dentro lista)
+  - Max 50K chars (configurabile via `HOMUN_BROWSER_MAX_OUTPUT`)
+- ✅ **Orchestrazione intelligente nel tool**
+  - Auto-snapshot dopo `navigate` con stability check (count elementi stabilizzato, fino a 5 retry)
+  - Auto-snapshot dopo `click` (fix stale refs post-autocomplete)
+  - Auto-snapshot dopo `type` con autocomplete detection
+  - Consecutive snapshot guard (blocca snapshot doppi senza azione intermedia)
+  - DOM manipulation guard su `evaluate` (blocca `.click()`, `.focus()`, `scrollTo()` etc.)
+  - Form plan injection (istruzioni per compilazione form)
+- ✅ **Browser task planning** (`src/agent/browser_task_plan.rs`)
+  - Veto system: blocca azioni non-selection quando autocomplete e' aperto
+  - Blocca cambio sorgente prima di estrarre risultati correnti
+  - Tracciamento stato form (campi compilati, autocomplete attivo)
+- ✅ **Execution plan** (`src/agent/execution_plan.rs`)
+  - Piano strutturato per task browser complessi
+  - Hinting form fields dal snapshot
+
+### Cosa manca / miglioramenti futuri
+
+- ⬚ **Stealth avanzato**: wrapper script Chrome con `--disable-blink-features=AutomationControlled`
+  (piu' robusto di `addInitScript` per anti-bot C++ level)
+- ⬚ **CDP endpoint mode**: lanciare Chrome separatamente e connettere via `--cdp-endpoint`
+  (profilo utente reale, nessun flag automazione)
+- ⬚ **Screenshot/vision fallback**: quando il modello ha `image_input`, inviare screenshot
+  per pagine dove lo snapshot accessibilita' non basta
+- ⬚ **Caching refs cross-action**: evitare snapshot ridondanti tracciando quali refs sono ancora validi
+- ⬚ **Test E2E browser**: test automatizzati del flow completo (navigate → fill → submit → extract)
+- ⬚ **Rate limiting per sito**: delay configurabile tra azioni per evitare ban
+- ⬚ **Cookie consent auto-dismiss**: detect e click automatico sui banner cookie
+  (senza usare `evaluate` — via `click` su ref riconosciuto)
+
+### Differenze da agent-browser.dev
+
+| Aspetto | agent-browser.dev | Homun |
+|---------|-------------------|-------|
+| Stealth | No (delega a Kernel cloud) | Si (`addInitScript` built-in) |
+| Snapshot | `compact_tree` con tutti i content roles | Stessa logica, adattata |
+| Auto-snapshot | Solo su snapshot esplicito | Dopo navigate, click, type |
+| Stability check | No (snapshot singolo) | Si (retry + count stabilizzato) |
+| Ref normalization | No (modello deve mandare ref esatto) | Si (fix `"42"` → `"e42"`) |
+| Form planning | No | Si (istruzioni pre-fill iniettate) |
+| DOM guard | No | Si (blocca evaluate mutanti) |
+| Tool design | Azioni come comandi separati | Tool singolo con enum action |
 
 ---
 
@@ -643,11 +739,22 @@ Programma Sandbox Trasversale (P0/P1)      ⚠️ PARTIAL
 Programma Chat Web UI (P1)                 ⚠️ PARTIAL
   ✅ CHAT-1 Refresh UI/UX base
   ✅ CHAT-2 Run in-memory con resume/background dopo page switch
-  TODO CHAT-3 Sessioni multiple vere
-  TODO CHAT-4 Persistenza run su DB
-  TODO CHAT-5 Composer + completo
-  ⚠️ CHAT-6 Stop profondo / cancel propagation
+  ✅ CHAT-3 Sessioni multiple vere
+  ✅ CHAT-4 Persistenza run su DB
+  ✅ CHAT-5 Composer + completo + routing multimodale
+  ✅ CHAT-6 Stop profondo / cancel propagation
   TODO CHAT-7 Test E2E chat
+  ⚠️ Hardening multimodale documenti / OCR / MCP fallback policy
+    |
+Programma Browser Automation (P1)          ✅ DONE
+  ✅ Migrazione da custom sidecar a MCP (@playwright/mcp)
+  ✅ Tool unificato "browser" (~17 azioni, schema piatto)
+  ✅ Stealth anti-bot (addInitScript: webdriver, chrome, plugins)
+  ✅ Snapshot compaction (compact_tree, agent-browser style)
+  ✅ Orchestrazione (auto-snapshot, stability, autocomplete, veto)
+  ⬚ Stealth avanzato (CDP endpoint, Chrome flags)
+  ⬚ Screenshot/vision fallback
+  ⬚ Test E2E browser
     |
 Sprint 6: RAG Knowledge Base (P1)          TODO (~1,100 LOC)
   6.1 File ingestion pipeline
@@ -670,9 +777,8 @@ Sprint 9+: Future (P3)
   Voice, Extended thinking, Prometheus, distribuzione
 ```
 
-**Completato: Sprint 1-4 + 5.3 + 5.5 + SBX-1 + parte Sprint 8**
-**Completato: Sprint 5 completo**
-**Rimanente: SBX-2..4 + SBX-6, CHAT-3..7, Sprint 6-7, hardening residuo**
+**Completato: Sprint 1-5 + SBX-1/5 + CHAT-1..6 + Browser Automation + parte Sprint 8**
+**Rimanente: SBX-2..4 + SBX-6, CHAT-7, Browser E2E/stealth avanzato, Sprint 6-7, hardening residuo**
 
 ---
 
@@ -687,16 +793,18 @@ Sprint 9+: Future (P3)
 | `docs/architecture/` | Diagrammi architetturali |
 | `CLAUDE.md` | Istruzioni sviluppo |
 | `PROJECT.md` | Visione e filosofia |
+| [agent-browser.dev](https://github.com/vercel-labs/agent-browser) | Riferimento browser: compact_tree, snapshot, architettura |
 
 ---
 
 ## Vantaggi Competitivi Homun
 
 1. **MCP client nativo** — ne OpenClaw ne ZeroClaw
-2. **Browser CDP diretto** — senza Playwright/Node.js
+2. **Browser via MCP Playwright** — tool unificato con stealth anti-bot, compact_tree, auto-snapshot
 3. **Exfiltration filter** — OpenClaw non ce l'ha
 4. **Web UI ricca** — 10+ pagine embedded
 5. **Skill ecosystem** — ClawHub + OpenSkills + hot-reload
 6. **Single binary Rust** — ~50MB, no runtime
 7. **XML fallback auto** — supporta modelli senza function calling
 8. **Prompt modulare** — sezioni componibili per mode
+9. **Browser per modelli deboli** — ref normalization, schema piatto, orchestrazione automatica

@@ -56,6 +56,20 @@ impl PromptSection for IdentitySection {
         // Core identity
         prompt.push_str("You are Homun, a personal AI assistant — a digital homunculus that helps your user with tasks.\n\n");
 
+        // Core reasoning approach — applies to ALL tasks
+        prompt.push_str(
+            "## How to Handle Requests\n\n\
+             Before acting on ANY request, briefly reason about it:\n\
+             1. **Understand the intent** — what does the user actually want to achieve?\n\
+             2. **Check what you know** — do you have all the information needed to complete the task?\n\
+             3. **Ask if something is missing** — if critical details are ambiguous or absent, ask ONE focused question.\n\
+             4. **Act with a plan** — once you have what you need, execute methodically.\n\n\
+             Keep it natural. For simple requests (\"che ore sono?\", \"ricordami che...\") just act.\n\
+             For complex tasks (bookings, multi-step operations, automations), take a moment to clarify and plan.\n\
+             NEVER pretend to have information you don't have. NEVER make assumptions about missing details \
+             when the user would reasonably expect you to ask.\n\n",
+        );
+
         // Project context header (inspired by OpenClaw)
         if !ctx.bootstrap_files.is_empty() {
             prompt.push_str("# Project Context\n\n");
@@ -132,9 +146,10 @@ impl PromptSection for ToolsSection {
         // Tool routing rules — ALWAYS included based on registered tools,
         // regardless of native vs XML mode. In native mode, tool definitions
         // go via the API parameter but the LLM still needs behavioral guidance.
-        let has_browser = ctx.registered_tool_names.iter().any(|n| n == "browser");
+        let has_browser = ctx.registered_tool_names.iter().any(|n| crate::browser::is_browser_tool(n));
         let has_web_search = ctx.registered_tool_names.iter().any(|n| n == "web_search");
         let has_web_fetch = ctx.registered_tool_names.iter().any(|n| n == "web_fetch");
+        let has_weather = ctx.registered_tool_names.iter().any(|n| n == "weather");
         let has_create_automation = ctx
             .registered_tool_names
             .iter()
@@ -159,32 +174,37 @@ impl PromptSection for ToolsSection {
             }
             if has_browser {
                 prompt.push_str(
-                    "- Use the **browser** tool when the task requires interaction with a website: navigating dynamic pages, clicking, typing, logging in, uploading files, or reading JS-rendered content.\n\
-                     - Do NOT open the browser for routine research if **web_search** or **web_fetch** can answer the request more directly.\n",
+                    "- Use **browser** when the task requires interaction with a website: navigating dynamic pages, clicking, typing, logging in, uploading files, or reading JS-rendered content.\n\
+                     - For travel/booking flows, multi-site comparisons, or known interactive sites, start with browser first.\n\
+                     - Do NOT open the browser for routine static research if **web_search** or **web_fetch** can answer the request more directly.\n",
                 );
             }
             if !has_web_search && has_browser {
                 prompt.push_str(
-                    "- No **web_search** tool is available. If you need to search the web, use the **browser** to navigate to a search engine and search from there.\n",
+                    "- No **web_search** tool is available. If you need to search the web, use browser({action: \"navigate\", url: \"https://google.com\"}) to open a search engine.\n",
                 );
             } else if !has_web_fetch && has_browser {
                 prompt.push_str(
-                    "- If you already know the URL but **web_fetch** is unavailable, use the **browser** to open and read the page.\n",
+                    "- If you already know the URL but **web_fetch** is unavailable, use browser({action: \"navigate\", url: \"...\"}) to open and read the page.\n",
                 );
             }
+            if has_weather {
+                prompt.push_str("- Use **weather** only for forecasts and conditions.\n");
+            }
 
-            // Browser workflow guidance (moved from tool description for better visibility)
+            // Browser workflow guidance — lightweight cognitive rules.
+            // Heavy form-level reasoning is injected by BrowserTool in snapshot output
+            // (see compact_tree + form plan in tools/browser.rs).
             if has_browser {
                 prompt.push_str(
                     "\n### Browser Workflow\n\n\
-                     Use this workflow only when browser interaction is actually required:\n\
-                     1. `navigate` to the site or search engine you need\n\
-                     2. `snapshot` to inspect visible elements and capture refs\n\
-                     3. `type`, `click`, `select`, or `upload` using refs from the snapshot\n\
-                     4. `snapshot` again to read the updated page or next step\n\
-                     5. Repeat only as needed, then formulate the answer and `close`\n\n\
-                     CRITICAL: NEVER guess or invent URLs. ALWAYS click refs from the snapshot.\n\
-                     Snapshot format: `- link \"Title\" [ref=e3]` → use `click ref=e3`\n",
+                     1. Navigate to the site, then snapshot to see the page\n\
+                     2. When you see a form, **stop and think**: list each field and the value you will use from the user's request. \
+                     Convert vague terms to concrete values (\"domani\"→actual date, \"mattina\"→morning hours, \"sera\"→evening hours). \
+                     If a required value is missing, ask the user.\n\
+                     3. Fill fields step by step using refs from the latest snapshot\n\
+                     4. **Autocomplete fields**: type a FEW characters, look at suggestions in the result, click the match\n\
+                     5. Snapshot after submit to verify results\n",
                 );
             }
         }
@@ -518,7 +538,7 @@ mod tests {
 
     #[test]
     fn test_tools_section_native_mode_with_browser() {
-        // In native mode, ctx.tools is empty but registered_tool_names has the browser.
+        // In native mode, ctx.tools is empty but registered_tool_names has browser MCP tools.
         // Routing rules must still appear.
         let section = ToolsSection;
         let tool_names = vec!["browser".to_string(), "shell".to_string()];
@@ -537,12 +557,12 @@ mod tests {
             "Browser workflow must be visible in native mode"
         );
         assert!(
-            result.contains("NEVER guess or invent URLs"),
-            "URL warning must be visible"
+            result.contains("stop and think"),
+            "Form reasoning instruction must be visible"
         );
         assert!(
-            result.contains("Use the **browser** tool when the task requires interaction"),
-            "Browser guidance should describe interaction-oriented usage"
+            result.contains("Autocomplete"),
+            "Autocomplete rule must be visible in browser workflow"
         );
         // Should NOT have XML tool call format
         assert!(!result.contains("Tool Call Format"));
@@ -564,7 +584,8 @@ mod tests {
         let result = section.build(&ctx).unwrap();
         assert!(result.contains("prefer the **web_search** tool first"));
         assert!(result.contains("Use **web_fetch** to read content from a specific known URL"));
-        assert!(result.contains("Do NOT open the browser for routine research"));
+        assert!(result.contains("Do NOT open the browser for routine static research"));
+        assert!(result.contains("travel/booking flows"));
     }
 
     #[test]

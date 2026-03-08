@@ -124,6 +124,7 @@ pub fn apply_mcp_preset_setup(
         args,
         url: None,
         env: merged_env,
+        capabilities: Vec::new(),
         enabled: true,
     };
     config
@@ -215,6 +216,7 @@ mod tests {
             args: vec!["hello".to_string()],
             url: None,
             env: HashMap::new(),
+            capabilities: Vec::new(),
             enabled: true,
         }
     }
