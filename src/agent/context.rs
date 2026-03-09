@@ -45,6 +45,8 @@ pub struct ContextBuilder {
     /// Relevant memories retrieved by vector + FTS5 search for the current query.
     /// Uses RwLock for interior mutability — updated per-request via `&self`.
     relevant_memories: RwLock<String>,
+    /// Relevant knowledge from RAG knowledge base search.
+    rag_knowledge: RwLock<String>,
     /// Contextual MCP setup suggestions inferred from the active request.
     mcp_suggestions: RwLock<String>,
     /// Known channels and their default chat IDs for cross-channel messaging
@@ -70,6 +72,7 @@ impl ContextBuilder {
             bootstrap_files: Arc::new(RwLock::new(bootstrap_files)),
             memory_content: String::new(),
             relevant_memories: RwLock::new(String::new()),
+            rag_knowledge: RwLock::new(String::new()),
             mcp_suggestions: RwLock::new(String::new()),
             channels_info: String::new(),
             prompt_builder: SystemPromptBuilder::with_defaults(),
@@ -183,6 +186,12 @@ impl ContextBuilder {
         *guard = memories;
     }
 
+    /// Set relevant RAG knowledge base results for the current query.
+    pub async fn set_rag_knowledge(&self, knowledge: String) {
+        let mut guard = self.rag_knowledge.write().await;
+        *guard = knowledge;
+    }
+
     /// Set contextual MCP setup suggestions for the current request.
     pub async fn set_mcp_suggestions(&self, suggestions: String) {
         let mut guard = self.mcp_suggestions.write().await;
@@ -277,6 +286,7 @@ impl ContextBuilder {
         let bootstrap_files = self.bootstrap_files.read().await;
         let skills_summary = self.skills_summary.read().await;
         let relevant_memories = self.relevant_memories.read().await;
+        let rag_knowledge = self.rag_knowledge.read().await;
         let mcp_suggestions = self.mcp_suggestions.read().await;
         let model_name = self.model_name.read().await;
 
@@ -290,6 +300,7 @@ impl ContextBuilder {
             bootstrap_files: &bootstrap_files,
             memory_content: &self.memory_content,
             relevant_memories: &relevant_memories,
+            rag_knowledge: &rag_knowledge,
             mcp_suggestions: &mcp_suggestions,
             channel: "main",
             prompt_mode: PromptMode::Full,

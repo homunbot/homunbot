@@ -19,11 +19,20 @@ const chatEmptyState = document.getElementById('chat-empty-state');
 const chatShellEl = document.querySelector('.chat-shell');
 const conversationListEl = document.getElementById('chat-conversation-list');
 const conversationTitleEl = document.getElementById('chat-conversation-title');
-const conversationSearchEl = document.getElementById('chat-conversation-search');
 const btnChatSidebar = document.getElementById('btn-chat-sidebar');
-const btnChatSidebarMenu = document.getElementById('btn-chat-sidebar-menu');
-const chatSidebarMenu = document.getElementById('chat-sidebar-menu');
-const btnChatToggleArchived = document.getElementById('btn-chat-toggle-archived');
+// Search modal
+const btnChatSearch = document.getElementById('btn-chat-search');
+const chatSearchModal = document.getElementById('chat-search-modal');
+const chatSearchInput = document.getElementById('chat-search-input');
+const chatSearchResults = document.getElementById('chat-search-results');
+const btnChatSearchClose = document.getElementById('btn-chat-search-close');
+const chatSearchIncludeArchived = document.getElementById('chat-search-include-archived');
+// Bulk actions
+const chatBulkActions = document.getElementById('chat-bulk-actions');
+const chatBulkCount = document.getElementById('chat-bulk-count');
+const btnBulkArchive = document.getElementById('btn-bulk-archive');
+const btnBulkDelete = document.getElementById('btn-bulk-delete');
+const btnBulkCancel = document.getElementById('btn-bulk-cancel');
 const runBadgeEl = document.getElementById('chat-run-badge');
 const runModelEl = document.getElementById('chat-run-model');
 const chatPlusBtn = document.getElementById('btn-chat-plus');
@@ -56,7 +65,9 @@ let sidebarCollapsed = false;
 let openConversationMenuId = null;
 let renamingConversationId = null;
 let renameDraft = '';
-let sidebarMenuOpen = false;
+let multiSelectMode = false;
+let selectedConversations = new Set();
+let searchDebounceTimer = null;
 let modalState = null;
 let pendingAttachments = [];
 let pendingMcpServers = [];
@@ -198,21 +209,50 @@ function truncateConversationText(value, max = 48) {
     return compact.length > max ? `${compact.slice(0, max).trimEnd()}…` : compact;
 }
 
+function capitalizeFirst(text) {
+    if (!text) return text;
+    return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 function formatConversationTimestamp(value) {
     if (!value) return '';
     const parsed = new Date(value);
     if (Number.isNaN(parsed.getTime())) return '';
-    return parsed.toLocaleString([], {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-    });
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
+    const itemDay = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+    if (itemDay >= today) {
+        return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    if (itemDay >= yesterday) {
+        return 'Ieri';
+    }
+    return parsed.toLocaleDateString([], { day: 'numeric', month: 'short' });
+}
+
+function groupConversationsByDate(convos) {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
+    const groups = [];
+    let todayItems = [], yesterdayItems = [], olderItems = [];
+    for (const c of convos) {
+        const d = new Date(c.updated_at);
+        const itemDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        if (itemDay >= today) todayItems.push(c);
+        else if (itemDay >= yesterday) yesterdayItems.push(c);
+        else olderItems.push(c);
+    }
+    if (todayItems.length) groups.push({ label: 'Oggi', items: todayItems });
+    if (yesterdayItems.length) groups.push({ label: 'Ieri', items: yesterdayItems });
+    if (olderItems.length) groups.push({ label: 'Meno recenti', items: olderItems });
+    return groups;
 }
 
 function syncConversationHeader() {
     if (!conversationTitleEl) return;
-    conversationTitleEl.textContent = currentConversationTitle();
+    conversationTitleEl.textContent = capitalizeFirst(currentConversationTitle());
 }
 
 function applySidebarState() {
@@ -220,17 +260,7 @@ function applySidebarState() {
     chatShellEl.classList.toggle('is-sidebar-collapsed', sidebarCollapsed);
 }
 
-function syncSidebarMenuLabel() {
-    if (!btnChatToggleArchived) return;
-    btnChatToggleArchived.textContent = showArchived ? 'Hide archived' : 'Show archived';
-}
-
-function closeSidebarMenu() {
-    sidebarMenuOpen = false;
-    if (chatSidebarMenu) {
-        chatSidebarMenu.hidden = true;
-    }
-}
+// sidebar menu removed — search modal replaces it
 
 function closeConversationMenu() {
     openConversationMenuId = null;
@@ -269,91 +299,131 @@ function updateConversationSummary(mutator) {
 function renderConversationList() {
     if (!conversationListEl) return;
     if (conversations.length === 0) {
-        conversationListEl.innerHTML = '<div class="chat-conversation-empty">No conversations yet.</div>';
+        conversationListEl.textContent = '';
+        const empty = document.createElement('div');
+        empty.className = 'chat-conversation-empty';
+        empty.textContent = 'No conversations yet.';
+        conversationListEl.appendChild(empty);
         return;
     }
 
-    conversationListEl.innerHTML = '';
-    conversations.forEach((conversation) => {
-        const item = document.createElement('div');
-        item.className = 'chat-conversation-item';
-        if (conversation.conversation_id === currentConversationId) {
-            item.classList.add('is-active');
-        }
-        if (conversation.active_run && (conversation.active_run.status === 'running' || conversation.active_run.status === 'stopping')) {
-            item.classList.add('is-running');
-        }
-        const formattedDate = formatConversationTimestamp(conversation.updated_at);
+    conversationListEl.textContent = '';
+    const groups = groupConversationsByDate(conversations);
+    groups.forEach((group) => {
+        const header = document.createElement('div');
+        header.className = 'chat-date-group';
+        header.textContent = group.label;
+        conversationListEl.appendChild(header);
 
-        const titleHtml = renamingConversationId === conversation.conversation_id
-            ? `<input type="text" class="input chat-rename-input" value="${escapeHtml(renameDraft || conversation.title || 'New conversation')}" aria-label="Rename conversation">`
-            : `<span class="chat-conversation-name">${escapeHtml(conversation.title || 'New conversation')}</span>`;
-
-        item.innerHTML = `
-            <button type="button" class="chat-conversation-item-body">
-                ${titleHtml}
-                <span class="chat-conversation-meta">${escapeHtml(formattedDate || '')}</span>
-            </button>
-            <button type="button" class="chat-conversation-menu-btn" aria-label="Conversation actions">•••</button>
-            <div class="chat-conversation-menu" ${openConversationMenuId === conversation.conversation_id ? '' : 'hidden'}>
-                <button type="button" class="chat-conversation-menu-item" data-action="rename">Rename</button>
-                <button type="button" class="chat-conversation-menu-item" data-action="${conversation.archived ? 'unarchive' : 'archive'}">${conversation.archived ? 'Unarchive' : 'Archive'}</button>
-                <button type="button" class="chat-conversation-menu-item is-danger" data-action="delete">Delete</button>
-            </div>
-        `;
-        item.querySelector('.chat-conversation-item-body')?.addEventListener('click', () => {
-            if (renamingConversationId === conversation.conversation_id) {
-                return;
-            }
-            if (conversation.conversation_id !== currentConversationId) {
-                selectConversation(conversation.conversation_id);
-            }
+        group.items.forEach((conversation) => {
+            conversationListEl.appendChild(buildConversationItem(conversation));
         });
-        item.querySelector('.chat-conversation-menu-btn')?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            openConversationMenuId = openConversationMenuId === conversation.conversation_id ? null : conversation.conversation_id;
-            renderConversationList();
-        });
-        item.querySelectorAll('.chat-conversation-menu-item').forEach((button) => {
-            button.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const action = button.dataset.action;
-                if (action === 'rename') {
-                    await renameConversation(conversation);
-                } else if (action === 'archive') {
-                    await setConversationArchived(conversation, true);
-                } else if (action === 'unarchive') {
-                    await setConversationArchived(conversation, false);
-                } else if (action === 'delete') {
-                    await deleteConversation(conversation);
-                }
-            });
-        });
-        const renameInput = item.querySelector('.chat-rename-input');
-        if (renameInput) {
-            renameInput.addEventListener('click', (e) => e.stopPropagation());
-            renameInput.addEventListener('input', () => {
-                renameDraft = renameInput.value;
-            });
-            renameInput.addEventListener('keydown', async (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    await commitRenameConversation(conversation);
-                } else if (e.key === 'Escape') {
-                    e.preventDefault();
-                    cancelRenameConversation();
-                }
-            });
-            renameInput.addEventListener('blur', async () => {
-                await commitRenameConversation(conversation);
-            });
-            setTimeout(() => {
-                renameInput.focus();
-                renameInput.select();
-            }, 0);
-        }
-        conversationListEl.appendChild(item);
     });
+    syncBulkActions();
+}
+
+function buildConversationItem(conversation) {
+    const item = document.createElement('div');
+    item.className = 'chat-conversation-item';
+    if (conversation.conversation_id === currentConversationId) item.classList.add('is-active');
+    if (conversation.active_run && (conversation.active_run.status === 'running' || conversation.active_run.status === 'stopping')) {
+        item.classList.add('is-running');
+    }
+    if (multiSelectMode) {
+        item.classList.add('is-selectable');
+        if (selectedConversations.has(conversation.conversation_id)) item.classList.add('is-selected');
+    }
+
+    // Checkbox (multi-select only)
+    if (multiSelectMode) {
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'chat-select-checkbox';
+        cb.checked = selectedConversations.has(conversation.conversation_id);
+        cb.addEventListener('click', (e) => { e.stopPropagation(); toggleConversationSelection(conversation.conversation_id); });
+        item.appendChild(cb);
+    }
+
+    // Body
+    const body = document.createElement('button');
+    body.type = 'button';
+    body.className = 'chat-conversation-item-body';
+
+    if (renamingConversationId === conversation.conversation_id) {
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.className = 'input chat-rename-input';
+        inp.value = renameDraft || conversation.title || 'New conversation';
+        inp.setAttribute('aria-label', 'Rename conversation');
+        inp.addEventListener('click', (e) => e.stopPropagation());
+        inp.addEventListener('input', () => { renameDraft = inp.value; });
+        inp.addEventListener('keydown', async (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); await commitRenameConversation(conversation); }
+            else if (e.key === 'Escape') { e.preventDefault(); cancelRenameConversation(); }
+        });
+        inp.addEventListener('blur', async () => { await commitRenameConversation(conversation); });
+        body.appendChild(inp);
+        setTimeout(() => { inp.focus(); inp.select(); }, 0);
+    } else {
+        const nameEl = document.createElement('span');
+        nameEl.className = 'chat-conversation-name';
+        nameEl.textContent = capitalizeFirst(conversation.title) || 'New conversation';
+        body.appendChild(nameEl);
+    }
+    const dateEl = document.createElement('span');
+    dateEl.className = 'chat-conversation-date';
+    dateEl.textContent = formatConversationTimestamp(conversation.updated_at);
+    body.appendChild(dateEl);
+
+    body.addEventListener('click', () => {
+        if (renamingConversationId === conversation.conversation_id) return;
+        if (multiSelectMode) { toggleConversationSelection(conversation.conversation_id); return; }
+        if (conversation.conversation_id !== currentConversationId) selectConversation(conversation.conversation_id);
+    });
+    item.appendChild(body);
+
+    // Menu button (three dots)
+    const menuBtn = document.createElement('button');
+    menuBtn.type = 'button';
+    menuBtn.className = 'chat-conversation-menu-btn';
+    menuBtn.setAttribute('aria-label', 'Conversation actions');
+    menuBtn.innerHTML = '<svg viewBox="0 0 18 18" fill="currentColor" width="14" height="14"><circle cx="4" cy="9" r="1.4"/><circle cx="9" cy="9" r="1.4"/><circle cx="14" cy="9" r="1.4"/></svg>';
+    menuBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openConversationMenuId = openConversationMenuId === conversation.conversation_id ? null : conversation.conversation_id;
+        renderConversationList();
+    });
+    item.appendChild(menuBtn);
+
+    // Menu dropdown
+    const menu = document.createElement('div');
+    menu.className = 'chat-conversation-menu';
+    if (openConversationMenuId !== conversation.conversation_id) menu.hidden = true;
+    const actions = [
+        { action: 'rename', label: 'Rename', cls: '' },
+        { action: 'select', label: multiSelectMode ? 'Deselect' : 'Select', cls: '' },
+        { action: conversation.archived ? 'unarchive' : 'archive', label: conversation.archived ? 'Unarchive' : 'Archive', cls: '' },
+        { action: 'delete', label: 'Delete', cls: 'is-danger' },
+    ];
+    actions.forEach(({ action, label, cls }) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'chat-conversation-menu-item' + (cls ? ' ' + cls : '');
+        btn.dataset.action = action;
+        btn.textContent = label;
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (action === 'rename') await renameConversation(conversation);
+            else if (action === 'select') enterMultiSelectMode(conversation.conversation_id);
+            else if (action === 'archive') await setConversationArchived(conversation, true);
+            else if (action === 'unarchive') await setConversationArchived(conversation, false);
+            else if (action === 'delete') await deleteConversation(conversation);
+        });
+        menu.appendChild(btn);
+    });
+    item.appendChild(menu);
+
+    return item;
 }
 
 async function refreshConversationList() {
@@ -573,7 +643,13 @@ function applyExecutionPlan(plan) {
     currentPlanState = plan && typeof plan === 'object' ? plan : null;
     if (!chatPlanPanel || !chatPlanObjective || !chatPlanDoneWrap || !chatPlanRemainingWrap) return;
 
-    if (!currentPlanState || !currentPlanState.objective) {
+    // Hide if no plan, no objective, or plan has no meaningful content
+    const hasExplicitSteps = Array.isArray(currentPlanState?.explicit_steps) && currentPlanState.explicit_steps.length > 0;
+    const hasCompletedSteps = Array.isArray(currentPlanState?.completed_steps) && currentPlanState.completed_steps.length > 0;
+    const hasBlockers = Array.isArray(currentPlanState?.active_blockers) && currentPlanState.active_blockers.length > 0;
+    const hasSources = Array.isArray(currentPlanState?.required_sources) && currentPlanState.required_sources.length > 0;
+    const hasContent = hasExplicitSteps || hasCompletedSteps || hasBlockers || hasSources || currentPlanState?.current_source;
+    if (!currentPlanState || !currentPlanState.objective || (!hasContent && !isProcessing)) {
         chatPlanPanel.hidden = true;
         chatPlanPanel.classList.add('collapsed');
         if (chatPlanToggle) chatPlanToggle.setAttribute('aria-expanded', 'false');
@@ -643,13 +719,13 @@ function applyExecutionPlan(plan) {
     renderPlanList(chatPlanDone, [...sourceDoneItems, ...doneItems]);
     renderPlanList(chatPlanRemaining, remainingItems);
     renderPlanList(chatPlanConstraints, constraintItems);
+    updatePlanProgressBadge();
 }
 
 /** Render an explicit plan created via plan_task with status icons. */
 function renderExplicitPlan(plan) {
     chatPlanPanel.hidden = false;
-    // Auto-expand when explicit plan appears
-    if (!planExpanded) planExpanded = true;
+    // Keep collapsed as pill — user clicks to expand
     chatPlanPanel.classList.toggle('collapsed', !planExpanded);
     if (chatPlanToggle) chatPlanToggle.setAttribute('aria-expanded', String(planExpanded));
     chatPlanObjective.textContent = plan.objective || '';
@@ -691,6 +767,7 @@ function renderExplicitPlan(plan) {
             renderPlanList(chatPlanConstraints, [plan.verification]);
         }
     }
+    updatePlanProgressBadge();
 }
 
 /** Reset column labels to their defaults (after explicit plan cleanup). */
@@ -699,6 +776,27 @@ function resetPlanLabels() {
     if (doneLabel) doneLabel.textContent = 'Done';
     const constraintLabel = chatPlanConstraintsWrap?.querySelector('.chat-plan-label');
     if (constraintLabel) constraintLabel.textContent = 'Constraints';
+}
+
+/** Update (or create) the compact progress badge inside the plan header. */
+function updatePlanProgressBadge() {
+    if (!chatPlanPanel || !currentPlanState) return;
+    let el = chatPlanPanel.querySelector('.chat-plan-progress');
+    if (!el) {
+        el = document.createElement('span');
+        el.className = 'chat-plan-progress';
+        const hdr = chatPlanPanel.querySelector('.chat-plan-header-copy');
+        if (hdr) hdr.appendChild(el);
+    }
+    if (Array.isArray(currentPlanState.explicit_steps) && currentPlanState.explicit_steps.length) {
+        const total = currentPlanState.explicit_steps.length;
+        const done = currentPlanState.explicit_steps.filter(s => s.status === 'completed').length;
+        el.textContent = done === total ? `\u2705 ${done}/${total}` : `\uD83D\uDD04 ${done}/${total}`;
+    } else {
+        const done = (currentPlanState.completed_steps || []).length;
+        const rem = (currentPlanState.constraints || []).length;
+        el.textContent = (done + rem) > 0 ? `(${done}/${done + rem})` : '';
+    }
 }
 
 function clearExecutionPlan() {
@@ -869,6 +967,11 @@ function hydrateActiveRun(run) {
         setRunBadge('warning', 'Failed');
     }
 
+    // Hide stale plan panel if run is no longer active
+    if (run.status !== 'running' && run.status !== 'stopping') {
+        clearExecutionPlan();
+    }
+
     syncEmptyState();
 }
 
@@ -915,30 +1018,136 @@ async function selectConversation(conversationId) {
     disconnectSocket();
     connect();
     await refreshConversationList();
+    chatText?.focus();
 }
 
-conversationSearchEl?.addEventListener('input', async () => {
-    conversationSearch = conversationSearchEl.value.trim();
-    await refreshConversationList();
+// ─── Search modal ───
+btnChatSearch?.addEventListener('click', () => openSearchModal());
+btnChatSearchClose?.addEventListener('click', () => closeSearchModal());
+chatSearchModal?.querySelector('.chat-search-modal-backdrop')?.addEventListener('click', () => closeSearchModal());
+chatSearchInput?.addEventListener('input', () => {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => performSearch(), 300);
 });
+chatSearchIncludeArchived?.addEventListener('change', () => performSearch());
 
-btnChatSidebarMenu?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    sidebarMenuOpen = !sidebarMenuOpen;
-    if (chatSidebarMenu) {
-        chatSidebarMenu.hidden = !sidebarMenuOpen;
+function openSearchModal() {
+    if (!chatSearchModal) return;
+    chatSearchModal.hidden = false;
+    if (chatSearchInput) { chatSearchInput.value = ''; chatSearchInput.focus(); }
+    if (chatSearchResults) chatSearchResults.textContent = '';
+}
+function closeSearchModal() {
+    if (chatSearchModal) chatSearchModal.hidden = true;
+}
+async function performSearch() {
+    const q = chatSearchInput?.value.trim() || '';
+    const inclArchived = chatSearchIncludeArchived?.checked || false;
+    const url = new URL('/api/v1/chat/conversations', window.location.origin);
+    url.searchParams.set('limit', '20');
+    if (q) url.searchParams.set('q', q);
+    if (inclArchived) url.searchParams.set('include_archived', 'true');
+    try {
+        const res = await fetch(url.pathname + url.search);
+        if (!res.ok) return;
+        const results = await res.json();
+        renderSearchResults(results);
+    } catch (_) { /* ignore */ }
+}
+function renderSearchResults(results) {
+    if (!chatSearchResults) return;
+    chatSearchResults.textContent = '';
+    if (results.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'chat-search-result-empty';
+        empty.textContent = 'No results found.';
+        chatSearchResults.appendChild(empty);
+        return;
     }
+    results.forEach((c) => {
+        const el = document.createElement('button');
+        el.type = 'button';
+        el.className = 'chat-search-result-item';
+        const name = document.createElement('span');
+        name.className = 'chat-search-result-name';
+        name.textContent = capitalizeFirst(c.title) || 'New conversation';
+        el.appendChild(name);
+        const date = document.createElement('span');
+        date.className = 'chat-search-result-date';
+        date.textContent = formatConversationTimestamp(c.updated_at);
+        el.appendChild(date);
+        el.addEventListener('click', () => {
+            closeSearchModal();
+            selectConversation(c.conversation_id);
+        });
+        chatSearchResults.appendChild(el);
+    });
+}
+
+// ─── Multi-select ───
+function enterMultiSelectMode(initialId) {
+    openConversationMenuId = null;
+    multiSelectMode = true;
+    selectedConversations.clear();
+    if (initialId) selectedConversations.add(initialId);
+    renderConversationList();
+}
+function exitMultiSelectMode() {
+    multiSelectMode = false;
+    selectedConversations.clear();
+    renderConversationList();
+}
+function toggleConversationSelection(id) {
+    if (selectedConversations.has(id)) selectedConversations.delete(id);
+    else selectedConversations.add(id);
+    if (selectedConversations.size === 0) exitMultiSelectMode();
+    else renderConversationList();
+}
+function syncBulkActions() {
+    if (!chatBulkActions) return;
+    chatBulkActions.hidden = !multiSelectMode || selectedConversations.size === 0;
+    if (chatBulkCount) chatBulkCount.textContent = `${selectedConversations.size} selected`;
+}
+
+btnBulkCancel?.addEventListener('click', () => exitMultiSelectMode());
+btnBulkDelete?.addEventListener('click', async () => {
+    const count = selectedConversations.size;
+    if (count === 0) return;
+    openModal({
+        title: 'Delete conversations',
+        copy: `Delete ${count} conversation${count > 1 ? 's' : ''}? This cannot be undone.`,
+        confirmLabel: 'Delete',
+        destructive: true,
+        onConfirm: async () => {
+            const ids = [...selectedConversations];
+            for (const id of ids) {
+                try { await fetch(`/api/v1/chat/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }); } catch (_) { /* ignore */ }
+            }
+            exitMultiSelectMode();
+            await refreshConversationList();
+            if (ids.includes(currentConversationId)) {
+                await ensureConversationSelectedAfterRemoval(currentConversationId);
+            }
+            showToast(`Deleted ${count} conversation${count > 1 ? 's' : ''}`, 'success');
+        },
+    });
 });
-
-btnChatToggleArchived?.addEventListener('click', async () => {
-    showArchived = !showArchived;
-    window.localStorage.setItem('homun.chat.showArchived', showArchived ? '1' : '0');
-    syncSidebarMenuLabel();
-    closeSidebarMenu();
-    await refreshConversationList();
-    if (!showArchived && currentConversationId && !conversations.some((item) => item.conversation_id === currentConversationId)) {
-        await ensureConversationSelectedAfterRemoval(currentConversationId);
+btnBulkArchive?.addEventListener('click', async () => {
+    const count = selectedConversations.size;
+    if (count === 0) return;
+    const ids = [...selectedConversations];
+    for (const id of ids) {
+        try {
+            await fetch(`/api/v1/chat/conversations/${encodeURIComponent(id)}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ archived: true }),
+            });
+        } catch (_) { /* ignore */ }
     }
+    exitMultiSelectMode();
+    await refreshConversationList();
+    showToast(`Archived ${count} conversation${count > 1 ? 's' : ''}`, 'success');
 });
 
 btnChatSidebar?.addEventListener('click', () => {
@@ -948,9 +1157,6 @@ btnChatSidebar?.addEventListener('click', () => {
 });
 
 document.addEventListener('click', (e) => {
-    if (sidebarMenuOpen && !e.target.closest('.chat-sidebar-menu-wrap')) {
-        closeSidebarMenu();
-    }
     if (openConversationMenuId && !e.target.closest('.chat-conversation-item')) {
         closeConversationMenu();
     }
@@ -961,18 +1167,11 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-        if (renamingConversationId) {
-            cancelRenameConversation();
-        }
-        if (sidebarMenuOpen) {
-            closeSidebarMenu();
-        }
-        if (mcpPickerOpen) {
-            closeMcpPicker();
-        }
-        if (!chatModalBackdrop?.hidden) {
-            closeModal();
-        }
+        if (!chatSearchModal?.hidden) { closeSearchModal(); return; }
+        if (multiSelectMode) { exitMultiSelectMode(); return; }
+        if (renamingConversationId) { cancelRenameConversation(); }
+        if (mcpPickerOpen) { closeMcpPicker(); }
+        if (!chatModalBackdrop?.hidden) { closeModal(); }
     }
 });
 
@@ -1315,7 +1514,7 @@ function removeToolIndicator() {
 /** Finalize and collapse reasoning section */
 function finalizeReasoning() {
     if (reasoningSectionEl && reasoningCount > 0) {
-        reasoningSectionEl.classList.add('collapsed');
+        reasoningSectionEl.classList.add('collapsed', 'is-done');
         updateReasoningCount();
     }
 }
@@ -1719,6 +1918,8 @@ function connect() {
                 clearToolCalls();
                 activeRunId = null;
                 setExecutionModel('');
+            } else if (data.type === 'workflow_progress') {
+                handleWorkflowProgress(data.progress);
             } else if (data.type === 'error') {
                 settleLiveArtifacts();
                 setProcessing(false);
@@ -1829,6 +2030,7 @@ function finalizeStream(content) {
         conversation.updated_at = new Date().toISOString();
         conversation.message_count = (conversation.message_count || 0) + 1;
     });
+    maybeAutoCompact();
 }
 
 // ─── Message rendering ─────────────────────────────────────────
@@ -1888,7 +2090,11 @@ function sendCurrentMessage() {
     if ((!text && attachments.length === 0 && mcpServers.length === 0) || isProcessing || !ws || ws.readyState !== WebSocket.OPEN) return;
 
     addMessage('user', text, null, { attachments, mcpServers });
-    ws.send(JSON.stringify({ content: text, attachments, mcp_servers: mcpServers }));
+    const payload = { content: text, attachments, mcp_servers: mcpServers };
+    if (thinkingEnabled !== null) {
+        payload.thinking = thinkingEnabled;
+    }
+    ws.send(JSON.stringify(payload));
     chatText.value = '';
     chatText.style.height = 'auto';
     chatText.focus();
@@ -1936,6 +2142,9 @@ function setProcessing(processing) {
         btnSend.title = processing ? 'Stop' : 'Send';
     }
     if (chatText) chatText.disabled = false;
+    // Toggle logo pulse on the app shell
+    const appEl = document.querySelector('.app');
+    if (appEl) appEl.classList.toggle('is-agent-working', processing);
     if (!processing) {
         setRunBadge(ws && ws.readyState === WebSocket.OPEN ? 'idle' : 'offline', ws && ws.readyState === WebSocket.OPEN ? '' : 'Offline');
     }
@@ -2017,19 +2226,30 @@ async function handleNewChat() {
 }
 
 /** Compact the conversation (trigger memory consolidation) */
-async function handleCompactChat() {
+async function handleCompactChat(silent = false) {
     try {
         const res = await fetch(conversationApi('/api/v1/chat/compact'), { method: 'POST' });
         const data = await res.json();
-        
+
         if (data.ok) {
             showToast('Conversation compacted', 'success');
-        } else {
+        } else if (!silent) {
             showToast(data.message || 'Cannot compact yet', 'warning');
         }
     } catch (e) {
-        console.error('Failed to compact chat:', e);
-        showToast('Failed to compact conversation', 'error');
+        if (!silent) {
+            console.error('Failed to compact chat:', e);
+            showToast('Failed to compact conversation', 'error');
+        }
+    }
+}
+
+/** Auto-compact when conversation exceeds message threshold */
+function maybeAutoCompact() {
+    if (!currentConversationId) return;
+    const msgCount = messagesEl.querySelectorAll('.chat-msg').length;
+    if (msgCount >= 30) {
+        handleCompactChat(true);
     }
 }
 
@@ -2053,8 +2273,12 @@ function normalizeModelCapabilities(capabilities) {
         multimodal: !!(capabilities && capabilities.multimodal),
         image_input: !!(capabilities && capabilities.image_input),
         tool_calls: !(capabilities && capabilities.tool_calls === false),
+        thinking: !!(capabilities && capabilities.thinking),
     };
 }
+
+/** Per-conversation thinking override: null = model default, true/false = explicit */
+let thinkingEnabled = null;
 
 async function hydrateChatModelCapabilities(data) {
     const known = {
@@ -2094,16 +2318,17 @@ function modelCapabilityLabels(modelId) {
     const labels = [];
     if (capabilities.image_input || capabilities.multimodal) labels.push('image');
     if (capabilities.tool_calls) labels.push('tools');
+    if (capabilities.thinking) labels.push('thinking');
     return labels;
 }
 
-function formatModelOptionLabel(label, modelId) {
-    const labels = modelCapabilityLabels(modelId);
-    return labels.length > 0 ? `${label} · ${labels.join(' · ')}` : label;
+function formatModelOptionLabel(label, _modelId) {
+    return label;
 }
 
 function renderActiveModelCapabilities(modelId) {
     if (!chatModelCapabilitiesEl) return;
+    const caps = normalizeModelCapabilities(chatModelCapabilities[modelId]);
     const labels = modelCapabilityLabels(modelId);
     if (labels.length === 0) {
         chatModelCapabilitiesEl.hidden = true;
@@ -2112,14 +2337,40 @@ function renderActiveModelCapabilities(modelId) {
     }
     chatModelCapabilitiesEl.hidden = false;
     chatModelCapabilitiesEl.textContent = '';
-    const settingsUrl = `/setup?model=${encodeURIComponent(modelId)}#section-providers`;
-    labels.forEach((label) => {
-        const link = document.createElement('a');
-        link.className = 'chat-model-capability-badge';
-        link.href = settingsUrl;
-        link.textContent = label;
-        link.title = `Open model settings for ${modelId}`;
-        chatModelCapabilitiesEl.appendChild(link);
+
+    // Thinking switch first (if model supports it)
+    if (caps.thinking) {
+        const isOn = thinkingEnabled !== false;
+        const wrapper = document.createElement('label');
+        wrapper.className = 'thinking-switch';
+        wrapper.title = 'Toggle thinking for this conversation';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = isOn;
+        checkbox.addEventListener('change', () => {
+            thinkingEnabled = checkbox.checked ? null : false;
+        });
+
+        const slider = document.createElement('span');
+        slider.className = 'thinking-slider';
+
+        const text = document.createElement('span');
+        text.className = 'thinking-label';
+        text.textContent = 'thinking';
+
+        wrapper.appendChild(checkbox);
+        wrapper.appendChild(slider);
+        wrapper.appendChild(text);
+        chatModelCapabilitiesEl.appendChild(wrapper);
+    }
+
+    // Static capability badges after thinking
+    labels.filter(l => l !== 'thinking').forEach((label) => {
+        const span = document.createElement('span');
+        span.className = 'chat-model-capability-badge';
+        span.textContent = label;
+        chatModelCapabilitiesEl.appendChild(span);
     });
 }
 
@@ -2331,6 +2582,7 @@ if (chatModelSelect) {
 
             if (res.ok) {
                 currentModel = newModel;
+                thinkingEnabled = null;
                 if (chatConfig) {
                     chatConfig.dataset.model = newModel;
                 }
@@ -2358,12 +2610,161 @@ closeChatPlusMenu();
 setRunBadge('offline', 'Offline');
 syncEmptyState();
 
+// ─── Workflow progress donut chart ─────────────────────────────
+
+/**
+ * Build an SVG donut chart showing workflow step progress.
+ * Returns an SVG element (36x36) with a ring that fills as steps complete.
+ */
+function buildWorkflowDonut(completed, total, status) {
+    const size = 36;
+    const strokeWidth = 4;
+    const radius = (size - strokeWidth) / 2;
+    const circumference = 2 * Math.PI * radius;
+    const progress = total > 0 ? completed / total : 0;
+    const dashOffset = circumference * (1 - progress);
+
+    // Status-based colors
+    let strokeColor = 'var(--accent)';
+    if (status === 'completed') strokeColor = 'var(--ok)';
+    else if (status === 'failed') strokeColor = 'var(--err)';
+    else if (status === 'paused') strokeColor = 'var(--warn)';
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', size);
+    svg.setAttribute('height', size);
+    svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
+    svg.classList.add('wf-donut');
+
+    // Background ring
+    const bgCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    bgCircle.setAttribute('cx', size / 2);
+    bgCircle.setAttribute('cy', size / 2);
+    bgCircle.setAttribute('r', radius);
+    bgCircle.setAttribute('fill', 'none');
+    bgCircle.setAttribute('stroke', 'var(--border-subtle)');
+    bgCircle.setAttribute('stroke-width', strokeWidth);
+    svg.appendChild(bgCircle);
+
+    // Progress ring
+    const progressCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    progressCircle.setAttribute('cx', size / 2);
+    progressCircle.setAttribute('cy', size / 2);
+    progressCircle.setAttribute('r', radius);
+    progressCircle.setAttribute('fill', 'none');
+    progressCircle.setAttribute('stroke', strokeColor);
+    progressCircle.setAttribute('stroke-width', strokeWidth);
+    progressCircle.setAttribute('stroke-linecap', 'round');
+    progressCircle.setAttribute('stroke-dasharray', circumference);
+    progressCircle.setAttribute('stroke-dashoffset', dashOffset);
+    progressCircle.setAttribute('transform', `rotate(-90 ${size / 2} ${size / 2})`);
+    progressCircle.classList.add('wf-donut-progress');
+    svg.appendChild(progressCircle);
+
+    // Center label: step count or checkmark
+    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    text.setAttribute('x', size / 2);
+    text.setAttribute('y', size / 2);
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('dominant-baseline', 'central');
+    text.setAttribute('font-size', '9');
+    text.setAttribute('fill', 'var(--t2)');
+    text.setAttribute('font-weight', '600');
+    if (status === 'completed') {
+        text.textContent = '\u2713'; // checkmark
+        text.setAttribute('font-size', '14');
+        text.setAttribute('fill', 'var(--ok)');
+    } else if (status === 'failed') {
+        text.textContent = '\u2717'; // X mark
+        text.setAttribute('font-size', '14');
+        text.setAttribute('fill', 'var(--err)');
+    } else {
+        text.textContent = `${completed}/${total}`;
+    }
+    svg.appendChild(text);
+
+    return svg;
+}
+
+/**
+ * Handle a workflow_progress WebSocket event.
+ * Creates or updates a compact workflow progress card in the chat.
+ */
+function handleWorkflowProgress(progress) {
+    if (!progress || !progress.workflow_id) return;
+
+    const wfId = progress.workflow_id;
+    const cardId = `wf-progress-${wfId}`;
+    let card = document.getElementById(cardId);
+
+    if (!card) {
+        // Create new workflow progress card
+        card = document.createElement('div');
+        card.id = cardId;
+        card.className = 'wf-progress-card';
+
+        const inner = document.createElement('div');
+        inner.className = 'wf-progress-inner';
+
+        const donutWrap = document.createElement('div');
+        donutWrap.className = 'wf-donut-wrap';
+        inner.appendChild(donutWrap);
+
+        const info = document.createElement('div');
+        info.className = 'wf-progress-info';
+        const nameEl = document.createElement('div');
+        nameEl.className = 'wf-progress-name';
+        const statusEl = document.createElement('div');
+        statusEl.className = 'wf-progress-status';
+        info.appendChild(nameEl);
+        info.appendChild(statusEl);
+        inner.appendChild(info);
+
+        card.appendChild(inner);
+        messagesEl.appendChild(card);
+    }
+
+    // Update card content
+    const donutWrap = card.querySelector('.wf-donut-wrap');
+    const nameEl = card.querySelector('.wf-progress-name');
+    const statusEl = card.querySelector('.wf-progress-status');
+
+    const completed = progress.completed_steps || 0;
+    const total = progress.total_steps || 1;
+    const status = progress.status || 'running';
+
+    // Replace donut SVG
+    donutWrap.replaceChildren(buildWorkflowDonut(completed, total, status));
+
+    // Update name and status text
+    nameEl.textContent = progress.workflow_name || wfId;
+
+    if (status === 'completed') {
+        statusEl.textContent = `Completed (${total} steps)`;
+        card.dataset.status = 'completed';
+    } else if (status === 'failed') {
+        statusEl.textContent = progress.error
+            ? `Failed at step ${completed + 1}: ${progress.error}`
+            : `Failed at step ${completed + 1}/${total}`;
+        card.dataset.status = 'failed';
+    } else if (status === 'paused') {
+        statusEl.textContent = `Waiting for approval \u2014 step ${completed + 1}/${total}: ${progress.current_step || ''}`;
+        card.dataset.status = 'paused';
+    } else {
+        statusEl.textContent = progress.current_step
+            ? `Step ${completed}/${total} done \u2014 running: ${progress.current_step}`
+            : `Step ${completed}/${total}`;
+        card.dataset.status = 'running';
+    }
+
+    scrollThreadToBottom();
+}
+
 async function bootstrapChat() {
     try {
         showArchived = window.localStorage.getItem('homun.chat.showArchived') === '1';
         sidebarCollapsed = window.localStorage.getItem('homun.chat.sidebarCollapsed') === '1';
         applySidebarState();
-        syncSidebarMenuLabel();
         await ensureConversationSelected();
         connect();
     } catch (e) {

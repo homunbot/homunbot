@@ -3,7 +3,7 @@ mod secrets;
 
 pub use db::{
     AutomationRow, AutomationRunRow, AutomationUpdate, CronJobRow, Database, EmailPendingRow,
-    MemoryChunkRow, MemoryRow, SessionListRow, TokenUsageAggRow, TokenUsageDailyRow,
-    UserIdentityRow, UserRow, WebhookTokenRow,
+    MemoryChunkRow, MemoryRow, RagChunkRow, RagSourceRow, SessionListRow, TokenUsageAggRow,
+    TokenUsageDailyRow, UserIdentityRow, UserRow, WebhookTokenRow,
 };
 pub use secrets::{global_secrets, EncryptedSecrets, SecretKey, SecretsError};

@@ -20,6 +20,8 @@ mod logs;
 mod mcp_setup;
 mod provider;
 mod queue;
+#[cfg(feature = "local-embeddings")]
+mod rag;
 mod scheduler;
 mod security;
 mod service;
@@ -27,6 +29,7 @@ mod session;
 mod skills;
 mod storage;
 mod tools;
+mod workflows;
 #[cfg(feature = "cli")]
 mod tui;
 mod user;
@@ -44,7 +47,8 @@ use crate::storage::Database;
 use crate::tools::ReadEmailInboxTool;
 use crate::tools::{
     CreateAutomationTool, CronTool, EditFileTool, ListDirTool, MessageTool, ReadFileTool,
-    ShellTool, SpawnTool, ToolRegistry, VaultTool, WebFetchTool, WebSearchTool, WriteFileTool,
+    ShellTool, SpawnTool, ToolRegistry, VaultTool, WebFetchTool, WebSearchTool, WorkflowTool,
+    WriteFileTool,
 };
 
 #[cfg(feature = "mcp")]
@@ -113,6 +117,12 @@ enum Commands {
     Memory {
         #[command(subcommand)]
         command: MemoryCommands,
+    },
+    /// Manage knowledge base (RAG)
+    #[cfg(feature = "local-embeddings")]
+    Knowledge {
+        #[command(subcommand)]
+        command: KnowledgeCommands,
     },
     /// Manage users and permissions
     Users {
@@ -315,6 +325,39 @@ enum MemoryCommands {
     },
 }
 
+#[cfg(feature = "local-embeddings")]
+#[derive(Subcommand)]
+enum KnowledgeCommands {
+    /// Add a file or directory to the knowledge base
+    Add {
+        /// Path to file or directory
+        path: String,
+        /// Recurse into subdirectories
+        #[arg(long, short)]
+        recursive: bool,
+    },
+    /// List indexed sources
+    List,
+    /// Search the knowledge base
+    Search {
+        /// Search query
+        query: String,
+        /// Max results
+        #[arg(long, short, default_value = "5")]
+        limit: usize,
+    },
+    /// Remove a source by ID
+    Remove {
+        /// Source ID
+        id: i64,
+    },
+    /// Sync resources from MCP cloud sources
+    Sync {
+        /// Specific MCP server name (syncs all configured if omitted)
+        server: Option<String>,
+    },
+}
+
 #[derive(Subcommand)]
 enum UserCommands {
     /// List all users
@@ -496,6 +539,41 @@ fn try_create_memory_searcher(db: Database, config: &Config) -> Option<agent::Me
         }
         Err(e) => {
             tracing::warn!(error = %e, "Failed to initialize embedding engine, vector search disabled");
+            None
+        }
+    }
+}
+
+/// Try to create a RAG engine (embedding engine + vector index for knowledge base).
+///
+/// Returns `None` if the embedding engine fails to initialize or knowledge is disabled.
+/// Only available when `local-embeddings` feature is enabled.
+#[cfg(feature = "local-embeddings")]
+fn try_create_rag_engine(
+    db: Database,
+    config: &Config,
+) -> Option<std::sync::Arc<tokio::sync::Mutex<rag::RagEngine>>> {
+    if !config.knowledge.enabled {
+        tracing::debug!("Knowledge base disabled in config");
+        return None;
+    }
+
+    let index_path = Config::data_dir().join("rag.usearch");
+    let provider = agent::create_embedding_provider(config).ok()?;
+
+    match agent::EmbeddingEngine::with_provider_and_path(provider, index_path) {
+        Ok(engine) => {
+            let chunk_opts = rag::ChunkOptions {
+                max_tokens: config.knowledge.chunk_max_tokens,
+                overlap_tokens: config.knowledge.chunk_overlap_tokens,
+            };
+            let rag_engine = rag::RagEngine::new(db, engine, chunk_opts);
+            let handle = std::sync::Arc::new(tokio::sync::Mutex::new(rag_engine));
+            tracing::info!("RAG knowledge base initialized");
+            Some(handle)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to initialize RAG embedding engine");
             None
         }
     }
@@ -724,6 +802,22 @@ async fn main() -> Result<()> {
             let db_for_searcher = db.clone();
             #[cfg(not(feature = "local-embeddings"))]
             let _db_for_searcher = db.clone();
+
+            // Register RAG knowledge tool (before tool_registry is moved)
+            #[cfg(feature = "local-embeddings")]
+            let _rag_engine_chat = {
+                let rag = try_create_rag_engine(db.clone(), &config);
+                if let Some(ref engine) = rag {
+                    // Rebuild HNSW if empty but DB has chunks (e.g., after restart)
+                    if let Err(e) = engine.lock().await.reindex_if_needed().await {
+                        tracing::warn!(error = %e, "Failed to reindex RAG at startup");
+                    }
+                    tool_registry
+                        .register(Box::new(tools::KnowledgeTool::new(engine.clone())));
+                }
+                rag
+            };
+
             // Capture tool names before moving registry (for system prompt routing rules)
             let tool_names: Vec<String> = tool_registry
                 .names()
@@ -753,6 +847,9 @@ async fn main() -> Result<()> {
                 let cfg = shared_config.read().await;
                 if let Some(searcher) = try_create_memory_searcher(db_for_searcher, &cfg) {
                     agent.set_memory_searcher(searcher);
+                }
+                if let Some(rag) = _rag_engine_chat {
+                    agent.set_rag_engine(rag);
                 }
             }
 
@@ -870,9 +967,12 @@ async fn main() -> Result<()> {
 
             let db = Database::open(&config.storage.resolved_path()).await?;
 
+            // Health tracker: shared between provider (records metrics) and web UI (exposes them)
+            let health_tracker = Arc::new(provider::ProviderHealthTracker::new());
+
             // Try to create provider, but allow gateway to start without one
             // This enables configuration via Web UI
-            let provider = match provider::create_provider(&config) {
+            let provider = match provider::create_provider_with_health(&config, health_tracker.clone()) {
                 Ok(p) => Some(p),
                 Err(e) => {
                     tracing::warn!(
@@ -901,6 +1001,10 @@ async fn main() -> Result<()> {
             let spawn_manager_cell = Arc::new(tokio::sync::OnceCell::new());
             tool_registry.register(Box::new(tools::SpawnTool::new(spawn_manager_cell.clone())));
 
+            // WorkflowTool uses the same late-bound pattern (WorkflowEngine needs Arc<AgentLoop>)
+            let workflow_engine_cell = Arc::new(tokio::sync::OnceCell::new());
+            tool_registry.register(Box::new(WorkflowTool::new(workflow_engine_cell.clone())));
+
             // Connect to MCP servers and register their tools.
             // Browser tools wrapped behind unified BrowserTool (not registered individually).
             #[cfg(feature = "mcp")]
@@ -924,6 +1028,8 @@ async fn main() -> Result<()> {
                 _browser_session_gw = Some(browser_tool.session());
                 tool_registry.register(Box::new(browser_tool));
             }
+            #[cfg(feature = "mcp")]
+            let _browser_session_estop = _browser_session_gw.clone();
 
             // Create tool message channel for proactive messaging (MessageTool → Gateway → Channel)
             let (tool_msg_tx, tool_msg_rx) = tokio::sync::mpsc::channel(100);
@@ -934,6 +1040,24 @@ async fn main() -> Result<()> {
             #[cfg(not(feature = "local-embeddings"))]
             let _db_for_searcher = db.clone();
             let db_for_web = db.clone();
+
+            // Register RAG knowledge tool (before tool_registry is moved)
+            #[cfg(feature = "local-embeddings")]
+            let rag_engine = {
+                let rag = try_create_rag_engine(db.clone(), &config);
+                if let Some(ref engine) = rag {
+                    // Rebuild HNSW if empty but DB has chunks (e.g., after restart)
+                    if let Err(e) = engine.lock().await.reindex_if_needed().await {
+                        tracing::warn!(error = %e, "Failed to reindex RAG at startup");
+                    }
+                    tool_registry
+                        .register(Box::new(tools::KnowledgeTool::new(engine.clone())));
+                }
+                rag
+            };
+            #[cfg(not(feature = "local-embeddings"))]
+            let _rag_engine: Option<()> = None;
+
             // Capture tool names before moving registry (for system prompt routing rules)
             let tool_names: Vec<String> = tool_registry
                 .names()
@@ -962,6 +1086,9 @@ async fn main() -> Result<()> {
                     let cfg = shared_config.read().await;
                     if let Some(searcher) = try_create_memory_searcher(db_for_searcher, &cfg) {
                         a.set_memory_searcher(searcher);
+                    }
+                    if let Some(ref rag) = rag_engine {
+                        a.set_rag_engine(rag.clone());
                     }
                 }
 
@@ -1066,11 +1193,24 @@ async fn main() -> Result<()> {
                 agent.clone(),
                 subagent_result_tx,
             ));
+            let subagent_manager_for_estop = subagent_manager.clone();
             if spawn_manager_cell.set(subagent_manager).is_err() {
                 tracing::error!("SpawnTool OnceCell was already initialized — this is a bug");
             }
 
             tracing::info!("Subagent manager initialized (SpawnTool registered)");
+
+            // Create WorkflowEngine and bind to the WorkflowTool OnceCell
+            let (workflow_event_tx, workflow_event_rx) = tokio::sync::mpsc::channel(50);
+            let workflow_engine = Arc::new(workflows::engine::WorkflowEngine::new(
+                db_for_web.clone(),
+                agent.clone(),
+                workflow_event_tx,
+            ));
+            if workflow_engine_cell.set(workflow_engine.clone()).is_err() {
+                tracing::error!("WorkflowTool OnceCell was already initialized — this is a bug");
+            }
+            tracing::info!("Workflow engine initialized (WorkflowTool registered)");
 
             // Start skill hot-reload watcher (watches ~/.homun/skills/ for changes)
             let skills_dir = config::Config::data_dir().join("skills");
@@ -1087,6 +1227,34 @@ async fn main() -> Result<()> {
             );
             let _bootstrap_watcher_handle = bootstrap_watcher.start();
 
+            // Start RAG directory watcher (auto-ingest files from configured directories)
+            #[cfg(feature = "local-embeddings")]
+            let _rag_watcher_handle = {
+                if let Some(ref rag) = rag_engine {
+                    let watch_dirs: Vec<std::path::PathBuf> = config
+                        .knowledge
+                        .watch_dirs
+                        .iter()
+                        .filter_map(|d| {
+                            let p = if d.starts_with("~/") {
+                                dirs::home_dir().map(|h| h.join(&d[2..]))
+                            } else {
+                                Some(std::path::PathBuf::from(d))
+                            };
+                            p
+                        })
+                        .collect();
+                    if !watch_dirs.is_empty() {
+                        let w = rag::watcher::RagWatcher::new(rag.clone(), watch_dirs);
+                        Some(w.start())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+
             let mut gateway = agent::Gateway::new(
                 agent,
                 shared_config,
@@ -1096,6 +1264,19 @@ async fn main() -> Result<()> {
                 db_for_web,
             );
             gateway.set_tool_message_rx(tool_msg_rx);
+            gateway.set_health_tracker(health_tracker);
+            gateway.set_workflow_engine(workflow_engine, workflow_event_rx);
+
+            // Populate emergency stop handles
+            {
+                let estop_arc = gateway.estop_handles();
+                let mut estop = estop_arc.write().await;
+                estop.subagent_manager = Some(subagent_manager_for_estop);
+                #[cfg(feature = "mcp")]
+                {
+                    estop.browser_session = _browser_session_estop;
+                }
+            }
 
             // Run gateway and clean up PID file on exit
             let result = gateway.run().await;
@@ -2147,6 +2328,132 @@ async fn main() -> Result<()> {
                     }
 
                     println!("\n✅ Memory reset complete. Restart the gateway to apply.");
+                }
+            }
+        }
+        #[cfg(feature = "local-embeddings")]
+        Commands::Knowledge { command } => {
+            let data_dir = Config::data_dir();
+            let db_path = data_dir.join("homun.db");
+            let db = Database::open(&db_path).await?;
+            let config = Config::load()?;
+
+            let Some(rag_handle) = try_create_rag_engine(db, &config) else {
+                eprintln!("Knowledge base not available (check config or embedding provider)");
+                std::process::exit(1);
+            };
+
+            // Auto-reindex if needed
+            {
+                let mut engine = rag_handle.lock().await;
+                if let Err(e) = engine.reindex_if_needed().await {
+                    tracing::warn!(error = %e, "Failed to reindex at startup");
+                }
+            }
+
+            match command {
+                KnowledgeCommands::Add { path, recursive } => {
+                    let target = if path.starts_with("~/") {
+                        if let Some(home) = dirs::home_dir() {
+                            home.join(&path[2..])
+                        } else {
+                            std::path::PathBuf::from(&path)
+                        }
+                    } else {
+                        std::path::PathBuf::from(&path)
+                    };
+
+                    let mut engine = rag_handle.lock().await;
+                    if target.is_dir() {
+                        match engine.ingest_directory(&target, recursive, "cli").await {
+                            Ok(ids) => println!("Indexed {} file(s)", ids.len()),
+                            Err(e) => eprintln!("Error: {e}"),
+                        }
+                    } else if target.is_file() {
+                        match engine.ingest_file(&target, "cli").await {
+                            Ok(Some(id)) => println!("Indexed (source_id={id})"),
+                            Ok(None) => println!("Already indexed (duplicate)"),
+                            Err(e) => eprintln!("Error: {e}"),
+                        }
+                    } else {
+                        eprintln!("Path not found: {}", target.display());
+                    }
+                }
+                KnowledgeCommands::List => {
+                    let engine = rag_handle.lock().await;
+                    match engine.list_sources().await {
+                        Ok(sources) if sources.is_empty() => {
+                            println!("No sources indexed.");
+                        }
+                        Ok(sources) => {
+                            println!("{:<5} {:<30} {:<12} {:<8} {:<10}", "ID", "File", "Type", "Chunks", "Status");
+                            println!("{}", "-".repeat(70));
+                            for s in &sources {
+                                println!("{:<5} {:<30} {:<12} {:<8} {:<10}", s.id, s.file_name, s.doc_type, s.chunk_count, s.status);
+                            }
+                            println!("\n{} source(s)", sources.len());
+                        }
+                        Err(e) => eprintln!("Error: {e}"),
+                    }
+                }
+                KnowledgeCommands::Search { query, limit } => {
+                    let mut engine = rag_handle.lock().await;
+                    match engine.search(&query, limit).await {
+                        Ok(results) if results.is_empty() => {
+                            println!("No results found.");
+                        }
+                        Ok(results) => {
+                            for (i, r) in results.iter().enumerate() {
+                                println!("\n{}. [{}] (chunk {}, score {:.2})", i + 1, r.source_file, r.chunk.chunk_index, r.score);
+                                if !r.chunk.heading.is_empty() {
+                                    println!("   {}", r.chunk.heading);
+                                }
+                                // Show first 200 chars of content
+                                let preview: String = r.chunk.content.chars().take(200).collect();
+                                println!("   {}", preview);
+                            }
+                        }
+                        Err(e) => eprintln!("Error: {e}"),
+                    }
+                }
+                KnowledgeCommands::Remove { id } => {
+                    let mut engine = rag_handle.lock().await;
+                    match engine.remove_source(id).await {
+                        Ok(true) => println!("Source {id} removed."),
+                        Ok(false) => println!("Source {id} not found."),
+                        Err(e) => eprintln!("Error: {e}"),
+                    }
+                }
+                KnowledgeCommands::Sync { server } => {
+                    let sync_dir = Config::data_dir().join("cloud-sync");
+                    let cloud_sync = crate::rag::CloudSync::new(
+                        std::sync::Arc::clone(&rag_handle),
+                        sync_dir,
+                    );
+
+                    let servers_to_sync: Vec<String> = match server {
+                        Some(s) => vec![s],
+                        None => config.knowledge.cloud_sources.clone(),
+                    };
+
+                    if servers_to_sync.is_empty() {
+                        println!("No cloud sources configured. Add servers to [knowledge].cloud_sources in config.toml");
+                        println!("Or specify a server: homun knowledge sync <server-name>");
+                    } else {
+                        // Connect to MCP servers for sync
+                        let (mcp_manager, _tools) = crate::tools::mcp::McpManager::start(&config.mcp.servers).await;
+                        for srv in &servers_to_sync {
+                            if let Some(peer) = mcp_manager.get_peer(srv) {
+                                match cloud_sync.sync_from_mcp(&peer, srv).await {
+                                    Ok(report) => println!("Synced {srv}: {report}"),
+                                    Err(e) => eprintln!("Error syncing {srv}: {e}"),
+                                }
+                            } else {
+                                eprintln!("MCP server '{srv}' not found or not connected.");
+                            }
+                        }
+                        mcp_manager.shutdown().await;
+                    }
                 }
             }
         }

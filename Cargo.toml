@@ -46,7 +46,7 @@ channel-webhook = []  # Built-in, uses axum
 providers-openai-compat = ["dep:eventsource-stream", "dep:pin-project-lite"]
 
 # === Advanced Features ===
-local-embeddings = ["dep:fastembed", "dep:usearch", "dep:lru"]
+local-embeddings = ["dep:fastembed", "dep:usearch", "dep:lru", "dep:pdf-extract", "dep:calamine", "dep:zip", "dep:quick-xml"]
 browser = ["mcp"]
 mcp = ["dep:rmcp"]
 vault-2fa = ["dep:totp-rs", "dep:rand"]
@@ -163,6 +163,12 @@ futures-util = { version = "0.3", optional = true }
 fastembed = { version = "5", optional = true }
 usearch = { version = "2", optional = true }
 lru = { version = "0.16", optional = true }
+
+# --- Advanced document parsers (feature-gated under local-embeddings) ---
+pdf-extract = { version = "0.10", optional = true }
+calamine = { version = "0.32", optional = true }
+zip = { version = "2", optional = true, default-features = false, features = ["deflate"] }
+quick-xml = { version = "0.37", optional = true }
 
 # --- MCP client (also powers browser via @playwright/mcp) ---
 rmcp = { version = "0.16", features = ["client", "transport-child-process"], optional = true }

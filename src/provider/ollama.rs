@@ -58,12 +58,6 @@ impl OllamaProvider {
             .to_string()
     }
 
-    /// Cloud models (`:cloud` suffix) have reasoning enabled by default,
-    /// causing 30-120s latency. Send `think: false` to disable it.
-    fn should_disable_think(&self, model: &str) -> bool {
-        model.contains(":cloud")
-    }
-
     /// Build an HTTP request with optional Bearer auth.
     fn build_request(&self, url: &str) -> reqwest::RequestBuilder {
         let mut req = self
@@ -199,18 +193,12 @@ impl Provider for OllamaProvider {
         let model = self.resolve_model(&request.model);
         let url = format!("{}/api/chat", self.api_base);
 
-        let think = if self.should_disable_think(&model) {
-            Some(false)
-        } else {
-            None
-        };
-
         let body = OllamaRequest {
             model,
             messages: Self::convert_messages(&request.messages)?,
             tools: request.tools,
             stream: Some(false),
-            think,
+            think: request.think,
             options: Some(OllamaOptions {
                 temperature: Some(request.temperature),
                 num_predict: Some(request.max_tokens),
@@ -262,18 +250,12 @@ impl Provider for OllamaProvider {
         let model = self.resolve_model(&request.model);
         let url = format!("{}/api/chat", self.api_base);
 
-        let think = if self.should_disable_think(&model) {
-            Some(false)
-        } else {
-            None
-        };
-
         let body = OllamaRequest {
             model,
             messages: Self::convert_messages(&request.messages)?,
             tools: request.tools,
             stream: Some(true),
-            think,
+            think: request.think,
             options: Some(OllamaOptions {
                 temperature: Some(request.temperature),
                 num_predict: Some(request.max_tokens),
@@ -546,15 +528,6 @@ mod tests {
         );
         assert_eq!(provider.resolve_model("glm-5:cloud"), "glm-5:cloud");
         assert_eq!(provider.resolve_model("ollama/glm-5:cloud"), "glm-5:cloud");
-    }
-
-    #[test]
-    fn test_should_disable_think() {
-        let provider = OllamaProvider::new("", None);
-        assert!(provider.should_disable_think("glm-5:cloud"));
-        assert!(provider.should_disable_think("qwen3:cloud"));
-        assert!(!provider.should_disable_think("llama3:8b"));
-        assert!(!provider.should_disable_think("qwen2.5:latest"));
     }
 
     #[test]

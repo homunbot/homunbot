@@ -14,6 +14,7 @@ pub struct Config {
     pub tools: ToolsConfig,
     pub storage: StorageConfig,
     pub memory: MemoryConfig,
+    pub knowledge: KnowledgeConfig,
     pub mcp: McpConfig,
     pub permissions: PermissionsConfig,
     pub security: SecurityConfig,
@@ -349,6 +350,7 @@ pub struct ModelCapabilities {
     pub multimodal: bool,
     pub image_input: bool,
     pub tool_calls: bool,
+    pub thinking: bool,
 }
 
 /// Per-model parameter overrides.
@@ -365,6 +367,8 @@ pub struct ModelOverrides {
     pub image_input: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<bool>,
 }
 
 impl Default for AgentConfig {
@@ -419,6 +423,9 @@ impl AgentConfig {
             }
             if let Some(tool_calls) = overrides.tool_calls {
                 capabilities.tool_calls = tool_calls;
+            }
+            if let Some(thinking) = overrides.thinking {
+                capabilities.thinking = thinking;
             }
         }
 
@@ -1074,11 +1081,32 @@ impl Default for ExecConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ToolsConfig {
     pub web_search: WebSearchConfig,
     pub exec: ExecConfig,
+    /// Default timeout for tool execution in seconds. 0 = no timeout.
+    #[serde(default = "default_tool_timeout")]
+    pub default_timeout_secs: u64,
+    /// Per-tool timeout overrides: tool_name → seconds.
+    #[serde(default)]
+    pub timeouts: std::collections::HashMap<String, u64>,
+}
+
+fn default_tool_timeout() -> u64 {
+    120
+}
+
+impl Default for ToolsConfig {
+    fn default() -> Self {
+        Self {
+            web_search: WebSearchConfig::default(),
+            exec: ExecConfig::default(),
+            default_timeout_secs: default_tool_timeout(),
+            timeouts: std::collections::HashMap::new(),
+        }
+    }
 }
 
 // --- MCP Config ---
@@ -1187,6 +1215,41 @@ impl Default for MemoryConfig {
             daily_archive_months: 3,         // Archive daily files after 3 months
             auto_cleanup: false,             // Don't auto-cleanup by default
             embedding_provider: "local".to_string(),
+        }
+    }
+}
+
+// --- Knowledge (RAG) Config ---
+
+/// Knowledge base (RAG) configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KnowledgeConfig {
+    /// Enable RAG knowledge base
+    pub enabled: bool,
+    /// Maximum tokens per chunk
+    pub chunk_max_tokens: usize,
+    /// Overlap tokens between chunks
+    pub chunk_overlap_tokens: usize,
+    /// Number of RAG results to inject per query
+    pub results_per_query: usize,
+    /// Directories to watch for auto-ingestion (e.g., ["~/Documents/notes"])
+    #[serde(default)]
+    pub watch_dirs: Vec<String>,
+    /// MCP server names to sync resources from (references keys in [mcp.servers])
+    #[serde(default)]
+    pub cloud_sources: Vec<String>,
+}
+
+impl Default for KnowledgeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            chunk_max_tokens: 512,
+            chunk_overlap_tokens: 50,
+            results_per_query: 3,
+            watch_dirs: Vec::new(),
+            cloud_sources: Vec::new(),
         }
     }
 }
@@ -1646,6 +1709,8 @@ pub struct UiConfig {
     pub theme: String,
     /// Preferred UI/assistant language: "system", "en", "it"
     pub language: String,
+    /// Accent color: "moss", "terracotta", "plum", "stone"
+    pub accent: String,
 }
 
 impl Default for UiConfig {
@@ -1653,6 +1718,7 @@ impl Default for UiConfig {
         Self {
             theme: "system".to_string(),
             language: "system".to_string(),
+            accent: "moss".to_string(),
         }
     }
 }

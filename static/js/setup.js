@@ -1230,6 +1230,7 @@ function getEffectiveModelCapabilities(modelId, data) {
         multimodal: !!caps.multimodal,
         image_input: !!caps.image_input,
         tool_calls: caps.tool_calls !== false,
+        thinking: !!caps.thinking,
     };
 }
 
@@ -1301,6 +1302,12 @@ function toggleModelOverrides(wrapper, modelId, overrides) {
             help: 'Disable this if the model needs XML tool dispatch instead of native function calling.',
             checked: current.tool_calls != null ? current.tool_calls : capabilityDefaults.tool_calls,
         },
+        {
+            key: 'thinking',
+            label: 'Thinking',
+            help: 'Enable reasoning/thinking mode. Auto-detected for DeepSeek R1, QwQ, cloud models.',
+            checked: current.thinking != null ? current.thinking : capabilityDefaults.thinking,
+        },
     ];
 
     var capabilityInputs = {};
@@ -1370,7 +1377,7 @@ function saveModelOverrides(modelId, tempVal, tokensVal, capabilityInputs, capab
     if (capabilityInputs.multimodal && capabilityInputs.multimodal.checked && capabilityInputs.image_input) {
         capabilityInputs.image_input.checked = true;
     }
-    ['multimodal', 'image_input', 'tool_calls'].forEach(function(key) {
+    ['multimodal', 'image_input', 'tool_calls', 'thinking'].forEach(function(key) {
         if (!capabilityInputs[key]) return;
         if (capabilityInputs[key].checked !== !!capabilityDefaults[key]) {
             entry[key] = capabilityInputs[key].checked;
@@ -2495,6 +2502,91 @@ if (btnRunCleanup) {
         document.documentElement.lang = resolved;
     }
 
+    // --- Accent color helpers ---
+    function hexToHSL(hex) {
+        var r = parseInt(hex.slice(1,3), 16) / 255;
+        var g = parseInt(hex.slice(3,5), 16) / 255;
+        var b = parseInt(hex.slice(5,7), 16) / 255;
+        var max = Math.max(r, g, b), min = Math.min(r, g, b);
+        var h, s, l = (max + min) / 2;
+        if (max === min) { h = s = 0; }
+        else {
+            var d = max - min;
+            s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+            if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+            else if (max === g) h = ((b - r) / d + 2) / 6;
+            else h = ((r - g) / d + 4) / 6;
+        }
+        return [Math.round(h * 360), Math.round(s * 100), Math.round(l * 100)];
+    }
+
+    function hslToHex(h, s, l) {
+        s /= 100; l /= 100;
+        var a = s * Math.min(l, 1 - l);
+        function f(n) {
+            var k = (n + h / 30) % 12;
+            var c = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+            return Math.round(255 * c).toString(16).padStart(2, '0');
+        }
+        return '#' + f(0) + f(8) + f(4);
+    }
+
+    function deriveAccentFamily(hex) {
+        var hsl = hexToHSL(hex);
+        var h = hsl[0], s = hsl[1], l = hsl[2];
+        var isDark = document.documentElement.classList.contains('dark');
+        var root = document.documentElement.style;
+
+        root.setProperty('--accent', hex);
+        root.setProperty('--accent-text', isDark ? hslToHex(h, Math.min(s + 10, 100), Math.min(l + 15, 85)) : hex);
+        root.setProperty('--accent-hover', hslToHex(h, s, isDark ? Math.min(l + 8, 80) : Math.max(l - 8, 20)));
+        root.setProperty('--accent-active', hslToHex(h, s, isDark ? l : Math.max(l - 14, 15)));
+        root.setProperty('--accent-light', hslToHex(h, isDark ? Math.max(s - 30, 10) : Math.min(s + 5, 40), isDark ? 18 : 90));
+        root.setProperty('--accent-border', hslToHex(h, isDark ? Math.max(s - 15, 15) : Math.min(s, 35), isDark ? 30 : 75));
+        root.setProperty('--focus-ring', hslToHex(h, Math.min(s + 5, 60), isDark ? Math.min(l + 10, 70) : Math.min(l + 10, 55)));
+        root.setProperty('--selection-bg', hslToHex(h, isDark ? 20 : 25, isDark ? 22 : 82));
+        root.setProperty('--chart-primary', hex);
+    }
+
+    function clearCustomAccent() {
+        var props = ['--accent', '--accent-text', '--accent-hover', '--accent-active',
+                     '--accent-light', '--accent-border', '--focus-ring', '--selection-bg', '--chart-primary'];
+        props.forEach(function(p) { document.documentElement.style.removeProperty(p); });
+    }
+
+    function applyAccent(accent) {
+        localStorage.setItem('homun-accent', accent);
+        clearCustomAccent();
+
+        if (accent.startsWith('#')) {
+            // Custom color — derive full family via inline styles
+            document.documentElement.removeAttribute('data-accent');
+            deriveAccentFamily(accent);
+            localStorage.setItem('homun-accent-custom', accent);
+        } else if (accent === 'moss') {
+            document.documentElement.removeAttribute('data-accent');
+        } else {
+            document.documentElement.setAttribute('data-accent', accent);
+        }
+
+        // Update active state on swatches
+        var swatches = document.querySelectorAll('.accent-swatch');
+        var customLabel = document.querySelector('.accent-custom-label');
+        swatches.forEach(function(s) {
+            if (s === customLabel) {
+                s.classList.toggle('is-active', accent.startsWith('#'));
+            } else {
+                s.classList.toggle('is-active', s.getAttribute('data-accent') === accent);
+            }
+        });
+
+        // Update custom color preview if active
+        if (customLabel && accent.startsWith('#')) {
+            var preview = customLabel.querySelector('.accent-custom-preview');
+            if (preview) preview.style.background = accent;
+        }
+    }
+
     if (themeSelect) {
         applyTheme(themeSelect.value);
 
@@ -2506,6 +2598,54 @@ if (btnRunCleanup) {
     }
     if (languageSelect) {
         applyLanguage(languageSelect.value);
+    }
+
+    // Accent picker — presets
+    var accentPicker = document.getElementById('accent-picker');
+    if (accentPicker) {
+        var currentAccent = localStorage.getItem('homun-accent') || 'moss';
+        var presetSwatches = accentPicker.querySelectorAll('.accent-swatch[data-accent]');
+        presetSwatches.forEach(function(swatch) {
+            if (swatch.getAttribute('data-accent') === currentAccent) {
+                swatch.classList.add('is-active');
+            }
+            swatch.addEventListener('click', function() {
+                var accent = this.getAttribute('data-accent');
+                if (accent) applyAccent(accent);
+            });
+        });
+
+        // Custom color picker
+        var customInput = document.getElementById('accent-custom-input');
+        var customLabel = document.querySelector('.accent-custom-label');
+        if (customInput) {
+            // If stored accent is a custom hex, restore it
+            if (currentAccent.startsWith('#')) {
+                customInput.value = currentAccent;
+                if (customLabel) {
+                    customLabel.classList.add('is-active');
+                    var preview = customLabel.querySelector('.accent-custom-preview');
+                    if (preview) preview.style.background = currentAccent;
+                }
+                deriveAccentFamily(currentAccent);
+            }
+
+            customInput.addEventListener('input', function() {
+                applyAccent(this.value);
+            });
+        }
+    }
+
+    // Include accent in the save handler
+    if (appearanceForm) {
+        appearanceForm.addEventListener('submit', function() {
+            var accent = localStorage.getItem('homun-accent') || 'moss';
+            fetch('/api/v1/config', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: 'ui.accent', value: accent }),
+            });
+        });
     }
 
     console.log('[Appearance] Form handler initialized');

@@ -47,6 +47,7 @@
 //! - **No bypass** — even disabling 2FA requires 2FA!
 //! - **Exfiltration detection** for API keys, tokens, passwords
 
+pub mod estop;
 mod exfiltration;
 mod pairing;
 mod vault_leak;
@@ -61,6 +62,7 @@ pub use exfiltration::{
     global_filter, init_global_filter, redact, scan, Detection, ExfilConfig, ExfilFilter,
     ScanResult, Severity,
 };
+pub use estop::{emergency_stop, resume, EStopHandles, EStopReport};
 pub use pairing::PairingManager;
 pub use vault_leak::redact_vault_values;
 

@@ -127,6 +127,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, conversation_id:
                                 "type": evt,
                                 "name": event.delta,
                             })
+                        } else if evt == "workflow_progress" {
+                            // delta contains JSON string of progress data
+                            let progress: serde_json::Value = serde_json::from_str(&event.delta)
+                                .unwrap_or_else(|_| serde_json::json!({}));
+                            serde_json::json!({
+                                "type": "workflow_progress",
+                                "progress": progress,
+                            })
                         } else {
                             serde_json::json!({
                                 "type": evt,
@@ -221,6 +229,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, conversation_id:
                         };
                         persist_run_snapshot(&state, &run).await;
 
+                        let thinking_override = parsed
+                            .get("thinking")
+                            .and_then(|v| v.as_bool());
+
                         let inbound = InboundMessage {
                             channel: "web".to_string(),
                             sender_id: chat_id.clone(),
@@ -229,6 +241,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, conversation_id:
                             timestamp: Utc::now(),
                             metadata: Some(MessageMetadata {
                                 web_run_id: Some(run.run_id),
+                                thinking_override,
                                 ..MessageMetadata::default()
                             }),
                         };

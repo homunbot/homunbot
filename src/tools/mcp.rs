@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
-use rmcp::model::{CallToolRequestParams, RawContent, ResourceContents};
+use rmcp::model::{
+    CallToolRequestParams, RawContent, ReadResourceRequestParams, ResourceContents,
+};
 use rmcp::service::{RunningService, ServiceExt};
 use rmcp::transport::TokioChildProcess;
 use serde_json::Value;
@@ -129,6 +131,31 @@ impl McpPeer {
         }
 
         Ok(output)
+    }
+
+    /// List all resources available from this MCP server.
+    pub async fn list_resources(&self) -> Result<Vec<rmcp::model::Resource>> {
+        let guard = self.service.read().await;
+        let service = guard.as_ref().context("MCP server connection closed")?;
+        let result = service
+            .list_resources(None)
+            .await
+            .context("MCP list_resources failed")?;
+        Ok(result.resources)
+    }
+
+    /// Read a specific resource by URI.
+    pub async fn read_resource(&self, uri: &str) -> Result<Vec<ResourceContents>> {
+        let guard = self.service.read().await;
+        let service = guard.as_ref().context("MCP server connection closed")?;
+        let result = service
+            .read_resource(ReadResourceRequestParams {
+                uri: uri.to_string(),
+                meta: None,
+            })
+            .await
+            .context("MCP read_resource failed")?;
+        Ok(result.contents)
     }
 
     async fn shutdown(&self) {
@@ -327,6 +354,14 @@ impl McpManager {
             .iter()
             .position(|(n, _)| n == crate::browser::BROWSER_MCP_SERVER_NAME)?;
         Some(self.peers.remove(idx).1)
+    }
+
+    /// Get a reference to a peer by server name.
+    pub fn get_peer(&self, name: &str) -> Option<Arc<McpPeer>> {
+        self.peers
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, p)| Arc::clone(p))
     }
 
     /// Shutdown all MCP server connections

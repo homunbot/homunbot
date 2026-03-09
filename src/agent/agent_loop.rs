@@ -300,7 +300,7 @@ impl AgentLoop {
         channel: &str,
         chat_id: &str,
     ) -> Result<String> {
-        self.process_message_inner(content, session_key, channel, chat_id, None, &[])
+        self.process_message_inner(content, session_key, channel, chat_id, None, &[], None)
             .await
     }
 
@@ -314,8 +314,16 @@ impl AgentLoop {
         chat_id: &str,
         blocked_tools: &[&str],
     ) -> Result<String> {
-        self.process_message_inner(content, session_key, channel, chat_id, None, blocked_tools)
-            .await
+        self.process_message_inner(
+            content,
+            session_key,
+            channel,
+            chat_id,
+            None,
+            blocked_tools,
+            None,
+        )
+        .await
     }
 
     /// Process a message with optional streaming output.
@@ -328,12 +336,20 @@ impl AgentLoop {
         chat_id: &str,
         stream_tx: mpsc::Sender<crate::provider::StreamChunk>,
     ) -> Result<String> {
-        self.process_message_inner(content, session_key, channel, chat_id, Some(stream_tx), &[])
-            .await
+        self.process_message_inner(
+            content,
+            session_key,
+            channel,
+            chat_id,
+            Some(stream_tx),
+            &[],
+            None,
+        )
+        .await
     }
 
-    /// Streaming variant with per-request blocked tools.
-    pub async fn process_message_streaming_with_blocked_tools(
+    /// Streaming variant with per-request blocked tools and optional thinking override.
+    pub async fn process_message_streaming_with_options(
         &self,
         content: &str,
         session_key: &str,
@@ -341,6 +357,7 @@ impl AgentLoop {
         chat_id: &str,
         stream_tx: mpsc::Sender<crate::provider::StreamChunk>,
         blocked_tools: &[&str],
+        thinking_override: Option<bool>,
     ) -> Result<String> {
         self.process_message_inner(
             content,
@@ -349,6 +366,7 @@ impl AgentLoop {
             chat_id,
             Some(stream_tx),
             blocked_tools,
+            thinking_override,
         )
         .await
     }
@@ -361,6 +379,7 @@ impl AgentLoop {
         chat_id: &str,
         stream_tx: Option<mpsc::Sender<crate::provider::StreamChunk>>,
         blocked_tools: &[&str],
+        thinking_override: Option<bool>,
     ) -> Result<String> {
         crate::agent::stop::clear_stop();
         let blocked_set: HashSet<&str> = blocked_tools.iter().copied().collect();
@@ -454,9 +473,23 @@ impl AgentLoop {
             .resolve_provider(&selected_model)
             .map(|(name, _)| name)
             .unwrap_or("unknown");
-        let _selected_capabilities = config
+        let selected_capabilities = config
             .agent
             .effective_model_capabilities(provider_name, &selected_model);
+
+        // Resolve effective thinking preference:
+        // per-request override > config capabilities > None (provider default)
+        let effective_think = match thinking_override {
+            Some(val) => Some(val),
+            None => {
+                if selected_capabilities.thinking {
+                    Some(true)
+                } else {
+                    None
+                }
+            }
+        };
+
         let xml_mode = config.should_use_xml_dispatch(provider_name, &selected_model);
         self.use_xml_dispatch.store(xml_mode, Ordering::Relaxed);
 
@@ -719,6 +752,7 @@ impl AgentLoop {
                 model: active_model.clone(),
                 max_tokens: config.agent.effective_max_tokens(active_model),
                 temperature: config.agent.effective_temperature(active_model),
+                think: effective_think,
             };
 
             // Estimate context size for debugging
@@ -805,6 +839,7 @@ impl AgentLoop {
                                 model: active_model.clone(),
                                 max_tokens: config.agent.effective_max_tokens(active_model),
                                 temperature: config.agent.effective_temperature(active_model),
+                                think: None,
                             };
                             let retry_response = tokio::select! {
                                 response = provider.chat(retry_request) => response,
@@ -837,6 +872,7 @@ impl AgentLoop {
                                 model: active_model.clone(),
                                 max_tokens: config.agent.effective_max_tokens(active_model),
                                 temperature: config.agent.effective_temperature(active_model),
+                                think: effective_think,
                             };
                             let fallback_response = tokio::select! {
                                 response = provider.chat(request2) => response,
@@ -918,6 +954,7 @@ impl AgentLoop {
                                     model: active_model.clone(),
                                     max_tokens: config.agent.effective_max_tokens(active_model),
                                     temperature: config.agent.effective_temperature(active_model),
+                                    think: None,
                                 };
                                 let retry_response = tokio::select! {
                                     response = provider.chat(retry_request) => response,
@@ -1335,6 +1372,7 @@ impl AgentLoop {
                 model: selected_model.clone(),
                 max_tokens: config.agent.effective_max_tokens(&selected_model),
                 temperature: config.agent.effective_temperature(&selected_model),
+                think: None,
             };
 
             match tokio::select! {
@@ -2578,6 +2616,7 @@ mod tests {
                 multimodal: true,
                 image_input: true,
                 tool_calls: true,
+                thinking: false,
             },
         );
         assert!(msg.is_some());
@@ -2591,6 +2630,7 @@ mod tests {
                 multimodal: false,
                 image_input: false,
                 tool_calls: true,
+                thinking: false,
             },
         );
         assert!(none.is_none());

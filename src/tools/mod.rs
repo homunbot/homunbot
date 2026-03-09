@@ -16,7 +16,10 @@ pub mod skill_create;
 pub mod spawn;
 pub mod vault;
 pub mod web;
+pub mod workflow;
 
+#[cfg(feature = "local-embeddings")]
+pub mod knowledge;
 #[cfg(feature = "local-embeddings")]
 pub mod remember;
 
@@ -39,8 +42,11 @@ pub use shell::ShellTool;
 pub use skill_create::CreateSkillTool;
 pub use spawn::SpawnTool;
 pub use vault::VaultTool;
+pub use workflow::WorkflowTool;
 pub use web::{WebFetchTool, WebSearchTool};
 
+#[cfg(feature = "local-embeddings")]
+pub use knowledge::KnowledgeTool;
 #[cfg(feature = "local-embeddings")]
 pub use remember::RememberTool;
 

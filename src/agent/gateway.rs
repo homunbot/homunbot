@@ -11,6 +11,8 @@ use crate::scheduler::{CronEvent, CronScheduler, ScheduledKind};
 use crate::security::PairingManager;
 use crate::session::SessionManager;
 use crate::storage::{AutomationUpdate, Database, EmailPendingRow};
+use crate::workflows::engine::WorkflowEngine;
+use crate::workflows::WorkflowEvent;
 use crate::utils::strip_reasoning;
 use tokio::sync::RwLock;
 
@@ -69,6 +71,9 @@ pub struct Gateway {
     health_tracker: Option<Arc<crate::provider::ProviderHealthTracker>>,
     /// Emergency stop handles — shared between gateway and web UI
     estop_handles: Arc<tokio::sync::RwLock<crate::security::EStopHandles>>,
+    /// Workflow engine + event receiver for persistent multi-step tasks
+    workflow_engine: Option<Arc<WorkflowEngine>>,
+    workflow_event_rx: Option<mpsc::Receiver<WorkflowEvent>>,
 }
 
 impl Gateway {
@@ -93,6 +98,8 @@ impl Gateway {
             estop_handles: Arc::new(tokio::sync::RwLock::new(
                 crate::security::EStopHandles::default(),
             )),
+            workflow_engine: None,
+            workflow_event_rx: None,
         }
     }
 
@@ -104,6 +111,16 @@ impl Gateway {
     /// Set the provider health tracker for circuit breaker + web UI metrics.
     pub fn set_health_tracker(&mut self, tracker: Arc<crate::provider::ProviderHealthTracker>) {
         self.health_tracker = Some(tracker);
+    }
+
+    /// Set the workflow engine and its event receiver.
+    pub fn set_workflow_engine(
+        &mut self,
+        engine: Arc<WorkflowEngine>,
+        event_rx: mpsc::Receiver<WorkflowEvent>,
+    ) {
+        self.workflow_engine = Some(engine);
+        self.workflow_event_rx = Some(event_rx);
     }
 
     /// Get the estop handles Arc (for populating from main.rs after gateway creation).
@@ -510,6 +527,7 @@ impl Gateway {
         let agent = self.agent.clone();
         let senders_for_routing = outbound_senders.clone();
         let web_stream_tx = self.web_stream_tx.take();
+        let web_stream_tx_for_wf = web_stream_tx.clone();
         let routing_db = self.db.clone();
 
         let routing_loop = tokio::spawn(async move {
@@ -893,6 +911,9 @@ impl Gateway {
                 } else {
                     &[]
                 };
+                let thinking_override = inbound_metadata
+                    .as_ref()
+                    .and_then(|m| m.thinking_override);
 
                 // Process through agent loop (spawned per-message)
                 let agent = agent.clone();
@@ -923,13 +944,14 @@ impl Gateway {
                             });
 
                             let result = agent
-                                .process_message_streaming_with_blocked_tools(
+                                .process_message_streaming_with_options(
                                     &inbound.content,
                                     &session_key,
                                     &channel_name,
                                     &chat_id,
                                     chunk_tx,
                                     blocked_tools,
+                                    thinking_override,
                                 )
                                 .await;
 
@@ -1241,6 +1263,62 @@ impl Gateway {
             None
         };
 
+        // --- Workflow event loop: forward workflow notifications to channels ---
+        let workflow_loop = if let (Some(engine), Some(mut wf_rx)) =
+            (self.workflow_engine.take(), self.workflow_event_rx.take())
+        {
+            let senders_for_wf = outbound_senders.clone();
+            // Resume workflows that were interrupted by previous shutdown
+            let engine_for_resume = engine.clone();
+            tokio::spawn(async move {
+                match engine_for_resume.resume_on_startup().await {
+                    Ok(n) if n > 0 => {
+                        tracing::info!(count = n, "Resumed workflows from previous session");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to resume workflows on startup");
+                    }
+                    _ => {}
+                }
+            });
+
+            let stream_tx_wf = web_stream_tx_for_wf.clone();
+            Some(tokio::spawn(async move {
+                while let Some(event) = wf_rx.recv().await {
+                    let notification = event.format_notification();
+                    if let Some(deliver_to) = event.deliver_to() {
+                        if let Some((channel, chat_id)) = deliver_to.rsplit_once(':') {
+                            // For web channel: also send structured progress event
+                            if channel == "web" {
+                                if let Some(ref stx) = stream_tx_wf {
+                                    let progress = event.to_progress_json();
+                                    let _ = stx
+                                        .send(crate::bus::StreamMessage {
+                                            chat_id: chat_id.to_string(),
+                                            delta: progress.to_string(),
+                                            done: false,
+                                            event_type: Some("workflow_progress".to_string()),
+                                            tool_call_data: None,
+                                        })
+                                        .await;
+                                }
+                            }
+
+                            // Send text notification to all channels
+                            let outbound = OutboundMessage {
+                                channel: channel.to_string(),
+                                chat_id: chat_id.to_string(),
+                                content: notification,
+                            };
+                            route_outbound(outbound, &senders_for_wf).await;
+                        }
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+
         // Wait for Ctrl+C — first signal triggers graceful shutdown,
         // second signal forces immediate exit.
         tokio::signal::ctrl_c().await?;
@@ -1251,6 +1329,9 @@ impl Gateway {
         routing_loop.abort();
         cron_loop.abort();
         if let Some(handle) = tool_msg_loop {
+            handle.abort();
+        }
+        if let Some(handle) = workflow_loop {
             handle.abort();
         }
 

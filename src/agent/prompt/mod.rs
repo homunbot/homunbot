@@ -34,6 +34,8 @@ pub struct PromptContext<'a> {
     pub memory_content: &'a str,
     /// Relevant memories from vector search
     pub relevant_memories: &'a str,
+    /// Relevant knowledge from RAG knowledge base search
+    pub rag_knowledge: &'a str,
     /// Contextual MCP setup suggestions inferred from the current request.
     pub mcp_suggestions: &'a str,
     /// Originating channel (web, telegram, etc.)

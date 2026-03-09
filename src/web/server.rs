@@ -10,6 +10,8 @@ use tower_http::trace::TraceLayer;
 
 use crate::bus::{InboundMessage, OutboundMessage, StreamMessage};
 use crate::config::Config;
+use crate::provider::ProviderHealthTracker;
+use crate::security::EStopHandles;
 use crate::storage::Database;
 
 use super::api;
@@ -40,6 +42,13 @@ pub struct AppState {
     /// Shared with the AgentLoop — both use the same HNSW index.
     #[cfg(feature = "local-embeddings")]
     pub memory_searcher: Option<Arc<tokio::sync::Mutex<crate::agent::MemorySearcher>>>,
+    /// Shared RAG knowledge base engine.
+    #[cfg(feature = "local-embeddings")]
+    pub rag_engine: Option<Arc<tokio::sync::Mutex<crate::rag::RagEngine>>>,
+    /// Provider health tracker for circuit breaker metrics.
+    pub health_tracker: Option<Arc<ProviderHealthTracker>>,
+    /// Emergency stop handles — shared with the estop module.
+    pub estop_handles: Arc<tokio::sync::RwLock<EStopHandles>>,
 }
 
 impl AppState {
@@ -61,6 +70,10 @@ pub struct WebServer {
     db: Option<Database>,
     #[cfg(feature = "local-embeddings")]
     memory_searcher: Option<Arc<tokio::sync::Mutex<crate::agent::MemorySearcher>>>,
+    #[cfg(feature = "local-embeddings")]
+    rag_engine: Option<Arc<tokio::sync::Mutex<crate::rag::RagEngine>>>,
+    health_tracker: Option<Arc<ProviderHealthTracker>>,
+    estop_handles: Arc<tokio::sync::RwLock<EStopHandles>>,
 }
 
 impl WebServer {
@@ -79,6 +92,10 @@ impl WebServer {
             db: Some(db),
             #[cfg(feature = "local-embeddings")]
             memory_searcher: None,
+            #[cfg(feature = "local-embeddings")]
+            rag_engine: None,
+            health_tracker: None,
+            estop_handles: Arc::new(tokio::sync::RwLock::new(EStopHandles::default())),
         }
     }
 
@@ -89,6 +106,25 @@ impl WebServer {
         searcher: Arc<tokio::sync::Mutex<crate::agent::MemorySearcher>>,
     ) {
         self.memory_searcher = Some(searcher);
+    }
+
+    /// Set the shared RAG engine for knowledge base API endpoints.
+    #[cfg(feature = "local-embeddings")]
+    pub fn set_rag_engine(
+        &mut self,
+        engine: Arc<tokio::sync::Mutex<crate::rag::RagEngine>>,
+    ) {
+        self.rag_engine = Some(engine);
+    }
+
+    /// Set the provider health tracker for the `/api/v1/providers/health` endpoint.
+    pub fn set_health_tracker(&mut self, tracker: Arc<ProviderHealthTracker>) {
+        self.health_tracker = Some(tracker);
+    }
+
+    /// Set the emergency stop handles (shared with the estop module).
+    pub fn set_estop_handles(&mut self, handles: Arc<tokio::sync::RwLock<EStopHandles>>) {
+        self.estop_handles = handles;
     }
 
     /// Set the receiver for streaming chunks from the gateway.
@@ -110,6 +146,10 @@ impl WebServer {
             db: None,
             #[cfg(feature = "local-embeddings")]
             memory_searcher: None,
+            #[cfg(feature = "local-embeddings")]
+            rag_engine: None,
+            health_tracker: None,
+            estop_handles: Arc::new(tokio::sync::RwLock::new(EStopHandles::default())),
         }
     }
 
@@ -140,6 +180,10 @@ impl WebServer {
             db: self.db,
             #[cfg(feature = "local-embeddings")]
             memory_searcher: self.memory_searcher,
+            #[cfg(feature = "local-embeddings")]
+            rag_engine: self.rag_engine,
+            health_tracker: self.health_tracker,
+            estop_handles: self.estop_handles,
         });
 
         // If we have outbound messages, spawn task to route them to WebSocket sessions

@@ -1,6 +1,6 @@
 # Homun — Development Roadmap
 
-> Last updated: 2026-03-08
+> Last updated: 2026-03-10
 > Basato su: Audit completo (`docs/AUDIT-2026-03.md`)
 > Gap analysis: Homun vs OpenClaw vs ZeroClaw
 > Source of truth: questo documento e' la roadmap/status operativa del progetto
@@ -17,8 +17,8 @@
 | Binary (full) | ~50MB |
 | Provider LLM | 14 |
 | Canali | 6 (CLI, Telegram, Discord*, WhatsApp*, Slack*, Email*) |
-| Tool built-in | 11 |
-| Pagine Web UI | 10+ |
+| Tool built-in | 13 (incl. knowledge, workflow) |
+| Pagine Web UI | 11 (incl. /knowledge) |
 | Feature flags | 12 |
 
 *\* = parziale/stub*
@@ -564,47 +564,181 @@ agent_loop.rs ─── browser_task_plan (veto/guard), execution_plan, supersed
 
 ---
 
+## Programma Trasversale — Design System "Olive Moss Console" (P1)
+
+> Obiettivo: passare da una palette generica a un design system proprietario,
+> con neutrali caldi fissi (olive/moss + stone) e accento selezionabile dall'utente.
+
+### Stato ad oggi (2026-03-09)
+
+- ✅ **Design token architecture**
+  - `:root` (light) e `.dark` token set completi: accent, surface, text, border, semantic (ok/warn/err/info)
+  - Palette neutrali: warm stone (`#F3F1EB`/`#ECE8DE` light, `#1D1C18`/`#262520` dark)
+  - Accent di default: olive saturo `#628A4A` (light), lifted `#82A868` (dark)
+  - Tutte le inline `rgba()` allineate alla palette (base `44,41,36`, accent `111,123,87`)
+  - Zero colori hardcoded: ogni valore cromatico passa per `var(--token)`
+- ✅ **Accent picker system**
+  - 4 preset: Moss (default), Terracotta (`#B85C38`), Plum (`#7A5C68`), Stone (`#7A7268`)
+  - Ogni preset ha varianti light + dark via `[data-accent="name"]` CSS selectors
+  - Custom color picker (`<input type="color">`) con derivazione HSL completa
+  - `deriveAccentFamily(hex)`: da un singolo hex genera 9 proprietà (hover, active, light, border, text, focus-ring, selection-bg, chart-primary)
+  - Persistenza in `localStorage` + restore senza flash (inline `<head>` script)
+  - Config backend: `UiConfig.accent` salvato in `config.toml` via API
+- ✅ **Semantic color tokenization**
+  - Famiglie semantiche: `--ok`/`--ok-bg`, `--warn`/`--warn-bg`, `--err`/`--err-bg`, `--info`/`--info-bg`
+  - Usate ovunque: toast, badge, test results, ACL entries, MCP status, e-stop
+  - `--text-on-accent` per tutti i testi su sfondi colorati (sostituisce `#fff` hardcoded)
+- ✅ **Typography**
+  - Dual-font: Geist (UI/body) + Plus Jakarta Sans (display headings)
+  - Scale tipografica coerente via token
+- ✅ **Settings UI**
+  - Sezione Appearance in Settings con swatch picker + color input
+  - Live preview: cambio accento istantaneo senza reload
+
+### File principali modificati
+
+| File | Modifiche |
+|------|-----------|
+| `static/css/style.css` | Token `:root`/`.dark`, accent variants, accent picker CSS, semantic colors |
+| `src/web/pages.rs` | Accent picker HTML, `<head>` inline script per flash prevention |
+| `src/config/schema.rs` | `UiConfig.accent` field |
+| `static/js/setup.js` | `applyAccent()`, `deriveAccentFamily()`, `hexToHSL()`/`hslToHex()` |
+| `static/js/theme.js` | Theme toggle (light/dark) con persistence |
+
+---
+
 ## Sprint 6 — RAG: Knowledge Base Personale (P1)
 
 > Obiettivo: Homun puo' cercare nei tuoi documenti, file, e dati cloud.
 > "Cerca nei miei documenti..." diventa naturale come "cerca su Google...".
+> Feature differenziante #1: ne' OpenClaw ne' ZeroClaw hanno RAG personale.
 
 | # | Task | File principali | LOC stimate | Stato |
 |---|------|----------------|-------------|-------|
-| 6.1 | **File ingestion pipeline** | `agent/rag.rs` (nuovo), `agent/chunking.rs` (nuovo) | ~400 | TODO |
-| | Watcher su cartelle configurate (notify crate, gia' usato per skills) | | | |
-| | Parser: Markdown, TXT, codice sorgente (nativi) | | | |
-| | Parser: PDF (`pdf-extract`), DOCX (`docx-rs`), HTML (gia' presente) | | | |
-| | Chunking intelligente: rispetta paragrafi/sezioni, overlap configurable | | | |
-| | De-duplicazione: skip chunk se gia' indicizzato (hash check) | | | |
-| 6.2 | **Indice RAG** | `agent/embeddings.rs`, `storage/db.rs` | ~200 | TODO |
-| | Tabella `rag_sources` (path, tipo, ultimo_scan, chunk_count) | | | |
-| | Tabella `rag_chunks` (source_id, chunk_text, embedding_id, metadata) | | | |
-| | Embedding + HNSW indexing (riusa EmbeddingEngine esistente) | | | |
-| | FTS5 parallelo per keyword search (riusa pattern memory_search) | | | |
-| | Ricerca unificata: RAG + memory nella stessa query | | | |
-| 6.3 | **Config e UI** | `config/schema.rs`, `web/api.rs`, `static/js/rag.js` (nuovo) | ~250 | TODO |
-| | Config: `rag.sources = [{ path = "~/Documents", recursive = true }]` | | | |
-| | CLI: `homun rag add ~/Documents`, `homun rag status`, `homun rag rebuild` | | | |
-| | Web UI: pagina `/knowledge` — sorgenti, statistiche, ricerca dedicata | | | |
-| | API: GET/POST `/api/v1/rag/sources`, GET `/api/v1/rag/search` | | | |
-| 6.4 | **File via Telegram → RAG** | `channels/telegram.rs` | ~150 | TODO |
-| | Download file inviati via Telegram in `~/.homun/inbox/` | | | |
-| | Auto-parsing e analisi nel contesto della conversazione | | | |
-| | Opzione: indicizzare nel RAG per ricerche future | | | |
-| | Supporto: PDF, immagini (→ vision model), testo, codice | | | |
-| 6.5 | **Sorgenti cloud via MCP** | `tools/mcp.rs` | ~100 | TODO |
+| 6.1 | **DB + migrazione RAG** | `migrations/011_rag_knowledge.sql`, `storage/db.rs` | ~150 | ✅ DONE |
+| | Tabella `rag_sources` (id, file_path, file_name, file_hash SHA-256, doc_type, file_size, chunk_count, status, error_message, source_channel, created_at, updated_at) | | | |
+| | Tabella `rag_chunks` (id, source_id FK, chunk_index, heading, content, token_count, created_at) | | | |
+| | Tabella FTS5 `rag_fts` con trigger di sincronizzazione (INSERT/DELETE/UPDATE) | | | |
+| | Metodi CRUD: insert/find/update/delete source, insert/load/update chunk, fts5_search, count | | | |
+| 6.2 | **Chunker modulare** | `rag/mod.rs`, `rag/chunker.rs` | ~460 | ✅ DONE |
+| | `DocChunk { index, heading, content, token_count }` + `ChunkOptions { max_tokens: 512, overlap: 50 }` | | | |
+| | Algoritmi: chunk_markdown (split su heading), chunk_code (double-blank), chunk_html (strip tags), chunk_plain_text (paragrafi) | | | |
+| | Estensioni supportate: md, txt, log, rs, py, js, ts, go, java, c, cpp, h, hpp, toml, yaml, yml, json, html, htm, css, sh, bash, zsh, sql, xml, csv, ini, cfg, conf, env, dockerfile, makefile | | | |
+| | Unit test: detect_doc_type, is_supported, estimate_tokens, chunk sizes, markdown headings, html strip | | | |
+| 6.3 | **RAG Engine** | `rag/engine.rs` | ~370 | ✅ DONE |
+| | `RagEngine::ingest_file()` — SHA-256 dedup → chunk → embed (filename+content) → HNSW + FTS5 | | | |
+| | `RagEngine::ingest_directory()` — batch ingestion con filtro estensioni | | | |
+| | `RagEngine::search()` — ibrido vector (HNSW cosine) + FTS5 keyword + RRF merge | | | |
+| | Filename in heading (FTS5 matching per nome file) + filename in embedding (vector matching) | | | |
+| | Auto-reindex all'avvio: `reindex_if_needed()` ricostruisce HNSW se DB ha chunk ma indice e' vuoto | | | |
+| | Persist HNSW dopo ogni ingestion (non solo auto-save ogni 50) | | | |
+| | `reindex_all()` con fix heading orfani + embedding filename+content | | | |
+| | `remove_source()`, `list_sources()`, `stats()`, `save_index()` | | | |
+| 6.4 | **Tool LLM `knowledge`** | `tools/knowledge.rs`, `tools/mod.rs` | ~120 | ✅ DONE |
+| | Azioni: `search` (query → chunk text con attribuzione file), `ingest` (file/dir), `list`, `remove` | | | |
+| | Condivide `Arc<Mutex<RagEngine>>` con agent loop e web server | | | |
+| | Descrizione ottimizzata: enfatizza che search restituisce il contenuto reale, non solo nomi file | | | |
+| 6.5 | **Config + EmbeddingEngine RAG** | `config/schema.rs`, `agent/embeddings.rs` | ~40 | ✅ DONE |
+| | `KnowledgeConfig { enabled, chunk_max_tokens, chunk_overlap_tokens, results_per_query }` | | | |
+| | `EmbeddingEngine::with_provider_and_path()` — indice HNSW separato (`rag.usearch`) | | | |
+| 6.6 | **Wiring startup** | `main.rs`, `lib.rs` | ~60 | ✅ DONE |
+| | `try_create_rag_engine()` — crea engine + auto-reindex | | | |
+| | Registrazione KnowledgeTool + passaggio handle a agent/web | | | |
+| | Feature-gated sotto `local-embeddings` (nel feature set `gateway`) | | | |
+| 6.7 | **Integrazione agent loop** | `agent/agent_loop.rs`, `agent/context.rs` | ~50 | ✅ DONE |
+| | RAG search automatica ad ogni messaggio (inietta chunk nel system prompt) | | | |
+| | Formato: `[RAG: filename (chunk N)] contenuto` | | | |
+| | `ContextBuilder::set_rag_knowledge()` + sezione dopo relevant_memories | | | |
+| 6.8 | **Web API** | `web/api.rs`, `web/server.rs` | ~200 | ✅ DONE |
+| | `GET /api/v1/knowledge/stats` — source_count, chunk_count, vector_count | | | |
+| | `GET /api/v1/knowledge/sources` — lista sorgenti + `DELETE` per rimozione | | | |
+| | `GET /api/v1/knowledge/search?q=...&limit=5` — ricerca ibrida | | | |
+| | `POST /api/v1/knowledge/ingest` — upload file multipart + ingestion | | | |
+| | `AppState.rag_engine` condiviso con gateway | | | |
+| 6.9 | **Web UI `/knowledge`** | `web/pages.rs`, `static/js/knowledge.js`, `static/css/style.css` | ~470 | ✅ DONE |
+| | Card statistiche (sorgenti, chunk, vettori) | | | |
+| | Upload zone drag & drop + file picker | | | |
+| | Tabella sorgenti con nome, tipo, chunk, size, status, data, delete | | | |
+| | Search con risultati attribuiti (file, score, heading, contenuto) | | | |
+| | Design Braun-inspired coerente con il resto della UI | | | |
+| 6.10 | **Telegram file → RAG** | `channels/telegram.rs`, `agent/gateway.rs`, `bus/queue.rs` | ~90 | ✅ DONE |
+| | Download documento via Telegram API → file temporaneo | | | |
+| | Auto-ingestion nel RAG engine (dedup via SHA-256) | | | |
+| | Routing intelligente: file senza caption → skip agent (solo conferma), file con caption → hint per knowledge tool | | | |
+| | Conferma utente con source_id e chunk count | | | |
+| | Cleanup file temporaneo dopo ingestion | | | |
+| 6.11 | **Formati file avanzati (PDF, DOCX)** | `rag/chunker.rs`, `rag/parsers.rs`, `Cargo.toml` | ~150 | DONE |
+| | Parser PDF (`pdf-extract` o `lopdf` + `pdf_text`) — estrazione testo, page-aware chunking | | | |
+| | Parser DOCX (`docx-rs`) — estrazione testo strutturato | | | |
+| | Parser XLSX/CSV avanzato — tabelle → chunk per foglio/sezione | | | |
+| | Aggiungere estensioni: pdf, docx, xlsx, xls, pptx, rtf, odt | | | |
+| 6.12 | **Indicizzazione cartelle da Web UI e CLI** | `web/api.rs`, `web/pages.rs`, `static/js/knowledge.js`, `main.rs` | ~200 | DONE |
+| | Web UI: campo path + checkbox recursive + bottone "Index Folder" | | | |
+| | API: `POST /api/v1/knowledge/ingest-directory` — ingest da path server-side | | | |
+| | CLI: `homun knowledge add ~/Documents --recursive` | | | |
+| | Progress reporting per ingestion grandi (numero file processati / totale) | | | |
+| 6.13 | **Protezione dati sensibili (vault-gated access + 2FA)** | `rag/sensitive.rs`, `rag/engine.rs`, `tools/knowledge.rs`, `web/api.rs`, `storage/db.rs` | ~200 | DONE |
+| | Classificazione automatica: detect pattern sensibili nel contenuto (API key, token, password, recovery key, codice fiscale, IBAN) | | | |
+| | Marcatura chunk come `sensitive = true` in DB (colonna o flag su `rag_chunks`) | | | |
+| | L'LLM puo' vedere che il chunk esiste e il suo heading, ma il contenuto e' mascherato | | | |
+| | Per mostrare il contenuto: richiedere auth token (vault PIN, Telegram OTP, o web session token) | | | |
+| | Dopo autenticazione: contenuto visibile per la durata della sessione | | | |
+| | Tool knowledge: azione `search` restituisce `[REDACTED — auth required]` per chunk sensibili | | | |
+| | Web UI: risultati sensibili con lucchetto, click per sbloccare con auth | | | |
+| 6.14 | **Directory watcher** | `rag/watcher.rs`, `rag/engine.rs`, `config/schema.rs`, `main.rs` | ~140 | DONE |
+| | Watcher su cartelle configurate (`knowledge.watch_dirs` in config) | | | |
+| | Auto-ingest su file nuovo/modificato (via notify crate, gia' usato per skills) | | | |
+| | Debounce per evitare re-ingestion durante salvataggio | | | |
+| | Re-hash e re-chunk se file modificato | | | |
+| 6.15 | **Sorgenti cloud via MCP (framework)** | `rag/cloud.rs`, `tools/mcp.rs`, `config/schema.rs`, `main.rs` | ~180 | DONE |
 | | Google Drive via MCP server → file sincronizzati in locale → indicizzati | | | |
 | | Notion via MCP → pagine esportate → indicizzate | | | |
 | | Qualsiasi MCP server che espone file → pipeline automatica | | | |
 
-**Stima totale Sprint 6: ~1,100 LOC**
+**Sprint 6 completato: ~2,830 LOC (6.1-6.15 tutti DONE)**
+
+### 6.1-6.10 Stato Dettagliato (Core RAG — Completato)
+
+- ✅ **Architettura**: modulo separato `src/rag/` (chunker.rs + engine.rs), tabelle DB dedicate (`rag_sources` + `rag_chunks`), indice HNSW separato (`rag.usearch`)
+- ✅ **Ingestion pipeline completa**: file → SHA-256 dedup → chunk (per tipo documento) → embed (fastembed local o OpenAI) → HNSW + FTS5
+- ✅ **Ricerca ibrida**: vector cosine (HNSW) + keyword (FTS5) + RRF merge — filename incluso in heading e embedding per matching per nome file
+- ✅ **Auto-recovery**: reindex automatico all'avvio se HNSW vuoto ma DB ha chunk (sopravvive a restart)
+- ✅ **30+ estensioni supportate**: md, txt, log, codice (rs/py/js/ts/go/java/c/cpp/h), config (toml/yaml/json/xml/csv/ini), html, shell scripts
+- ✅ **Telegram end-to-end**: invia file → auto-download → ingestion → conferma → query via chat → risposta con contenuto
+- ✅ **Web UI completa**: pagina /knowledge con upload drag&drop, tabella sorgenti, search con risultati attribuiti, stats card
+- ✅ **Tool LLM**: `knowledge` tool con search/ingest/list/remove — l'agent lo usa automaticamente per domande sui documenti
+- ✅ **Context injection**: RAG search automatica nel system prompt ad ogni messaggio (come per le memorie)
+
+### 6.13 Design: Vault-Gated Access per Dati Sensibili
+
+```
+# Il sistema indicizza un file con una recovery key
+Tu (Telegram): [invii MEGA-CHIAVEDIRECUPERO.txt]
+Homun: "File indicizzato (1 chunk). Rilevato contenuto sensibile (recovery key)."
+
+# Quando chiedi il contenuto...
+Tu: "Qual e' la chiave di recupero di MEGA?"
+Homun: "Ho trovato il file MEGA-CHIAVEDIRECUPERO.txt nella knowledge base.
+        Il contenuto e' classificato come sensibile.
+        Per visualizzarlo, inserisci il PIN del vault o conferma da Telegram."
+
+# Dopo autenticazione
+Tu: [conferma PIN/OTP]
+Homun: "Chiave di recupero MEGA: icLTS4lgw7YBfkIccHo-kQ"
+```
+
+Pattern sensibili riconosciuti:
+- API key / token (formato `sk-...`, `ghp_...`, `xoxb-...`, base64 lunghi)
+- Password / secret (keyword match)
+- Recovery key / seed phrase
+- Codici fiscali, IBAN, numeri carta
+- File con nome suggestivo (contiene "password", "secret", "key", "token", "recovery")
 
 ### Come funziona il RAG
 
 ```
-# Aggiungere una cartella alla knowledge base
-homun rag add ~/Documents/lavoro --recursive
+# Aggiungere una cartella alla knowledge base (CLI — 6.12)
+homun knowledge add ~/Documents/lavoro --recursive
   Scanning... 142 files found
   Indexing... 847 chunks created (384-dim vectors)
   Done. Knowledge base: 847 chunks from 142 files.
@@ -616,14 +750,60 @@ Homun:
   2. Trova chunk rilevante da ~/Documents/lavoro/contratto-acme.pdf
   3. Risponde con il contenuto + citazione del file sorgente
 
-# File via Telegram
+# File via Telegram (gia' funzionante)
 Tu (Telegram): [invii fattura.pdf]
-Homun: "Ho ricevuto fattura.pdf (2 pagine). E' una fattura di 1.250€ da
-        Fornitore XYZ per servizi consulenza. Vuoi che la salvi nella
-        knowledge base per riferimento futuro?"
-Tu: "si"
-→ Indicizzata e ricercabile
+Homun: "File indicizzato nella knowledge base (source_id=7, 3 chunk).
+        Chiedimi qualsiasi cosa sul contenuto."
+Tu: "Quanto devo pagare?"
+Homun: "La fattura e' di 1.250€ da Fornitore XYZ per servizi consulenza,
+        scadenza 30/04/2026."
 ```
+
+---
+
+## Programma Workflow Engine — Autonomia Multi-Step (P1)
+
+> Obiettivo: orchestrazione persistente di task multi-step che sopravvivono ai restart,
+> passano contesto tra step, supportano approval gates, e possono essere collegati ad automazioni e cron.
+
+| # | Task | File principali | LOC stimate | Stato |
+|---|------|----------------|-------------|-------|
+| WF-1 | **Schema DB + tipi** | `migrations/013_workflows.sql`, `workflows/mod.rs` | ~280 | ✅ DONE |
+| | Tabelle `workflows` e `workflow_steps` con status, context JSON, retry count | | | |
+| | Enums: WorkflowStatus (6 stati), StepStatus (5 stati) | | | |
+| | Structs: Workflow, WorkflowStep, WorkflowCreateRequest, StepDefinition | | | |
+| | WorkflowEvent enum per notifiche (step completed, approval needed, etc.) | | | |
+| WF-2 | **DB layer** | `workflows/db.rs` | ~330 | ✅ DONE |
+| | CRUD: insert_workflow, load_workflow, list_workflows | | | |
+| | Status updates: update_workflow_status, update_step_status | | | |
+| | Context: update_workflow_context, update_workflow_step_idx | | | |
+| | Resume: load_resumable_workflows (running/pending on boot) | | | |
+| | Retry: increment_step_retry, cancel_pending_steps | | | |
+| WF-3 | **Engine (orchestratore)** | `workflows/engine.rs` | ~490 | ✅ DONE |
+| | create_and_start() — valida, persiste, avvia esecuzione | | | |
+| | run_workflow_loop() — esegue step sequenziali via AgentLoop | | | |
+| | Approval gates — pausa + notifica + resume su conferma utente | | | |
+| | Retry logic — retry_count < max_retries, poi fail workflow | | | |
+| | Inter-step context — risultati precedenti iniettati nel prompt | | | |
+| | resume_on_startup() — riprende workflow interrotti al boot | | | |
+| WF-4 | **Tool LLM** | `tools/workflow.rs` | ~310 | ✅ DONE |
+| | 5 azioni: create, list, status, approve, cancel | | | |
+| | OnceCell late-binding (stesso pattern di SpawnTool) | | | |
+| | deliver_to per routing notifiche al canale corretto | | | |
+| WF-5 | **Wiring gateway** | `main.rs`, `agent/gateway.rs`, `tools/mod.rs` | ~80 | ✅ DONE |
+| | WorkflowEngine init con DB + AgentLoop + event channel | | | |
+| | Event loop nel gateway per routing notifiche ai canali | | | |
+| | Resume automatico workflow al boot del gateway | | | |
+| WF-6 | **Web UI workflows** | `web/pages.rs`, `web/api.rs`, `static/js/workflows.js` | ~300 | TODO |
+| | Pagina /workflows con lista, status, progress bar | | | |
+| | Dettaglio workflow con step timeline + risultati | | | |
+| | Pulsanti approve/cancel da UI | | | |
+| WF-7 | **Trigger da automazioni/cron** | `scheduler/automations.rs`, `workflows/engine.rs` | ~150 | TODO |
+| | Automazione puo' creare un workflow come output (non solo prompt singolo) | | | |
+| | Cron trigger: `workflow_template_id` in automazione → avvia workflow su schedule | | | |
+| | Concatenazione: automation result → workflow input context | | | |
+
+**Completato: WF-1..5 (~1,490 LOC) — TODO: WF-6 (Web UI), WF-7 (trigger automation/cron)**
 
 ---
 
@@ -664,16 +844,18 @@ Tu: "si"
 | | cargo fmt, clippy, test | | | |
 | | Multi-feature matrix | | | |
 | | Release binaries | | | |
-| 8.2 | **Tool abort/timeout** | `tools/registry.rs`, `agent/agent_loop.rs` | ~80 | ⚠️ PARTIAL |
-| | Timeout configurabile per tool (default 60s) | | | |
-| | Abort signal propagation | | | |
-| 8.3 | **Provider health monitoring** | `provider/health.rs` (nuovo) | ~100 | TODO |
-| | Track latency, error rate per provider | | | |
-| | Auto-disable provider temporaneamente su errori | | | |
-| 8.4 | **E-Stop** | `security/estop.rs` (nuovo) | ~80 | TODO |
-| | Kill all tool execution | | | |
-| | Network disable | | | |
-| | Web UI button | | | |
+| 8.2 | **Tool abort/timeout** | `agent/agent_loop.rs`, `config/schema.rs` | ~30 | ✅ DONE |
+| | Generic timeout wrapper in agent loop (tokio::select!) | | | |
+| | Per-tool timeout override via config | | | |
+| | Default 120s, 0 = disable | | | |
+| 8.3 | **Provider health monitoring** | `provider/health.rs` (nuovo), `provider/reliable.rs` | ~220 | ✅ DONE |
+| | Circular buffer circuit breaker (WINDOW_SIZE=20) | | | |
+| | Auto-skip Down providers (>80% error rate) | | | |
+| | EMA latency tracking, REST API `/api/v1/providers/health` | | | |
+| 8.4 | **E-Stop** | `security/estop.rs` (nuovo), `web/api.rs` | ~110 | ✅ DONE |
+| | Kill agent loop, network offline, browser close | | | |
+| | MCP shutdown, subagent cancel | | | |
+| | Web UI button + resume endpoint | | | |
 | 8.5 | **Service install** | `service/launchd.rs`, `service/systemd.rs` | ~200 | ✅ DONE |
 | | `homun service install` (macOS/Linux) | | | |
 | | Auto-start on boot | | | |
@@ -691,7 +873,7 @@ Tu: "si"
 | Voice (Whisper STT + TTS) | P2 | Input/output vocale |
 | Signal channel | P3 | signal-cli bridge |
 | Matrix channel | P3 | matrix-sdk-rs |
-| Lobster-style workflows | P3 | Multi-turn context isolation |
+| ~~Lobster-style workflows~~ | ~~P3~~ | ✅ Implementato come Workflow Engine |
 | Pre-built binaries | P2 | GitHub Releases |
 | Docker image | P2 | Multi-arch |
 | Homebrew formula | P3 | `brew install homun` |
@@ -756,29 +938,45 @@ Programma Browser Automation (P1)          ✅ DONE
   ⬚ Screenshot/vision fallback
   ⬚ Test E2E browser
     |
-Sprint 6: RAG Knowledge Base (P1)          TODO (~1,100 LOC)
-  6.1 File ingestion pipeline
-  6.2 Indice RAG (embedding + HNSW + FTS5)
-  6.3 Config e UI
-  6.4 File via Telegram → RAG
-  6.5 Sorgenti cloud via MCP
+Programma Design System (P1)               ✅ DONE
+  ✅ Olive Moss Console — token architecture (light + dark)
+  ✅ Accent picker (4 preset + custom color con derivazione HSL)
+  ✅ Semantic color tokenization (ok/warn/err/info + text-on-accent)
+  ✅ Typography (Geist + Plus Jakarta Sans)
+    |
+Sprint 6: RAG Knowledge Base (P1)          ✅ COMPLETE (~2,830 LOC)
+  ✅ 6.1-6.10 Core RAG (DB, chunker, engine, tool, config, startup, agent loop, API, UI, Telegram)
+  ✅ 6.11 Formati avanzati (PDF, DOCX, XLSX) — parsers.rs
+  ✅ 6.12 Indicizzazione cartelle (Web UI + CLI) — Knowledge subcommand
+  ✅ 6.13 Vault-gated access per dati sensibili + 2FA — sensitive.rs, reveal endpoint
+  ✅ 6.14 Directory watcher (auto-ingest) — watcher.rs, notify crate
+  ✅ 6.15 Sorgenti cloud via MCP (framework) — cloud.rs, CloudSync
+    |
+Programma Workflow Engine (P1)             ⚠️ PARTIAL (~1,490 LOC)
+  ✅ WF-1 Schema DB + tipi (workflows + workflow_steps)
+  ✅ WF-2 DB layer (CRUD, status, context, resume)
+  ✅ WF-3 Engine orchestratore (step runner, approval, retry, resume-on-boot)
+  ✅ WF-4 Tool LLM (create/list/status/approve/cancel)
+  ✅ WF-5 Wiring gateway (init, event loop, auto-resume)
+  TODO WF-6 Web UI workflows
+  TODO WF-7 Trigger da automazioni/cron
     |
 Sprint 7: Canali Phase 2 (P2)              TODO (~600 LOC)
   7.1-7.4 Discord, Slack, Email, WhatsApp
     |
-Sprint 8: Hardening (P2)                   ⚠️ PARTIAL (~540 LOC)
+Sprint 8: Hardening (P2)                   ✅ COMPLETE (~360 LOC)
   ✅ 8.1 CI Pipeline
-  ⚠️ 8.2 Tool timeout (presente su tool singoli, manca abort unificato)
-  TODO 8.3 Provider health monitoring
-  TODO 8.4 E-Stop
+  ✅ 8.2 Tool timeout (generic wrapper in agent loop)
+  ✅ 8.3 Provider health monitoring (circuit breaker + REST API)
+  ✅ 8.4 E-Stop (kill switch + Web UI button)
   ✅ 8.5 Service install
     |
 Sprint 9+: Future (P3)
   Voice, Extended thinking, Prometheus, distribuzione
 ```
 
-**Completato: Sprint 1-5 + SBX-1/5 + CHAT-1..6 + Browser Automation + parte Sprint 8**
-**Rimanente: SBX-2..4 + SBX-6, CHAT-7, Browser E2E/stealth avanzato, Sprint 6-7, hardening residuo**
+**Completato: Sprint 1-6 + Sprint 8 + SBX-1/5 + CHAT-1..6 + Browser + Design System + Workflow Engine (core)**
+**Rimanente: WF-6/7 (UI + trigger), SBX-2..4 + SBX-6, CHAT-7, Browser E2E, Sprint 7, Sprint 9+**
 
 ---
 
@@ -800,11 +998,12 @@ Sprint 9+: Future (P3)
 ## Vantaggi Competitivi Homun
 
 1. **MCP client nativo** — ne OpenClaw ne ZeroClaw
-2. **Browser via MCP Playwright** — tool unificato con stealth anti-bot, compact_tree, auto-snapshot
-3. **Exfiltration filter** — OpenClaw non ce l'ha
-4. **Web UI ricca** — 10+ pagine embedded
-5. **Skill ecosystem** — ClawHub + OpenSkills + hot-reload
-6. **Single binary Rust** — ~50MB, no runtime
-7. **XML fallback auto** — supporta modelli senza function calling
-8. **Prompt modulare** — sezioni componibili per mode
-9. **Browser per modelli deboli** — ref normalization, schema piatto, orchestrazione automatica
+2. **RAG Knowledge Base personale** — ne OpenClaw ne ZeroClaw hanno ingestion + ricerca ibrida sui documenti utente
+3. **Browser via MCP Playwright** — tool unificato con stealth anti-bot, compact_tree, auto-snapshot
+4. **Exfiltration filter** — OpenClaw non ce l'ha
+5. **Web UI ricca** — 11 pagine embedded + design system proprietario con accent picker
+6. **Skill ecosystem** — ClawHub + OpenSkills + hot-reload
+7. **Single binary Rust** — ~50MB, no runtime
+8. **XML fallback auto** — supporta modelli senza function calling
+9. **Prompt modulare** — sezioni componibili per mode
+10. **Browser per modelli deboli** — ref normalization, schema piatto, orchestrazione automatica

@@ -192,9 +192,19 @@ impl EmbeddingEngine {
     }
 
     /// Create an engine with a specific provider (for testing or custom backends).
+    /// Uses the default index path (`~/.homun/memory.usearch`).
     pub fn with_provider(provider: Box<dyn EmbeddingProvider>) -> Result<Self> {
         let data_dir = Config::data_dir();
         let index_path = data_dir.join("memory.usearch");
+        Self::with_provider_and_path(provider, index_path)
+    }
+
+    /// Create an engine with a specific provider and custom HNSW index path.
+    /// Used by RAG to maintain a separate index (`rag.usearch`).
+    pub fn with_provider_and_path(
+        provider: Box<dyn EmbeddingProvider>,
+        index_path: PathBuf,
+    ) -> Result<Self> {
 
         // Create or load the USearch HNSW index
         let options = IndexOptions {
@@ -385,7 +395,7 @@ impl Drop for EmbeddingEngine {
 ///
 /// - `"openai"` → OpenAI API with fallback to local if API key missing.
 /// - `"local"` (default) → fastembed ONNX model.
-fn create_embedding_provider(config: &Config) -> Result<Box<dyn EmbeddingProvider>> {
+pub fn create_embedding_provider(config: &Config) -> Result<Box<dyn EmbeddingProvider>> {
     match config.memory.embedding_provider.as_str() {
         "openai" => {
             let api_key = config.providers.openai.api_key.clone();

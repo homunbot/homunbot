@@ -1,0 +1,498 @@
+//! Workflow orchestrator — manages multi-step execution lifecycle.
+//!
+//! The engine:
+//! 1. Creates workflows and persists them to SQLite
+//! 2. Executes steps sequentially via `AgentLoop::process_message()`
+//! 3. Passes inter-step context (previous results) to each step
+//! 4. Pauses at approval gates and resumes on user confirmation
+//! 5. Retries failed steps up to `max_retries`
+//! 6. Resumes interrupted workflows on gateway restart
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use anyhow::{bail, Result};
+use tokio::sync::{mpsc, Mutex};
+use tokio::task::JoinHandle;
+
+use crate::agent::AgentLoop;
+use crate::storage::Database;
+
+use super::{
+    StepStatus, Workflow, WorkflowCreateRequest, WorkflowEvent, WorkflowStatus, WorkflowStep,
+};
+
+/// Workflow engine — orchestrates persistent multi-step autonomous tasks.
+pub struct WorkflowEngine {
+    db: Database,
+    agent: Arc<AgentLoop>,
+    /// Tracks running workflow tasks: workflow_id → JoinHandle
+    running: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
+    /// Channel for sending events to the gateway (notifications, approvals)
+    event_tx: mpsc::Sender<WorkflowEvent>,
+}
+
+impl WorkflowEngine {
+    pub fn new(
+        db: Database,
+        agent: Arc<AgentLoop>,
+        event_tx: mpsc::Sender<WorkflowEvent>,
+    ) -> Self {
+        Self {
+            db,
+            agent,
+            running: Arc::new(Mutex::new(HashMap::new())),
+            event_tx,
+        }
+    }
+
+    /// Create a new workflow and immediately start executing it.
+    pub async fn create_and_start(
+        &self,
+        req: WorkflowCreateRequest,
+        channel: &str,
+        chat_id: &str,
+    ) -> Result<String> {
+        if req.steps.is_empty() {
+            bail!("Workflow must have at least one step");
+        }
+        if req.steps.len() > 20 {
+            bail!("Workflow cannot have more than 20 steps");
+        }
+
+        let workflow_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
+        let created_by = format!("{channel}:{chat_id}");
+        self.db
+            .insert_workflow(&workflow_id, &req, Some(&created_by))
+            .await?;
+
+        tracing::info!(
+            workflow_id = %workflow_id,
+            name = %req.name,
+            steps = req.steps.len(),
+            "Workflow created"
+        );
+
+        self.start_workflow(&workflow_id).await?;
+        Ok(workflow_id)
+    }
+
+    /// Start or resume a workflow from its current step.
+    async fn start_workflow(&self, workflow_id: &str) -> Result<()> {
+        let workflow = self
+            .db
+            .load_workflow(workflow_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Workflow {workflow_id} not found"))?;
+
+        if workflow.status.is_terminal() {
+            bail!("Workflow {} is already {}", workflow_id, workflow.status.as_str());
+        }
+
+        // Mark as running
+        self.db
+            .update_workflow_status(workflow_id, WorkflowStatus::Running, None)
+            .await?;
+
+        let db = self.db.clone();
+        let agent = self.agent.clone();
+        let event_tx = self.event_tx.clone();
+        let wf_id = workflow_id.to_string();
+        let running = self.running.clone();
+
+        let handle = tokio::spawn(async move {
+            if let Err(e) = run_workflow_loop(db.clone(), agent, event_tx.clone(), &wf_id).await {
+                tracing::error!(workflow_id = %wf_id, error = %e, "Workflow execution failed");
+                let _ = db
+                    .update_workflow_status(&wf_id, WorkflowStatus::Failed, Some(&e.to_string()))
+                    .await;
+                let _ = db.cancel_pending_steps(&wf_id).await;
+
+                // Load workflow name for notification
+                if let Ok(Some(wf)) = db.load_workflow(&wf_id).await {
+                    let total = wf.steps.len();
+                    let step = wf.current_step_idx;
+                    let _ = event_tx
+                        .send(WorkflowEvent::WorkflowFailed {
+                            workflow_id: wf_id.clone(),
+                            workflow_name: wf.name,
+                            step_idx: step,
+                            total_steps: total,
+                            error: e.to_string(),
+                            deliver_to: wf.deliver_to,
+                        })
+                        .await;
+                }
+            }
+
+            // Remove from running map
+            running.lock().await.remove(&wf_id);
+        });
+
+        self.running
+            .lock()
+            .await
+            .insert(workflow_id.to_string(), handle);
+
+        Ok(())
+    }
+
+    /// Resume a paused workflow (after approval).
+    pub async fn approve_and_resume(&self, workflow_id: &str) -> Result<String> {
+        let workflow = self
+            .db
+            .load_workflow(workflow_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Workflow {workflow_id} not found"))?;
+
+        if workflow.status != WorkflowStatus::Paused {
+            bail!(
+                "Workflow {} is not paused (current status: {})",
+                workflow_id,
+                workflow.status.as_str()
+            );
+        }
+
+        let step_name = workflow
+            .steps
+            .get(workflow.current_step_idx)
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        self.start_workflow(workflow_id).await?;
+        Ok(format!(
+            "Workflow \"{}\" resumed from step {}: {}",
+            workflow.name, workflow.current_step_idx, step_name
+        ))
+    }
+
+    /// Cancel a workflow.
+    pub async fn cancel(&self, workflow_id: &str) -> Result<String> {
+        let workflow = self
+            .db
+            .load_workflow(workflow_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Workflow {workflow_id} not found"))?;
+
+        if workflow.status.is_terminal() {
+            bail!(
+                "Workflow {} is already {}",
+                workflow_id,
+                workflow.status.as_str()
+            );
+        }
+
+        // Abort running task if any
+        if let Some(handle) = self.running.lock().await.remove(workflow_id) {
+            handle.abort();
+        }
+
+        self.db
+            .update_workflow_status(workflow_id, WorkflowStatus::Cancelled, None)
+            .await?;
+        self.db.cancel_pending_steps(workflow_id).await?;
+
+        Ok(format!("Workflow \"{}\" cancelled", workflow.name))
+    }
+
+    /// List workflows (optionally filtered by status).
+    pub async fn list(&self, status_filter: Option<&str>) -> Result<Vec<Workflow>> {
+        self.db.list_workflows(status_filter).await
+    }
+
+    /// Get a single workflow's status.
+    pub async fn status(&self, workflow_id: &str) -> Result<Option<Workflow>> {
+        self.db.load_workflow(workflow_id).await
+    }
+
+    /// Resume any workflows that were running when the process stopped.
+    pub async fn resume_on_startup(&self) -> Result<usize> {
+        let resumable = self.db.load_resumable_workflows().await?;
+        let count = resumable.len();
+
+        for wf in resumable {
+            tracing::info!(
+                workflow_id = %wf.id,
+                name = %wf.name,
+                step = wf.current_step_idx,
+                "Resuming workflow from previous session"
+            );
+            if let Err(e) = self.start_workflow(&wf.id).await {
+                tracing::error!(
+                    workflow_id = %wf.id,
+                    error = %e,
+                    "Failed to resume workflow"
+                );
+            }
+        }
+
+        if count > 0 {
+            tracing::info!(count, "Resumed workflows from previous session");
+        }
+        Ok(count)
+    }
+}
+
+/// Main execution loop for a single workflow.
+/// Runs steps sequentially, handles retries and approval gates.
+async fn run_workflow_loop(
+    db: Database,
+    agent: Arc<AgentLoop>,
+    event_tx: mpsc::Sender<WorkflowEvent>,
+    workflow_id: &str,
+) -> Result<()> {
+    loop {
+        // Reload workflow state (might have been updated by approval)
+        let workflow = db
+            .load_workflow(workflow_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Workflow disappeared"))?;
+
+        if workflow.status.is_terminal() || workflow.status == WorkflowStatus::Cancelled {
+            return Ok(());
+        }
+
+        let step_idx = workflow.current_step_idx;
+        let Some(step) = workflow.steps.get(step_idx) else {
+            // All steps exhausted — workflow complete
+            return complete_workflow(&db, &event_tx, &workflow).await;
+        };
+
+        // Skip already completed steps (from resume)
+        if step.status == StepStatus::Completed {
+            db.update_workflow_step_idx(workflow_id, step_idx + 1)
+                .await?;
+            continue;
+        }
+
+        // Check approval gate
+        if step.approval_required && step.status == StepStatus::Pending {
+            tracing::info!(
+                workflow_id = %workflow_id,
+                step = step_idx,
+                "Workflow paused for approval"
+            );
+
+            db.update_workflow_status(workflow_id, WorkflowStatus::Paused, None)
+                .await?;
+
+            let _ = event_tx
+                .send(WorkflowEvent::ApprovalNeeded {
+                    workflow_id: workflow_id.to_string(),
+                    workflow_name: workflow.name.clone(),
+                    step_idx,
+                    total_steps: workflow.steps.len(),
+                    step_name: step.name.clone(),
+                    step_instruction: step.instruction.clone(),
+                    deliver_to: workflow.deliver_to.clone(),
+                })
+                .await;
+
+            // Exit loop — will be resumed by approve_and_resume()
+            return Ok(());
+        }
+
+        // Execute the step
+        let result = execute_step(&db, &agent, &workflow, step).await;
+
+        match result {
+            Ok(output) => {
+                // Step succeeded — store result, update context, advance
+                db.update_step_status(&step.id, StepStatus::Completed, Some(&output), None)
+                    .await?;
+
+                // Update shared context with step result
+                let mut context = workflow.context.clone();
+                if let serde_json::Value::Object(ref mut map) = context {
+                    map.insert(
+                        format!("step_{}", step_idx),
+                        serde_json::json!({
+                            "name": step.name,
+                            "result": truncate_for_context(&output, 2000),
+                        }),
+                    );
+                }
+                db.update_workflow_context(workflow_id, &context).await?;
+
+                // Notify step completion
+                let _ = event_tx
+                    .send(WorkflowEvent::StepCompleted {
+                        workflow_id: workflow_id.to_string(),
+                        workflow_name: workflow.name.clone(),
+                        step_idx,
+                        total_steps: workflow.steps.len(),
+                        step_name: step.name.clone(),
+                        result_summary: truncate_for_context(&output, 200),
+                        deliver_to: workflow.deliver_to.clone(),
+                    })
+                    .await;
+
+                // Advance to next step
+                db.update_workflow_step_idx(workflow_id, step_idx + 1)
+                    .await?;
+
+                tracing::info!(
+                    workflow_id = %workflow_id,
+                    step = step_idx,
+                    step_name = %step.name,
+                    "Step completed"
+                );
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                tracing::warn!(
+                    workflow_id = %workflow_id,
+                    step = step_idx,
+                    error = %error_msg,
+                    retry = step.retry_count,
+                    max = step.max_retries,
+                    "Step failed"
+                );
+
+                if step.retry_count < step.max_retries {
+                    // Retry
+                    db.increment_step_retry(&step.id).await?;
+                    db.update_step_status(
+                        &step.id,
+                        StepStatus::Pending,
+                        None,
+                        Some(&error_msg),
+                    )
+                    .await?;
+                    // Loop will re-execute this step
+                } else {
+                    // Max retries exhausted — fail workflow
+                    db.update_step_status(
+                        &step.id,
+                        StepStatus::Failed,
+                        None,
+                        Some(&error_msg),
+                    )
+                    .await?;
+                    bail!(
+                        "Step {} \"{}\" failed after {} retries: {}",
+                        step_idx,
+                        step.name,
+                        step.max_retries,
+                        error_msg
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Execute a single workflow step via the agent loop.
+async fn execute_step(
+    db: &Database,
+    agent: &AgentLoop,
+    workflow: &Workflow,
+    step: &WorkflowStep,
+) -> Result<String> {
+    // Mark step as running
+    db.update_step_status(&step.id, StepStatus::Running, None, None)
+        .await?;
+
+    let prompt = build_step_prompt(workflow, step);
+    let session_key = format!("workflow:{}:step:{}", workflow.id, step.idx);
+
+    agent
+        .process_message(&prompt, &session_key, "workflow", &workflow.id)
+        .await
+}
+
+/// Build the prompt for a workflow step, including context from previous steps.
+fn build_step_prompt(workflow: &Workflow, step: &WorkflowStep) -> String {
+    let total = workflow.steps.len();
+    let mut lines = Vec::new();
+
+    lines.push(format!(
+        "WORKFLOW EXECUTION — Step {}/{}: {}",
+        step.idx, total, step.name
+    ));
+    lines.push(format!("Workflow: {}", workflow.name));
+    lines.push(format!("Objective: {}", workflow.objective));
+    lines.push(String::new());
+
+    // Include previous step results
+    let completed: Vec<&WorkflowStep> = workflow
+        .steps
+        .iter()
+        .filter(|s| s.status == StepStatus::Completed && s.idx < step.idx)
+        .collect();
+
+    if !completed.is_empty() {
+        lines.push("Previous step results:".to_string());
+        for s in completed {
+            let result = s
+                .result
+                .as_deref()
+                .map(|r| truncate_for_context(r, 500))
+                .unwrap_or_else(|| "(no output)".to_string());
+            lines.push(format!("- Step {} ({}): {}", s.idx, s.name, result));
+        }
+        lines.push(String::new());
+    }
+
+    lines.push("YOUR TASK FOR THIS STEP:".to_string());
+    lines.push(step.instruction.clone());
+    lines.push(String::new());
+    lines.push(
+        "After completing the task, provide your result clearly. \
+         The result will be passed to subsequent steps."
+            .to_string(),
+    );
+
+    lines.join("\n")
+}
+
+/// Mark workflow as completed and send final notification.
+async fn complete_workflow(
+    db: &Database,
+    event_tx: &mpsc::Sender<WorkflowEvent>,
+    workflow: &Workflow,
+) -> Result<()> {
+    db.update_workflow_status(&workflow.id, WorkflowStatus::Completed, None)
+        .await?;
+
+    // Build summary from step results
+    let mut summary_lines = Vec::new();
+    for step in &workflow.steps {
+        let status = step.status.as_str();
+        let result = step
+            .result
+            .as_deref()
+            .map(|r| truncate_for_context(r, 300))
+            .unwrap_or_else(|| "-".to_string());
+        summary_lines.push(format!("Step {} ({}) [{}]: {}", step.idx, step.name, status, result));
+    }
+    let summary = summary_lines.join("\n");
+
+    let _ = event_tx
+        .send(WorkflowEvent::WorkflowCompleted {
+            workflow_id: workflow.id.clone(),
+            workflow_name: workflow.name.clone(),
+            total_steps: workflow.steps.len(),
+            summary,
+            deliver_to: workflow.deliver_to.clone(),
+        })
+        .await;
+
+    tracing::info!(
+        workflow_id = %workflow.id,
+        name = %workflow.name,
+        "Workflow completed"
+    );
+
+    Ok(())
+}
+
+fn truncate_for_context(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        let mut result: String = s.chars().take(max.saturating_sub(3)).collect();
+        result.push_str("...");
+        result
+    }
+}

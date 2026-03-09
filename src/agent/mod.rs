@@ -33,7 +33,7 @@ pub use prompt::{PromptContext, PromptMode, PromptSection, SystemPromptBuilder, 
 pub use subagent::SubagentManager;
 
 #[cfg(feature = "local-embeddings")]
-pub use embeddings::EmbeddingEngine;
+pub use embeddings::{create_embedding_provider, EmbeddingEngine};
 
 #[cfg(feature = "local-embeddings")]
 pub use memory_search::MemorySearcher;

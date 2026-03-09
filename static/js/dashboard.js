@@ -420,3 +420,34 @@ if (usageEls.refresh && usageEls.since && usageEls.until) {
     usageEls.refresh.addEventListener('click', loadUsage);
     loadUsage();
 }
+
+// ─── Emergency Stop ───
+{
+    const btn = document.getElementById('estop-btn');
+    if (btn) {
+        btn.addEventListener('click', async () => {
+            if (!confirm('EMERGENCY STOP\n\nThis will immediately:\n- Stop the agent loop\n- Take the network offline\n- Close the browser\n- Shut down MCP servers\n- Cancel all subagents\n\nProceed?')) {
+                return;
+            }
+            btn.disabled = true;
+            btn.textContent = 'Stopping...';
+            try {
+                const res = await fetch('/api/v1/emergency-stop', { method: 'POST' });
+                const report = await res.json();
+                btn.textContent = 'STOPPED';
+                btn.classList.add('estop-stopped');
+                // Show report
+                const parts = [];
+                if (report.browser_closed) parts.push('Browser closed');
+                if (report.mcp_shutdown) parts.push('MCP shut down');
+                if (report.subagents_cancelled > 0) parts.push(report.subagents_cancelled + ' subagents cancelled');
+                parts.push('Network offline');
+                alert('Emergency Stop activated.\n\n' + parts.join('\n'));
+            } catch (e) {
+                alert('Emergency stop failed: ' + e.message);
+                btn.disabled = false;
+                btn.textContent = '\u26A0 Emergency Stop';
+            }
+        });
+    }
+}

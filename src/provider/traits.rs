@@ -205,6 +205,9 @@ pub struct ChatRequest {
     pub model: String,
     pub max_tokens: u32,
     pub temperature: f32,
+    /// Thinking/reasoning toggle: `Some(true)` = enable, `Some(false)` = disable,
+    /// `None` = provider default.
+    pub think: Option<bool>,
 }
 
 /// A streaming chunk from the LLM

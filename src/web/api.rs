@@ -30,8 +30,16 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/v1/skills/search", get(search_skills))
         .route("/v1/skills/install", axum::routing::post(install_skill))
         .route(
+            "/v1/skills/create",
+            axum::routing::post(create_skill_api),
+        )
+        .route(
             "/v1/skills/{name}",
             get(get_skill_detail).delete(delete_skill),
+        )
+        .route(
+            "/v1/skills/{name}/scan",
+            axum::routing::post(scan_skill_api),
         )
         .route("/v1/skills/catalog/status", get(catalog_status))
         .route("/v1/skills/catalog/counts", get(catalog_counts))
@@ -663,6 +671,134 @@ async fn install_skill(
             message: e.to_string(),
             security_report: None,
         })),
+    }
+}
+
+// --- Create skill ---
+
+#[derive(Deserialize)]
+struct CreateSkillRequest {
+    prompt: String,
+    name: Option<String>,
+    language: Option<String>,
+    #[serde(default)]
+    overwrite: bool,
+}
+
+#[derive(Serialize)]
+struct CreateSkillResponse {
+    ok: bool,
+    name: String,
+    path: String,
+    language: String,
+    reused_skills: Vec<String>,
+    smoke_test_passed: bool,
+    validation_notes: Vec<String>,
+    message: String,
+    security_report: Option<SecurityReportDetailView>,
+}
+
+#[derive(Serialize)]
+struct SecurityReportDetailView {
+    risk_score: u8,
+    blocked: bool,
+    scanned_files: usize,
+    summary: String,
+    warnings: Vec<SecurityWarningView>,
+}
+
+#[derive(Serialize)]
+struct SecurityWarningView {
+    severity: String,
+    category: String,
+    description: String,
+    file: Option<String>,
+    line: Option<usize>,
+}
+
+fn security_detail_view(report: &crate::skills::SecurityReport) -> SecurityReportDetailView {
+    SecurityReportDetailView {
+        risk_score: report.risk_score,
+        blocked: report.blocked,
+        scanned_files: report.scanned_files,
+        summary: report.summary(),
+        warnings: report
+            .warnings
+            .iter()
+            .map(|w| SecurityWarningView {
+                severity: format!("{:?}", w.severity),
+                category: format!("{:?}", w.category),
+                description: w.description.clone(),
+                file: w.file.clone(),
+                line: w.line,
+            })
+            .collect(),
+    }
+}
+
+async fn create_skill_api(
+    Json(req): Json<CreateSkillRequest>,
+) -> Result<Json<CreateSkillResponse>, StatusCode> {
+    let request = crate::skills::SkillCreationRequest {
+        prompt: req.prompt,
+        name: req.name,
+        language: req.language,
+        overwrite: req.overwrite,
+    };
+
+    match crate::skills::create_skill(request).await {
+        Ok(result) => Ok(Json(CreateSkillResponse {
+            ok: true,
+            name: result.name,
+            path: result.path.display().to_string(),
+            language: result.script_language,
+            reused_skills: result.reused_skills,
+            smoke_test_passed: result.smoke_test_passed,
+            validation_notes: result.validation_notes,
+            message: String::new(),
+            security_report: Some(security_detail_view(&result.security_report)),
+        })),
+        Err(e) => Ok(Json(CreateSkillResponse {
+            ok: false,
+            name: String::new(),
+            path: String::new(),
+            language: String::new(),
+            reused_skills: vec![],
+            smoke_test_passed: false,
+            validation_notes: vec![],
+            message: e.to_string(),
+            security_report: None,
+        })),
+    }
+}
+
+// --- Scan skill ---
+
+async fn scan_skill_api(
+    Path(name): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let skills_dir = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".homun")
+        .join("skills");
+    let skill_dir = skills_dir.join(&name);
+
+    if !skill_dir.exists() {
+        return Ok(Json(serde_json::json!({
+            "ok": false,
+            "message": format!("Skill '{}' not found", name),
+        })));
+    }
+
+    match crate::skills::scan_skill_package(&skill_dir).await {
+        Ok(report) => Ok(Json(serde_json::json!({
+            "ok": true,
+            "report": security_detail_view(&report),
+        }))),
+        Err(e) => Ok(Json(serde_json::json!({
+            "ok": false,
+            "message": e.to_string(),
+        }))),
     }
 }
 
@@ -1678,6 +1814,7 @@ async fn test_provider(
         model: model.clone(),
         max_tokens: 12,
         temperature: 0.0,
+        think: None,
     };
 
     let result =
@@ -4715,6 +4852,7 @@ async fn try_generate_install_guide_with_llm(
             model,
             max_tokens: 700,
             temperature: 0.2,
+            think: None,
         }),
     )
     .await

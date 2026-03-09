@@ -193,6 +193,7 @@ impl MemoryConsolidator {
             model: model.to_string(),
             max_tokens: 4096,
             temperature: 0.3,
+            think: None,
         };
 
         let response = provider
@@ -628,6 +629,7 @@ impl MemoryConsolidator {
             model: model.to_string(),
             max_tokens: 1024,
             temperature: 0.2,
+            think: None,
         };
 
         let response = provider
