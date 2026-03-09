@@ -584,9 +584,18 @@ function applyExecutionPlan(plan) {
         chatPlanDoneWrap.hidden = true;
         chatPlanRemainingWrap.hidden = true;
         if (chatPlanConstraintsWrap) chatPlanConstraintsWrap.hidden = true;
+        // Reset label in case explicit plan changed it
+        resetPlanLabels();
         return;
     }
 
+    // If an explicit plan is present, use the dedicated renderer
+    if (Array.isArray(currentPlanState.explicit_steps) && currentPlanState.explicit_steps.length > 0) {
+        renderExplicitPlan(currentPlanState);
+        return;
+    }
+
+    // --- Inferred mode (existing behavior) ---
     chatPlanPanel.hidden = false;
     if (
         !planExpanded &&
@@ -600,6 +609,7 @@ function applyExecutionPlan(plan) {
     chatPlanPanel.classList.toggle('collapsed', !planExpanded);
     if (chatPlanToggle) chatPlanToggle.setAttribute('aria-expanded', String(planExpanded));
     chatPlanObjective.textContent = currentPlanState.objective || '';
+    resetPlanLabels();
 
     const doneItems = Array.isArray(currentPlanState.completed_steps)
         ? currentPlanState.completed_steps
@@ -633,6 +643,62 @@ function applyExecutionPlan(plan) {
     renderPlanList(chatPlanDone, [...sourceDoneItems, ...doneItems]);
     renderPlanList(chatPlanRemaining, remainingItems);
     renderPlanList(chatPlanConstraints, constraintItems);
+}
+
+/** Render an explicit plan created via plan_task with status icons. */
+function renderExplicitPlan(plan) {
+    chatPlanPanel.hidden = false;
+    // Auto-expand when explicit plan appears
+    if (!planExpanded) planExpanded = true;
+    chatPlanPanel.classList.toggle('collapsed', !planExpanded);
+    if (chatPlanToggle) chatPlanToggle.setAttribute('aria-expanded', String(planExpanded));
+    chatPlanObjective.textContent = plan.objective || '';
+
+    // Render steps with status icons in the "Done" column (relabeled to "Plan")
+    const doneLabel = chatPlanDoneWrap.querySelector('.chat-plan-label');
+    if (doneLabel) doneLabel.textContent = 'Plan';
+    chatPlanDoneWrap.hidden = false;
+
+    const stepItems = plan.explicit_steps.map((step) => {
+        const icon = step.status === 'completed' ? '\u2705'
+            : step.status === 'in_progress' ? '\uD83D\uDD04'
+            : '\u2B1C';
+        return `${icon} ${step.description}`;
+    });
+    renderPlanList(chatPlanDone, stepItems);
+
+    // Hide "Remaining" column — step statuses already convey progress
+    chatPlanRemainingWrap.hidden = true;
+    if (chatPlanRemaining) chatPlanRemaining.textContent = '';
+
+    // Show active blockers if any
+    const blockers = Array.isArray(plan.active_blockers) ? plan.active_blockers : [];
+    if (chatPlanConstraintsWrap) {
+        chatPlanConstraintsWrap.hidden = blockers.length === 0;
+        if (blockers.length > 0) {
+            const label = chatPlanConstraintsWrap.querySelector('.chat-plan-label');
+            if (label) label.textContent = 'Blockers';
+            renderPlanList(chatPlanConstraints, blockers);
+        }
+    }
+
+    // Show verification note when all steps completed
+    if (plan.verification && plan.explicit_steps.every((s) => s.status === 'completed')) {
+        if (chatPlanConstraintsWrap) {
+            chatPlanConstraintsWrap.hidden = false;
+            const label = chatPlanConstraintsWrap.querySelector('.chat-plan-label');
+            if (label) label.textContent = 'Verification';
+            renderPlanList(chatPlanConstraints, [plan.verification]);
+        }
+    }
+}
+
+/** Reset column labels to their defaults (after explicit plan cleanup). */
+function resetPlanLabels() {
+    const doneLabel = chatPlanDoneWrap?.querySelector('.chat-plan-label');
+    if (doneLabel) doneLabel.textContent = 'Done';
+    const constraintLabel = chatPlanConstraintsWrap?.querySelector('.chat-plan-label');
+    if (constraintLabel) constraintLabel.textContent = 'Constraints';
 }
 
 function clearExecutionPlan() {

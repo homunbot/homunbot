@@ -59,6 +59,10 @@ pub struct AgentLoop {
     /// Arc-wrapped so it can be shared with background consolidation tasks.
     /// Only functional with `local-embeddings` feature - dummy otherwise.
     memory_searcher: Option<Arc<tokio::sync::Mutex<MemorySearcher>>>,
+    /// Optional RAG engine for knowledge base search.
+    /// Shared with KnowledgeTool and web API.
+    #[cfg(feature = "local-embeddings")]
+    rag_engine: Option<Arc<tokio::sync::Mutex<crate::rag::RagEngine>>>,
     /// Set to true when the model doesn't support native function calling.
     /// Auto-detected on first error — tools are then injected into the system
     /// prompt as XML and parsed from the LLM's text response.
@@ -175,6 +179,8 @@ impl AgentLoop {
             message_tx: None,
             skill_registry: None,
             memory_searcher: None,
+            #[cfg(feature = "local-embeddings")]
+            rag_engine: None,
             use_xml_dispatch: AtomicBool::new(use_xml_dispatch),
             db,
             #[cfg(feature = "mcp")]
@@ -242,6 +248,24 @@ impl AgentLoop {
     #[cfg(feature = "local-embeddings")]
     pub fn memory_searcher_handle(&self) -> Option<Arc<tokio::sync::Mutex<MemorySearcher>>> {
         self.memory_searcher.clone()
+    }
+
+    /// Set the RAG knowledge base engine.
+    /// When set, each user message triggers a search for relevant knowledge base content.
+    #[cfg(feature = "local-embeddings")]
+    pub fn set_rag_engine(
+        &mut self,
+        engine: Arc<tokio::sync::Mutex<crate::rag::RagEngine>>,
+    ) {
+        self.rag_engine = Some(engine);
+    }
+
+    /// Get a clone of the shared RAG engine handle (for sharing with the web server).
+    #[cfg(feature = "local-embeddings")]
+    pub fn rag_engine_handle(
+        &self,
+    ) -> Option<Arc<tokio::sync::Mutex<crate::rag::RagEngine>>> {
+        self.rag_engine.clone()
     }
 
     /// Set registered tool names so the system prompt can include routing rules
@@ -475,6 +499,39 @@ impl AgentLoop {
             }
         }
 
+        // Search RAG knowledge base and inject into context
+        #[cfg(feature = "local-embeddings")]
+        if let Some(ref rag_mutex) = self.rag_engine {
+            let results_per_query = config.knowledge.results_per_query;
+            let mut rag = rag_mutex.lock().await;
+            match rag.search(&prompt_content, results_per_query).await {
+                Ok(results) if !results.is_empty() => {
+                    let knowledge_text = results
+                        .iter()
+                        .map(|r| {
+                            format!(
+                                "- [RAG: {} (chunk {})] {}",
+                                r.source_file, r.chunk.chunk_index, r.chunk.content
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    self.context.set_rag_knowledge(knowledge_text).await;
+                    tracing::debug!(
+                        results = results.len(),
+                        "Injected RAG knowledge into context"
+                    );
+                }
+                Ok(_) => {
+                    self.context.set_rag_knowledge(String::new()).await;
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "RAG search failed, continuing without");
+                    self.context.set_rag_knowledge(String::new()).await;
+                }
+            }
+        }
+
         self.context
             .set_mcp_suggestions(build_mcp_suggestions(&config, &prompt_content))
             .await;
@@ -482,6 +539,47 @@ impl AgentLoop {
         // Build initial messages for the LLM
         // Get tool definitions for the LLM (built-in tools + skills as tools)
         let mut tool_defs = self.tool_registry.get_definitions();
+
+        // Virtual planning tools — intercepted by the agent loop, not in ToolRegistry.
+        tool_defs.push(crate::provider::ToolDefinition {
+            tool_type: "function".to_string(),
+            function: crate::provider::FunctionDefinition {
+                name: "plan_task".to_string(),
+                description: "Create a step-by-step plan for complex tasks with multiple distinct sub-goals. Use this before starting work on tasks with 3+ steps. Skip for simple single-action tasks.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "steps": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Ordered list of plan steps to complete"
+                        },
+                        "verification": {
+                            "type": "string",
+                            "description": "How to verify the goal was achieved (optional)"
+                        }
+                    },
+                    "required": ["steps"]
+                }),
+            },
+        });
+        tool_defs.push(crate::provider::ToolDefinition {
+            tool_type: "function".to_string(),
+            function: crate::provider::FunctionDefinition {
+                name: "complete_step".to_string(),
+                description: "Mark a plan step as completed. Call this after finishing the work for a step in the current plan.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "step": {
+                            "type": "integer",
+                            "description": "0-indexed step number to mark as completed"
+                        }
+                    },
+                    "required": ["step"]
+                }),
+            },
+        });
 
         // Register installed skills as tool definitions so the LLM can call them.
         // Each skill becomes a callable tool with a `query` parameter.
@@ -1028,9 +1126,63 @@ impl AgentLoop {
                     }
 
                     // --- OBSERVE: Execute and add result ---
-                    // First check if this is a registered tool; if not, check
-                    // if it matches an installed skill (on-demand body loading).
-                    let result = if blocked_set.contains(tool_call.name.as_str()) {
+                    // Virtual plan tools are intercepted here — they modify
+                    // execution_plan directly and never reach the ToolRegistry.
+                    // Then check blocked tools, skills, and finally real tools.
+                    let result = if tool_call.name == "plan_task" {
+                        let steps: Vec<String> = tool_call
+                            .arguments
+                            .get("steps")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(String::from))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let verification = tool_call
+                            .arguments
+                            .get("verification")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+
+                        if steps.is_empty() {
+                            crate::tools::ToolResult::error(
+                                "plan_task requires at least one step.",
+                            )
+                        } else {
+                            let count = steps.len();
+                            execution_plan.set_explicit_plan(steps, verification);
+                            tracing::info!(count, "Explicit plan created");
+                            crate::tools::ToolResult::success(format!(
+                                "Plan created with {} steps. Step 0 is now in progress.",
+                                count
+                            ))
+                        }
+                    } else if tool_call.name == "complete_step" {
+                        let step_index = tool_call
+                            .arguments
+                            .get("step")
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v as usize);
+
+                        match step_index {
+                            Some(idx) => match execution_plan.complete_step(idx) {
+                                Ok(msg) => {
+                                    let mut output = msg;
+                                    if execution_plan.all_steps_completed() {
+                                        output.push_str("\n\nAll planned steps completed. Review results before finalizing.");
+                                    }
+                                    tracing::info!(step = idx, "Plan step completed");
+                                    crate::tools::ToolResult::success(output)
+                                }
+                                Err(e) => crate::tools::ToolResult::error(e),
+                            },
+                            None => crate::tools::ToolResult::error(
+                                "complete_step requires a 'step' integer parameter.",
+                            ),
+                        }
+                    } else if blocked_set.contains(tool_call.name.as_str()) {
                         crate::tools::ToolResult::error(format!(
                             "Tool '{}' is disabled in this execution context.",
                             tool_call.name
@@ -1051,9 +1203,32 @@ impl AgentLoop {
                             is_error: false,
                         }
                     } else {
+                        // Resolve per-tool timeout from config
+                        let tool_timeout = {
+                            let cfg = self.config.read().await;
+                            let secs = cfg
+                                .tools
+                                .timeouts
+                                .get(&tool_call.name)
+                                .copied()
+                                .unwrap_or(cfg.tools.default_timeout_secs);
+                            if secs == 0 {
+                                std::time::Duration::MAX
+                            } else {
+                                std::time::Duration::from_secs(secs)
+                            }
+                        };
+
                         match tokio::select! {
                             result = self.tool_registry.execute(&tool_call.name, tool_call.arguments.clone(), &tool_ctx) => Ok(result),
                             _ = crate::agent::stop::wait_for_stop() => Err(crate::agent::stop::cancellation_error()),
+                            _ = tokio::time::sleep(tool_timeout) => {
+                                tracing::warn!(tool = %tool_call.name, timeout_secs = tool_timeout.as_secs(), "Tool execution timed out");
+                                Ok(crate::tools::ToolResult::error(format!(
+                                    "Tool '{}' timed out after {} seconds. Consider breaking the task into smaller steps.",
+                                    tool_call.name, tool_timeout.as_secs()
+                                )))
+                            }
                         } {
                             Ok(result) => result,
                             Err(_) => {

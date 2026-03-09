@@ -65,6 +65,10 @@ pub struct Gateway {
     web_stream_tx: Option<mpsc::Sender<StreamMessage>>,
     /// Database handle passed to the web server for memory/vault APIs
     db: Database,
+    /// Provider health tracker for circuit breaker metrics (shared with web UI)
+    health_tracker: Option<Arc<crate::provider::ProviderHealthTracker>>,
+    /// Emergency stop handles — shared between gateway and web UI
+    estop_handles: Arc<tokio::sync::RwLock<crate::security::EStopHandles>>,
 }
 
 impl Gateway {
@@ -85,12 +89,26 @@ impl Gateway {
             tool_message_rx: None,
             web_stream_tx: None,
             db,
+            health_tracker: None,
+            estop_handles: Arc::new(tokio::sync::RwLock::new(
+                crate::security::EStopHandles::default(),
+            )),
         }
     }
 
     /// Set the receiver for tool-originated messages (from MessageTool)
     pub fn set_tool_message_rx(&mut self, rx: mpsc::Receiver<OutboundMessage>) {
         self.tool_message_rx = Some(rx);
+    }
+
+    /// Set the provider health tracker for circuit breaker + web UI metrics.
+    pub fn set_health_tracker(&mut self, tracker: Arc<crate::provider::ProviderHealthTracker>) {
+        self.health_tracker = Some(tracker);
+    }
+
+    /// Get the estop handles Arc (for populating from main.rs after gateway creation).
+    pub fn estop_handles(&self) -> Arc<tokio::sync::RwLock<crate::security::EStopHandles>> {
+        self.estop_handles.clone()
     }
 
     /// Start the gateway — runs all channels + cron + agent loop.
@@ -283,17 +301,29 @@ impl Gateway {
             self.web_stream_tx = Some(stream_tx);
 
             let web_db = self.db.clone();
+            let web_health_tracker = self.health_tracker.clone();
+            let web_estop_handles = self.estop_handles.clone();
             // Share the memory searcher with the web server for hybrid search API
             #[cfg(feature = "local-embeddings")]
             let web_memory_searcher = self.agent.memory_searcher_handle();
+            #[cfg(feature = "local-embeddings")]
+            let web_rag_engine = self.agent.rag_engine_handle();
 
             let handle = tokio::spawn(async move {
                 let mut server =
                     WebServer::new(shared_config, web_inbound_tx, web_outbound_rx, web_db);
                 server.set_stream_rx(stream_rx);
+                if let Some(tracker) = web_health_tracker {
+                    server.set_health_tracker(tracker);
+                }
+                server.set_estop_handles(web_estop_handles);
                 #[cfg(feature = "local-embeddings")]
                 if let Some(searcher) = web_memory_searcher {
                     server.set_memory_searcher(searcher);
+                }
+                #[cfg(feature = "local-embeddings")]
+                if let Some(rag) = web_rag_engine {
+                    server.set_rag_engine(rag);
                 }
                 if let Err(e) = server.start().await {
                     tracing::error!(error = %e, "Web UI server error");
@@ -472,6 +502,10 @@ impl Gateway {
         // --- Email approval handler ---
         let approval_handler = EmailApprovalHandler::new(self.db.clone(), &email_notify_routes);
 
+        // --- RAG engine handle for file ingestion ---
+        #[cfg(feature = "local-embeddings")]
+        let routing_rag_engine = self.agent.rag_engine_handle();
+
         // --- Main message routing loop ---
         let agent = self.agent.clone();
         let senders_for_routing = outbound_senders.clone();
@@ -480,7 +514,8 @@ impl Gateway {
 
         let routing_loop = tokio::spawn(async move {
             let approval_handler = std::sync::Arc::new(approval_handler);
-            while let Some(inbound) = inbound_rx.recv().await {
+            #[allow(unused_mut)] // `inbound` is mutated inside #[cfg(feature = "local-embeddings")]
+            while let Some(mut inbound) = inbound_rx.recv().await {
                 let session_key = inbound
                     .metadata
                     .as_ref()
@@ -709,6 +744,93 @@ impl Gateway {
                         ApprovalAction::NotApplicable => {
                             // Not an approval command — continue to normal processing
                         }
+                    }
+                }
+
+                // --- RAG file ingestion ---
+                // If the message has an attachment_path, ingest it into the knowledge base
+                // and notify the user.  When the user sends a file without a caption we
+                // skip the agent loop (the confirmation is enough).  When a caption is
+                // present we rewrite the message to hint the agent to use the knowledge tool.
+                #[cfg(feature = "local-embeddings")]
+                {
+                    let mut rag_skip_agent = false;
+                    if let Some(ref path) = inbound
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.attachment_path.clone())
+                    {
+                        if let Some(ref rag_mutex) = routing_rag_engine {
+                            let file_path = std::path::PathBuf::from(path);
+                            let file_name = file_path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_else(|| path.clone());
+                            let mut rag = rag_mutex.lock().await;
+                            match rag.ingest_file(&file_path, "telegram").await {
+                                Ok(Some(source_id)) => {
+                                    tracing::info!(source_id, file = %file_name, "RAG ingested Telegram file");
+                                    let confirm = OutboundMessage {
+                                        channel: channel_name.clone(),
+                                        chat_id: chat_id.clone(),
+                                        content: format!("📄 Indexed \"{file_name}\" into knowledge base."),
+                                    };
+                                    route_outbound(confirm, &senders_for_routing).await;
+
+                                    // If message content is just the filename (no user caption),
+                                    // skip the agent loop — the confirmation is sufficient.
+                                    let content_trimmed = inbound.content.trim();
+                                    if content_trimmed == file_name
+                                        || content_trimmed == "[document]"
+                                    {
+                                        rag_skip_agent = true;
+                                    } else {
+                                        // User wrote a caption — rewrite content with a hint so the
+                                        // agent knows to use the knowledge tool.
+                                        inbound.content = format!(
+                                            "[The file \"{file_name}\" has been indexed in the knowledge base (source_id={source_id}). \
+                                             Use the knowledge tool with action=\"search\" to retrieve its content.]\n\n{}",
+                                            inbound.content
+                                        );
+                                    }
+                                }
+                                Ok(None) => {
+                                    // Duplicate file
+                                    let confirm = OutboundMessage {
+                                        channel: channel_name.clone(),
+                                        chat_id: chat_id.clone(),
+                                        content: format!("📄 \"{file_name}\" already in knowledge base (duplicate)."),
+                                    };
+                                    route_outbound(confirm, &senders_for_routing).await;
+                                    let content_trimmed = inbound.content.trim();
+                                    if content_trimmed == file_name
+                                        || content_trimmed == "[document]"
+                                    {
+                                        rag_skip_agent = true;
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e, file = %file_name, "RAG ingestion failed");
+                                    let confirm = OutboundMessage {
+                                        channel: channel_name.clone(),
+                                        chat_id: chat_id.clone(),
+                                        content: format!("❌ Failed to index \"{file_name}\": {e}"),
+                                    };
+                                    route_outbound(confirm, &senders_for_routing).await;
+                                    let content_trimmed = inbound.content.trim();
+                                    if content_trimmed == file_name
+                                        || content_trimmed == "[document]"
+                                    {
+                                        rag_skip_agent = true;
+                                    }
+                                }
+                            }
+                            // Clean up the temp file
+                            let _ = tokio::fs::remove_file(&file_path).await;
+                        }
+                    }
+                    if rag_skip_agent {
+                        continue;
                     }
                 }
 
