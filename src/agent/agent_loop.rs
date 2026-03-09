@@ -540,47 +540,6 @@ impl AgentLoop {
         // Get tool definitions for the LLM (built-in tools + skills as tools)
         let mut tool_defs = self.tool_registry.get_definitions();
 
-        // Virtual planning tools — intercepted by the agent loop, not in ToolRegistry.
-        tool_defs.push(crate::provider::ToolDefinition {
-            tool_type: "function".to_string(),
-            function: crate::provider::FunctionDefinition {
-                name: "plan_task".to_string(),
-                description: "Create a step-by-step plan for complex tasks with multiple distinct sub-goals. Use this before starting work on tasks with 3+ steps. Skip for simple single-action tasks.".to_string(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "steps": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Ordered list of plan steps to complete"
-                        },
-                        "verification": {
-                            "type": "string",
-                            "description": "How to verify the goal was achieved (optional)"
-                        }
-                    },
-                    "required": ["steps"]
-                }),
-            },
-        });
-        tool_defs.push(crate::provider::ToolDefinition {
-            tool_type: "function".to_string(),
-            function: crate::provider::FunctionDefinition {
-                name: "complete_step".to_string(),
-                description: "Mark a plan step as completed. Call this after finishing the work for a step in the current plan.".to_string(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "step": {
-                            "type": "integer",
-                            "description": "0-indexed step number to mark as completed"
-                        }
-                    },
-                    "required": ["step"]
-                }),
-            },
-        });
-
         // Register installed skills as tool definitions so the LLM can call them.
         // Each skill becomes a callable tool with a `query` parameter.
         if let Some(registry) = &self.skill_registry {
@@ -1126,63 +1085,8 @@ impl AgentLoop {
                     }
 
                     // --- OBSERVE: Execute and add result ---
-                    // Virtual plan tools are intercepted here — they modify
-                    // execution_plan directly and never reach the ToolRegistry.
-                    // Then check blocked tools, skills, and finally real tools.
-                    let result = if tool_call.name == "plan_task" {
-                        let steps: Vec<String> = tool_call
-                            .arguments
-                            .get("steps")
-                            .and_then(|v| v.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|v| v.as_str().map(String::from))
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        let verification = tool_call
-                            .arguments
-                            .get("verification")
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
-
-                        if steps.is_empty() {
-                            crate::tools::ToolResult::error(
-                                "plan_task requires at least one step.",
-                            )
-                        } else {
-                            let count = steps.len();
-                            execution_plan.set_explicit_plan(steps, verification);
-                            tracing::info!(count, "Explicit plan created");
-                            crate::tools::ToolResult::success(format!(
-                                "Plan created with {} steps. Step 0 is now in progress.",
-                                count
-                            ))
-                        }
-                    } else if tool_call.name == "complete_step" {
-                        let step_index = tool_call
-                            .arguments
-                            .get("step")
-                            .and_then(|v| v.as_u64())
-                            .map(|v| v as usize);
-
-                        match step_index {
-                            Some(idx) => match execution_plan.complete_step(idx) {
-                                Ok(msg) => {
-                                    let mut output = msg;
-                                    if execution_plan.all_steps_completed() {
-                                        output.push_str("\n\nAll planned steps completed. Review results before finalizing.");
-                                    }
-                                    tracing::info!(step = idx, "Plan step completed");
-                                    crate::tools::ToolResult::success(output)
-                                }
-                                Err(e) => crate::tools::ToolResult::error(e),
-                            },
-                            None => crate::tools::ToolResult::error(
-                                "complete_step requires a 'step' integer parameter.",
-                            ),
-                        }
-                    } else if blocked_set.contains(tool_call.name.as_str()) {
+                    // Check blocked tools, skills, and finally real tools.
+                    let result = if blocked_set.contains(tool_call.name.as_str()) {
                         crate::tools::ToolResult::error(format!(
                             "Tool '{}' is disabled in this execution context.",
                             tool_call.name

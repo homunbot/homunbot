@@ -70,17 +70,6 @@ impl PromptSection for IdentitySection {
              when the user would reasonably expect you to ask.\n\n",
         );
 
-        // Task planning guidance
-        prompt.push_str(
-            "## Task Planning\n\n\
-             For complex tasks with **3 or more distinct sub-goals**, call `plan_task` to create \
-             a structured plan before starting. This helps you stay on track and shows the user your progress.\n\
-             - For simple tasks (single action, quick lookup, conversation), skip planning and act directly.\n\
-             - After finishing the work for a step, call `complete_step` to mark it done.\n\
-             - You can use other tools between `plan_task` and `complete_step` calls.\n\
-             - If the plan needs to change mid-execution, call `plan_task` again with updated steps.\n\n",
-        );
-
         // Project context header (inspired by OpenClaw)
         if !ctx.bootstrap_files.is_empty() {
             prompt.push_str("# Project Context\n\n");
