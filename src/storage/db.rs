@@ -212,6 +212,18 @@ impl Database {
             include_str!("../../migrations/015_business.sql"),
         )
         .await?;
+        Self::apply_migration(
+            pool,
+            "016_skill_audit",
+            include_str!("../../migrations/016_skill_audit.sql"),
+        )
+        .await?;
+        Self::apply_migration(
+            pool,
+            "017_web_auth",
+            include_str!("../../migrations/017_web_auth.sql"),
+        )
+        .await?;
 
         Ok(())
     }
@@ -1547,7 +1559,7 @@ impl Database {
     /// Load a user by their internal ID.
     pub async fn load_user(&self, id: &str) -> Result<Option<UserRow>> {
         let row = sqlx::query_as::<_, UserRow>(
-            "SELECT id, username, roles, created_at, updated_at, metadata
+            "SELECT id, username, roles, password_hash, created_at, updated_at, metadata
              FROM users WHERE id = ?",
         )
         .bind(id)
@@ -1561,7 +1573,7 @@ impl Database {
     /// Load a user by their username.
     pub async fn load_user_by_username(&self, username: &str) -> Result<Option<UserRow>> {
         let row = sqlx::query_as::<_, UserRow>(
-            "SELECT id, username, roles, created_at, updated_at, metadata
+            "SELECT id, username, roles, password_hash, created_at, updated_at, metadata
              FROM users WHERE username = ?",
         )
         .bind(username)
@@ -1575,7 +1587,7 @@ impl Database {
     /// Load all users.
     pub async fn load_all_users(&self) -> Result<Vec<UserRow>> {
         let rows = sqlx::query_as::<_, UserRow>(
-            "SELECT id, username, roles, created_at, updated_at, metadata
+            "SELECT id, username, roles, password_hash, created_at, updated_at, metadata
              FROM users ORDER BY created_at ASC",
         )
         .fetch_all(&self.pool)
@@ -1643,7 +1655,7 @@ impl Database {
         platform_id: &str,
     ) -> Result<Option<UserRow>> {
         let row = sqlx::query_as::<_, UserRow>(
-            "SELECT u.id, u.username, u.roles, u.created_at, u.updated_at, u.metadata
+            "SELECT u.id, u.username, u.roles, u.password_hash, u.created_at, u.updated_at, u.metadata
              FROM users u
              JOIN user_identities i ON u.id = i.user_id
              WHERE i.channel = ? AND i.platform_id = ?",
@@ -1696,14 +1708,23 @@ impl Database {
     // --- Webhook tokens ---
 
     /// Create a new webhook token for a user.
-    pub async fn create_webhook_token(&self, token: &str, user_id: &str, name: &str) -> Result<()> {
-        sqlx::query("INSERT INTO webhook_tokens (token, user_id, name) VALUES (?, ?, ?)")
-            .bind(token)
-            .bind(user_id)
-            .bind(name)
-            .execute(&self.pool)
-            .await
-            .context("Failed to create webhook token")?;
+    pub async fn create_webhook_token(
+        &self,
+        token: &str,
+        user_id: &str,
+        name: &str,
+        scope: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO webhook_tokens (token, user_id, name, scope) VALUES (?, ?, ?, ?)",
+        )
+        .bind(token)
+        .bind(user_id)
+        .bind(name)
+        .bind(scope)
+        .execute(&self.pool)
+        .await
+        .context("Failed to create webhook token")?;
 
         Ok(())
     }
@@ -1711,7 +1732,7 @@ impl Database {
     /// Look up a webhook token and return the associated user.
     pub async fn lookup_user_by_webhook_token(&self, token: &str) -> Result<Option<UserRow>> {
         let row = sqlx::query_as::<_, UserRow>(
-            "SELECT u.id, u.username, u.roles, u.created_at, u.updated_at, u.metadata
+            "SELECT u.id, u.username, u.roles, u.password_hash, u.created_at, u.updated_at, u.metadata
              FROM users u
              JOIN webhook_tokens wt ON u.id = wt.user_id
              WHERE wt.token = ? AND wt.enabled = 1",
@@ -1738,7 +1759,7 @@ impl Database {
     /// Load all webhook tokens for a user.
     pub async fn load_webhook_tokens(&self, user_id: &str) -> Result<Vec<WebhookTokenRow>> {
         let rows = sqlx::query_as::<_, WebhookTokenRow>(
-            "SELECT token, user_id, name, enabled, last_used, created_at
+            "SELECT token, user_id, name, enabled, scope, last_used, created_at
              FROM webhook_tokens WHERE user_id = ?
              ORDER BY created_at DESC",
         )
@@ -1771,6 +1792,45 @@ impl Database {
             .context("Failed to toggle webhook token")?;
 
         Ok(result.rows_affected() > 0)
+    }
+
+    /// Load a single webhook token by its value.
+    pub async fn load_webhook_token(&self, token: &str) -> Result<Option<WebhookTokenRow>> {
+        let row = sqlx::query_as::<_, WebhookTokenRow>(
+            "SELECT token, user_id, name, enabled, scope, last_used, created_at
+             FROM webhook_tokens WHERE token = ?",
+        )
+        .bind(token)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to load webhook token")?;
+
+        Ok(row)
+    }
+
+    // --- User password ---
+
+    /// Set the password hash for a user.
+    pub async fn set_user_password_hash(&self, user_id: &str, hash: &str) -> Result<()> {
+        sqlx::query("UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?")
+            .bind(hash)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to set user password hash")?;
+
+        Ok(())
+    }
+
+    /// Count total users in the database (for first-run detection).
+    pub async fn count_users(&self) -> Result<i64> {
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM users")
+                .fetch_one(&self.pool)
+                .await
+                .context("Failed to count users")?;
+
+        Ok(count)
     }
 
     // --- Token usage ---
@@ -2225,6 +2285,7 @@ pub struct UserRow {
     pub id: String,
     pub username: String,
     pub roles: String, // JSON array
+    pub password_hash: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub metadata: String, // JSON object
@@ -2246,6 +2307,7 @@ pub struct WebhookTokenRow {
     pub user_id: String,
     pub name: String,
     pub enabled: bool,
+    pub scope: String,
     pub last_used: Option<String>,
     pub created_at: String,
 }

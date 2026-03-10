@@ -2666,7 +2666,7 @@ async fn main() -> Result<()> {
 
                     match info {
                         Some(u) => {
-                            let token = user_mgr.create_webhook_token(&u.id, &name).await?;
+                            let token = user_mgr.create_webhook_token(&u.id, &name, "admin").await?;
                             println!("✅ Created webhook token for user '{}':", u.username);
                             println!("   Token: {}", token);
                             println!("\n   Usage: POST /api/webhook/{}", token);

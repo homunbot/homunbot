@@ -398,13 +398,13 @@ pub fn router() -> Router<Arc<AppState>> {
 // --- Health check ---
 
 #[derive(Serialize)]
-struct HealthResponse {
+pub(crate) struct HealthResponse {
     status: &'static str,
     version: &'static str,
     uptime_secs: u64,
 }
 
-async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
+pub async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
@@ -9253,7 +9253,7 @@ async fn browse_directories(
 
 /// Request body for webhook ingress
 #[derive(Debug, Deserialize)]
-struct WebhookRequest {
+pub(crate) struct WebhookRequest {
     /// The message to send to the agent
     message: String,
     /// Optional: conversation ID for threading (defaults to "webhook")
@@ -9263,7 +9263,7 @@ struct WebhookRequest {
 
 /// Response for webhook ingress
 #[derive(Debug, Serialize)]
-struct WebhookResponse {
+pub(crate) struct WebhookResponse {
     status: &'static str,
     user: String,
     conversation_id: String,
@@ -9271,7 +9271,7 @@ struct WebhookResponse {
 
 /// Error response for webhook ingress
 #[derive(Debug, Serialize)]
-struct WebhookError {
+pub(crate) struct WebhookError {
     error: &'static str,
     message: String,
 }
@@ -9283,7 +9283,7 @@ struct WebhookError {
 ///
 /// POST /api/v1/webhook/{token}
 /// Body: { "message": "...", "conversation_id": "optional" }
-async fn webhook_ingress(
+pub async fn webhook_ingress(
     Path(token): Path<String>,
     State(state): State<Arc<AppState>>,
     Json(body): Json<WebhookRequest>,
@@ -9418,6 +9418,7 @@ struct TokenResponse {
     token: String,
     name: String,
     enabled: bool,
+    scope: String,
     last_used: Option<String>,
     created_at: String,
 }
@@ -9432,6 +9433,8 @@ struct AddIdentityRequest {
 #[derive(Debug, Deserialize)]
 struct CreateTokenRequest {
     name: String,
+    /// Token scope: "admin" (default), "read", "write"
+    scope: Option<String>,
 }
 
 /// Get the owner account info (first user in database)
@@ -9665,6 +9668,7 @@ async fn list_tokens(
             token: t.token,
             name: t.name,
             enabled: t.enabled,
+            scope: t.scope,
             last_used: t.last_used,
             created_at: t.created_at,
         })
@@ -9709,7 +9713,8 @@ async fn create_token(
     // Generate token
     let token = format!("wh_{}", uuid::Uuid::new_v4().simple());
 
-    db.create_webhook_token(&token, &owner.id, &body.name)
+    let scope = body.scope.as_deref().unwrap_or("admin");
+    db.create_webhook_token(&token, &owner.id, &body.name, scope)
         .await
         .map_err(|e| {
             (
@@ -9722,6 +9727,7 @@ async fn create_token(
         token,
         name: body.name,
         enabled: true,
+        scope: scope.to_string(),
         last_used: None,
         created_at: chrono::Utc::now().to_rfc3339(),
     }))
@@ -9800,6 +9806,9 @@ async fn toggle_token(
         token,
         name: current.map(|t| t.name.clone()).unwrap_or_default(),
         enabled: new_enabled,
+        scope: current
+            .map(|t| t.scope.clone())
+            .unwrap_or_else(|| "admin".to_string()),
         last_used: current.and_then(|t| t.last_used.clone()),
         created_at: current.map(|t| t.created_at.clone()).unwrap_or_default(),
     }))

@@ -4010,3 +4010,168 @@ async fn business_page() -> Html<String> {
     let html = page_html("Business", "business", body, &["business.js"]);
     Html(html)
 }
+
+// ─── Auth Pages (standalone, no sidebar) ───────────────────────
+
+/// Standalone page wrapper without sidebar (for login, setup).
+fn standalone_page(title: &str, body: &str) -> String {
+    format!(
+        r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{title} — Homun</title>
+    <link rel="icon" href="/static/img/favicon/favicon.ico" sizes="any">
+    <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        body {{ display: flex; justify-content: center; align-items: center; min-height: 100vh; background: var(--bg-primary); }}
+        .auth-card {{ background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; width: 100%; max-width: 400px; box-shadow: 0 4px 24px rgba(0,0,0,0.2); }}
+        .auth-card h1 {{ font-size: 1.5rem; margin: 0 0 0.5rem; text-align: center; }}
+        .auth-card p {{ color: var(--text-secondary); font-size: 0.875rem; text-align: center; margin: 0 0 1.5rem; }}
+        .auth-card label {{ display: block; font-size: 0.8125rem; font-weight: 500; margin-bottom: 0.375rem; color: var(--text-secondary); }}
+        .auth-card input[type="text"], .auth-card input[type="password"] {{ width: 100%; padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); color: var(--text-primary); font-size: 0.875rem; box-sizing: border-box; margin-bottom: 1rem; }}
+        .auth-card input:focus {{ outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(99,102,241,0.2); }}
+        .auth-card button {{ width: 100%; padding: 0.75rem; border: none; border-radius: 8px; background: var(--accent); color: white; font-size: 0.875rem; font-weight: 600; cursor: pointer; transition: opacity 0.15s; }}
+        .auth-card button:hover {{ opacity: 0.9; }}
+        .auth-card button:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+        .auth-error {{ color: var(--danger, #ef4444); font-size: 0.8125rem; text-align: center; min-height: 1.25rem; margin-bottom: 0.5rem; }}
+        .auth-logo {{ text-align: center; margin-bottom: 1.5rem; }}
+        .auth-logo svg {{ width: 48px; height: 48px; color: var(--accent); }}
+    </style>
+</head>
+<body>
+    {body}
+</body>
+</html>"##
+    )
+}
+
+/// GET /login — standalone login page
+pub async fn login_page() -> Html<String> {
+    let body = r##"
+    <div class="auth-card">
+        <div class="auth-logo">
+            <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="24" cy="24" r="20"/>
+                <circle cx="24" cy="18" r="6"/>
+                <path d="M12 40c0-6.627 5.373-12 12-12s12 5.373 12 12"/>
+            </svg>
+        </div>
+        <h1>Homun</h1>
+        <p>Sign in to access your assistant</p>
+        <div class="auth-error" id="error-msg"></div>
+        <form id="login-form" onsubmit="return handleLogin(event)">
+            <label for="username">Username</label>
+            <input type="text" id="username" name="username" required autocomplete="username" autofocus>
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required autocomplete="current-password">
+            <button type="submit" id="login-btn">Sign In</button>
+        </form>
+    </div>
+    <script>
+    async function handleLogin(e) {
+        e.preventDefault();
+        const btn = document.getElementById('login-btn');
+        const err = document.getElementById('error-msg');
+        btn.disabled = true;
+        err.textContent = '';
+        try {
+            const res = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: document.getElementById('username').value,
+                    password: document.getElementById('password').value
+                })
+            });
+            const data = await res.json();
+            if (data.success && data.redirect) {
+                window.location.href = data.redirect;
+            } else {
+                err.textContent = data.error || 'Login failed';
+            }
+        } catch (ex) {
+            err.textContent = 'Network error';
+        }
+        btn.disabled = false;
+        return false;
+    }
+    </script>
+    "##;
+
+    Html(standalone_page("Login", body))
+}
+
+/// GET /setup-wizard — first-run admin account creation
+pub async fn setup_wizard_page() -> Html<String> {
+    let body = r##"
+    <div class="auth-card">
+        <div class="auth-logo">
+            <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="24" cy="24" r="20"/>
+                <circle cx="24" cy="18" r="6"/>
+                <path d="M12 40c0-6.627 5.373-12 12-12s12 5.373 12 12"/>
+            </svg>
+        </div>
+        <h1>Welcome to Homun</h1>
+        <p>Create your admin account to get started</p>
+        <div class="auth-error" id="error-msg"></div>
+        <form id="setup-form" onsubmit="return handleSetup(event)">
+            <label for="username">Username</label>
+            <input type="text" id="username" name="username" required autocomplete="username" autofocus>
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required autocomplete="new-password" minlength="6">
+            <label for="confirm">Confirm Password</label>
+            <input type="password" id="confirm" name="confirm" required autocomplete="new-password" minlength="6">
+            <button type="submit" id="setup-btn">Create Account</button>
+        </form>
+    </div>
+    <script>
+    async function handleSetup(e) {
+        e.preventDefault();
+        const btn = document.getElementById('setup-btn');
+        const err = document.getElementById('error-msg');
+        const pw = document.getElementById('password').value;
+        const confirm = document.getElementById('confirm').value;
+        btn.disabled = true;
+        err.textContent = '';
+
+        if (pw !== confirm) {
+            err.textContent = 'Passwords do not match';
+            btn.disabled = false;
+            return false;
+        }
+        if (pw.length < 6) {
+            err.textContent = 'Password must be at least 6 characters';
+            btn.disabled = false;
+            return false;
+        }
+
+        try {
+            const res = await fetch('/api/auth/setup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: document.getElementById('username').value,
+                    password: pw
+                })
+            });
+            const data = await res.json();
+            if (data.success && data.redirect) {
+                window.location.href = data.redirect;
+            } else {
+                err.textContent = data.error || 'Setup failed';
+            }
+        } catch (ex) {
+            err.textContent = 'Network error';
+        }
+        btn.disabled = false;
+        return false;
+    }
+    </script>
+    "##;
+
+    Html(standalone_page("Setup", body))
+}

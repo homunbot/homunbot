@@ -1,6 +1,6 @@
 # Homun — Development Roadmap
 
-> Last updated: 2026-03-21
+> Last updated: 2026-03-10
 > Basato su: Audit completo (`docs/AUDIT-2026-03.md`)
 > Gap analysis: Homun vs OpenClaw vs ZeroClaw
 > Source of truth: questo documento e' la roadmap/status operativa del progetto
@@ -13,12 +13,12 @@
 |---------|--------|
 | LOC Rust | ~41,343 |
 | LOC Frontend | ~8,691 |
-| Test | 312 passing (verificato con `cargo test -q` il 2026-03-04) |
+| Test | 506 passing (verificato con `cargo test -q` il 2026-03-10) |
 | Binary (full) | ~50MB |
 | Provider LLM | 14 |
 | Canali | 7 (CLI, Telegram, Discord*, WhatsApp*, Slack*, Email*, Web) |
 | Tool built-in | ~20 (incl. knowledge, workflow, business, browser, approval, read_email) |
-| Pagine Web UI | 17 (/chat, /dashboard, /setup, /channels, /browser, /automations, /workflows, /business, /skills, /mcp, /memory, /knowledge, /vault, /permissions, /approvals, /account, /logs) |
+| Pagine Web UI | 19 (/chat, /dashboard, /setup, /channels, /browser, /automations, /workflows, /business, /skills, /mcp, /memory, /knowledge, /vault, /permissions, /approvals, /account, /logs, /login, /setup-wizard) |
 | Feature flags | 12 |
 
 *\* = parziale/stub*
@@ -1042,33 +1042,52 @@ Homun ha gia':
 
 ---
 
-## Programma Security Web (P0)
+## Programma Security Web (P0) ✅
 
 > Obiettivo: proteggere la Web UI e le API da accesso non autorizzato.
-> Attualmente la Web UI e tutti gli endpoint API sono completamente aperti — chiunque con accesso alla porta puo' controllare l'agent, leggere il vault, cancellare dati.
-> **Critico**: senza auth, il pairing cifrato della Mobile App e' inutile (il gateway e' gia' esposto).
+> **Completato**: auth PBKDF2, sessioni firmate HMAC, middleware su tutte le route, HTTPS con dominio custom (`ui.homun.bot`), rate limiting per-IP, API key con scope. Setup sistema automatizzato (hosts, cert trust, port forward) con singolo prompt admin su macOS/Linux/Windows.
 
-| # | Task | File principali | LOC stimate | Stato |
-|---|------|----------------|-------------|-------|
-| SEC-1 | **Autenticazione Web UI** | `web/auth.rs` (nuovo), `web/server.rs`, `web/api.rs` | ~300 | TODO |
-| | Login page con username/password (hash argon2) | | | |
-| | Session token (JWT o cookie firmato) | | | |
-| | Middleware auth su tutte le route (eccetto /login e /api/health) | | | |
-| | Setup iniziale: primo utente crea credenziali | | | |
-| SEC-2 | **HTTPS nativo** | `web/server.rs`, `config/schema.rs` | ~100 | TODO |
-| | TLS via rustls (auto-generazione cert self-signed o Let's Encrypt) | | | |
-| | Redirect HTTP → HTTPS | | | |
-| | Config: `[web] tls_cert`, `tls_key`, `auto_tls` | | | |
-| SEC-3 | **Rate limiting API** | `web/server.rs` | ~80 | TODO |
-| | Rate limiter per IP (tower-governor o simile) | | | |
-| | Limiti separati per auth endpoint (anti-brute-force) e API generiche | | | |
-| | Config: `[web] rate_limit_per_minute` | | | |
-| SEC-4 | **API key auth per accesso programmatico** | `web/auth.rs`, `web/api.rs`, `storage/db.rs` | ~120 | TODO |
+| # | Task | File principali | LOC | Stato |
+|---|------|----------------|-----|-------|
+| SEC-1 | **Autenticazione Web UI** | `web/auth.rs` (nuovo), `web/server.rs`, `web/pages.rs`, `web/api.rs`, `storage/db.rs` | ~450 | ✅ DONE |
+| | Password hashing con PBKDF2-HMAC-SHA256 (600k iter, OWASP) via `ring::pbkdf2` | | | |
+| | Session store in-memory con cookie HMAC-SHA256 firmati (HttpOnly, SameSite=Strict) | | | |
+| | Auth middleware (`from_fn_with_state`) su tutte le route protette | | | |
+| | Router split: route pubbliche (login, setup, health, webhook) vs protette (tutto il resto) | | | |
+| | Setup wizard: primo avvio → redirect `/setup-wizard` → crea admin → auto-login | | | |
+| | Login page standalone (no sidebar) con POST `/api/auth/login` | | | |
+| | Migration 017: `password_hash` su users, `scope` su webhook_tokens | | | |
+| | Signing key persistita nel vault (`web.session.signing_key`) | | | |
+| | Cleanup task: sessioni scadute ogni 5 minuti | | | |
+| | 13 unit test (hash, cookie signing, session lifecycle, rate limiter) | | | |
+| SEC-2 | **HTTPS nativo con dominio custom** | `web/server.rs`, `config/schema.rs`, `Cargo.toml` | ~200 | ✅ DONE |
+| | TLS via `rustls` + `tokio-rustls` (accept loop manuale con `hyper_util::TowerToHyperService`) | | | |
+| | Auto-generazione cert self-signed via `rcgen` (SAN: localhost, domain custom, 127.0.0.1, 10yr) | | | |
+| | Dominio custom `ui.homun.bot` (configurabile in `[web] domain`) con `auto_tls = true` di default | | | |
+| | **Setup sistema automatizzato** (`setup_system()`): singolo prompt admin per OS | | | |
+| | — macOS: `osascript` (hosts + Keychain trust + pfctl port forward 443→18443) | | | |
+| | — Linux: `pkexec`/`sudo` (hosts + update-ca-certificates + iptables NAT) | | | |
+| | — Windows: PowerShell RunAs UAC (hosts + certutil + netsh portproxy) | | | |
+| | Idempotente: marker `.trusted`, grep hosts, pfctl/iptables check — no re-prompt ai riavvii | | | |
+| | URL pulito: `https://ui.homun.bot` (senza porta) grazie al port forwarding kernel-level | | | |
+| | Config: `[web] tls_cert`, `tls_key`, `auto_tls`, `domain`, `port = 18443` | | | |
+| | 5 unit test (cert generation, custom domain, permissions, build_tls_config) | | | |
+| SEC-3 | **Rate limiting API** | `web/auth.rs`, `web/server.rs` | ~100 | ✅ DONE |
+| | `RateLimiter` per-IP con sliding window (`RwLock<HashMap<IpAddr, (u32, Instant)>>`) | | | |
+| | Due istanze separate: auth (5/min anti-brute-force) e API generiche (60/min) | | | |
+| | `ConnectInfo<SocketAddr>` per IP extraction | | | |
+| | Risposta 429 con header `Retry-After` | | | |
+| | Config: `[web] rate_limit_per_minute`, `auth_rate_limit_per_minute` | | | |
+| | Cleanup integrato nel task sessioni (ogni 5 min) | | | |
+| | 3 unit test (within limit, over limit, separate IPs) | | | |
+| SEC-4 | **API key auth per accesso programmatico** | `web/auth.rs`, `web/api.rs`, `storage/db.rs` | ~60 | ✅ DONE |
 | | Header `Authorization: Bearer <token>` per API REST | | | |
-| | CRUD token da Web UI (/account) | | | |
-| | Scoping opzionale (read-only, admin) | | | |
+| | Integrato nel middleware auth (fallback dopo cookie check) | | | |
+| | Scope enforcement: `read` vs `admin` con `AuthUser::can_write()` | | | |
+| | Campo `scope` in `CreateTokenRequest` + `create_webhook_token()` | | | |
+| | 2 unit test (scope read, scope admin) | | | |
 
-**Stima totale Security Web: ~600 LOC**
+**Totale Security Web: ~810 LOC, 23 nuovi test — Zero nuove crate per SEC-1/3/4 (tutto `ring`)**
 
 ---
 
@@ -1255,11 +1274,11 @@ Programma Skill Runtime Parity (P0/P1)   ✅ COMPLETE (~580 LOC)
   ✅ SKL-6 Skill audit logging (migration 016, fire-and-forget, API endpoint)
   ✅ SKL-7 E2E test suite (41 test nel modulo loader, tutti passing)
     |
-Programma Security Web (P0)              TODO (~600 LOC)
-  TODO SEC-1 Autenticazione Web UI (login, session, middleware)
-  TODO SEC-2 HTTPS nativo (rustls, auto-cert)
-  TODO SEC-3 Rate limiting API
-  TODO SEC-4 API key auth per accesso programmatico
+Programma Security Web (P0)              ✅ DONE (~810 LOC, 23 test)
+  ✅ SEC-1 Autenticazione Web UI (PBKDF2, session store, middleware, setup wizard)
+  ✅ SEC-2 HTTPS nativo (rustls, auto-cert, dominio custom ui.homun.bot, setup OS automatizzato)
+  ✅ SEC-3 Rate limiting API (auth 5/min, API 60/min, per-IP sliding window)
+  ✅ SEC-4 API key auth (Bearer token, scope read/admin)
     |
 Programma Mobile App (P2)                 TODO (~2,600 LOC)
   TODO APP-1 Fondazioni (pairing, channel, chat, push)
@@ -1270,8 +1289,8 @@ Sprint 9+: Future (P3)
   Voice, Extended thinking, Prometheus, distribuzione
 ```
 
-**Completato: Sprint 1-6 + Sprint 8 + SBX-1/5 + CHAT-1..6 + Browser + Design System + Workflow Engine + BIZ-1 + SKL-1..7 + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
-**Rimanente: Security Web (P0), SBX-2..4/6, CHAT-7, Browser E2E, Sprint 7, BIZ-2..5, Mobile App, Sprint 9+**
+**Completato: Sprint 1-6 + Sprint 8 + SBX-1/5 + CHAT-1..6 + Browser + Design System + Workflow Engine + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4) + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
+**Rimanente: SBX-2..4/6, CHAT-7, Browser E2E, Sprint 7, BIZ-2..5, Mobile App, Sprint 9+**
 
 ---
 

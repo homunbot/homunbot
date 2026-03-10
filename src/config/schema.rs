@@ -723,8 +723,21 @@ pub struct WebConfig {
     pub enabled: bool,
     pub host: String,
     pub port: u16,
+    /// Custom domain for the web UI (default: "ui.homun.bot").
+    /// Used in self-signed cert SANs and /etc/hosts setup.
+    pub domain: String,
     /// Optional auth token for remote access. Empty = no auth (localhost only).
     pub auth_token: String,
+    /// API rate limit: max requests per minute per IP (default: 60).
+    pub rate_limit_per_minute: u32,
+    /// Auth rate limit: max login attempts per minute per IP (default: 5).
+    pub auth_rate_limit_per_minute: u32,
+    /// Path to TLS certificate PEM file. Empty = no TLS.
+    pub tls_cert: String,
+    /// Path to TLS private key PEM file. Empty = no TLS.
+    pub tls_key: String,
+    /// Auto-generate self-signed cert if no cert/key provided (default: true).
+    pub auto_tls: bool,
 }
 
 impl Default for WebConfig {
@@ -732,8 +745,14 @@ impl Default for WebConfig {
         Self {
             enabled: true,
             host: "127.0.0.1".to_string(),
-            port: 18080,
+            port: 18443,
+            domain: "ui.homun.bot".to_string(),
             auth_token: String::new(),
+            rate_limit_per_minute: 60,
+            auth_rate_limit_per_minute: 5,
+            tls_cert: String::new(),
+            tls_key: String::new(),
+            auto_tls: true,
         }
     }
 }

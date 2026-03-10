@@ -27,7 +27,8 @@ default = ["cli", "web-ui", "file-tools", "shell-tool", "web-tools", "cron-tool"
 
 # === Core Features ===
 cli = ["dep:clap", "dep:ratatui", "dep:crossterm"]
-web-ui = ["cli", "dep:axum", "dep:tower", "dep:tower-http", "dep:rust-embed", "dep:mime_guess", "dep:pulldown-cmark"]
+web-ui = ["cli", "dep:axum", "dep:tower", "dep:tower-http", "dep:rust-embed", "dep:mime_guess", "dep:pulldown-cmark",
+           "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen", "dep:hyper-util"]
 file-tools = []
 shell-tool = []
 web-tools = []
@@ -136,6 +137,7 @@ tower-http = { version = "0.6", features = ["cors", "trace"], optional = true }
 rust-embed = { version = "8", features = ["compression"], optional = true }
 mime_guess = { version = "2", optional = true }
 pulldown-cmark = { version = "0.13", optional = true }
+hyper-util = { version = "0.1", features = ["tokio", "server-auto", "http1", "http2"], optional = true }
 
 # --- Shell tool feature ---
 regex = { version = "1" }
@@ -182,7 +184,9 @@ lettre = { version = "0.11", optional = true, default-features = false, features
 mail-parser = { version = "0.11", optional = true }
 async-imap = { version = "0.11", optional = true, default-features = false, features = ["runtime-tokio"] }
 tokio-rustls = { version = "0.26", optional = true, features = ["ring"] }
+rustls-pemfile = { version = "2", optional = true }
 rustls-pki-types = { version = "1", optional = true }
+rcgen = { version = "0.13", optional = true }
 webpki-roots = { version = "0.26", optional = true }
 
 # --- Skill installer (archive extraction) ---

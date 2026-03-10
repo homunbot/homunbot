@@ -202,11 +202,18 @@ impl UserManager {
             .await
     }
 
-    /// Create a webhook token for a user.
-    pub async fn create_webhook_token(&self, user_id: &str, name: &str) -> Result<String> {
+    /// Create a webhook token for a user with a given scope (e.g., "admin", "read").
+    pub async fn create_webhook_token(
+        &self,
+        user_id: &str,
+        name: &str,
+        scope: &str,
+    ) -> Result<String> {
         // Generate a secure random token
         let token = format!("wh_{}", Uuid::new_v4().simple());
-        self.db.create_webhook_token(&token, user_id, name).await?;
+        self.db
+            .create_webhook_token(&token, user_id, name, scope)
+            .await?;
         Ok(token)
     }
 
@@ -258,6 +265,7 @@ mod tests {
             id: "test-id".to_string(),
             username: "testuser".to_string(),
             roles: r#"["admin","user"]"#.to_string(),
+            password_hash: None,
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
             metadata: "{}".to_string(),
