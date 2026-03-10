@@ -20,7 +20,7 @@ use super::server::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
     let api_router = Router::new()
-        .route("/health", get(health))
+        // Note: /health and /v1/webhook/{token} are registered as public routes in server.rs
         .route("/v1/logs/stream", get(stream_logs))
         .route("/v1/logs/recent", get(recent_logs))
         .route("/v1/status", get(status))
@@ -130,8 +130,7 @@ pub fn router() -> Router<Arc<AppState>> {
             axum::routing::post(generate_or_get_trigger_word),
         )
         .route("/v1/channels/whatsapp/pair", get(ws_whatsapp_pair))
-        // --- Webhook Ingress ---
-        .route("/v1/webhook/{token}", axum::routing::post(webhook_ingress))
+        // Note: /v1/webhook/{token} is registered as public route in server.rs
         // --- Account ---
         .route("/v1/account", get(get_account))
         .route(

@@ -446,6 +446,21 @@ html, body {
     opacity: 0.2;
 }
 
+/* ─── Logout nav button ─── */
+.nav-logout {
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+}
+.nav-logout .nav-icon {
+    opacity: 0.35;
+}
+.nav-logout:hover .nav-icon {
+    opacity: 1;
+    color: var(--err);
+}
+
 /* ─── Sub-navigation panels ─── */
 .sidebar-subnav {
     position: absolute;

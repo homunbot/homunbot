@@ -331,9 +331,9 @@ pub async fn auth_middleware(
         }
     }
 
-    // 3. First-run: if no users exist, redirect to setup wizard
+    // 3. First-run: if no user has a password, redirect to setup wizard
     if let Some(db) = &state.db {
-        if let Ok(0) = db.count_users().await {
+        if let Ok(0) = db.count_users_with_password().await {
             let path = req.uri().path();
             if !path.starts_with("/setup-wizard")
                 && !path.starts_with("/api/auth/setup")
@@ -348,7 +348,8 @@ pub async fn auth_middleware(
 
     // 4. No valid auth — reject
     let path = req.uri().path().to_string();
-    if path.starts_with("/api/") {
+    if path.starts_with("/api/") || path.starts_with("/ws/") {
+        // API and WebSocket paths get 401 JSON (WS can't follow HTTP redirects)
         (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({
@@ -576,7 +577,7 @@ pub async fn login_handler(
     tracing::info!(username = %user.username, "User logged in via web UI");
 
     let cookie = format!(
-        "{}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}",
+        "{}={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}",
         SESSION_COOKIE_NAME, signed_cookie, DEFAULT_SESSION_TTL_SECS
     );
 
@@ -607,7 +608,7 @@ pub async fn logout_handler(
 
     // Clear cookie
     let clear_cookie = format!(
-        "{}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
+        "{}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0",
         SESSION_COOKIE_NAME
     );
 
@@ -649,8 +650,8 @@ pub async fn setup_handler(
         }
     };
 
-    // Only allow setup if no users exist
-    match db.count_users().await {
+    // Only allow setup if no user has a password yet
+    match db.count_users_with_password().await {
         Ok(0) => {}
         Ok(_) => {
             return (
@@ -658,7 +659,7 @@ pub async fn setup_handler(
                 Json(AuthResponse {
                     success: false,
                     redirect: None,
-                    error: Some("Setup already completed. Users already exist.".into()),
+                    error: Some("Setup already completed. An admin account already exists.".into()),
                 }),
             )
                 .into_response()
@@ -705,22 +706,32 @@ pub async fn setup_handler(
         }
     };
 
-    // Create admin user
-    let user_id = uuid::Uuid::new_v4().to_string();
-    if let Err(e) = db
-        .create_user(&user_id, body.username.trim(), &["admin"])
-        .await
-    {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(AuthResponse {
-                success: false,
-                redirect: None,
-                error: Some(format!("Failed to create user: {e}")),
-            }),
-        )
-            .into_response();
-    }
+    // Look up existing user or create new one
+    let username = body.username.trim();
+    let user_id = match db.load_user_by_username(username).await {
+        Ok(Some(existing)) => {
+            // User exists (e.g. from channel pairing) — just set password
+            tracing::info!(%username, "Setting password for existing user during first-run setup");
+            existing.id
+        }
+        _ => {
+            // No existing user — create new admin
+            let new_id = uuid::Uuid::new_v4().to_string();
+            if let Err(e) = db.create_user(&new_id, username, &["admin"]).await {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(AuthResponse {
+                        success: false,
+                        redirect: None,
+                        error: Some(format!("Failed to create user: {e}")),
+                    }),
+                )
+                    .into_response();
+            }
+            tracing::info!(%username, "Admin account created during first-run setup");
+            new_id
+        }
+    };
 
     if let Err(e) = db.set_user_password_hash(&user_id, &password_hash).await {
         return (
@@ -733,8 +744,6 @@ pub async fn setup_handler(
         )
             .into_response();
     }
-
-    tracing::info!(username = %body.username.trim(), "Admin account created during first-run setup");
 
     // Auto-login: create session
     let session_store = match &state.session_store {
@@ -759,7 +768,7 @@ pub async fn setup_handler(
     let signed_cookie = session_store.sign_cookie(&session_id);
 
     let cookie = format!(
-        "{}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}",
+        "{}={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}",
         SESSION_COOKIE_NAME, signed_cookie, DEFAULT_SESSION_TTL_SECS
     );
 

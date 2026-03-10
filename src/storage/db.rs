@@ -1833,6 +1833,19 @@ impl Database {
         Ok(count)
     }
 
+    /// Count users that have a password set (for web auth first-run detection).
+    /// Returns 0 when no user has ever set up web credentials.
+    pub async fn count_users_with_password(&self) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM users WHERE password_hash IS NOT NULL",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("Failed to count users with password")?;
+
+        Ok(count)
+    }
+
     // --- Token usage ---
 
     pub async fn insert_token_usage(

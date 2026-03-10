@@ -53,6 +53,7 @@ const ICON_VAULT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="current
 const ICON_PERMISSIONS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="16" height="12" rx="1.5"/><circle cx="9" cy="10" r="2"/><path d="M5 4V3a4 4 0 0 1 8 0v1"/></svg>"#;
 const ICON_APPROVALS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1v4M9 13v4M1 9h4M13 9h4"/><circle cx="9" cy="9" r="3"/><path d="M6 9l2 2 4-4"/></svg>"#;
 const ICON_ACCOUNT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="6" r="3.5"/><path d="M3 17c0-3.5 2.5-6 6-6s6 2.5 6 6"/></svg>"#;
+const ICON_LOGOUT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15H3.5A1.5 1.5 0 0 1 2 13.5v-9A1.5 1.5 0 0 1 3.5 3H6"/><path d="M12 12l4-3-4-3"/><path d="M16 9H7"/></svg>"#;
 const ICON_KNOWLEDGE: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h5l2 2h7v10H2z"/><path d="M6 9h6"/><path d="M6 12h4"/></svg>"#;
 const ICON_WORKFLOWS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="4" r="2"/><circle cx="13" cy="4" r="2"/><circle cx="9" cy="14" r="2"/><path d="M5 6v2a3 3 0 0 0 3 3h1"/><path d="M13 6v2a3 3 0 0 1-3 3h-1"/></svg>"#;
 
@@ -123,6 +124,9 @@ fn sidebar(active: &str) -> String {
                 <a href="/setup" class="nav-link{settings_a}" data-label="Settings">
                     <span class="nav-icon">{ic_settings}</span>
                 </a>
+                <button type="button" class="nav-link nav-logout" id="nav-logout-btn" data-label="Logout" title="Sign out" onclick="fetch('/api/auth/logout',{{method:'POST'}}).then(()=>location.href='/login')">
+                    <span class="nav-icon">{ic_logout}</span>
+                </button>
             </div>
             <div class="sidebar-subnav{tools_open}" id="tools-subnav">
                 <div class="sidebar-subnav-header">Tools</div>
@@ -158,6 +162,7 @@ fn sidebar(active: &str) -> String {
         ic_tools = ICON_TOOLS,
         ic_estop = ICON_ESTOP,
         ic_settings = ICON_SETTINGS,
+        ic_logout = ICON_LOGOUT,
         // Tools subnav
         tools_open = tools_open,
         automations_a = a("automations"),

@@ -353,10 +353,6 @@ impl WebServer {
             )
             .route("/api/health", axum::routing::get(api::health))
             .route(
-                "/api/auth/logout",
-                axum::routing::post(auth::logout_handler),
-            )
-            .route(
                 "/api/v1/webhook/{token}",
                 axum::routing::post(api::webhook_ingress),
             )
@@ -366,6 +362,7 @@ impl WebServer {
         // Protected routes — require auth (SEC-1 middleware + SEC-3 API rate limit)
         let protected = Router::new()
             .merge(pages::router())
+            .route("/api/auth/logout", axum::routing::post(auth::logout_handler))
             .nest("/api", api::router())
             .merge(ws::router())
             .layer(axum::middleware::from_fn_with_state(
@@ -381,7 +378,29 @@ impl WebServer {
             .merge(public)
             .merge(protected)
             .layer(TraceLayer::new_for_http())
-            .layer(CorsLayer::permissive())
+            .layer(
+                CorsLayer::new()
+                    .allow_origin(tower_http::cors::AllowOrigin::predicate(|origin, _| {
+                        let s = origin.as_bytes();
+                        s.starts_with(b"https://localhost")
+                            || s.starts_with(b"https://127.0.0.1")
+                            || s.starts_with(b"http://localhost")
+                            || s.starts_with(b"http://127.0.0.1")
+                            || s.starts_with(b"https://ui.homun.bot")
+                    }))
+                    .allow_methods([
+                        axum::http::Method::GET,
+                        axum::http::Method::POST,
+                        axum::http::Method::PATCH,
+                        axum::http::Method::DELETE,
+                    ])
+                    .allow_headers([
+                        axum::http::header::CONTENT_TYPE,
+                        axum::http::header::AUTHORIZATION,
+                        axum::http::header::COOKIE,
+                    ])
+                    .allow_credentials(true),
+            )
             .with_state(state);
 
         let addr: SocketAddr = format!("{host}:{port}")
@@ -406,8 +425,12 @@ impl WebServer {
                 } else {
                     None
                 };
-                let forward_port = if port != 443 { Some(port) } else { None };
-                setup_system(&domain, &host, cert_path.as_deref(), forward_port);
+                setup_system(&domain, cert_path.as_deref());
+                // Spawn a TCP proxy on port 443 → actual port (clean URL)
+                if port != 443 {
+                    let proxy_target_port = port;
+                    tokio::spawn(start_port_proxy(443, proxy_target_port));
+                }
                 tracing::info!(%addr, url = %format!("https://{domain}"), "Web UI starting (HTTPS)");
             } else {
                 tracing::info!(%addr, "Web UI starting (HTTPS)");
@@ -433,10 +456,13 @@ impl WebServer {
                                 .await;
                             let hyper_svc =
                                 hyper_util::service::TowerToHyperService::new(svc);
+                            // serve_connection_with_upgrades is required for WebSocket
+                            // to work — without it, hyper won't release the TCP stream
+                            // for the HTTP Upgrade mechanism that WS relies on.
                             let _ = hyper_util::server::conn::auto::Builder::new(
                                 hyper_util::rt::TokioExecutor::new(),
                             )
-                            .serve_connection(io, hyper_svc)
+                            .serve_connection_with_upgrades(io, hyper_svc)
                             .await;
                         }
                         Err(e) => {
@@ -538,12 +564,17 @@ async fn build_tls_config(
         }
     };
 
-    // Build ServerConfig
+    // Build ServerConfig with ALPN — HTTP/1.1 first so that WebSocket upgrade works.
+    // HTTP/2 WebSocket requires Extended CONNECT (RFC 8441) which hyper doesn't enable
+    // by default, so we prefer HTTP/1.1 to keep classic WS upgrade mechanism working.
     match rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
     {
-        Ok(config) => Some(Arc::new(config)),
+        Ok(mut config) => {
+            config.alpn_protocols = vec![b"http/1.1".to_vec(), b"h2".to_vec()];
+            Some(Arc::new(config))
+        }
         Err(e) => {
             tracing::error!(error = %e, "Failed to build TLS config");
             None
@@ -610,101 +641,88 @@ fn generate_self_signed(cert_path: &Path, key_path: &Path, extra_domains: &[&str
 }
 
 /// One-shot system configuration: hosts entry + cert trust + port forward.
-/// All privileged operations are batched into a **single** admin prompt.
+/// One-time system setup: hosts entry + cert trust.
 ///
-/// `cert_path`: if `Some`, trust the self-signed cert (first-time only).
-/// `forward_port`: if `Some(actual_port)`, redirect 443 → actual_port.
-fn setup_system(domain: &str, host: &str, cert_path: Option<&Path>, forward_port: Option<u16>) {
+/// - **Cert trust (macOS)**: login keychain with `-p ssl` — no admin needed
+/// - **Cert trust (Linux)**: `update-ca-certificates` — needs admin
+/// - **Cert trust (Windows)**: `certutil` — needs admin (UAC)
+/// - **Hosts**: adds `127.0.0.1 <domain>` to `/etc/hosts` — needs admin
+///
+/// Port forwarding is handled separately via `start_port_proxy()` (in-process TCP proxy).
+fn setup_system(domain: &str, cert_path: Option<&Path>) {
+    let loopback = "127.0.0.1";
+
     let hosts_path = if cfg!(windows) {
         r"C:\Windows\System32\drivers\etc\hosts"
     } else {
         "/etc/hosts"
     };
 
-    // ── Check what actually needs to be done ──────────────────────────
+    // ── Check what needs to be done ──────────────────────────────────
     let needs_hosts = !std::fs::read_to_string(hosts_path)
         .map(|c| c.contains(domain))
         .unwrap_or(false);
 
-    let marker_path = dirs::home_dir()
+    let cert_marker = dirs::home_dir()
         .unwrap_or_default()
         .join(".homun/tls/.trusted");
-    let needs_cert_trust = cert_path.is_some() && !marker_path.exists();
+    let needs_cert_trust = cert_path.is_some() && !cert_marker.exists();
 
-    let needs_port_forward = forward_port.map_or(false, |actual_port| {
-        if cfg!(target_os = "macos") {
-            // Check pfctl NAT rules
-            !std::process::Command::new("pfctl")
-                .args(["-s", "nat"])
-                .output()
-                .map(|o| {
-                    String::from_utf8_lossy(&o.stdout)
-                        .contains(&format!("port {actual_port}"))
-                })
-                .unwrap_or(false)
-        } else {
-            true // Assume needed on Linux/Windows (iptables -C will check inside)
-        }
-    });
-
-    if !needs_hosts && !needs_cert_trust && !needs_port_forward {
+    if !needs_hosts && !needs_cert_trust {
         tracing::debug!(domain, "System already configured");
         return;
     }
 
-    // ── Build a single script with all operations ────────────────────
+    // ── macOS: trust cert in login keychain (NO admin needed) ────────
+    if needs_cert_trust {
+        if let Some(cert) = cert_path {
+            if cfg!(target_os = "macos") {
+                let cert_str = cert.to_string_lossy();
+                let ok = std::process::Command::new("security")
+                    .args([
+                        "add-trusted-cert",
+                        "-p",
+                        "ssl",
+                        "-r",
+                        "trustRoot",
+                        "-k",
+                        &format!(
+                            "{}/Library/Keychains/login.keychain-db",
+                            std::env::var("HOME").unwrap_or_default()
+                        ),
+                        &cert_str,
+                    ])
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+                if ok {
+                    let _ = std::fs::write(&cert_marker, "");
+                    tracing::info!("Trusted self-signed cert in login keychain");
+                } else {
+                    tracing::warn!(
+                        "Could not trust cert in login keychain — browser will show warning"
+                    );
+                }
+            }
+        }
+    }
+
+    // ── Build privileged commands (hosts entry, Linux/Windows cert) ──
     let mut commands: Vec<String> = Vec::new();
 
     if needs_hosts {
-        commands.push(format!("echo '{host}\t{domain}' >> {hosts_path}"));
+        commands.push(format!("echo '{loopback}\t{domain}' >> {hosts_path}"));
     }
 
     if needs_cert_trust {
         if let Some(cert) = cert_path {
             let cert_str = cert.to_string_lossy();
-            if cfg!(target_os = "macos") {
-                commands.push(format!(
-                    "security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain {cert_str}"
-                ));
-            } else if cfg!(target_os = "linux") {
+            if cfg!(target_os = "linux") {
                 commands.push(format!(
                     "cp {cert_str} /usr/local/share/ca-certificates/homun-self-signed.crt && update-ca-certificates"
                 ));
             } else if cfg!(windows) {
-                commands.push(format!(
-                    "certutil -addstore -f ROOT {cert_str}"
-                ));
-            }
-        }
-    }
-
-    if let Some(actual_port) = forward_port {
-        if needs_port_forward {
-            if cfg!(target_os = "macos") {
-                // Write pf config file first (unprivileged)
-                let pf_conf_path = dirs::home_dir()
-                    .unwrap_or_default()
-                    .join(".homun/pf-homun.conf");
-                let pf_rule = format!(
-                    "rdr pass on lo0 inet proto tcp from any to {host} port 443 -> {host} port {actual_port}"
-                );
-                if let Some(parent) = pf_conf_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::write(&pf_conf_path, &pf_rule);
-                let pf_path = pf_conf_path.to_string_lossy();
-                commands.push(format!(
-                    "pfctl -ef {pf_path} 2>/dev/null || pfctl -f {pf_path} -e 2>/dev/null; true"
-                ));
-            } else if cfg!(target_os = "linux") {
-                commands.push(format!(
-                    "iptables -t nat -C OUTPUT -p tcp -d {host} --dport 443 -j REDIRECT --to-port {actual_port} 2>/dev/null || \
-                     iptables -t nat -A OUTPUT -p tcp -d {host} --dport 443 -j REDIRECT --to-port {actual_port}"
-                ));
-            } else if cfg!(windows) {
-                commands.push(format!(
-                    "netsh interface portproxy add v4tov4 listenport=443 listenaddress={host} connectport={actual_port} connectaddress={host}"
-                ));
+                commands.push(format!("certutil -addstore -f ROOT {cert_str}"));
             }
         }
     }
@@ -717,8 +735,9 @@ fn setup_system(domain: &str, host: &str, cert_path: Option<&Path>, forward_port
 
     // ── Execute with a single privilege escalation ───────────────────
     let success = if cfg!(target_os = "macos") {
+        let escaped = combined.replace('\\', "\\\\").replace('"', "\\\"");
         let script = format!(
-            r#"do shell script "{combined}" with administrator privileges"#
+            r#"do shell script "{escaped}" with administrator privileges"#
         );
         std::process::Command::new("osascript")
             .args(["-e", &script])
@@ -726,7 +745,6 @@ fn setup_system(domain: &str, host: &str, cert_path: Option<&Path>, forward_port
             .map(|s| s.success())
             .unwrap_or(false)
     } else if cfg!(target_os = "linux") {
-        // Try pkexec (GUI dialog), fall back to sudo (terminal)
         std::process::Command::new("pkexec")
             .args(["sh", "-c", &combined])
             .status()
@@ -739,7 +757,6 @@ fn setup_system(domain: &str, host: &str, cert_path: Option<&Path>, forward_port
                     .unwrap_or(false)
             })
     } else if cfg!(windows) {
-        // Windows: PowerShell with UAC elevation
         let ps_cmd = format!(
             "Start-Process cmd -ArgumentList '/c {combined}' -Verb RunAs -Wait"
         );
@@ -753,14 +770,12 @@ fn setup_system(domain: &str, host: &str, cert_path: Option<&Path>, forward_port
     };
 
     if success {
-        // Write marker so we don't re-trust the cert on next boot
-        if needs_cert_trust {
-            let _ = std::fs::write(&marker_path, "");
+        if needs_cert_trust && !cfg!(target_os = "macos") {
+            let _ = std::fs::write(&cert_marker, "");
         }
         let ops: Vec<&str> = [
             if needs_hosts { Some("hosts") } else { None },
             if needs_cert_trust { Some("cert-trust") } else { None },
-            if needs_port_forward { Some("port-forward") } else { None },
         ]
         .into_iter()
         .flatten()
@@ -770,9 +785,54 @@ fn setup_system(domain: &str, host: &str, cert_path: Option<&Path>, forward_port
         tracing::warn!(
             domain,
             "Could not configure system (admin prompt declined?) — \
-             https://{domain} may not work, try https://{host}:{} directly",
-            forward_port.unwrap_or(18443)
+             add '{loopback}\t{domain}' to {hosts_path} manually"
         );
+    }
+}
+
+/// In-process TCP proxy: binds on `listen_port` (e.g. 443) and forwards
+/// all connections to `target_port` (e.g. 18443) on localhost.
+///
+/// This avoids pfctl/iptables entirely — works on all OS, no VPN conflicts.
+/// Binding to port < 1024 requires admin on first run; subsequent runs
+/// reuse the listener.
+async fn start_port_proxy(listen_port: u16, target_port: u16) {
+    let addr: SocketAddr = ([127, 0, 0, 1], listen_port).into();
+
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => {
+            tracing::info!(listen_port, target_port, "Port proxy started (443 → {target_port})");
+            l
+        }
+        Err(e) => {
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                tracing::info!(
+                    listen_port,
+                    "Port {listen_port} requires admin — use https://ui.homun.bot:{target_port} or run with sudo"
+                );
+            } else {
+                tracing::debug!(listen_port, error = %e, "Could not bind port proxy");
+            }
+            return;
+        }
+    };
+
+    let target_addr: SocketAddr = ([127, 0, 0, 1], target_port).into();
+    loop {
+        let (mut inbound, _) = match listener.accept().await {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        tokio::spawn(async move {
+            match tokio::net::TcpStream::connect(target_addr).await {
+                Ok(mut outbound) => {
+                    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, "Port proxy: target connection failed");
+                }
+            }
+        });
     }
 }
 
