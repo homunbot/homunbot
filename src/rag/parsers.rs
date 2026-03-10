@@ -19,11 +19,33 @@ pub fn chunk_binary(path: &Path, doc_type: &str, opts: &ChunkOptions) -> Result<
 // ─── PDF ────────────────────────────────────────────────────────
 
 fn chunk_pdf(path: &Path, opts: &ChunkOptions) -> Result<Vec<DocChunk>> {
-    let text = pdf_extract::extract_text(path)
+    let mut text = pdf_extract::extract_text(path)
         .with_context(|| format!("Failed to extract text from PDF {}", path.display()))?;
 
+    // If no text extracted, try OCR via tesseract CLI (handles image-based PDFs)
     if text.trim().is_empty() {
-        return Ok(Vec::new());
+        match try_ocr_pdf(path) {
+            Ok(ocr_text) if !ocr_text.trim().is_empty() => {
+                tracing::info!(path = %path.display(), "PDF text empty, used OCR fallback");
+                text = ocr_text;
+            }
+            Ok(_) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    "PDF contains no extractable text and OCR produced no results (image-based PDF?)"
+                );
+                return Ok(Vec::new());
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "PDF contains no extractable text and OCR is unavailable. \
+                     Install tesseract for image-based PDF support."
+                );
+                return Ok(Vec::new());
+            }
+        }
     }
 
     // Split on form feeds (\x0C) for page-aware chunking
@@ -43,6 +65,69 @@ fn chunk_pdf(path: &Path, opts: &ChunkOptions) -> Result<Vec<DocChunk>> {
         chunk.index = i;
     }
     Ok(chunks)
+}
+
+/// Try OCR on a PDF using tesseract CLI.
+/// Converts PDF pages to images via pdftoppm, then runs tesseract on each.
+fn try_ocr_pdf(path: &Path) -> Result<String> {
+    // Check if tesseract is available
+    let check = std::process::Command::new("tesseract")
+        .arg("--version")
+        .output();
+    if check.is_err() || !check.unwrap().status.success() {
+        anyhow::bail!("tesseract not found");
+    }
+
+    // Check if pdftoppm is available (from poppler-utils)
+    let check_ppm = std::process::Command::new("pdftoppm")
+        .arg("-h")
+        .output();
+    if check_ppm.is_err() {
+        anyhow::bail!("pdftoppm not found (install poppler)");
+    }
+
+    let tmp_dir = tempfile::tempdir().context("Failed to create temp dir for OCR")?;
+
+    // Convert PDF to PNG images
+    let ppm_status = std::process::Command::new("pdftoppm")
+        .args(["-png", "-r", "300"])
+        .arg(path)
+        .arg(tmp_dir.path().join("page").to_str().unwrap_or("page"))
+        .status()
+        .context("Failed to run pdftoppm")?;
+
+    if !ppm_status.success() {
+        anyhow::bail!("pdftoppm failed with status {}", ppm_status);
+    }
+
+    // Find generated page images and OCR each
+    let mut pages: Vec<std::path::PathBuf> = std::fs::read_dir(tmp_dir.path())?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("png"))
+        .collect();
+    pages.sort();
+
+    let mut all_text = String::new();
+    for page_img in &pages {
+        let output = std::process::Command::new("tesseract")
+            .arg(page_img)
+            .arg("stdout")
+            .arg("-l")
+            .arg("eng+ita")
+            .output()
+            .context("Failed to run tesseract")?;
+
+        if output.status.success() {
+            let page_text = String::from_utf8_lossy(&output.stdout);
+            if !page_text.trim().is_empty() {
+                all_text.push_str(&page_text);
+                all_text.push('\x0C'); // Form feed for page separation
+            }
+        }
+    }
+
+    Ok(all_text)
 }
 
 // ─── DOCX ───────────────────────────────────────────────────────

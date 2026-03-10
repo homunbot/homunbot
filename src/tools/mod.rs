@@ -1,5 +1,6 @@
 pub mod approval;
 pub mod automation;
+pub mod business;
 pub mod cron;
 #[cfg(feature = "channel-email")]
 pub mod email_inbox;
@@ -28,6 +29,7 @@ pub use approval::{
     ApprovalManager, ApprovalResponse, PendingApproval,
 };
 pub use automation::CreateAutomationTool;
+pub use business::BusinessTool;
 pub use cron::CronTool;
 #[cfg(feature = "channel-email")]
 pub use email_inbox::ReadEmailInboxTool;

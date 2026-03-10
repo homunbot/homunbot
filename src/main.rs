@@ -14,6 +14,7 @@ mod agent;
 #[cfg(feature = "browser")]
 mod browser;
 mod bus;
+mod business;
 mod channels;
 mod config;
 mod logs;
@@ -46,9 +47,9 @@ use crate::storage::Database;
 #[cfg(feature = "channel-email")]
 use crate::tools::ReadEmailInboxTool;
 use crate::tools::{
-    CreateAutomationTool, CronTool, EditFileTool, ListDirTool, MessageTool, ReadFileTool,
-    ShellTool, SpawnTool, ToolRegistry, VaultTool, WebFetchTool, WebSearchTool, WorkflowTool,
-    WriteFileTool,
+    BusinessTool, CreateAutomationTool, CronTool, EditFileTool, ListDirTool, MessageTool,
+    ReadFileTool, ShellTool, SpawnTool, ToolRegistry, VaultTool, WebFetchTool, WebSearchTool,
+    WorkflowTool, WriteFileTool,
 };
 
 #[cfg(feature = "mcp")]
@@ -838,7 +839,7 @@ async fn main() -> Result<()> {
             agent.set_registered_tool_names(tool_names);
             #[cfg(feature = "mcp")]
             if let Some(session) = _browser_session {
-                agent.set_browser_session(session);
+                agent.set_browser_session(session).await;
             }
 
             // Initialize memory searcher (vector + FTS5 hybrid search)
@@ -947,6 +948,8 @@ async fn main() -> Result<()> {
             // Write new PID file
             std::fs::write(&pid_file, std::process::id().to_string())?;
 
+            let startup_t0 = std::time::Instant::now();
+
             let mut config = Config::load()?;
             // Inject browser MCP server into config BEFORE wrapping in Arc<RwLock>,
             // so runtime_config lookups in McpClientTool::execute() can find it.
@@ -964,8 +967,10 @@ async fn main() -> Result<()> {
             let shared_config = Arc::new(tokio::sync::RwLock::new(config));
             // Snapshot for one-time startup operations (provider, tools, channels, etc.)
             let config = shared_config.read().await.clone();
+            tracing::info!(elapsed_ms = startup_t0.elapsed().as_millis(), "⏱ config loaded");
 
             let db = Database::open(&config.storage.resolved_path()).await?;
+            tracing::info!(elapsed_ms = startup_t0.elapsed().as_millis(), "⏱ database opened");
 
             // Health tracker: shared between provider (records metrics) and web UI (exposes them)
             let health_tracker = Arc::new(provider::ProviderHealthTracker::new());
@@ -984,6 +989,7 @@ async fn main() -> Result<()> {
                     None
                 }
             };
+            tracing::info!(elapsed_ms = startup_t0.elapsed().as_millis(), "⏱ provider created");
 
             let session_manager = SessionManager::new(db.clone());
 
@@ -1005,31 +1011,22 @@ async fn main() -> Result<()> {
             let workflow_engine_cell = Arc::new(tokio::sync::OnceCell::new());
             tool_registry.register(Box::new(WorkflowTool::new(workflow_engine_cell.clone())));
 
-            // Connect to MCP servers and register their tools.
-            // Browser tools wrapped behind unified BrowserTool (not registered individually).
-            #[cfg(feature = "mcp")]
-            let (mut _mcp_manager, mcp_tools) = McpManager::start_with_sandbox(
-                &config.mcp.servers,
-                Some(config.security.execution_sandbox.clone()),
-                Some(shared_config.clone()),
-            )
-            .await;
-            #[cfg(feature = "mcp")]
-            for tool in mcp_tools {
-                if !crate::browser::is_browser_tool(tool.name()) {
-                    tool_registry.register(tool);
-                }
+            // BusinessTool — late-bound OnceCell (BusinessEngine needs DB which is created later)
+            let business_engine_cell = Arc::new(tokio::sync::OnceCell::new());
+            if config.business.enabled {
+                tool_registry
+                    .register(Box::new(BusinessTool::new(business_engine_cell.clone())));
             }
+
+            // MCP servers are connected in the background (deferred) to avoid blocking
+            // gateway startup. Tool discovery + registration happens asynchronously.
+            // Save MCP config for the background task.
             #[cfg(feature = "mcp")]
-            let mut _browser_session_gw: Option<std::sync::Arc<crate::tools::BrowserSession>> = None;
+            let mcp_servers_config = config.mcp.servers.clone();
             #[cfg(feature = "mcp")]
-            if let Some(browser_peer) = _mcp_manager.take_browser_peer() {
-                let browser_tool = crate::tools::BrowserTool::new(browser_peer);
-                _browser_session_gw = Some(browser_tool.session());
-                tool_registry.register(Box::new(browser_tool));
-            }
+            let mcp_sandbox_config = config.security.execution_sandbox.clone();
             #[cfg(feature = "mcp")]
-            let _browser_session_estop = _browser_session_gw.clone();
+            let mcp_shared_config = shared_config.clone();
 
             // Create tool message channel for proactive messaging (MessageTool → Gateway → Channel)
             let (tool_msg_tx, tool_msg_rx) = tokio::sync::mpsc::channel(100);
@@ -1057,6 +1054,7 @@ async fn main() -> Result<()> {
             };
             #[cfg(not(feature = "local-embeddings"))]
             let _rag_engine: Option<()> = None;
+            tracing::info!(elapsed_ms = startup_t0.elapsed().as_millis(), "⏱ RAG engine ready");
 
             // Capture tool names before moving registry (for system prompt routing rules)
             let tool_names: Vec<String> = tool_registry
@@ -1075,10 +1073,6 @@ async fn main() -> Result<()> {
                 .await;
                 a.set_message_tx(tool_msg_tx);
                 a.set_registered_tool_names(tool_names);
-                #[cfg(feature = "mcp")]
-                if let Some(session) = _browser_session_gw {
-                    a.set_browser_session(session);
-                }
 
                 // Initialize memory searcher (vector + FTS5 hybrid search)
                 #[cfg(feature = "local-embeddings")]
@@ -1212,6 +1206,22 @@ async fn main() -> Result<()> {
             }
             tracing::info!("Workflow engine initialized (WorkflowTool registered)");
 
+            // Bind workflow engine to cron scheduler for automation-triggered workflows
+            cron_scheduler.set_workflow_engine(workflow_engine.clone());
+
+            // Create BusinessEngine and bind to the BusinessTool OnceCell
+            let business_engine = Arc::new(business::engine::BusinessEngine::new(
+                db_for_web.clone(),
+            ));
+            if business_engine_cell.set(business_engine.clone()).is_err() {
+                tracing::error!(
+                    "BusinessTool OnceCell was already initialized — this is a bug"
+                );
+            }
+            if config.business.enabled {
+                tracing::info!("Business engine initialized (BusinessTool registered)");
+            }
+
             // Start skill hot-reload watcher (watches ~/.homun/skills/ for changes)
             let skills_dir = config::Config::data_dir().join("skills");
             let skill_watcher = skills::SkillWatcher::new(skills_summary_handle, skills_dir);
@@ -1255,6 +1265,9 @@ async fn main() -> Result<()> {
                 }
             };
 
+            // Clone agent Arc before moving into Gateway (needed for deferred MCP task)
+            #[cfg(feature = "mcp")]
+            let agent_for_mcp_deferred = agent.clone();
             let mut gateway = agent::Gateway::new(
                 agent,
                 shared_config,
@@ -1266,19 +1279,65 @@ async fn main() -> Result<()> {
             gateway.set_tool_message_rx(tool_msg_rx);
             gateway.set_health_tracker(health_tracker);
             gateway.set_workflow_engine(workflow_engine, workflow_event_rx);
+            // Always pass BusinessEngine to gateway (Web UI needs it regardless of tool flag)
+            gateway.set_business_engine(business_engine);
 
             // Populate emergency stop handles
+            let estop_arc = gateway.estop_handles();
             {
-                let estop_arc = gateway.estop_handles();
                 let mut estop = estop_arc.write().await;
                 estop.subagent_manager = Some(subagent_manager_for_estop);
-                #[cfg(feature = "mcp")]
-                {
-                    estop.browser_session = _browser_session_estop;
-                }
+                // browser_session is set by the deferred MCP background task below
             }
 
+            // --- Deferred MCP startup: connect in background, register tools when ready ---
+            // This avoids blocking gateway startup for ~23s while MCP servers (e.g. Playwright) launch.
+            // Channels + Web UI start immediately; MCP tools become available once connected.
+            #[cfg(feature = "mcp")]
+            let _mcp_handle = {
+                let agent_for_mcp = agent_for_mcp_deferred;
+                let estop_for_mcp = estop_arc.clone();
+                let startup_t0_mcp = startup_t0;
+                tokio::spawn(async move {
+                    let (mut mcp_manager, mcp_tools) = McpManager::start_with_sandbox(
+                        &mcp_servers_config,
+                        Some(mcp_sandbox_config),
+                        Some(mcp_shared_config),
+                    )
+                    .await;
+
+                    // Separate browser tools from regular MCP tools
+                    let mut regular_tools: Vec<Box<dyn crate::tools::Tool>> = Vec::new();
+                    for tool in mcp_tools {
+                        if !crate::browser::is_browser_tool(tool.name()) {
+                            regular_tools.push(tool);
+                        }
+                    }
+
+                    // Register regular MCP tools into the shared registry
+                    agent_for_mcp.register_deferred_tools(regular_tools).await;
+
+                    // Handle browser peer: create BrowserTool and set session on both agent and estop
+                    if let Some(browser_peer) = mcp_manager.take_browser_peer() {
+                        let browser_tool = crate::tools::BrowserTool::new(browser_peer);
+                        let session = browser_tool.session();
+                        agent_for_mcp
+                            .register_deferred_tools(vec![Box::new(browser_tool)])
+                            .await;
+                        agent_for_mcp.set_browser_session(session.clone()).await;
+                        // Also update estop handles so emergency stop can close the browser
+                        estop_for_mcp.write().await.browser_session = Some(session);
+                    }
+
+                    tracing::info!(
+                        elapsed_ms = startup_t0_mcp.elapsed().as_millis(),
+                        "⏱ MCP servers connected (deferred)"
+                    );
+                })
+            };
+
             // Run gateway and clean up PID file on exit
+            tracing::info!(elapsed_ms = startup_t0.elapsed().as_millis(), "⏱ gateway ready, starting channels");
             let result = gateway.run().await;
 
             // Clean up PID file

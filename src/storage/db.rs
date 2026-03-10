@@ -200,6 +200,18 @@ impl Database {
             include_str!("../../migrations/013_workflows.sql"),
         )
         .await?;
+        Self::apply_migration(
+            pool,
+            "014_automation_workflow",
+            include_str!("../../migrations/014_automation_workflow.sql"),
+        )
+        .await?;
+        Self::apply_migration(
+            pool,
+            "015_business",
+            include_str!("../../migrations/015_business.sql"),
+        )
+        .await?;
 
         Ok(())
     }
@@ -1149,7 +1161,8 @@ impl Database {
             "SELECT id, name, prompt, schedule, enabled, status, deliver_to,
                     trigger_kind, trigger_value,
                     last_run, last_result, created_at, updated_at,
-                    plan_json, dependencies_json, plan_version, validation_errors
+                    plan_json, dependencies_json, plan_version, validation_errors,
+                    workflow_steps_json
              FROM automations
              ORDER BY created_at DESC",
         )
@@ -1166,7 +1179,8 @@ impl Database {
             "SELECT id, name, prompt, schedule, enabled, status, deliver_to,
                     trigger_kind, trigger_value,
                     last_run, last_result, created_at, updated_at,
-                    plan_json, dependencies_json, plan_version, validation_errors
+                    plan_json, dependencies_json, plan_version, validation_errors,
+                    workflow_steps_json
              FROM automations
              WHERE id = ?",
         )
@@ -1207,12 +1221,17 @@ impl Database {
             Some(v) => v,
             None => current.validation_errors,
         };
+        let workflow_steps_json = match update.workflow_steps_json {
+            Some(v) => v,
+            None => current.workflow_steps_json,
+        };
 
         let result = sqlx::query(
             "UPDATE automations
              SET name = ?, prompt = ?, schedule = ?, enabled = ?, status = ?,
                  deliver_to = ?, trigger_kind = ?, trigger_value = ?, last_result = ?,
                  plan_json = ?, dependencies_json = ?, plan_version = ?, validation_errors = ?,
+                 workflow_steps_json = ?,
                  last_run = CASE WHEN ? THEN datetime('now') ELSE last_run END,
                  updated_at = datetime('now')
              WHERE id = ?",
@@ -1230,6 +1249,7 @@ impl Database {
         .bind(dependencies_json)
         .bind(plan_version)
         .bind(validation_errors)
+        .bind(workflow_steps_json)
         .bind(update.touch_last_run)
         .bind(id)
         .execute(&self.pool)
@@ -1948,6 +1968,58 @@ impl Database {
         .context("Failed to load email_pending by id")?;
         Ok(row)
     }
+
+    // ── SKL-6: Skill Audit Logging ──────────────────────────────────
+
+    /// Insert a skill activation audit record.
+    ///
+    /// activation_type: "tool_call" or "slash_command"
+    pub async fn insert_skill_audit(
+        &self,
+        skill_name: &str,
+        channel: &str,
+        query: &str,
+        activation_type: &str,
+    ) -> Result<i64> {
+        let row = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO skill_audit (skill_name, channel, query, activation_type)
+             VALUES (?, ?, ?, ?)
+             RETURNING id",
+        )
+        .bind(skill_name)
+        .bind(channel)
+        .bind(query)
+        .bind(activation_type)
+        .fetch_one(&self.pool)
+        .await
+        .context("Failed to insert skill audit")?;
+        Ok(row)
+    }
+
+    /// List recent skill audit entries.
+    pub async fn list_skill_audits(&self, limit: i64) -> Result<Vec<SkillAuditRow>> {
+        let rows = sqlx::query_as::<_, SkillAuditRow>(
+            "SELECT id, timestamp, skill_name, channel, query, activation_type, success
+             FROM skill_audit ORDER BY id DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to list skill audits")?;
+        Ok(rows)
+    }
+}
+
+/// Skill audit log row.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct SkillAuditRow {
+    pub id: i64,
+    pub timestamp: String,
+    pub skill_name: String,
+    pub channel: String,
+    pub query: Option<String>,
+    pub activation_type: String,
+    pub success: i64,
 }
 
 /// Result of memory cleanup operation.
@@ -2106,6 +2178,7 @@ pub struct AutomationRow {
     pub dependencies_json: String,
     pub plan_version: i64,
     pub validation_errors: Option<String>,
+    pub workflow_steps_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -2128,6 +2201,8 @@ pub struct AutomationUpdate {
     pub plan_version: Option<i64>,
     /// Use `Some(None)` to clear validation errors.
     pub validation_errors: Option<Option<String>>,
+    /// Use `Some(None)` to clear workflow steps.
+    pub workflow_steps_json: Option<Option<String>>,
     pub touch_last_run: bool,
 }
 

@@ -97,8 +97,14 @@ impl TelegramChannel {
                     }
                 }
                 Err(e) => {
-                    tracing::error!(error = ?e, "Failed to get updates");
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    let err_str = format!("{e:?}");
+                    if err_str.contains("TimedOut") || err_str.contains("timed out") {
+                        tracing::debug!(error = %e, "Telegram poll timeout (normal)");
+                        // Timeouts during long polling are expected — retry immediately
+                    } else {
+                        tracing::warn!(error = %e, "Telegram poll error, backing off");
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    }
                 }
             }
         }

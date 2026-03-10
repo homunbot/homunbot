@@ -20,6 +20,8 @@ pub struct Config {
     pub security: SecurityConfig,
     pub browser: BrowserConfig,
     pub ui: UiConfig,
+    pub business: BusinessConfig,
+    pub skills: SkillsConfig,
 }
 
 impl Config {
@@ -1979,6 +1981,74 @@ impl BrowserConfig {
             })
         })
     }
+}
+
+/// Business Autopilot configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BusinessConfig {
+    /// Enable the business tool
+    pub enabled: bool,
+    /// Default autonomy level: "semi", "budget", "full"
+    pub default_autonomy: String,
+    /// Default currency
+    pub default_currency: String,
+    /// Default OODA review interval (cron-style schedule)
+    pub default_ooda_interval: String,
+    /// Fiscal country (ISO 3166-1 alpha-2)
+    pub fiscal_country: String,
+    /// VAT number (P.IVA for IT)
+    pub vat_number: Option<String>,
+    /// Fiscal regime: "standard", "forfettario", "exempt"
+    pub fiscal_regime: String,
+}
+
+impl Default for BusinessConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_autonomy: "semi".to_string(),
+            default_currency: "EUR".to_string(),
+            default_ooda_interval: "every:86400".to_string(),
+            fiscal_country: "IT".to_string(),
+            vat_number: None,
+            fiscal_regime: "standard".to_string(),
+        }
+    }
+}
+
+// ── Skills Configuration ───────────────────────────────────────────
+
+/// Per-skill configuration for env injection and overrides.
+///
+/// Example TOML:
+/// ```toml
+/// [skills.entries.my-skill]
+/// env = { GITHUB_ORG = "myorg", API_URL = "https://api.example.com" }
+/// api_key = "vault://my-skill-api-key"
+/// enabled = true
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SkillsConfig {
+    /// Per-skill configuration entries, keyed by skill name
+    #[serde(default)]
+    pub entries: HashMap<String, SkillEntryConfig>,
+}
+
+/// Configuration for a single skill.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SkillEntryConfig {
+    /// Environment variables to inject into skill script execution
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    /// API key (plain or vault:// reference) — injected as API_KEY env var
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Override to disable a skill regardless of eligibility
+    #[serde(default)]
+    pub enabled: Option<bool>,
 }
 
 #[cfg(test)]

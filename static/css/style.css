@@ -7640,3 +7640,97 @@ html, body {
 }
 .app.is-agent-working .logo-icon { animation: logo-pulse 2s ease-in-out infinite; }
 .dark .app.is-agent-working .logo-icon { animation: logo-pulse-dark 2s ease-in-out infinite; }
+
+/* ─── Workflows: step builder + timeline ─── */
+.wf-step-row {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.75rem;
+    margin-bottom: 0.5rem;
+    background: var(--surface-1);
+}
+.wf-step-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+.wf-step-number {
+    font-weight: 600;
+    font-size: 0.8rem;
+    width: 1.5rem;
+    text-align: center;
+    color: var(--text-2);
+    flex-shrink: 0;
+}
+.wf-step-name { flex: 1; }
+.wf-step-approval {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.8rem;
+    color: var(--text-2);
+    white-space: nowrap;
+    cursor: pointer;
+}
+.wf-step-instruction { width: 100%; }
+
+/* Timeline */
+.wf-detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+.wf-timeline { padding-left: 0.5rem; }
+.wf-timeline-step {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.5rem 0;
+    border-left: 2px solid var(--border);
+    margin-left: 0.5rem;
+    padding-left: 1rem;
+    position: relative;
+}
+.wf-timeline-step:last-child { border-left-color: transparent; }
+.wf-timeline-icon {
+    position: absolute;
+    left: -0.55rem;
+    top: 0.55rem;
+    font-size: 0.9rem;
+    line-height: 1;
+    color: var(--text-2);
+}
+.wf-step-done .wf-timeline-icon { color: var(--ok); }
+.wf-step-active .wf-timeline-icon { color: var(--accent); }
+.wf-step-failed .wf-timeline-icon { color: var(--err); }
+.wf-step-skipped .wf-timeline-icon { color: var(--text-3); }
+
+.wf-timeline-body { flex: 1; min-width: 0; }
+.wf-timeline-name { font-weight: 500; margin-bottom: 0.2rem; }
+.wf-timeline-instruction {
+    font-size: 0.82rem;
+    color: var(--text-2);
+    margin-bottom: 0.2rem;
+}
+.wf-step-result {
+    font-size: 0.8rem;
+    background: var(--surface-2);
+    border-radius: var(--radius);
+    padding: 0.4rem 0.6rem;
+    margin-top: 0.3rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.wf-step-error {
+    font-size: 0.8rem;
+    color: var(--err);
+    margin-top: 0.2rem;
+}
+.wf-timeline-ts {
+    font-size: 0.72rem;
+    color: var(--text-3);
+    margin-top: 0.2rem;
+}
+.item-row.selected { background: var(--surface-2); }

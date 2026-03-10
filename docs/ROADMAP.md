@@ -1,6 +1,6 @@
 # Homun — Development Roadmap
 
-> Last updated: 2026-03-10
+> Last updated: 2026-03-21
 > Basato su: Audit completo (`docs/AUDIT-2026-03.md`)
 > Gap analysis: Homun vs OpenClaw vs ZeroClaw
 > Source of truth: questo documento e' la roadmap/status operativa del progetto
@@ -16,9 +16,9 @@
 | Test | 312 passing (verificato con `cargo test -q` il 2026-03-04) |
 | Binary (full) | ~50MB |
 | Provider LLM | 14 |
-| Canali | 6 (CLI, Telegram, Discord*, WhatsApp*, Slack*, Email*) |
-| Tool built-in | 13 (incl. knowledge, workflow) |
-| Pagine Web UI | 11 (incl. /knowledge) |
+| Canali | 7 (CLI, Telegram, Discord*, WhatsApp*, Slack*, Email*, Web) |
+| Tool built-in | ~20 (incl. knowledge, workflow, business, browser, approval, read_email) |
+| Pagine Web UI | 17 (/chat, /dashboard, /setup, /channels, /browser, /automations, /workflows, /business, /skills, /mcp, /memory, /knowledge, /vault, /permissions, /approvals, /account, /logs) |
 | Feature flags | 12 |
 
 *\* = parziale/stub*
@@ -794,16 +794,18 @@ Homun: "La fattura e' di 1.250€ da Fornitore XYZ per servizi consulenza,
 | | WorkflowEngine init con DB + AgentLoop + event channel | | | |
 | | Event loop nel gateway per routing notifiche ai canali | | | |
 | | Resume automatico workflow al boot del gateway | | | |
-| WF-6 | **Web UI workflows** | `web/pages.rs`, `web/api.rs`, `static/js/workflows.js` | ~300 | TODO |
-| | Pagina /workflows con lista, status, progress bar | | | |
-| | Dettaglio workflow con step timeline + risultati | | | |
-| | Pulsanti approve/cancel da UI | | | |
-| WF-7 | **Trigger da automazioni/cron** | `scheduler/automations.rs`, `workflows/engine.rs` | ~150 | TODO |
-| | Automazione puo' creare un workflow come output (non solo prompt singolo) | | | |
-| | Cron trigger: `workflow_template_id` in automazione → avvia workflow su schedule | | | |
-| | Concatenazione: automation result → workflow input context | | | |
+| WF-6 | **Web UI workflows** | `web/pages.rs`, `web/api.rs`, `static/js/workflows.js` | ~640 | ✅ DONE |
+| | Pagina /workflows con stats grid, create form, lista, detail panel | | | |
+| | 5 API endpoints (list, create, get, approve, cancel) | | | |
+| | Step builder dinamico + step timeline con stato/risultato | | | |
+| | Auto-refresh 15s, approve/cancel da UI | | | |
+| WF-7 | **Trigger da automazioni/cron** | `scheduler/cron.rs`, `storage/db.rs`, `web/api.rs`, `static/js/automations.js` | ~180 | ✅ DONE |
+| | Colonna `workflow_steps_json` su automations (migrazione 014) | | | |
+| | CronScheduler con WorkflowEngine via OnceCell (late-binding) | | | |
+| | Se automation ha steps → crea workflow, altrimenti prompt singolo (fallback) | | | |
+| | Toggle "Execute as workflow" nel form automazioni + step builder | | | |
 
-**Completato: WF-1..5 (~1,490 LOC) — TODO: WF-6 (Web UI), WF-7 (trigger automation/cron)**
+**Completato: WF-1..7 (~2,310 LOC) — Workflow Engine completo**
 
 ---
 
@@ -861,6 +863,272 @@ Homun: "La fattura e' di 1.250€ da Fornitore XYZ per servizi consulenza,
 | | Auto-start on boot | | | |
 
 **Stima totale Sprint 8: ~540 LOC**
+
+---
+
+## Programma Trasversale — Skill Runtime Parity (P0/P1)
+
+> Obiettivo: portare il runtime skill a parita 1:1 con ClawHub/OpenClaw.
+> Se le skill ClawHub funzionano su Homun, anche Felix (business autopilot) diventa una skill installabile.
+> Riferimento: `~/Projects/openclaw/src/agents/skills/` per implementazione OpenClaw.
+
+### Contesto
+
+OpenClaw ha un sistema skill maturo con:
+- **Eligibility gating** a load-time (bins, env, config, os)
+- **Invocation policy** (user-invocable, disable-model-invocation)
+- **Tool policy** runtime (allow/deny per agent/context, hard enforcement)
+- **Env/secret injection** per skill (apiKey → process.env)
+- **Security scanner** pre-install (static analysis for suspicious patterns)
+- **Lobster** (workflow DSL) — ma e' un plugin tool separato, NON parte delle skill
+
+Homun ha gia':
+- ✅ Workflow Engine (~2,310 LOC) — piu' potente di Lobster (DB, retry, resume, Web UI, cron)
+- ✅ Skill Shield (security scanner pre-install)
+- ✅ Sandbox unificata (Docker/native) per script skill
+- ✅ Context header con path, scripts, references (SKL-1)
+- ✅ Slash command dispatch `/skill-name args` (SKL-1)
+- ✅ Binary dependency check con warning (SKL-1)
+- ✅ Variable substitution per compatibilita Claude Code skills (SKL-1)
+
+### Milestone
+
+| # | Scope | Priorita | LOC stimate | Stato |
+|---|-------|----------|-------------|-------|
+| SKL-1 | **Context header + slash commands** | P0 | ~256 | ✅ DONE |
+| | Activation header: skill dir, scripts, references, run instructions | | | |
+| | Slash command `/skill-name args` → system message injection | | | |
+| | `substitute_skill_variables()` ($ARGUMENTS, ${SKILL_DIR}, $USER_NAME) | | | |
+| | `extract_required_bins()` + warning se mancanti | | | |
+| | `list_skill_references()` + `build_skill_activation_header()` | | | |
+| SKL-2 | **Eligibility gating completa** | P1 | ~100 | ✅ DONE |
+| | `SkillRequirements` struct: bins, any_bins, env, config, os | | | |
+| | `extract_requirements()` + `check_eligibility()` | | | |
+| | `eligible: bool` su `Skill`, `check_all_eligibility()`, `list_eligible()` | | | |
+| | Skill non eleggibili escluse dal prompt e tool registration | | | |
+| | 5 test unitari | | | |
+| SKL-3 | **Invocation policy** | P1 | ~60 | ✅ DONE |
+| | `user-invocable: false` — skill nascosta da slash commands | | | |
+| | `disable-model-invocation: true` — skill esclusa dal prompt LLM | | | |
+| | `list_for_model()` filtra eligible + model-invocable | | | |
+| | 3 test unitari | | | |
+| SKL-4 | **Tool policy per-skill (hard enforcement)** | P0 | ~130 | ✅ DONE |
+| | `parse_allowed_tools()` con alias mapping (Web, Bash, Read, etc.) | | | |
+| | `skill_allowed_tools: Option<HashSet<String>>` in agent loop | | | |
+| | Defense in depth: soft (filtra tool_defs) + hard (runtime block) | | | |
+| | Skills sempre callable (bypass policy) — backward compatible | | | |
+| | 5 test unitari | | | |
+| SKL-5 | **Skill env/secret injection** | P1 | ~110 | ✅ DONE |
+| | `SkillsConfig` + `SkillEntryConfig` in config/schema.rs | | | |
+| | `resolve_skill_env()` con vault:// resolution | | | |
+| | `skill_env` su `ToolContext` → iniettato in Shell subprocess | | | |
+| | `execute_skill_script_with_env()` per script execution | | | |
+| | 3 test unitari | | | |
+| SKL-6 | **Skill audit logging** | P2 | ~80 | ✅ DONE |
+| | Migration 016, `insert_skill_audit()` + `list_skill_audits()` | | | |
+| | Fire-and-forget audit (tool-call + slash command) | | | |
+| | API endpoint `GET /api/v1/skills/audit?limit=N` | | | |
+| SKL-7 | **E2E test suite** | P1 | ~100 | ✅ DONE |
+| | `test_backward_compatibility_no_new_fields` | | | |
+| | `test_full_lifecycle_eligibility_and_invocation` (4 skills, policy combos) | | | |
+| | `test_tool_policy_parsing_complex` | | | |
+| | `test_scan_with_eligibility` (scan → eligibility → filtering) | | | |
+| | 41 test totali nel modulo loader (tutti passing) | | | |
+
+**Programma SKL completato: ~580 LOC effettive (SKL-1..7)**
+
+### Differenze architetturali vs OpenClaw
+
+| Aspetto | OpenClaw | Homun | Note |
+|---------|---------|-------|------|
+| **Caricamento skill** | LLM legge SKILL.md via `read` tool | Tool-call interception + header | Homun e' piu efficiente (1 round-trip in meno) |
+| **Workflow runtime** | Lobster (DSL plugin, opzionale) | Workflow Engine (DB, retry, resume, UI) | Homun ha di piu — Lobster e' solo piping + approval |
+| **Tool restriction** | Per-agent allow/deny (runtime) | `skill_allowed_tools` hard enforcement + tool_defs filtering | ✅ Parita — defense in depth (soft+hard) |
+| **Secret injection** | process.env prima del turno LLM | `resolve_skill_env()` + `ToolContext.skill_env` → subprocess | ✅ Parita — vault:// resolution + env injection |
+| **Security scan** | Warnings only, non blocca | Skill Shield (scan + VirusTotal + risk score) | Homun ha di piu (VirusTotal integration) |
+| **Eligibility** | bins + env + config + os | bins + any_bins + env + os (`check_eligibility()`) | ✅ Parita — config skip (future) |
+| **Invocation policy** | user-invocable + disable-model | user_invocable + disable_model_invocation | ✅ Parita |
+| **Audit** | Event logging | `skill_audit` table + API endpoint | ✅ Parita |
+
+---
+
+## Feature Implementate — Non Tracciate in Sprint
+
+> Queste feature sono state implementate durante lo sviluppo ma non erano pianificate come task espliciti.
+> Documentate qui per completezza dell'inventario.
+
+| Feature | File principali | Note |
+|---------|----------------|------|
+| **Approval system** | `tools/approval.rs`, `web/api.rs` (7 endpoint), `web/pages.rs` (/approvals), `static/js/approvals.js` | Tool + API + pagina Web UI dedicata per approvazione azioni semi-autonome |
+| **2FA/TOTP** | `web/api.rs` (7 endpoint: setup/verify/status/disable/backup/validate/recover) | Autenticazione a due fattori per operazioni sensibili (vault, knowledge sensitive) |
+| **Account management** | `web/pages.rs` (/account), `web/api.rs` | Pagina gestione account/identita' utente |
+| **API tokens** | `web/api.rs` | Generazione e gestione token API per accesso programmatico |
+| **Webhook ingress** | `web/api.rs` | Endpoint per ricezione webhook esterni (Stripe, GitHub, etc.) |
+| **Email multi-account** | `channels/email.rs`, `tools/read_email.rs` | Supporto account multipli + tool `read_email_inbox` per LLM |
+| **Exfiltration guard** | `security/mod.rs` | Filtro anti-esfiltrazione dati sensibili nelle risposte |
+| **TUI (ratatui)** | `tui/app.rs`, `tui/ui.rs`, `tui/event.rs` | Interfaccia terminale interattiva alternativa al CLI |
+| **Canale Web** | `channels/web.rs`, `web/ws.rs` | Chat via WebSocket nella Web UI — settimo canale |
+| **E-Stop** | `security/estop.rs`, `web/api.rs` | Kill switch emergenza per agent loop, network, browser, MCP |
+| **Provider health** | `provider/health.rs` | Circuit breaker, EMA latency, auto-skip provider down |
+
+---
+
+## BIZ — Business Autopilot (P1)
+
+> Obiettivo: agente AI autonomo che trova nicchie, crea strategie, vende prodotti, traccia revenue, auto-corregge.
+> Filosofia MCP-first: il core traccia contabilita e orchestrazione; integrazioni esterne (Stripe, PayPal, Twitter, email, fatturazione) via MCP server.
+
+### BIZ-1: Core Engine (~2,030 LOC)
+
+| # | Task | File principali | Stato |
+|---|------|----------------|-------|
+| BIZ-1.1 | **DB migration** | `migrations/015_business.sql` | ✅ DONE |
+| | 6 tabelle: businesses, strategies, products, transactions, orders, insights | | |
+| BIZ-1.2 | **Tipi domain** | `src/business/mod.rs` | ✅ DONE |
+| | Enum status + struct Business, Strategy, Product, Transaction, Order, etc. | | |
+| BIZ-1.3 | **DB operations** | `src/business/db.rs` | ✅ DONE |
+| | CRUD per ogni entita + revenue_summary + budget tracking | | |
+| BIZ-1.4 | **Engine** | `src/business/engine.rs` | ✅ DONE |
+| | Lifecycle (launch/pause/resume/close), OODA prompt builder, budget enforcement | | |
+| BIZ-1.5 | **Tool LLM** | `src/tools/business.rs` | ✅ DONE |
+| | 13 azioni: launch, list, status, research, strategize, create_product, etc. | | |
+| | Autonomia semi/budget/full, OnceCell late-binding | | |
+| BIZ-1.6 | **Config** | `src/config/schema.rs` | ✅ DONE |
+| | BusinessConfig: enabled, default_autonomy, currency, fiscal | | |
+| BIZ-1.7 | **Wiring** | `src/main.rs`, `server.rs`, `gateway.rs` | ✅ DONE |
+| BIZ-1.8 | **System prompt** | `src/agent/prompt/sections.rs` | ✅ DONE |
+| BIZ-1.9 | **Web UI** | `src/web/pages.rs` | ✅ DONE |
+| | Pagina /business con form, stats, lista, detail panel | | |
+| BIZ-1.10 | **API REST** | `src/web/api.rs` | ✅ DONE |
+| | 10 endpoint: list, create, get, pause, resume, close, strategies, products, transactions, revenue | | |
+| BIZ-1.11 | **Frontend JS** | `static/js/business.js` | ✅ DONE |
+
+**BIZ-1 completato: ~2,030 LOC**
+
+### BIZ-2: Pagamenti (TODO, ~1,500 LOC)
+
+| # | Task | Note |
+|---|------|------|
+| BIZ-2.1 | Payment trait | `PaymentProvider`: create_checkout, verify, webhook |
+| BIZ-2.2 | Stripe | Checkout + Webhooks (anche via MCP) |
+| BIZ-2.3 | PayPal | Orders API + IPN (anche via MCP) |
+| BIZ-2.4 | Storefront | Landing page pubblica `/store/{slug}` |
+
+### BIZ-3: Contabilita (TODO, ~400 LOC)
+
+| # | Task | Note |
+|---|------|------|
+| BIZ-3.1 | Tracking IVA | Tax rate/amount su transactions, suggerimento aliquota per paese |
+| BIZ-3.2 | Export CSV | Transazioni filtrabili per periodo/tipo + riepilogo IVA |
+
+> NO fatture — l'utente le fa manualmente o via MCP (es. FattureInCloud, Stripe Invoicing)
+
+### BIZ-4: Marketing Skills (TODO, ~600 LOC)
+
+| # | Task | Note |
+|---|------|------|
+| BIZ-4.1 | X/Twitter skill | Post, thread, analytics (o via MCP) |
+| BIZ-4.2 | Email marketing | Newsletter via SMTP/Resend (o via MCP) |
+
+### BIZ-5: Crypto (TODO, ~1,000 LOC)
+
+| # | Task | Note |
+|---|------|------|
+| BIZ-5.1 | Wallet ETH/SOL | Generazione, balance, receive monitoring |
+| BIZ-5.2 | Token ERC-20/SPL | Deploy su Base/Ethereum/Solana |
+| BIZ-5.3 | Crypto payments | Wallet address per pagamenti |
+
+**Stima totale BIZ: ~5,530 LOC (BIZ-1 done, BIZ-2..5 TODO)**
+
+---
+
+## Programma Security Web (P0)
+
+> Obiettivo: proteggere la Web UI e le API da accesso non autorizzato.
+> Attualmente la Web UI e tutti gli endpoint API sono completamente aperti — chiunque con accesso alla porta puo' controllare l'agent, leggere il vault, cancellare dati.
+> **Critico**: senza auth, il pairing cifrato della Mobile App e' inutile (il gateway e' gia' esposto).
+
+| # | Task | File principali | LOC stimate | Stato |
+|---|------|----------------|-------------|-------|
+| SEC-1 | **Autenticazione Web UI** | `web/auth.rs` (nuovo), `web/server.rs`, `web/api.rs` | ~300 | TODO |
+| | Login page con username/password (hash argon2) | | | |
+| | Session token (JWT o cookie firmato) | | | |
+| | Middleware auth su tutte le route (eccetto /login e /api/health) | | | |
+| | Setup iniziale: primo utente crea credenziali | | | |
+| SEC-2 | **HTTPS nativo** | `web/server.rs`, `config/schema.rs` | ~100 | TODO |
+| | TLS via rustls (auto-generazione cert self-signed o Let's Encrypt) | | | |
+| | Redirect HTTP → HTTPS | | | |
+| | Config: `[web] tls_cert`, `tls_key`, `auto_tls` | | | |
+| SEC-3 | **Rate limiting API** | `web/server.rs` | ~80 | TODO |
+| | Rate limiter per IP (tower-governor o simile) | | | |
+| | Limiti separati per auth endpoint (anti-brute-force) e API generiche | | | |
+| | Config: `[web] rate_limit_per_minute` | | | |
+| SEC-4 | **API key auth per accesso programmatico** | `web/auth.rs`, `web/api.rs`, `storage/db.rs` | ~120 | TODO |
+| | Header `Authorization: Bearer <token>` per API REST | | | |
+| | CRUD token da Web UI (/account) | | | |
+| | Scoping opzionale (read-only, admin) | | | |
+
+**Stima totale Security Web: ~600 LOC**
+
+---
+
+## Programma Mobile App — Homun Companion (P2)
+
+> Obiettivo: app nativa iOS/Android che offre un'esperienza personalizzata rispetto ai canali generici (Telegram, Discord).
+> Telegram funziona ma un'app dedicata consente risposte personalizzate, interazioni ricche, e UX su misura.
+
+### Perche' un'app dedicata
+
+- **UX personalizzata**: risposte formattate (markdown rendering, code blocks, grafici inline), non limitate al formato Telegram
+- **Interazioni ricche**: bottoni inline contestuali, form, approval gates visivi, notifiche push granulari
+- **Vault sicuro via pairing**: pairing crittografato diretto con l'istanza Homun — i secret vengono mostrati in chiaro nell'app senza bisogno di OTP/PIN, perche' il canale e' gia' cifrato end-to-end
+- **Dashboard mobile**: stats business, revenue, workflow status, memoria — tutto accessibile dal telefono
+- **Allegati nativi**: foto, documenti, audio direttamente dalla camera/gallery con pipeline ottimizzata
+- **Offline cache**: ultime conversazioni consultabili anche senza rete
+
+### Architettura
+
+```
+App (Flutter / Dart)
+       │
+       ├── WebSocket (streaming real-time)
+       ├── REST API (gia' esistente: /api/v1/*)
+       └── Pairing cifrato
+               │
+               ▼
+       Homun Gateway
+               │
+               ├── Channel "app" (nuovo canale in src/channels/)
+               └── Vault: secret visibili in chiaro via canale cifrato
+```
+
+### APP-1: Fondazioni (~1,200 LOC app + ~200 LOC Rust)
+
+| # | Task | Note |
+|---|------|------|
+| APP-1.1 | **Pairing sicuro** | QR code / deep link → scambio chiavi (X25519 o simile), sessione cifrata |
+| APP-1.2 | **Channel "app"** | Nuovo canale `src/channels/app.rs` — WebSocket + push notification routing |
+| APP-1.3 | **Chat base** | Invio/ricezione messaggi, streaming, markdown rendering |
+| APP-1.4 | **Push notifications** | FCM (Android) + APNs (iOS) per risposte, approval gate, alert |
+
+### APP-2: Esperienza Ricca (~800 LOC app)
+
+| # | Task | Note |
+|---|------|------|
+| APP-2.1 | **Vault mobile** | Visualizzazione secret in chiaro (pairing cifrato = trusted), generazione token |
+| APP-2.2 | **Dashboard** | Stats business, revenue, workflow, memoria — mobile-first |
+| APP-2.3 | **Approval inline** | Bottoni approve/deny per workflow e azioni semi-autonome |
+| APP-2.4 | **Allegati nativi** | Camera, gallery, file picker → upload + RAG ingestion |
+
+### APP-3: Polish (~400 LOC app)
+
+| # | Task | Note |
+|---|------|------|
+| APP-3.1 | **Offline cache** | Conversazioni recenti consultabili offline |
+| APP-3.2 | **Biometric lock** | FaceID / fingerprint per accesso app e vault |
+| APP-3.3 | **Widget** | iOS widget / Android widget con stats rapide |
+
+**Stima totale APP: ~2,600 LOC (app + backend)**
 
 ---
 
@@ -952,14 +1220,14 @@ Sprint 6: RAG Knowledge Base (P1)          ✅ COMPLETE (~2,830 LOC)
   ✅ 6.14 Directory watcher (auto-ingest) — watcher.rs, notify crate
   ✅ 6.15 Sorgenti cloud via MCP (framework) — cloud.rs, CloudSync
     |
-Programma Workflow Engine (P1)             ⚠️ PARTIAL (~1,490 LOC)
+Programma Workflow Engine (P1)             ✅ DONE (~2,310 LOC)
   ✅ WF-1 Schema DB + tipi (workflows + workflow_steps)
   ✅ WF-2 DB layer (CRUD, status, context, resume)
   ✅ WF-3 Engine orchestratore (step runner, approval, retry, resume-on-boot)
   ✅ WF-4 Tool LLM (create/list/status/approve/cancel)
   ✅ WF-5 Wiring gateway (init, event loop, auto-resume)
-  TODO WF-6 Web UI workflows
-  TODO WF-7 Trigger da automazioni/cron
+  ✅ WF-6 Web UI workflows (pagina, API, JS, CSS)
+  ✅ WF-7 Trigger da automazioni/cron (OnceCell, migration 014, step builder)
     |
 Sprint 7: Canali Phase 2 (P2)              TODO (~600 LOC)
   7.1-7.4 Discord, Slack, Email, WhatsApp
@@ -971,12 +1239,39 @@ Sprint 8: Hardening (P2)                   ✅ COMPLETE (~360 LOC)
   ✅ 8.4 E-Stop (kill switch + Web UI button)
   ✅ 8.5 Service install
     |
+BIZ: Business Autopilot (P1)               ⚠️ PARTIAL
+  ✅ BIZ-1 Core Engine (DB, tipi, engine, tool, config, wiring, web UI, API, JS)
+  TODO BIZ-2 Pagamenti (Stripe, PayPal, storefront)
+  TODO BIZ-3 Contabilita (tracking IVA, export CSV)
+  TODO BIZ-4 Marketing (X/Twitter, Email — skills o MCP)
+  TODO BIZ-5 Crypto (wallet, token deploy, pagamenti)
+    |
+Programma Skill Runtime Parity (P0/P1)   ✅ COMPLETE (~580 LOC)
+  ✅ SKL-1 Context header + slash commands + bins check + variable substitution
+  ✅ SKL-2 Eligibility gating (env, any_bins, os, check_eligibility)
+  ✅ SKL-3 Invocation policy (user-invocable, disable-model-invocation, list_for_model)
+  ✅ SKL-4 Tool policy per-skill (parse_allowed_tools, hard enforcement, defense in depth)
+  ✅ SKL-5 Skill env/secret injection (SkillsConfig, vault://, ToolContext.skill_env)
+  ✅ SKL-6 Skill audit logging (migration 016, fire-and-forget, API endpoint)
+  ✅ SKL-7 E2E test suite (41 test nel modulo loader, tutti passing)
+    |
+Programma Security Web (P0)              TODO (~600 LOC)
+  TODO SEC-1 Autenticazione Web UI (login, session, middleware)
+  TODO SEC-2 HTTPS nativo (rustls, auto-cert)
+  TODO SEC-3 Rate limiting API
+  TODO SEC-4 API key auth per accesso programmatico
+    |
+Programma Mobile App (P2)                 TODO (~2,600 LOC)
+  TODO APP-1 Fondazioni (pairing, channel, chat, push)
+  TODO APP-2 Esperienza ricca (vault mobile, dashboard, approval, allegati)
+  TODO APP-3 Polish (offline, biometric, widget)
+    |
 Sprint 9+: Future (P3)
   Voice, Extended thinking, Prometheus, distribuzione
 ```
 
-**Completato: Sprint 1-6 + Sprint 8 + SBX-1/5 + CHAT-1..6 + Browser + Design System + Workflow Engine (core)**
-**Rimanente: WF-6/7 (UI + trigger), SBX-2..4 + SBX-6, CHAT-7, Browser E2E, Sprint 7, Sprint 9+**
+**Completato: Sprint 1-6 + Sprint 8 + SBX-1/5 + CHAT-1..6 + Browser + Design System + Workflow Engine + BIZ-1 + SKL-1..7 + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
+**Rimanente: Security Web (P0), SBX-2..4/6, CHAT-7, Browser E2E, Sprint 7, BIZ-2..5, Mobile App, Sprint 9+**
 
 ---
 
@@ -1001,9 +1296,11 @@ Sprint 9+: Future (P3)
 2. **RAG Knowledge Base personale** — ne OpenClaw ne ZeroClaw hanno ingestion + ricerca ibrida sui documenti utente
 3. **Browser via MCP Playwright** — tool unificato con stealth anti-bot, compact_tree, auto-snapshot
 4. **Exfiltration filter** — OpenClaw non ce l'ha
-5. **Web UI ricca** — 11 pagine embedded + design system proprietario con accent picker
-6. **Skill ecosystem** — ClawHub + OpenSkills + hot-reload
-7. **Single binary Rust** — ~50MB, no runtime
-8. **XML fallback auto** — supporta modelli senza function calling
-9. **Prompt modulare** — sezioni componibili per mode
-10. **Browser per modelli deboli** — ref normalization, schema piatto, orchestrazione automatica
+5. **Business Autopilot** — agente autonomo per business con OODA loop, budget enforcement, MCP-first
+6. **Web UI ricca** — 17 pagine embedded + design system proprietario con accent picker
+7. **Skill ecosystem** — ClawHub + OpenSkills + hot-reload
+8. **Mobile App con pairing cifrato** — vault secret in chiaro via canale sicuro, UX personalizzata oltre Telegram
+9. **Single binary Rust** — ~50MB, no runtime
+10. **XML fallback auto** — supporta modelli senza function calling
+11. **Prompt modulare** — sezioni componibili per mode
+12. **Browser per modelli deboli** — ref normalization, schema piatto, orchestrazione automatica

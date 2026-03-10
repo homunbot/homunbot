@@ -5,6 +5,8 @@ use anyhow::Result;
 use tokio::sync::{mpsc, Mutex};
 
 use crate::storage::{AutomationRow, AutomationUpdate, CronJobRow, Database};
+use crate::workflows::engine::WorkflowEngine;
+use crate::workflows::{StepDefinition, WorkflowCreateRequest};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScheduledKind {
@@ -40,6 +42,8 @@ pub struct CronScheduler {
     db: Database,
     event_tx: mpsc::Sender<CronEvent>,
     jobs: Arc<Mutex<Vec<CronJobRow>>>,
+    /// Late-bound workflow engine — set after AgentLoop is created.
+    workflow_engine: Arc<tokio::sync::OnceCell<Arc<WorkflowEngine>>>,
 }
 
 impl CronScheduler {
@@ -48,7 +52,13 @@ impl CronScheduler {
             db,
             event_tx,
             jobs: Arc::new(Mutex::new(Vec::new())),
+            workflow_engine: Arc::new(tokio::sync::OnceCell::new()),
         }
+    }
+
+    /// Bind the workflow engine (late init — engine is created after CronScheduler).
+    pub fn set_workflow_engine(&self, engine: Arc<WorkflowEngine>) {
+        let _ = self.workflow_engine.set(engine);
     }
 
     /// Load jobs from DB and start the scheduler loop.
@@ -231,6 +241,73 @@ impl CronScheduler {
                 run_id = %run_id,
                 "Automation firing"
             );
+
+            // If automation has workflow steps, create a workflow instead of sending prompt
+            if let Some(ref steps_json) = automation.workflow_steps_json {
+                if let Some(engine) = self.workflow_engine.get() {
+                    match serde_json::from_str::<Vec<StepDefinition>>(steps_json) {
+                        Ok(steps) if !steps.is_empty() => {
+                            let req = WorkflowCreateRequest {
+                                name: automation.name.clone(),
+                                objective: automation.prompt.clone(),
+                                steps,
+                                deliver_to: automation.deliver_to.clone(),
+                            };
+                            let channel = automation
+                                .deliver_to
+                                .as_deref()
+                                .unwrap_or("automation");
+                            match engine.create_and_start(req, channel, channel).await {
+                                Ok(wf_id) => {
+                                    let msg = format!("Workflow {wf_id} started");
+                                    let _ = self
+                                        .db
+                                        .complete_automation_run(&run_id, "completed", Some(&msg))
+                                        .await;
+                                    let _ = self
+                                        .db
+                                        .update_automation(
+                                            &automation.id,
+                                            AutomationUpdate {
+                                                last_result: Some(Some(msg)),
+                                                ..Default::default()
+                                            },
+                                        )
+                                        .await;
+                                }
+                                Err(e) => {
+                                    let msg = format!("Failed to start workflow: {e}");
+                                    tracing::error!(automation_id = %automation.id, %e, "Workflow creation failed");
+                                    let _ = self
+                                        .db
+                                        .complete_automation_run(&run_id, "error", Some(&msg))
+                                        .await;
+                                    let _ = self
+                                        .db
+                                        .update_automation(
+                                            &automation.id,
+                                            AutomationUpdate {
+                                                status: Some("error".to_string()),
+                                                last_result: Some(Some(msg)),
+                                                ..Default::default()
+                                            },
+                                        )
+                                        .await;
+                                }
+                            }
+                            continue; // Skip normal prompt path
+                        }
+                        Ok(_) => {
+                            tracing::warn!(automation_id = %automation.id, "Empty workflow steps, falling back to prompt");
+                        }
+                        Err(e) => {
+                            tracing::warn!(automation_id = %automation.id, error = %e, "Invalid workflow steps JSON, falling back to prompt");
+                        }
+                    }
+                } else {
+                    tracing::warn!(automation_id = %automation.id, "Workflow engine not available, falling back to prompt");
+                }
+            }
 
             let runtime_prompt = crate::scheduler::automations::build_runtime_run_input_from_plan(
                 automation.plan_json.as_deref(),

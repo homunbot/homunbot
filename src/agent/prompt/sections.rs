@@ -158,6 +158,10 @@ impl PromptSection for ToolsSection {
             .registered_tool_names
             .iter()
             .any(|n| n == "read_email_inbox");
+        let has_workflow = ctx
+            .registered_tool_names
+            .iter()
+            .any(|n| n == "workflow");
 
         if has_browser || has_web_search || has_web_fetch {
             prompt.push_str("\n### Tool Routing Rules\n\n");
@@ -227,6 +231,20 @@ impl PromptSection for ToolsSection {
             prompt.push_str(
                 "When asked to read/check/summarize inbox emails, use **read_email_inbox** first.\n\
                  Do not claim missing access before attempting this tool.\n",
+            );
+        }
+
+        if has_workflow {
+            prompt.push_str("\n### Workflow Rules\n\n");
+            prompt.push_str(
+                "Use the **workflow** tool for complex, multi-step tasks that need autonomous orchestration.\n\
+                 Workflows are ideal when a task has 3+ distinct steps that each require their own reasoning \
+                 (e.g. 'research competitors, then analyze findings, then write a report').\n\
+                 Each step runs independently with its own agent session, results pass between steps automatically, \
+                 and steps can require human approval before proceeding.\n\
+                 Use `action: \"create\"` with a list of steps (name + instruction). \
+                 Use `action: \"list\"` or `action: \"status\"` to check progress.\n\
+                 Do NOT use workflow for simple single-step tasks — just answer directly.\n",
             );
         }
 
@@ -321,10 +339,10 @@ impl PromptSection for SkillsSection {
 
         let mut prompt = String::from("## Skills\n\n");
         prompt.push_str("Before replying: scan available skills and their descriptions.\n");
-        prompt
-            .push_str("- If exactly one skill clearly applies: read its SKILL.md and follow it.\n");
+        prompt.push_str("- If exactly one skill clearly applies: call it as a tool to activate its instructions.\n");
         prompt.push_str("- If multiple could apply: choose the most specific one.\n");
-        prompt.push_str("- If none clearly apply: do not read any SKILL.md.\n\n");
+        prompt.push_str("- If none clearly apply: do not activate any skill.\n");
+        prompt.push_str("- Users can invoke skills directly with `/skill-name arguments`.\n\n");
         prompt.push_str(ctx.skills_summary);
 
         Ok(prompt)
@@ -475,6 +493,43 @@ impl PromptSection for RuntimeSection {
         );
 
         Ok(prompt)
+    }
+}
+
+// ── Business Section ─────────────────────────────────────────────────
+
+pub struct BusinessSection;
+
+impl PromptSection for BusinessSection {
+    fn name(&self) -> &str {
+        "business"
+    }
+
+    fn build(&self, ctx: &PromptContext<'_>) -> Result<String> {
+        let has_business = ctx
+            .registered_tool_names
+            .iter()
+            .any(|n| n == "business");
+
+        if !has_business {
+            return Ok(String::new());
+        }
+
+        Ok(String::from(
+            "### Business Autopilot Rules\n\n\
+             You have the **business** tool for autonomous business management.\n\n\
+             **Actions**: launch, list, status, research, strategize, create_product, \
+             record_sale, record_expense, revenue, review, pivot, pause, close.\n\n\
+             **Autonomy levels**:\n\
+             - **semi**: Always propose strategies, products, and pivots to the user before executing.\n\
+             - **budget**: Execute freely within budget. Propose anything exceeding remaining budget.\n\
+             - **full**: Execute all actions autonomously.\n\n\
+             **OODA Reviews**: After launching a business, create an automation with the `ooda_prompt` \
+             returned by the launch action. This enables periodic strategy review cycles.\n\n\
+             **Research before strategy**: Use `research` to gather market insights before creating strategies.\n\
+             **MCP integration**: If MCP tools are available for payments, marketing, or analytics, \
+             use them alongside the business tool for execution.\n",
+        ))
     }
 }
 

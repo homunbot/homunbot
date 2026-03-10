@@ -407,6 +407,7 @@ mod tests {
             chat_id: "test".to_string(),
             message_tx: None,
             approval_manager: None,
+            skill_env: None,
         }
     }
 

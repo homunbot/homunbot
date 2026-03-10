@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -53,6 +54,30 @@ async fn execute_skill_script_inner(
     sandbox: &ExecutionSandboxConfig,
     sanitize_env: bool,
 ) -> Result<ScriptOutput> {
+    execute_skill_script_with_env(
+        skill_dir,
+        script_name,
+        args,
+        timeout_secs,
+        sandbox,
+        sanitize_env,
+        &HashMap::new(),
+    )
+    .await
+}
+
+/// Execute a skill script with explicit env vars and sandbox configuration.
+///
+/// SKL-5: extra_env allows injecting skill-specific env vars resolved from config.
+pub async fn execute_skill_script_with_env(
+    skill_dir: &Path,
+    script_name: &str,
+    args: &[&str],
+    timeout_secs: u64,
+    sandbox: &ExecutionSandboxConfig,
+    sanitize_env: bool,
+    extra_env: &HashMap<String, String>,
+) -> Result<ScriptOutput> {
     let scripts_dir = skill_dir.join("scripts");
     let script_path = scripts_dir.join(script_name);
 
@@ -87,7 +112,7 @@ async fn execute_skill_script_inner(
         interpreter,
         &command_args,
         skill_dir,
-        &std::collections::HashMap::new(),
+        extra_env,
         sanitize_env,
         sandbox,
     )

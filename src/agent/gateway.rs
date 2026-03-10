@@ -74,6 +74,8 @@ pub struct Gateway {
     /// Workflow engine + event receiver for persistent multi-step tasks
     workflow_engine: Option<Arc<WorkflowEngine>>,
     workflow_event_rx: Option<mpsc::Receiver<WorkflowEvent>>,
+    /// Business engine for autonomous business management
+    business_engine: Option<Arc<crate::business::engine::BusinessEngine>>,
 }
 
 impl Gateway {
@@ -100,6 +102,7 @@ impl Gateway {
             )),
             workflow_engine: None,
             workflow_event_rx: None,
+            business_engine: None,
         }
     }
 
@@ -121,6 +124,14 @@ impl Gateway {
     ) {
         self.workflow_engine = Some(engine);
         self.workflow_event_rx = Some(event_rx);
+    }
+
+    /// Set the business engine for autonomous business management.
+    pub fn set_business_engine(
+        &mut self,
+        engine: Arc<crate::business::engine::BusinessEngine>,
+    ) {
+        self.business_engine = Some(engine);
     }
 
     /// Get the estop handles Arc (for populating from main.rs after gateway creation).
@@ -319,6 +330,8 @@ impl Gateway {
 
             let web_db = self.db.clone();
             let web_health_tracker = self.health_tracker.clone();
+            let web_workflow_engine = self.workflow_engine.clone();
+            let web_business_engine = self.business_engine.clone();
             let web_estop_handles = self.estop_handles.clone();
             // Share the memory searcher with the web server for hybrid search API
             #[cfg(feature = "local-embeddings")]
@@ -332,6 +345,12 @@ impl Gateway {
                 server.set_stream_rx(stream_rx);
                 if let Some(tracker) = web_health_tracker {
                     server.set_health_tracker(tracker);
+                }
+                if let Some(wf_engine) = web_workflow_engine {
+                    server.set_workflow_engine(wf_engine);
+                }
+                if let Some(biz_engine) = web_business_engine {
+                    server.set_business_engine(biz_engine);
                 }
                 server.set_estop_handles(web_estop_handles);
                 #[cfg(feature = "local-embeddings")]

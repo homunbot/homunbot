@@ -241,6 +241,17 @@ impl Database {
         Ok(())
     }
 
+    /// Delete a workflow and all its steps.
+    pub async fn delete_workflow(&self, workflow_id: &str) -> Result<()> {
+        // Steps are deleted by ON DELETE CASCADE
+        sqlx::query("DELETE FROM workflows WHERE id = ?")
+            .bind(workflow_id)
+            .execute(self.pool())
+            .await
+            .with_context(|| format!("Failed to delete workflow {workflow_id}"))?;
+        Ok(())
+    }
+
     /// Cancel all pending steps of a workflow (for cancel/fail operations).
     pub async fn cancel_pending_steps(&self, workflow_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();

@@ -360,6 +360,7 @@ mod tests {
             chat_id: "123456".to_string(),
             message_tx: None,
             approval_manager: None,
+            skill_env: None,
         }
     }
 

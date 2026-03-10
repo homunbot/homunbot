@@ -300,6 +300,11 @@ impl Provider for OllamaProvider {
                     continue;
                 };
 
+                // Skip thinking-only chunks (thinking field set, no content)
+                if sc.message.thinking.is_some() && sc.message.content.is_empty() {
+                    continue;
+                }
+
                 // Text delta → forward to client
                 if !sc.message.content.is_empty() {
                     full_content.push_str(&sc.message.content);
@@ -349,11 +354,14 @@ impl Provider for OllamaProvider {
             }
         }
 
+        // Strip any <think> tags that leaked into content
+        let clean_content = Self::strip_think_tags(&full_content);
+
         Ok(ChatResponse {
-            content: if full_content.is_empty() {
+            content: if clean_content.is_empty() {
                 None
             } else {
-                Some(full_content)
+                Some(clean_content)
             },
             tool_calls,
             finish_reason,
@@ -379,10 +387,22 @@ impl OllamaProvider {
             .map(|(i, tc)| Self::normalize_tool_call(tc, i))
             .collect();
 
-        let content = if resp.message.content.is_empty() {
+        // Log thinking content for debugging
+        if let Some(ref thinking) = resp.message.thinking {
+            tracing::debug!(
+                thinking_len = thinking.len(),
+                "Ollama response included thinking content"
+            );
+        }
+
+        // Strip <think> tags from content — some models embed reasoning there
+        // even when the `think` parameter separates it into its own field.
+        let raw_content = Self::strip_think_tags(&resp.message.content);
+
+        let content = if raw_content.is_empty() {
             None
         } else {
-            Some(resp.message.content)
+            Some(raw_content)
         };
 
         let finish_reason = if !tool_calls.is_empty() {
@@ -403,6 +423,23 @@ impl OllamaProvider {
             finish_reason,
             usage,
         }
+    }
+
+    /// Strip `<think>...</think>` tags from content.
+    ///
+    /// Some models embed reasoning inside `<think>` tags in the `content` field
+    /// even when the `think` parameter separates it into a dedicated field.
+    /// This ensures thinking never leaks into the agent loop.
+    fn strip_think_tags(text: &str) -> String {
+        use regex::Regex;
+        use std::sync::LazyLock;
+
+        static THINK_RE: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r"(?s)<think[^>]*>.*?</think\s*>").expect("Invalid think regex")
+        });
+
+        let cleaned = THINK_RE.replace_all(text, "");
+        cleaned.trim().to_string()
     }
 }
 
@@ -475,6 +512,9 @@ struct OllamaResponse {
 struct OllamaResponseMessage {
     #[serde(default)]
     content: String,
+    /// Thinking/reasoning content (Ollama `think: true` — DeepSeek-R1, QwQ, etc.)
+    #[serde(default)]
+    thinking: Option<String>,
     #[serde(default)]
     tool_calls: Option<Vec<OllamaToolCall>>,
 }
@@ -749,6 +789,7 @@ mod tests {
         let resp = OllamaResponse {
             message: OllamaResponseMessage {
                 content: "Hello!".to_string(),
+                thinking: None,
                 tool_calls: None,
             },
             done: true,
@@ -772,6 +813,7 @@ mod tests {
         let resp = OllamaResponse {
             message: OllamaResponseMessage {
                 content: String::new(),
+                thinking: None,
                 tool_calls: Some(vec![OllamaToolCall {
                     function: OllamaFunction {
                         name: "shell".to_string(),
@@ -796,5 +838,96 @@ mod tests {
     fn test_provider_name() {
         let provider = OllamaProvider::new("", None);
         assert_eq!(provider.name(), "ollama");
+    }
+
+    #[test]
+    fn test_parse_response_with_thinking() {
+        // Ollama returns a `thinking` field inside the message when think: true
+        let json = r#"{
+            "model": "deepseek-r1",
+            "message": {
+                "role": "assistant",
+                "content": "The answer is 42.",
+                "thinking": "Let me reason about this step by step..."
+            },
+            "done": true,
+            "done_reason": "stop",
+            "prompt_eval_count": 100,
+            "eval_count": 50
+        }"#;
+        let resp: OllamaResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.message.content, "The answer is 42.");
+        assert_eq!(
+            resp.message.thinking.as_deref(),
+            Some("Let me reason about this step by step...")
+        );
+        assert!(resp.message.tool_calls.is_none());
+    }
+
+    #[test]
+    fn test_parse_response_thinking_with_tool_calls() {
+        // thinking + tool calls in the same response
+        let json = r#"{
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "thinking": "I need to run a command to check this.",
+                "tool_calls": [{
+                    "function": {
+                        "name": "shell",
+                        "arguments": {"command": "ls -la"}
+                    }
+                }]
+            },
+            "done": true,
+            "done_reason": "stop"
+        }"#;
+        let resp: OllamaResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.message.thinking.is_some());
+        let tcs = resp.message.tool_calls.unwrap();
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(tcs[0].function.name, "shell");
+    }
+
+    #[test]
+    fn test_build_chat_response_strips_think_tags() {
+        let tag = "think";
+        let provider = OllamaProvider::new("", None);
+        let resp = OllamaResponse {
+            message: OllamaResponseMessage {
+                content: format!("<{tag}>Long reasoning here...</{tag}>\nActual answer."),
+                thinking: None,
+                tool_calls: None,
+            },
+            done: true,
+            done_reason: Some("stop".to_string()),
+            prompt_eval_count: None,
+            eval_count: None,
+            total_duration: None,
+        };
+        let chat_resp = provider.build_chat_response(resp);
+        assert_eq!(chat_resp.content.as_deref(), Some("Actual answer."));
+    }
+
+    #[test]
+    fn test_strip_think_tags() {
+        let tag = "think";
+        assert_eq!(
+            OllamaProvider::strip_think_tags(&format!(
+                "<{tag}>reasoning</{tag}> answer"
+            )),
+            "answer"
+        );
+        assert_eq!(
+            OllamaProvider::strip_think_tags("no tags here"),
+            "no tags here"
+        );
+        assert_eq!(
+            OllamaProvider::strip_think_tags(&format!(
+                "<{tag}>block1</{tag}> middle <{tag}>block2</{tag}> end"
+            )),
+            "middle  end"
+        );
+        assert_eq!(OllamaProvider::strip_think_tags(&format!("<{tag}>only thinking</{tag}>")), "");
     }
 }

@@ -195,6 +195,69 @@ impl WorkflowEngine {
         Ok(format!("Workflow \"{}\" cancelled", workflow.name))
     }
 
+    /// Delete a terminal workflow.
+    pub async fn delete(&self, workflow_id: &str) -> Result<String> {
+        let workflow = self
+            .db
+            .load_workflow(workflow_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Workflow {workflow_id} not found"))?;
+
+        if !workflow.status.is_terminal() {
+            bail!(
+                "Cannot delete a {} workflow — cancel it first",
+                workflow.status.as_str()
+            );
+        }
+
+        self.db.delete_workflow(workflow_id).await?;
+        Ok(format!("Workflow \"{}\" deleted", workflow.name))
+    }
+
+    /// Restart a terminal workflow (creates a fresh copy and starts it).
+    pub async fn restart(&self, workflow_id: &str) -> Result<String> {
+        let workflow = self
+            .db
+            .load_workflow(workflow_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Workflow {workflow_id} not found"))?;
+
+        if !workflow.status.is_terminal() {
+            bail!(
+                "Cannot restart a {} workflow — it's still active",
+                workflow.status.as_str()
+            );
+        }
+
+        let req = WorkflowCreateRequest {
+            name: workflow.name.clone(),
+            objective: workflow.objective.clone(),
+            steps: workflow
+                .steps
+                .iter()
+                .map(|s| super::StepDefinition {
+                    name: s.name.clone(),
+                    instruction: s.instruction.clone(),
+                    approval_required: s.approval_required,
+                    max_retries: s.max_retries,
+                })
+                .collect(),
+            deliver_to: workflow.deliver_to.clone(),
+        };
+
+        let channel_chat = workflow
+            .created_by
+            .as_deref()
+            .unwrap_or("web:web");
+        let (channel, chat_id) = channel_chat.rsplit_once(':').unwrap_or(("web", "web"));
+
+        let new_id = self.create_and_start(req, channel, chat_id).await?;
+        Ok(format!(
+            "Workflow \"{}\" restarted as {new_id}",
+            workflow.name
+        ))
+    }
+
     /// List workflows (optionally filtered by status).
     pub async fn list(&self, status_filter: Option<&str>) -> Result<Vec<Workflow>> {
         self.db.list_workflows(status_filter).await
@@ -455,18 +518,15 @@ async fn complete_workflow(
     db.update_workflow_status(&workflow.id, WorkflowStatus::Completed, None)
         .await?;
 
-    // Build summary from step results
-    let mut summary_lines = Vec::new();
-    for step in &workflow.steps {
-        let status = step.status.as_str();
-        let result = step
-            .result
-            .as_deref()
-            .map(|r| truncate_for_context(r, 300))
-            .unwrap_or_else(|| "-".to_string());
-        summary_lines.push(format!("Step {} ({}) [{}]: {}", step.idx, step.name, status, result));
-    }
-    let summary = summary_lines.join("\n");
+    // Use the last completed step's result as the summary — that's the
+    // final deliverable. Fall back to a short completion notice.
+    let summary = workflow
+        .steps
+        .iter()
+        .rev()
+        .find(|s| s.status == StepStatus::Completed && s.result.is_some())
+        .and_then(|s| s.result.clone())
+        .unwrap_or_else(|| "Workflow completed successfully.".to_string());
 
     let _ = event_tx
         .send(WorkflowEvent::WorkflowCompleted {

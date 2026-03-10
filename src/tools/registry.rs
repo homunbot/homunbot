@@ -44,6 +44,9 @@ pub struct ToolContext {
     pub message_tx: Option<mpsc::Sender<OutboundMessage>>,
     /// Optional approval manager for interactive approval workflow.
     pub approval_manager: Option<Arc<ApprovalManager>>,
+    /// SKL-5: Skill-specific env vars to inject into subprocess execution.
+    /// Set when a skill with configured env is activated.
+    pub skill_env: Option<HashMap<String, String>>,
 }
 
 /// Tool trait — every built-in tool and skill implements this.
@@ -221,6 +224,7 @@ mod tests {
             chat_id: "test".to_string(),
             message_tx: None,
             approval_manager: None,
+            skill_env: None,
         }
     }
 

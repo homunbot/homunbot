@@ -27,6 +27,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/v1/config", get(get_config))
         .route("/v1/config", axum::routing::patch(patch_config))
         .route("/v1/skills", get(list_skills))
+        .route("/v1/skills/audit", get(list_skill_audits))
         .route("/v1/skills/search", get(search_skills))
         .route("/v1/skills/install", axum::routing::post(install_skill))
         .route(
@@ -299,7 +300,63 @@ pub fn router() -> Router<Arc<AppState>> {
             axum::routing::post(run_automation_now),
         )
         // --- Usage ---
-        .route("/v1/usage", get(get_usage));
+        .route("/v1/usage", get(get_usage))
+        // --- Workflows ---
+        .route(
+            "/v1/workflows",
+            get(list_workflows_api).post(create_workflow_api),
+        )
+        .route("/v1/workflows/{id}", get(get_workflow_api))
+        .route(
+            "/v1/workflows/{id}/approve",
+            axum::routing::post(approve_workflow_api),
+        )
+        .route(
+            "/v1/workflows/{id}/cancel",
+            axum::routing::post(cancel_workflow_api),
+        )
+        .route(
+            "/v1/workflows/{id}/delete",
+            axum::routing::post(delete_workflow_api),
+        )
+        .route(
+            "/v1/workflows/{id}/restart",
+            axum::routing::post(restart_workflow_api),
+        )
+        // --- Business Autopilot ---
+        .route(
+            "/v1/business",
+            get(list_businesses_api).post(create_business_api),
+        )
+        .route("/v1/business/{id}", get(get_business_api))
+        .route(
+            "/v1/business/{id}/pause",
+            axum::routing::post(pause_business_api),
+        )
+        .route(
+            "/v1/business/{id}/resume",
+            axum::routing::post(resume_business_api),
+        )
+        .route(
+            "/v1/business/{id}/close",
+            axum::routing::post(close_business_api),
+        )
+        .route(
+            "/v1/business/{id}/strategies",
+            get(list_business_strategies_api),
+        )
+        .route(
+            "/v1/business/{id}/products",
+            get(list_business_products_api),
+        )
+        .route(
+            "/v1/business/{id}/transactions",
+            get(list_business_transactions_api),
+        )
+        .route(
+            "/v1/business/{id}/revenue",
+            get(get_business_revenue_api),
+        );
 
     // --- Knowledge Base (RAG) ---
     #[cfg(feature = "local-embeddings")]
@@ -600,6 +657,46 @@ async fn list_skills() -> Json<Vec<SkillView>> {
             })
             .collect(),
     )
+}
+
+/// SKL-6: List recent skill audit entries.
+async fn list_skill_audits(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<AuditQueryParams>,
+) -> Json<Vec<SkillAuditView>> {
+    let limit = params.limit.unwrap_or(50).min(200);
+    let rows = if let Some(ref db) = state.db {
+        db.list_skill_audits(limit).await.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    Json(
+        rows.into_iter()
+            .map(|r| SkillAuditView {
+                id: r.id,
+                timestamp: r.timestamp,
+                skill_name: r.skill_name,
+                channel: r.channel,
+                query: r.query,
+                activation_type: r.activation_type,
+            })
+            .collect(),
+    )
+}
+
+#[derive(serde::Deserialize)]
+struct AuditQueryParams {
+    limit: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct SkillAuditView {
+    id: i64,
+    timestamp: String,
+    skill_name: String,
+    channel: String,
+    query: Option<String>,
+    activation_type: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -9996,6 +10093,7 @@ struct CreateAutomationRequest {
     trigger_value: Option<String>,
     enabled: Option<bool>,
     deliver_to: Option<String>,
+    workflow_steps: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Deserialize)]
@@ -10012,6 +10110,8 @@ struct PatchAutomationRequest {
     status: Option<String>,
     deliver_to: Option<String>,
     clear_deliver_to: Option<bool>,
+    workflow_steps: Option<Vec<serde_json::Value>>,
+    clear_workflow_steps: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -10319,6 +10419,27 @@ async fn create_automation(
         )
     })?;
 
+    // Save workflow steps if provided
+    if let Some(steps) = req.workflow_steps {
+        if !steps.is_empty() {
+            let steps_json = serde_json::to_string(&steps).map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid workflow steps: {e}"),
+                )
+            })?;
+            let _ = db
+                .update_automation(
+                    &id,
+                    crate::storage::AutomationUpdate {
+                        workflow_steps_json: Some(Some(steps_json)),
+                        ..Default::default()
+                    },
+                )
+                .await;
+        }
+    }
+
     let created = db.load_automation(&id).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -10398,6 +10519,23 @@ async fn patch_automation(
             normalize_automation_trigger(Some(desired_trigger), desired_trigger_value)?;
         update.trigger_kind = Some(trigger_kind);
         update.trigger_value = Some(trigger_value);
+    }
+
+    // Handle workflow steps
+    if req.clear_workflow_steps.unwrap_or(false) {
+        update.workflow_steps_json = Some(None);
+    } else if let Some(steps) = req.workflow_steps {
+        if steps.is_empty() {
+            update.workflow_steps_json = Some(None);
+        } else {
+            let steps_json = serde_json::to_string(&steps).map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid workflow steps: {e}"),
+                )
+            })?;
+            update.workflow_steps_json = Some(Some(steps_json));
+        }
     }
 
     let final_prompt = update
@@ -11541,4 +11679,368 @@ async fn reveal_knowledge_chunk(
         )
             .into_response(),
     }
+}
+
+// ─── Workflow API ────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct WorkflowListQuery {
+    status: Option<String>,
+}
+
+/// GET /api/v1/workflows?status=running
+async fn list_workflows_api(
+    Query(q): Query<WorkflowListQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state
+        .workflow_engine
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Workflow engine not available".into()))?;
+    let workflows = engine
+        .list(q.status.as_deref())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let total = workflows.len();
+    let running = workflows.iter().filter(|w| w.status == crate::workflows::WorkflowStatus::Running).count();
+    let paused = workflows.iter().filter(|w| w.status == crate::workflows::WorkflowStatus::Paused).count();
+    let completed = workflows.iter().filter(|w| w.status == crate::workflows::WorkflowStatus::Completed).count();
+    let failed = workflows.iter().filter(|w| w.status == crate::workflows::WorkflowStatus::Failed).count();
+
+    Ok(Json(serde_json::json!({
+        "workflows": workflows,
+        "stats": {
+            "total": total,
+            "running": running,
+            "paused": paused,
+            "completed": completed,
+            "failed": failed,
+        }
+    })))
+}
+
+/// POST /api/v1/workflows
+async fn create_workflow_api(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<crate::workflows::WorkflowCreateRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state
+        .workflow_engine
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Workflow engine not available".into()))?;
+    let workflow_id = engine
+        .create_and_start(req, "web", "web")
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "workflow_id": workflow_id })))
+}
+
+/// GET /api/v1/workflows/{id}
+async fn get_workflow_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state
+        .workflow_engine
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Workflow engine not available".into()))?;
+    let workflow = engine
+        .status(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, format!("Workflow {id} not found")))?;
+    Ok(Json(serde_json::to_value(&workflow).unwrap_or_default()))
+}
+
+/// POST /api/v1/workflows/{id}/approve
+async fn approve_workflow_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state
+        .workflow_engine
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Workflow engine not available".into()))?;
+    let msg = engine
+        .approve_and_resume(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "message": msg })))
+}
+
+/// POST /api/v1/workflows/{id}/cancel
+async fn cancel_workflow_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state
+        .workflow_engine
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Workflow engine not available".into()))?;
+    let msg = engine
+        .cancel(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "message": msg })))
+}
+
+/// POST /api/v1/workflows/{id}/delete
+async fn delete_workflow_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state
+        .workflow_engine
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Workflow engine not available".into()))?;
+    let msg = engine
+        .delete(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "message": msg })))
+}
+
+/// POST /api/v1/workflows/{id}/restart
+async fn restart_workflow_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state
+        .workflow_engine
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Workflow engine not available".into()))?;
+    let msg = engine
+        .restart(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "message": msg })))
+}
+
+// ─── Business Autopilot API ─────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct BusinessListQuery {
+    status: Option<String>,
+}
+
+/// GET /api/v1/business?status=active
+async fn list_businesses_api(
+    Query(q): Query<BusinessListQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state
+        .business_engine
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    let businesses = engine
+        .db()
+        .list_businesses(q.status.as_deref())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let total = businesses.len();
+    let active = businesses
+        .iter()
+        .filter(|b| b.status == crate::business::BusinessStatus::Active)
+        .count();
+    let total_revenue: f64 = businesses.iter().map(|b| b.budget_spent).sum();
+
+    Ok(Json(serde_json::json!({
+        "businesses": businesses,
+        "stats": {
+            "total": total,
+            "active": active,
+            "total_budget_spent": total_revenue,
+        }
+    })))
+}
+
+#[derive(Deserialize)]
+struct CreateBusinessRequest {
+    name: String,
+    description: Option<String>,
+    autonomy: Option<String>,
+    budget: Option<f64>,
+    currency: Option<String>,
+    ooda_interval: Option<String>,
+    deliver_to: Option<String>,
+}
+
+/// POST /api/v1/business
+async fn create_business_api(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateBusinessRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state
+        .business_engine
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+
+    let autonomy =
+        crate::business::BusinessAutonomy::from_str(req.autonomy.as_deref().unwrap_or("semi"));
+    let currency = req.currency.as_deref().unwrap_or("EUR");
+    let ooda_interval = req.ooda_interval.as_deref().unwrap_or("every:86400");
+
+    let biz = engine
+        .launch(
+            &req.name,
+            req.description.as_deref(),
+            autonomy,
+            req.budget,
+            currency,
+            ooda_interval,
+            req.deliver_to.as_deref(),
+            None, // created_by
+            None, // fiscal_config
+        )
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "business": biz,
+        "message": format!("Business '{}' launched", biz.name),
+    })))
+}
+
+/// GET /api/v1/business/{id}
+async fn get_business_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state
+        .business_engine
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    let biz = engine
+        .db()
+        .load_business(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, format!("Business {id} not found")))?;
+
+    let revenue = engine
+        .get_revenue_summary(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "business": biz,
+        "revenue": revenue,
+    })))
+}
+
+/// POST /api/v1/business/{id}/pause
+async fn pause_business_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state
+        .business_engine
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    engine
+        .pause(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "message": "Business paused" })))
+}
+
+/// POST /api/v1/business/{id}/resume
+async fn resume_business_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state
+        .business_engine
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    engine
+        .resume(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "message": "Business resumed" })))
+}
+
+/// POST /api/v1/business/{id}/close
+async fn close_business_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state
+        .business_engine
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    engine
+        .close(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "message": "Business closed" })))
+}
+
+/// GET /api/v1/business/{id}/strategies
+async fn list_business_strategies_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state
+        .business_engine
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    let strategies = engine
+        .db()
+        .list_strategies(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "strategies": strategies })))
+}
+
+/// GET /api/v1/business/{id}/products
+async fn list_business_products_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state
+        .business_engine
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    let products = engine
+        .db()
+        .list_products(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "products": products })))
+}
+
+/// GET /api/v1/business/{id}/transactions
+async fn list_business_transactions_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state
+        .business_engine
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    let transactions = engine
+        .db()
+        .list_transactions(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "transactions": transactions })))
+}
+
+/// GET /api/v1/business/{id}/revenue
+async fn get_business_revenue_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state
+        .business_engine
+        .as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    let revenue = engine
+        .get_revenue_summary(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "revenue": revenue })))
 }

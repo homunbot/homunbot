@@ -13,6 +13,7 @@ use crate::config::Config;
 use crate::provider::ProviderHealthTracker;
 use crate::security::EStopHandles;
 use crate::storage::Database;
+use crate::workflows::engine::WorkflowEngine;
 
 use super::api;
 use super::pages;
@@ -47,6 +48,10 @@ pub struct AppState {
     pub rag_engine: Option<Arc<tokio::sync::Mutex<crate::rag::RagEngine>>>,
     /// Provider health tracker for circuit breaker metrics.
     pub health_tracker: Option<Arc<ProviderHealthTracker>>,
+    /// Workflow engine for multi-step orchestration.
+    pub workflow_engine: Option<Arc<WorkflowEngine>>,
+    /// Business engine for autonomous business management.
+    pub business_engine: Option<Arc<crate::business::engine::BusinessEngine>>,
     /// Emergency stop handles — shared with the estop module.
     pub estop_handles: Arc<tokio::sync::RwLock<EStopHandles>>,
 }
@@ -73,6 +78,8 @@ pub struct WebServer {
     #[cfg(feature = "local-embeddings")]
     rag_engine: Option<Arc<tokio::sync::Mutex<crate::rag::RagEngine>>>,
     health_tracker: Option<Arc<ProviderHealthTracker>>,
+    workflow_engine: Option<Arc<WorkflowEngine>>,
+    business_engine: Option<Arc<crate::business::engine::BusinessEngine>>,
     estop_handles: Arc<tokio::sync::RwLock<EStopHandles>>,
 }
 
@@ -95,6 +102,8 @@ impl WebServer {
             #[cfg(feature = "local-embeddings")]
             rag_engine: None,
             health_tracker: None,
+            workflow_engine: None,
+            business_engine: None,
             estop_handles: Arc::new(tokio::sync::RwLock::new(EStopHandles::default())),
         }
     }
@@ -120,6 +129,19 @@ impl WebServer {
     /// Set the provider health tracker for the `/api/v1/providers/health` endpoint.
     pub fn set_health_tracker(&mut self, tracker: Arc<ProviderHealthTracker>) {
         self.health_tracker = Some(tracker);
+    }
+
+    /// Set the workflow engine for multi-step orchestration API endpoints.
+    pub fn set_workflow_engine(&mut self, engine: Arc<WorkflowEngine>) {
+        self.workflow_engine = Some(engine);
+    }
+
+    /// Set the business engine for autonomous business management API endpoints.
+    pub fn set_business_engine(
+        &mut self,
+        engine: Arc<crate::business::engine::BusinessEngine>,
+    ) {
+        self.business_engine = Some(engine);
     }
 
     /// Set the emergency stop handles (shared with the estop module).
@@ -149,6 +171,8 @@ impl WebServer {
             #[cfg(feature = "local-embeddings")]
             rag_engine: None,
             health_tracker: None,
+            workflow_engine: None,
+            business_engine: None,
             estop_handles: Arc::new(tokio::sync::RwLock::new(EStopHandles::default())),
         }
     }
@@ -183,6 +207,8 @@ impl WebServer {
             #[cfg(feature = "local-embeddings")]
             rag_engine: self.rag_engine,
             health_tracker: self.health_tracker,
+            workflow_engine: self.workflow_engine,
+            business_engine: self.business_engine,
             estop_handles: self.estop_handles,
         });
 

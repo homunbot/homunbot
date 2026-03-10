@@ -189,8 +189,10 @@ webpki-roots = { version = "0.26", optional = true }
 flate2 = "1"
 tar = "0.4"
 
-[dev-dependencies]
+# --- OCR temp files ---
 tempfile = "3"
+
+[dev-dependencies]
 
 # =============================================================================
 # RELEASE PROFILES

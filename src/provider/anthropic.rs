@@ -64,6 +64,17 @@ struct AnthropicRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<AnthropicToolDef>,
+    /// Extended thinking configuration.
+    /// When enabled, Claude shows its reasoning process before answering.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<ThinkingConfig>,
+}
+
+#[derive(Serialize)]
+struct ThinkingConfig {
+    #[serde(rename = "type")]
+    config_type: String,
+    budget_tokens: u32,
 }
 
 #[derive(Serialize, Clone)]
@@ -97,6 +108,12 @@ enum ContentBlock {
     ToolResult {
         tool_use_id: String,
         content: String,
+    },
+    /// Extended thinking block — Claude's internal reasoning.
+    /// We parse but discard its content (reasoning_filter handles display).
+    #[serde(rename = "thinking")]
+    Thinking {
+        thinking: String,
     },
 }
 
@@ -341,13 +358,29 @@ impl Provider for AnthropicProvider {
         let (system, messages) = convert_messages(&request.messages);
         let tools = convert_tools(&request.tools);
 
+        // Extended thinking: when enabled, temperature must be omitted (API constraint)
+        // and we allocate thinking budget as half of max_tokens (min 1024).
+        let (thinking, temperature) = if request.think == Some(true) {
+            let budget = (request.max_tokens / 2).max(1024);
+            (
+                Some(ThinkingConfig {
+                    config_type: "enabled".to_string(),
+                    budget_tokens: budget,
+                }),
+                None, // temperature must be omitted with thinking
+            )
+        } else {
+            (None, Some(request.temperature))
+        };
+
         let body = AnthropicRequest {
             model,
             max_tokens: request.max_tokens.max(1),
             messages,
             system,
-            temperature: Some(request.temperature),
+            temperature,
             tools,
+            thinking,
         };
 
         let mut req = self
@@ -406,6 +439,10 @@ impl Provider for AnthropicProvider {
                 }
                 ContentBlock::ToolResult { .. } => {
                     // Should not appear in responses, only in requests
+                }
+                ContentBlock::Thinking { .. } => {
+                    // Extended thinking blocks — reasoning is internal, we skip it.
+                    // The agent loop's reasoning_filter handles display if needed.
                 }
             }
         }

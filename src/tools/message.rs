@@ -102,6 +102,7 @@ mod tests {
             chat_id: "123456".to_string(),
             message_tx: None,
             approval_manager: None,
+            skill_env: None,
         }
     }
 
@@ -144,6 +145,7 @@ mod tests {
             chat_id: "123".to_string(),
             message_tx: Some(tx),
             approval_manager: None,
+            skill_env: None,
         };
 
         let args = serde_json::json!({"content": "Hello from the agent!"});
@@ -169,6 +171,7 @@ mod tests {
             chat_id: "local".to_string(),
             message_tx: Some(tx),
             approval_manager: None,
+            skill_env: None,
         };
 
         let args = serde_json::json!({

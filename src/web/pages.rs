@@ -17,6 +17,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/browser", get(browser_page))
         .route("/chat", get(chat_page))
         .route("/automations", get(automations_page))
+        .route("/workflows", get(workflows_page))
+        .route("/business", get(business_page))
         .route("/skills", get(skills_page))
         .route("/mcp", get(mcp_page))
         .route(
@@ -52,6 +54,7 @@ const ICON_PERMISSIONS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="c
 const ICON_APPROVALS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1v4M9 13v4M1 9h4M13 9h4"/><circle cx="9" cy="9" r="3"/><path d="M6 9l2 2 4-4"/></svg>"#;
 const ICON_ACCOUNT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="6" r="3.5"/><path d="M3 17c0-3.5 2.5-6 6-6s6 2.5 6 6"/></svg>"#;
 const ICON_KNOWLEDGE: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h5l2 2h7v10H2z"/><path d="M6 9h6"/><path d="M6 12h4"/></svg>"#;
+const ICON_WORKFLOWS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="4" r="2"/><circle cx="13" cy="4" r="2"/><circle cx="9" cy="14" r="2"/><path d="M5 6v2a3 3 0 0 0 3 3h1"/><path d="M13 6v2a3 3 0 0 1-3 3h-1"/></svg>"#;
 
 /// Channel icons — minimal stroke SVGs for dashboard/settings
 const ICON_WEB: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="7.5"/><path d="M1.5 9h15"/><path d="M9 1.5a11.5 11.5 0 0 1 3 7.5 11.5 11.5 0 0 1-3 7.5"/><path d="M9 1.5a11.5 11.5 0 0 0-3 7.5 11.5 11.5 0 0 0 3 7.5"/></svg>"#;
@@ -71,7 +74,7 @@ const ICON_TOOLS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="current
 const ICON_ESTOP: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="6,1 12,1 17,6 17,12 12,17 6,17 1,12 1,6"/><rect x="6.5" y="6.5" width="5" height="5" rx="0.8"/></svg>"#;
 
 /// Pages that belong to the "Tools" sub-navigation group.
-const TOOLS_PAGES: &[&str] = &["automations", "skills", "mcp", "memory", "knowledge", "vault"];
+const TOOLS_PAGES: &[&str] = &["automations", "workflows", "business", "skills", "mcp", "memory", "knowledge", "vault"];
 /// Pages that belong to the "Settings" sub-navigation group.
 const SETTINGS_PAGES: &[&str] = &["settings", "channels", "browser", "permissions", "approvals", "logs"];
 
@@ -124,6 +127,8 @@ fn sidebar(active: &str) -> String {
             <div class="sidebar-subnav{tools_open}" id="tools-subnav">
                 <div class="sidebar-subnav-header">Tools</div>
                 <a href="/automations" class="sidebar-subnav-link{automations_a}">Automations</a>
+                <a href="/workflows" class="sidebar-subnav-link{workflows_a}">Workflows</a>
+                <a href="/business" class="sidebar-subnav-link{business_a}">Business</a>
                 <a href="/skills" class="sidebar-subnav-link{skills_a}">Skills</a>
                 <a href="/mcp" class="sidebar-subnav-link{mcp_a}">MCP Servers</a>
                 <a href="/memory" class="sidebar-subnav-link{memory_a}">Memory</a>
@@ -156,6 +161,8 @@ fn sidebar(active: &str) -> String {
         // Tools subnav
         tools_open = tools_open,
         automations_a = a("automations"),
+        workflows_a = a("workflows"),
+        business_a = a("business"),
         skills_a = a("skills"),
         mcp_a = a("mcp"),
         memory_a = a("memory"),
@@ -1330,6 +1337,18 @@ async fn automations_page() -> Html<String> {
                             </div>
                         </div>
 
+                        <div class="form-group">
+                            <label class="toggle-label">
+                                <input type="checkbox" id="automation-workflow-toggle">
+                                Execute as multi-step workflow
+                            </label>
+                            <div class="form-hint">When enabled, the automation runs as a workflow with distinct steps instead of a single prompt.</div>
+                        </div>
+                        <div id="automation-workflow-steps" style="display:none;">
+                            <div id="automation-wf-step-list"></div>
+                            <button type="button" class="btn btn-secondary btn-sm" id="automation-add-wf-step">+ Add Step</button>
+                        </div>
+
                         <div class="actions">
                             <button class="btn btn-primary" type="submit">Create Automation</button>
                         </div>
@@ -1361,6 +1380,97 @@ async fn automations_page() -> Html<String> {
         "automations",
         body,
         &["automations.js"],
+    ))
+}
+
+// ─── Workflows ──────────────────────────────────────────────────
+
+async fn workflows_page() -> Html<String> {
+    let body = r#"<main class="content">
+            <div class="content-inner">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">Workflows</h1>
+                        <span class="badge badge-info" id="workflows-count">0</span>
+                    </div>
+                    <div class="actions">
+                        <button class="btn btn-secondary btn-sm" id="btn-workflows-refresh">Refresh</button>
+                    </div>
+                </div>
+
+                <div class="stats-grid" style="grid-template-columns:repeat(4,1fr)">
+                    <div class="stat-card">
+                        <div class="stat-label">Total</div>
+                        <div class="stat-value" id="stat-total">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Running</div>
+                        <div class="stat-value" id="stat-running">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Completed</div>
+                        <div class="stat-value" id="stat-completed">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Failed</div>
+                        <div class="stat-value" id="stat-failed">0</div>
+                    </div>
+                </div>
+
+                <section class="section">
+                    <h2>Create Workflow</h2>
+                    <form id="workflow-create-form" class="form form--full">
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="wf-name">Name</label>
+                                <input id="wf-name" class="input" type="text" maxlength="120" placeholder="Research & Report">
+                            </div>
+                            <div class="form-group">
+                                <label for="wf-deliver-to">Deliver To</label>
+                                <select id="wf-deliver-to" class="input">
+                                    <option value="web:web">Web UI</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="wf-objective">Objective</label>
+                            <textarea id="wf-objective" class="input" rows="2" placeholder="Describe the high-level goal of this workflow."></textarea>
+                            <div class="form-hint">The objective is shared with every step for context.</div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Steps</label>
+                            <div id="wf-steps-container"></div>
+                            <button type="button" class="btn btn-secondary btn-sm" id="wf-add-step" style="margin-top:0.5rem;">+ Add Step</button>
+                        </div>
+
+                        <div class="actions">
+                            <button class="btn btn-primary" type="submit">Create Workflow</button>
+                        </div>
+                    </form>
+                </section>
+
+                <section class="section">
+                    <h2>Workflow List</h2>
+                    <div id="workflows-list" class="item-list">
+                        <div class="empty-state">
+                            <p>Loading workflows...</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="section" id="workflow-detail-section" style="display:none;">
+                    <h2>Workflow Detail</h2>
+                    <div id="workflow-detail"></div>
+                </section>
+            </div>
+        </main>"#;
+
+    Html(page_html(
+        "Workflows",
+        "workflows",
+        body,
+        &["workflows.js"],
     ))
 }
 
@@ -3766,5 +3876,137 @@ async fn knowledge_page(State(_state): State<Arc<AppState>>) -> Html<String> {
     </main>"##;
 
     let html = page_html("Knowledge", "knowledge", body, &["knowledge.js"]);
+    Html(html)
+}
+
+// ─── Business ──────────────────────────────────────────────────
+
+async fn business_page() -> Html<String> {
+    let body = r##"<main class="content">
+            <div class="content-inner">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">Business</h1>
+                        <span class="badge badge-info" id="biz-count">0</span>
+                    </div>
+                    <div class="actions">
+                        <button class="btn btn-secondary btn-sm" id="btn-biz-refresh">Refresh</button>
+                    </div>
+                </div>
+
+                <div class="stats-grid" style="grid-template-columns:repeat(4,1fr)">
+                    <div class="stat-card">
+                        <div class="stat-label">Active</div>
+                        <div class="stat-value" id="stat-biz-active">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Total Revenue</div>
+                        <div class="stat-value" id="stat-biz-revenue">0.00</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Profit</div>
+                        <div class="stat-value" id="stat-biz-profit">0.00</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Products</div>
+                        <div class="stat-value" id="stat-biz-products">0</div>
+                    </div>
+                </div>
+
+                <section class="section">
+                    <h2>Launch Business</h2>
+                    <form id="biz-create-form" class="form form--full">
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="biz-name">Name</label>
+                                <input id="biz-name" class="input" type="text" maxlength="120" placeholder="My AI Business">
+                            </div>
+                            <div class="form-group">
+                                <label for="biz-autonomy">Autonomy</label>
+                                <select id="biz-autonomy" class="input">
+                                    <option value="semi">Semi-autonomous</option>
+                                    <option value="budget">Budget-limited</option>
+                                    <option value="full">Full autonomous</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="biz-budget">Budget (optional)</label>
+                                <input id="biz-budget" class="input" type="number" step="0.01" min="0" placeholder="100.00">
+                            </div>
+                            <div class="form-group">
+                                <label for="biz-currency">Currency</label>
+                                <input id="biz-currency" class="input" type="text" maxlength="3" value="EUR" placeholder="EUR">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="biz-description">Description</label>
+                            <textarea id="biz-description" class="input" rows="2" placeholder="What this business does..."></textarea>
+                        </div>
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="biz-deliver-to">Deliver To</label>
+                                <select id="biz-deliver-to" class="input"></select>
+                            </div>
+                            <div class="form-group" style="display:flex;align-items:flex-end">
+                                <button type="submit" class="btn btn-primary">Launch</button>
+                            </div>
+                        </div>
+                    </form>
+                </section>
+
+                <section class="section">
+                    <h2>Businesses</h2>
+                    <div id="biz-list" class="card-grid">
+                        <p class="empty-state">No businesses yet. Launch one above.</p>
+                    </div>
+                </section>
+
+                <!-- Detail Panel -->
+                <section class="section" id="biz-detail-panel" style="display:none">
+                    <div class="page-header">
+                        <h2 id="biz-detail-name">Business Detail</h2>
+                        <div class="actions">
+                            <button class="btn btn-secondary btn-sm" id="btn-biz-pause">Pause</button>
+                            <button class="btn btn-secondary btn-sm" id="btn-biz-resume" style="display:none">Resume</button>
+                            <button class="btn btn-danger btn-sm" id="btn-biz-close">Close</button>
+                        </div>
+                    </div>
+                    <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+                        <div class="stat-card">
+                            <div class="stat-label">Revenue</div>
+                            <div class="stat-value" id="biz-d-revenue">0.00</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Expenses</div>
+                            <div class="stat-value" id="biz-d-expenses">0.00</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Profit</div>
+                            <div class="stat-value" id="biz-d-profit">0.00</div>
+                        </div>
+                    </div>
+                    <div id="biz-detail-info" class="detail-info"></div>
+
+                    <h3>Strategies</h3>
+                    <div id="biz-strategies-list" class="items-list">
+                        <p class="empty-state">No strategies yet.</p>
+                    </div>
+
+                    <h3>Products</h3>
+                    <div id="biz-products-list" class="items-list">
+                        <p class="empty-state">No products yet.</p>
+                    </div>
+
+                    <h3>Recent Transactions</h3>
+                    <div id="biz-transactions-list" class="items-list">
+                        <p class="empty-state">No transactions yet.</p>
+                    </div>
+                </section>
+            </div>
+        </main>"##;
+
+    let html = page_html("Business", "business", body, &["business.js"]);
     Html(html)
 }

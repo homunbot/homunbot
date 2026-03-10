@@ -49,7 +49,9 @@ pub struct AgentLoop {
     config: Arc<RwLock<Config>>,
     context: ContextBuilder,
     session_manager: SessionManager,
-    tool_registry: ToolRegistry,
+    /// Tool registry — wrapped in Arc<RwLock> so MCP tools can be registered
+    /// in the background after the gateway has already started.
+    tool_registry: Arc<RwLock<ToolRegistry>>,
     memory: Arc<MemoryConsolidator>,
     /// Sender for proactive messages (set in Gateway mode)
     message_tx: Option<mpsc::Sender<OutboundMessage>>,
@@ -70,8 +72,9 @@ pub struct AgentLoop {
     /// Database handle for token usage tracking.
     db: Database,
     /// Shared browser session state for continuation hints and idle cleanup.
+    /// Wrapped in RwLock so MCP background startup can inject it after Arc wrapping.
     #[cfg(feature = "mcp")]
-    browser_session: Option<Arc<crate::tools::browser::BrowserSession>>,
+    browser_session: RwLock<Option<Arc<crate::tools::browser::BrowserSession>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +91,48 @@ struct IterationBudgetState {
     extensions_used: u8,
 }
 
+/// Information returned when a skill is activated via tool call.
+///
+/// Contains the enriched skill body with variable substitution,
+/// directory info, available scripts/references, and metadata.
+struct ActivatedSkill {
+    /// Skill body with variables substituted ($ARGUMENTS, ${SKILL_DIR})
+    body: String,
+    /// Absolute path to the skill directory
+    skill_dir: std::path::PathBuf,
+    /// Available scripts in the skill's scripts/ directory
+    scripts: Vec<String>,
+    /// Available reference files in references/
+    references: Vec<String>,
+    /// Allowed tools restriction from frontmatter (if set)
+    allowed_tools: Option<String>,
+    /// Required binary dependencies from metadata.openclaw.requires.bins
+    required_bins: Vec<String>,
+}
+
+/// Check required binaries synchronously and return warning text.
+fn check_required_bins_sync(bins: &[String]) -> String {
+    if bins.is_empty() {
+        return String::new();
+    }
+
+    let mut warnings = String::new();
+    for bin in bins {
+        let found = std::process::Command::new("which")
+            .arg(bin)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !found {
+            warnings.push_str(&format!(
+                "⚠ Required binary '{bin}' not found. Install it before using this skill.\n"
+            ));
+        }
+    }
+    warnings
+}
 
 async fn emit_plan_update(
     stream_tx: Option<&mpsc::Sender<crate::provider::StreamChunk>>,
@@ -174,7 +219,7 @@ impl AgentLoop {
             config,
             context,
             session_manager,
-            tool_registry,
+            tool_registry: Arc::new(RwLock::new(tool_registry)),
             memory,
             message_tx: None,
             skill_registry: None,
@@ -184,7 +229,7 @@ impl AgentLoop {
             use_xml_dispatch: AtomicBool::new(use_xml_dispatch),
             db,
             #[cfg(feature = "mcp")]
-            browser_session: None,
+            browser_session: RwLock::new(None),
         }
     }
 
@@ -195,9 +240,29 @@ impl AgentLoop {
     }
 
     /// Set the shared browser session for continuation hints and idle cleanup.
+    /// Takes &self (not &mut) so it can be called after Arc wrapping (deferred MCP startup).
     #[cfg(feature = "mcp")]
-    pub fn set_browser_session(&mut self, session: Arc<crate::tools::browser::BrowserSession>) {
-        self.browser_session = Some(session);
+    pub async fn set_browser_session(&self, session: Arc<crate::tools::browser::BrowserSession>) {
+        *self.browser_session.write().await = Some(session);
+    }
+
+    /// Register tools into the shared registry after the AgentLoop has been created.
+    /// Used for deferred MCP tool registration — MCP servers connect in the background
+    /// and their tools are injected here once discovery completes.
+    pub async fn register_deferred_tools(&self, tools: Vec<Box<dyn crate::tools::Tool>>) {
+        let mut registry = self.tool_registry.write().await;
+        let count = tools.len();
+        for tool in tools {
+            registry.register(tool);
+        }
+        if count > 0 {
+            tracing::info!(tools = count, "Deferred tools registered into agent");
+        }
+    }
+
+    /// Get a clone of the tool registry Arc for deferred registration from outside.
+    pub fn tool_registry_handle(&self) -> Arc<RwLock<ToolRegistry>> {
+        self.tool_registry.clone()
     }
 
     /// Inject skills summary into the system prompt.
@@ -477,9 +542,9 @@ impl AgentLoop {
             .agent
             .effective_model_capabilities(provider_name, &selected_model);
 
-        // Resolve effective thinking preference:
-        // per-request override > config capabilities > None (provider default)
-        let effective_think = match thinking_override {
+        // Thinking preference is resolved below, after tool_defs are built,
+        // so we can suppress thinking when tools are available.
+        let thinking_pref = match thinking_override {
             Some(val) => Some(val),
             None => {
                 if selected_capabilities.thinking {
@@ -571,13 +636,15 @@ impl AgentLoop {
 
         // Build initial messages for the LLM
         // Get tool definitions for the LLM (built-in tools + skills as tools)
-        let mut tool_defs = self.tool_registry.get_definitions();
+        let mut tool_defs = self.tool_registry.read().await.get_definitions();
 
         // Register installed skills as tool definitions so the LLM can call them.
         // Each skill becomes a callable tool with a `query` parameter.
+        // Only model-invocable skills are registered (ineligible or disable-model-invocation
+        // skills are hidden from the LLM).
         if let Some(registry) = &self.skill_registry {
             let guard = registry.read().await;
-            for (name, desc) in guard.list() {
+            for (name, desc) in guard.list_for_model() {
                 tool_defs.push(crate::provider::ToolDefinition {
                     tool_type: "function".to_string(),
                     function: crate::provider::FunctionDefinition {
@@ -620,6 +687,17 @@ impl AgentLoop {
         }
 
         let has_tools = !tool_defs.is_empty();
+
+        // Resolve effective thinking: when tools are available, disable thinking.
+        // Reasoning models (DeepSeek-R1, QwQ) tend to "reason in text" instead
+        // of calling tools when thinking is active, breaking the agent loop.
+        let effective_think = if has_tools && thinking_pref == Some(true) {
+            tracing::debug!("Thinking disabled: tools are available and take priority");
+            None
+        } else {
+            thinking_pref
+        };
+
         let available_tool_names = tool_defs
             .iter()
             .map(|tool| tool.function.name.clone())
@@ -664,18 +742,53 @@ impl AgentLoop {
                 .await
         };
 
+        // Skill tool policy: when a skill with allowed-tools is activated,
+        // this restricts which tools the LLM can call for the remainder of this turn.
+        let mut skill_allowed_tools: Option<std::collections::HashSet<String>> = None;
+
+        // Check for /skill-name slash command invocation.
+        // If matched, inject the skill instructions as a system message
+        // so the LLM gets skill context without a tool-call round-trip.
+        if let Some((skill_injection, allowed_tools_raw)) =
+            self.try_resolve_slash_command(&prompt_content).await
+        {
+            messages.push(ChatMessage::system(&skill_injection));
+            // If the skill has allowed-tools, activate hard enforcement
+            if let Some(ref tools_str) = allowed_tools_raw {
+                skill_allowed_tools = Some(crate::skills::parse_allowed_tools(tools_str));
+                tracing::info!("Skill tool policy activated via slash command");
+            }
+            // SKL-6: audit log for slash command activation (fire-and-forget)
+            if let Some(skill_name) = prompt_content.trim().strip_prefix('/') {
+                let name = skill_name.split_whitespace().next().unwrap_or(skill_name);
+                let db = self.db.clone();
+                let skill = name.to_string();
+                let ch = channel.to_string();
+                let q = prompt_content.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = db.insert_skill_audit(&skill, &ch, &q, "slash_command").await {
+                        tracing::debug!(error = %e, "Skill audit insert failed (slash)");
+                    }
+                });
+            }
+        }
+
+        // Save base tool_defs before the loop for policy-based filtering
+        let base_tool_defs = tool_defs.clone();
+
         // Build tool context with real channel info so tools can route responses
-        let tool_ctx = ToolContext {
+        let mut tool_ctx = ToolContext {
             workspace: Config::workspace_dir().to_string_lossy().to_string(),
             channel: channel.to_string(),
             chat_id: chat_id.to_string(),
             message_tx: self.message_tx.clone(),
             approval_manager: crate::tools::global_approval_manager(),
+            skill_env: None,
         };
 
         // Browser session: idle cleanup and continuation hint
         #[cfg(feature = "mcp")]
-        if let Some(ref session) = self.browser_session {
+        if let Some(ref session) = *self.browser_session.read().await {
             // Close browser if idle too long (frees resources)
             session
                 .close_if_idle(crate::tools::browser::BROWSER_IDLE_TIMEOUT_SECS)
@@ -730,10 +843,33 @@ impl AgentLoop {
             // chat_stream. It handles both text and tool calls in the SSE
             // stream. Text deltas are forwarded to the client in real-time;
             // tool call deltas are accumulated and returned in ChatResponse.
+            // SKL-4: when a skill policy is active, filter tool_defs to only
+            // include allowed tools. Skills are always kept so the model can
+            // still activate other skills during the same turn.
+            let effective_tool_defs = if let Some(ref allowed) = skill_allowed_tools {
+                // Collect skill names so we can whitelist them in the filter
+                let skill_names: std::collections::HashSet<String> =
+                    if let Some(ref reg) = self.skill_registry {
+                        let guard = reg.read().await;
+                        guard.list_for_model().into_iter().map(|(n, _)| n.to_string()).collect()
+                    } else {
+                        std::collections::HashSet::new()
+                    };
+                base_tool_defs
+                    .iter()
+                    .filter(|td| {
+                        allowed.contains(&td.function.name)
+                            || skill_names.contains(&td.function.name)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
+            } else {
+                tool_defs.clone()
+            };
             let api_tools = if xml_mode {
                 Vec::new()
             } else {
-                tool_defs.clone()
+                effective_tool_defs.clone()
             };
             let use_streaming = stream_tx.is_some();
 
@@ -1128,21 +1264,96 @@ impl AgentLoop {
                             "Tool '{}' is disabled in this execution context.",
                             tool_call.name
                         ))
-                    } else if let Some(body) = self.try_load_skill_body(&tool_call.name).await {
+                    } else if let Some(activated) = self.try_activate_skill(&tool_call.name, &tool_call.arguments).await {
+                        let query = tool_call.arguments
+                            .get("query")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
                         tracing::info!(
                             skill = %tool_call.name,
-                            body_len = body.len(),
-                            "Skill activated — returning SKILL.md body"
+                            body_len = activated.body.len(),
+                            scripts = activated.scripts.len(),
+                            references = activated.references.len(),
+                            has_allowed_tools = activated.allowed_tools.is_some(),
+                            "Skill activated — returning enriched SKILL.md body"
                         );
+                        let header = crate::skills::build_skill_activation_header(
+                            &tool_call.name,
+                            &activated.skill_dir,
+                            &activated.scripts,
+                            &activated.references,
+                            activated.allowed_tools.as_deref(),
+                            query,
+                        );
+                        let bin_warnings = check_required_bins_sync(&activated.required_bins);
                         let output = format!(
-                            "[SKILL INSTRUCTIONS — follow these steps to complete the task]\n\n{}\n\n\
-                            [END SKILL INSTRUCTIONS — now execute the commands above using the shell tool to get the answer]",
-                            body
+                            "[SKILL ACTIVATED: {}]\n\n\
+                             {}{}\n\
+                             {}\n\n\
+                             [END SKILL INSTRUCTIONS]",
+                            tool_call.name, header, bin_warnings, activated.body
                         );
+                        // SKL-4: activate tool policy if skill has allowed-tools
+                        if let Some(ref tools_str) = activated.allowed_tools {
+                            skill_allowed_tools =
+                                Some(crate::skills::parse_allowed_tools(tools_str));
+                            tracing::info!(
+                                skill = %tool_call.name,
+                                allowed = ?skill_allowed_tools,
+                                "Skill tool policy activated"
+                            );
+                        }
+
+                        // SKL-5: resolve skill env vars from config
+                        {
+                            let cfg = self.config.read().await;
+                            let skill_env_map = crate::skills::resolve_skill_env(
+                                &tool_call.name,
+                                &cfg.skills,
+                                None, // TODO: pass secrets when vault is integrated
+                            );
+                            if !skill_env_map.is_empty() {
+                                tracing::info!(
+                                    skill = %tool_call.name,
+                                    env_keys = ?skill_env_map.keys().collect::<Vec<_>>(),
+                                    "Skill env vars resolved from config"
+                                );
+                                tool_ctx.skill_env = Some(skill_env_map);
+                            }
+                        }
+
+                        // SKL-6: audit log (fire-and-forget)
+                        {
+                            let db = self.db.clone();
+                            let skill = tool_call.name.clone();
+                            let ch = channel.to_string();
+                            let q = query.to_string();
+                            tokio::spawn(async move {
+                                if let Err(e) = db.insert_skill_audit(&skill, &ch, &q, "tool_call").await {
+                                    tracing::debug!(error = %e, "Skill audit insert failed");
+                                }
+                            });
+                        }
+
                         crate::tools::ToolResult {
                             output,
                             is_error: false,
                         }
+                    } else if skill_allowed_tools
+                        .as_ref()
+                        .is_some_and(|allowed| !allowed.contains(&tool_call.name))
+                    {
+                        // SKL-4: tool not permitted by active skill policy
+                        tracing::warn!(
+                            tool = %tool_call.name,
+                            "Tool blocked by skill allowed-tools policy"
+                        );
+                        crate::tools::ToolResult::error(format!(
+                            "Tool '{}' is not permitted by the active skill's tool policy. \
+                             Only these tools are allowed: {:?}",
+                            tool_call.name,
+                            skill_allowed_tools.as_ref().unwrap()
+                        ))
                     } else {
                         // Resolve per-tool timeout from config
                         let tool_timeout = {
@@ -1161,7 +1372,10 @@ impl AgentLoop {
                         };
 
                         match tokio::select! {
-                            result = self.tool_registry.execute(&tool_call.name, tool_call.arguments.clone(), &tool_ctx) => Ok(result),
+                            result = async {
+                                let reg = self.tool_registry.read().await;
+                                reg.execute(&tool_call.name, tool_call.arguments.clone(), &tool_ctx).await
+                            } => Ok(result),
                             _ = crate::agent::stop::wait_for_stop() => Err(crate::agent::stop::cancellation_error()),
                             _ = tokio::time::sleep(tool_timeout) => {
                                 tracing::warn!(tool = %tool_call.name, timeout_secs = tool_timeout.as_secs(), "Tool execution timed out");
@@ -1506,23 +1720,145 @@ impl AgentLoop {
         Ok(safe_response)
     }
 
-    /// Try to load a skill's full SKILL.md body by name.
-    /// Returns `Some(body)` if a matching skill is found, `None` otherwise.
-    /// This enables "progressive disclosure": the system prompt only lists
-    /// skill names + descriptions, and the full body is loaded on-demand
-    /// when the LLM decides to activate a skill.
-    async fn try_load_skill_body(&self, name: &str) -> Option<String> {
+    /// Activate a skill: load its SKILL.md body, substitute variables,
+    /// list available scripts/references, and return enriched context.
+    ///
+    /// This enables ClawHub/OpenClaw compatibility — the LLM gets:
+    /// - The skill directory path (to run scripts, read references)
+    /// - Available scripts and references with full paths
+    /// - Variable substitution ($ARGUMENTS, ${SKILL_DIR})
+    /// - Allowed-tools restriction (prompt-based enforcement)
+    async fn try_activate_skill(
+        &self,
+        name: &str,
+        arguments: &serde_json::Value,
+    ) -> Option<ActivatedSkill> {
         let registry = self.skill_registry.as_ref()?;
         let mut guard = registry.write().await;
-        let skill = guard.get_mut(name)?;
 
-        match skill.load_body().await {
-            Ok(body) => Some(body.to_string()),
-            Err(e) => {
-                tracing::warn!(skill = %name, error = %e, "Failed to load skill body");
-                None
+        // If skill not found, rescan from disk (may have been created at runtime)
+        if guard.get(name).is_none() {
+            tracing::debug!(skill = %name, "Skill not in registry, rescanning from disk");
+            if let Err(e) = guard.scan_and_load().await {
+                tracing::warn!(error = %e, "Failed to rescan skills");
             }
         }
+
+        let skill = guard.get_mut(name)?;
+
+        let body = match skill.load_body().await {
+            Ok(body) => body.to_string(),
+            Err(e) => {
+                tracing::warn!(skill = %name, error = %e, "Failed to load skill body");
+                return None;
+            }
+        };
+
+        let skill_dir = skill.path.clone();
+        let allowed_tools = skill.meta.allowed_tools.clone();
+        let required_bins =
+            crate::skills::extract_required_bins(&skill.meta.metadata);
+
+        // List available scripts and references
+        let scripts = crate::skills::list_skill_scripts(&skill_dir);
+        let references = crate::skills::list_skill_references(&skill_dir);
+
+        // Substitute variables for Claude Code / ClawHub compatibility
+        let query = arguments
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let substituted_body =
+            crate::skills::substitute_skill_variables(&body, query, &skill_dir, None);
+
+        Some(ActivatedSkill {
+            body: substituted_body,
+            skill_dir,
+            scripts,
+            references,
+            allowed_tools,
+            required_bins,
+        })
+    }
+
+    /// Try to resolve a `/skill-name args` slash command.
+    ///
+    /// Returns `Some((enriched_body, allowed_tools))` if the message matches an installed skill,
+    /// `None` otherwise (message is not a slash command or skill not found).
+    /// The `allowed_tools` is the raw string from the skill's frontmatter for tool policy enforcement.
+    async fn try_resolve_slash_command(&self, message: &str) -> Option<(String, Option<String>)> {
+        let trimmed = message.trim();
+        if !trimmed.starts_with('/') {
+            return None;
+        }
+
+        // Parse: /skill-name rest of message
+        let without_slash = &trimmed[1..];
+        let (skill_name, arguments) = match without_slash.split_once(char::is_whitespace) {
+            Some((name, args)) => (name, args.trim()),
+            None => (without_slash, ""),
+        };
+
+        let registry = self.skill_registry.as_ref()?;
+        let mut guard = registry.write().await;
+
+        // Check if this matches an installed skill
+        if guard.get(skill_name).is_none() {
+            return None; // Not a skill — let normal processing handle it
+        }
+
+        let skill = guard.get_mut(skill_name)?;
+
+        // Check invocation policy: user-invocable: false → block slash commands
+        if !skill.meta.user_invocable {
+            tracing::debug!(skill = %skill_name, "Skill not user-invocable, ignoring slash command");
+            return None;
+        }
+        let body = match skill.load_body().await {
+            Ok(b) => b.to_string(),
+            Err(e) => {
+                tracing::warn!(skill = %skill_name, error = %e, "Failed to load skill for slash command");
+                return None;
+            }
+        };
+
+        let skill_dir = skill.path.clone();
+        let allowed_tools = skill.meta.allowed_tools.clone();
+        let required_bins =
+            crate::skills::extract_required_bins(&skill.meta.metadata);
+
+        let scripts = crate::skills::list_skill_scripts(&skill_dir);
+        let references = crate::skills::list_skill_references(&skill_dir);
+
+        let substituted = crate::skills::substitute_skill_variables(
+            &body, arguments, &skill_dir, None,
+        );
+
+        let header = crate::skills::build_skill_activation_header(
+            skill_name,
+            &skill_dir,
+            &scripts,
+            &references,
+            allowed_tools.as_deref(),
+            arguments,
+        );
+
+        // Check required binaries and add warnings
+        let bin_warnings = check_required_bins_sync(&required_bins);
+
+        tracing::info!(
+            skill = %skill_name,
+            arguments = %arguments,
+            "Slash command activated skill"
+        );
+
+        let enriched = format!(
+            "[SKILL ACTIVATED: {skill_name}]\n\n\
+             {header}{bin_warnings}\n\
+             {substituted}\n\n\
+             [END SKILL INSTRUCTIONS]"
+        );
+        Some((enriched, allowed_tools))
     }
 
     /// Trigger memory consolidation and session compaction if thresholds exceeded.
