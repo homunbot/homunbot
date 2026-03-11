@@ -899,10 +899,7 @@ impl Database {
         Ok(row)
     }
 
-    pub async fn find_rag_source_by_path(
-        &self,
-        file_path: &str,
-    ) -> Result<Option<RagSourceRow>> {
+    pub async fn find_rag_source_by_path(&self, file_path: &str) -> Result<Option<RagSourceRow>> {
         let row = sqlx::query_as::<_, RagSourceRow>(
             "SELECT id, file_path, file_name, file_hash, doc_type, file_size,
                     chunk_count, status, error_message, source_channel, created_at, updated_at
@@ -1715,16 +1712,14 @@ impl Database {
         name: &str,
         scope: &str,
     ) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO webhook_tokens (token, user_id, name, scope) VALUES (?, ?, ?, ?)",
-        )
-        .bind(token)
-        .bind(user_id)
-        .bind(name)
-        .bind(scope)
-        .execute(&self.pool)
-        .await
-        .context("Failed to create webhook token")?;
+        sqlx::query("INSERT INTO webhook_tokens (token, user_id, name, scope) VALUES (?, ?, ?, ?)")
+            .bind(token)
+            .bind(user_id)
+            .bind(name)
+            .bind(scope)
+            .execute(&self.pool)
+            .await
+            .context("Failed to create webhook token")?;
 
         Ok(())
     }
@@ -1812,23 +1807,24 @@ impl Database {
 
     /// Set the password hash for a user.
     pub async fn set_user_password_hash(&self, user_id: &str, hash: &str) -> Result<()> {
-        sqlx::query("UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?")
-            .bind(hash)
-            .bind(user_id)
-            .execute(&self.pool)
-            .await
-            .context("Failed to set user password hash")?;
+        sqlx::query(
+            "UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?",
+        )
+        .bind(hash)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await
+        .context("Failed to set user password hash")?;
 
         Ok(())
     }
 
     /// Count total users in the database (for first-run detection).
     pub async fn count_users(&self) -> Result<i64> {
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM users")
-                .fetch_one(&self.pool)
-                .await
-                .context("Failed to count users")?;
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&self.pool)
+            .await
+            .context("Failed to count users")?;
 
         Ok(count)
     }
@@ -1836,12 +1832,11 @@ impl Database {
     /// Count users that have a password set (for web auth first-run detection).
     /// Returns 0 when no user has ever set up web credentials.
     pub async fn count_users_with_password(&self) -> Result<i64> {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM users WHERE password_hash IS NOT NULL",
-        )
-        .fetch_one(&self.pool)
-        .await
-        .context("Failed to count users with password")?;
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE password_hash IS NOT NULL")
+                .fetch_one(&self.pool)
+                .await
+                .context("Failed to count users with password")?;
 
         Ok(count)
     }

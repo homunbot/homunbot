@@ -120,11 +120,7 @@ If MCP tools are available (e.g., for marketing, payments, analytics), use them 
     }
 
     /// Link an OODA automation to a business.
-    pub async fn set_ooda_automation(
-        &self,
-        business_id: &str,
-        automation_id: &str,
-    ) -> Result<()> {
+    pub async fn set_ooda_automation(&self, business_id: &str, automation_id: &str) -> Result<()> {
         self.db
             .set_business_ooda_automation(business_id, automation_id)
             .await

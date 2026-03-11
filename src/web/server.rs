@@ -129,10 +129,7 @@ impl WebServer {
 
     /// Set the shared RAG engine for knowledge base API endpoints.
     #[cfg(feature = "local-embeddings")]
-    pub fn set_rag_engine(
-        &mut self,
-        engine: Arc<tokio::sync::Mutex<crate::rag::RagEngine>>,
-    ) {
+    pub fn set_rag_engine(&mut self, engine: Arc<tokio::sync::Mutex<crate::rag::RagEngine>>) {
         self.rag_engine = Some(engine);
     }
 
@@ -147,10 +144,7 @@ impl WebServer {
     }
 
     /// Set the business engine for autonomous business management API endpoints.
-    pub fn set_business_engine(
-        &mut self,
-        engine: Arc<crate::business::engine::BusinessEngine>,
-    ) {
+    pub fn set_business_engine(&mut self, engine: Arc<crate::business::engine::BusinessEngine>) {
         self.business_engine = Some(engine);
     }
 
@@ -362,7 +356,10 @@ impl WebServer {
         // Protected routes — require auth (SEC-1 middleware + SEC-3 API rate limit)
         let protected = Router::new()
             .merge(pages::router())
-            .route("/api/auth/logout", axum::routing::post(auth::logout_handler))
+            .route(
+                "/api/auth/logout",
+                axum::routing::post(auth::logout_handler),
+            )
             .nest("/api", api::router())
             .merge(ws::router())
             .layer(axum::middleware::from_fn_with_state(
@@ -449,13 +446,9 @@ impl WebServer {
                             use tower::Service;
                             let io = hyper_util::rt::TokioIo::new(tls_stream);
                             let Ok(svc) =
-                                tower::Service::<SocketAddr>::call(
-                                    &mut make_service,
-                                    remote_addr,
-                                )
-                                .await;
-                            let hyper_svc =
-                                hyper_util::service::TowerToHyperService::new(svc);
+                                tower::Service::<SocketAddr>::call(&mut make_service, remote_addr)
+                                    .await;
+                            let hyper_svc = hyper_util::service::TowerToHyperService::new(svc);
                             // serve_connection_with_upgrades is required for WebSocket
                             // to work — without it, hyper won't release the TCP stream
                             // for the HTTP Upgrade mechanism that WS relies on.
@@ -497,7 +490,10 @@ async fn build_tls_config(
 
     let (cert_path, key_path) = if !tls_cert.is_empty() && !tls_key.is_empty() {
         // User-provided cert/key
-        (std::path::PathBuf::from(tls_cert), std::path::PathBuf::from(tls_key))
+        (
+            std::path::PathBuf::from(tls_cert),
+            std::path::PathBuf::from(tls_key),
+        )
     } else if auto_tls {
         // Auto-generate self-signed cert
         let tls_dir = dirs::home_dir()
@@ -601,9 +597,10 @@ fn generate_self_signed(cert_path: &Path, key_path: &Path, extra_domains: &[&str
 
     let mut params = rcgen::CertificateParams::new(dns_names)?;
     params.distinguished_name = rcgen::DistinguishedName::new();
-    params
-        .distinguished_name
-        .push(rcgen::DnType::CommonName, rcgen::DnValue::Utf8String("Homun Self-Signed".into()));
+    params.distinguished_name.push(
+        rcgen::DnType::CommonName,
+        rcgen::DnValue::Utf8String("Homun Self-Signed".into()),
+    );
     // Add IP SANs for localhost
     params
         .subject_alt_names
@@ -736,9 +733,7 @@ fn setup_system(domain: &str, cert_path: Option<&Path>) {
     // ── Execute with a single privilege escalation ───────────────────
     let success = if cfg!(target_os = "macos") {
         let escaped = combined.replace('\\', "\\\\").replace('"', "\\\"");
-        let script = format!(
-            r#"do shell script "{escaped}" with administrator privileges"#
-        );
+        let script = format!(r#"do shell script "{escaped}" with administrator privileges"#);
         std::process::Command::new("osascript")
             .args(["-e", &script])
             .status()
@@ -757,9 +752,7 @@ fn setup_system(domain: &str, cert_path: Option<&Path>) {
                     .unwrap_or(false)
             })
     } else if cfg!(windows) {
-        let ps_cmd = format!(
-            "Start-Process cmd -ArgumentList '/c {combined}' -Verb RunAs -Wait"
-        );
+        let ps_cmd = format!("Start-Process cmd -ArgumentList '/c {combined}' -Verb RunAs -Wait");
         std::process::Command::new("powershell")
             .args(["-Command", &ps_cmd])
             .status()
@@ -775,7 +768,11 @@ fn setup_system(domain: &str, cert_path: Option<&Path>) {
         }
         let ops: Vec<&str> = [
             if needs_hosts { Some("hosts") } else { None },
-            if needs_cert_trust { Some("cert-trust") } else { None },
+            if needs_cert_trust {
+                Some("cert-trust")
+            } else {
+                None
+            },
         ]
         .into_iter()
         .flatten()
@@ -801,7 +798,11 @@ async fn start_port_proxy(listen_port: u16, target_port: u16) {
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => {
-            tracing::info!(listen_port, target_port, "Port proxy started (443 → {target_port})");
+            tracing::info!(
+                listen_port,
+                target_port,
+                "Port proxy started (443 → {target_port})"
+            );
             l
         }
         Err(e) => {
@@ -929,7 +930,10 @@ mod tests {
         let config = rustls::ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(certs, key);
-        assert!(config.is_ok(), "Certificate and key should form valid TLS config");
+        assert!(
+            config.is_ok(),
+            "Certificate and key should form valid TLS config"
+        );
     }
 
     #[test]
@@ -973,7 +977,11 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let key_perms = std::fs::metadata(&key_path).unwrap().permissions().mode();
             // Check that only owner has permissions (mode & 0o077 == 0)
-            assert_eq!(key_perms & 0o077, 0, "Key file should have 0600 permissions");
+            assert_eq!(
+                key_perms & 0o077,
+                0,
+                "Key file should have 0600 permissions"
+            );
         }
     }
 
@@ -1000,6 +1008,9 @@ mod tests {
             "ui.homun.bot",
         )
         .await;
-        assert!(result.is_some(), "Should produce valid TLS config from provided cert/key");
+        assert!(
+            result.is_some(),
+            "Should produce valid TLS config from provided cert/key"
+        );
     }
 }

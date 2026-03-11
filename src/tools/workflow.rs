@@ -149,14 +149,15 @@ impl WorkflowTool {
             None => return Ok(ToolResult::error("Missing required field: steps")),
         };
 
-        let steps: Vec<crate::workflows::StepDefinition> = match serde_json::from_value(steps_val.clone()) {
-            Ok(s) => s,
-            Err(e) => {
-                return Ok(ToolResult::error(format!(
-                    "Invalid steps format: {e}. Each step needs 'name' and 'instruction'."
-                )))
-            }
-        };
+        let steps: Vec<crate::workflows::StepDefinition> =
+            match serde_json::from_value(steps_val.clone()) {
+                Ok(s) => s,
+                Err(e) => {
+                    return Ok(ToolResult::error(format!(
+                        "Invalid steps format: {e}. Each step needs 'name' and 'instruction'."
+                    )))
+                }
+            };
 
         // Default deliver_to to current channel
         let deliver_to = args
@@ -184,11 +185,7 @@ impl WorkflowTool {
         }
     }
 
-    async fn handle_list(
-        &self,
-        engine: &WorkflowEngine,
-        args: &Value,
-    ) -> Result<ToolResult> {
+    async fn handle_list(&self, engine: &WorkflowEngine, args: &Value) -> Result<ToolResult> {
         let filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("all");
 
         let status_filter = match filter {
@@ -208,22 +205,27 @@ impl WorkflowTool {
 
         let mut lines = Vec::new();
         for wf in &workflows {
-            let completed = wf.steps.iter().filter(|s| s.status == crate::workflows::StepStatus::Completed).count();
+            let completed = wf
+                .steps
+                .iter()
+                .filter(|s| s.status == crate::workflows::StepStatus::Completed)
+                .count();
             let total = wf.steps.len();
             lines.push(format!(
                 "- [{}] {} (id: {}) — {}/{} steps, status: {}",
-                wf.id, wf.name, wf.id, completed, total, wf.status.as_str()
+                wf.id,
+                wf.name,
+                wf.id,
+                completed,
+                total,
+                wf.status.as_str()
             ));
         }
 
         Ok(ToolResult::success(lines.join("\n")))
     }
 
-    async fn handle_status(
-        &self,
-        engine: &WorkflowEngine,
-        args: &Value,
-    ) -> Result<ToolResult> {
+    async fn handle_status(&self, engine: &WorkflowEngine, args: &Value) -> Result<ToolResult> {
         let id = match args.get("workflow_id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => return Ok(ToolResult::error("Missing required field: workflow_id")),
@@ -254,7 +256,11 @@ impl WorkflowTool {
                 crate::workflows::StepStatus::Skipped => "[skipped]",
                 crate::workflows::StepStatus::Pending => "[pending]",
             };
-            let approval = if step.approval_required { " (approval required)" } else { "" };
+            let approval = if step.approval_required {
+                " (approval required)"
+            } else {
+                ""
+            };
             lines.push(format!(
                 "  {} Step {}: {}{}",
                 status_icon, step.idx, step.name, approval
@@ -275,11 +281,7 @@ impl WorkflowTool {
         Ok(ToolResult::success(lines.join("\n")))
     }
 
-    async fn handle_approve(
-        &self,
-        engine: &WorkflowEngine,
-        args: &Value,
-    ) -> Result<ToolResult> {
+    async fn handle_approve(&self, engine: &WorkflowEngine, args: &Value) -> Result<ToolResult> {
         let id = match args.get("workflow_id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => return Ok(ToolResult::error("Missing required field: workflow_id")),
@@ -287,15 +289,13 @@ impl WorkflowTool {
 
         match engine.approve_and_resume(id).await {
             Ok(msg) => Ok(ToolResult::success(msg)),
-            Err(e) => Ok(ToolResult::error(format!("Failed to approve workflow: {e}"))),
+            Err(e) => Ok(ToolResult::error(format!(
+                "Failed to approve workflow: {e}"
+            ))),
         }
     }
 
-    async fn handle_cancel(
-        &self,
-        engine: &WorkflowEngine,
-        args: &Value,
-    ) -> Result<ToolResult> {
+    async fn handle_cancel(&self, engine: &WorkflowEngine, args: &Value) -> Result<ToolResult> {
         let id = match args.get("workflow_id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => return Ok(ToolResult::error("Missing required field: workflow_id")),

@@ -1,6 +1,6 @@
 # Homun — Development Roadmap
 
-> Last updated: 2026-03-10
+> Last updated: 2026-03-12
 > Basato su: Audit completo (`docs/AUDIT-2026-03.md`)
 > Gap analysis: Homun vs OpenClaw vs ZeroClaw
 > Source of truth: questo documento e' la roadmap/status operativa del progetto
@@ -285,11 +285,11 @@ Quando si aggiunge un nuovo canale, implementare sempre:
 
 > Obiettivo: eseguire Shell, MCP stdio e script skill in un runtime coerente, sicuro e multi-piattaforma.
 
-### Stato ad oggi (2026-03-06)
+### Stato ad oggi (2026-03-12)
 
 - ✅ **Fondazioni implementate (milestone 1, macOS-first)**
-  - Config unica sandbox (`security.execution_sandbox`) con backend `auto|docker|none` + `strict`.
-  - Runtime wrapper condiviso (`src/tools/sandbox_exec.rs`) usato da:
+  - Config unica sandbox (`security.execution_sandbox`) con backend `auto|docker|linux_native|windows_native|none` + `strict`.
+  - Runtime wrapper condiviso come modulo `src/tools/sandbox/` (11 file, ~2,200 LOC) usato da:
     - Shell tool (`src/tools/shell.rs`)
     - MCP stdio (`src/tools/mcp.rs`)
     - Skill executor (`src/skills/executor.rs`)
@@ -299,35 +299,55 @@ Quando si aggiunge un nuovo canale, implementare sempre:
     - `GET /api/v1/security/sandbox/presets`
     - `GET /api/v1/security/sandbox/image`
     - `POST /api/v1/security/sandbox/image/pull`
+    - `POST /api/v1/security/sandbox/image/build`
     - `GET /api/v1/security/sandbox/events`
-  - UI Permissions con sezione Execution Sandbox (stato runtime, backend, limiti CPU/RAM, network, readonly rootfs, mount workspace, preset rapidi, runtime image status/pull, recent events).
+  - UI Permissions con sezione Execution Sandbox (stato runtime, backend, limiti CPU/RAM, network, readonly rootfs, mount workspace, preset rapidi, runtime image policy/version, status/pull/build baseline, recent events).
   - Badge/runtime status in Skills e MCP pages + link rapido a Permissions.
+- ✅ **Architettura modulare sandbox** (refactoring completato 2026-03-12)
+  - Monolitico `sandbox_exec.rs` (2,242 LOC) splittato in `src/tools/sandbox/`:
+    - `mod.rs` — facade pubblica + 24 unit test
+    - `types.rs` — tutti i tipi pubblici e interni
+    - `env.rs` — sanitizzazione env
+    - `events.rs` — event log I/O
+    - `resolve.rs` — probe backend e risoluzione
+    - `runtime_image.rs` — lifecycle immagine runtime (~600 LOC)
+    - `backends/{mod,native,docker,linux_native,windows_native}.rs` — builder per backend
+  - Tutti i caller aggiornati, 31 unit test passanti, nessuna modifica API/UI.
 - ✅ **Comportamento attuale robusto su macOS**
   - Se Docker non e' disponibile e backend=`auto`, fallback controllato a native.
   - Con `strict=true`, blocco esecuzione quando backend richiesto non disponibile.
 - ✅ **Osservabilita' e operativita'**
   - Event log recente delle decisioni sandbox condiviso tra shell, MCP e skill scripts.
   - Stato immagine runtime Docker ispezionabile dalla UI con pull manuale del runtime configurato.
-- ⚠️ **In corso / parziale**
-  - Lifecycle immagine presente a livello operativo, ma manca ancora versioning/policy di update piu' rigorosa.
+  - Status runtime generalizzato con capability/reason per backend e drift/policy della runtime image.
+- ✅ **Validazione CI multi-piattaforma** (aggiunta 2026-03-12)
+  - Suite test Linux native (`tests/sandbox_linux_native.rs`): 8 test Bubblewrap (probe, echo, env, network, prlimit, workspace, rootfs, strict).
+  - Suite test runtime image (`tests/sandbox_runtime_image.rs`): 6 test Docker (build baseline, node, python, bash, tsx, sandbox exec).
+  - Suite test E2E cross-platform (`tests/sandbox_e2e.rs`): 7 test portabili (echo nativo, detection backend, Docker sandbox, env isolation, bwrap, macOS fallback).
+  - CI workflow `.github/workflows/sandbox-validation.yml`: 5 job (linux-native, runtime-image, e2e-linux, e2e-windows, e2e-macos).
+- ⚠️ **Parziale / da chiudere**
+  - Backend `linux_native` implementato e con suite test CI, ma non ancora eseguito su runner GitHub (PR pendente).
+  - Backend `windows_native` wired come stub (`bail!`), suite test CI pronta per quando viene implementato con Job Objects.
+  - Build locale della baseline runtime `homun/runtime-core:2026.03` validata via test quando Docker e' disponibile.
+  - Resta parity browser-complete della runtime image oltre il core baseline.
 
 ### Milestone Sandbox — Dove siamo
 
 | Milestone | Scope | Stato |
 |-----------|-------|-------|
 | SBX-1 | Backend unificato + wiring su Shell/MCP/Skills + API/UI runtime status | ✅ DONE |
-| SBX-2 | Hard isolation backend Linux (namespaces/seccomp/cgroups) oltre Docker fallback | TODO |
-| SBX-3 | Backend Windows nativo (Job Objects/AppContainer o equivalente) | TODO |
-| SBX-4 | Runtime image gestita (template immagine/toolchain per skill+MCP) + lifecycle/versioning | ⚠️ PARTIAL |
+| SBX-2 | Hard isolation backend Linux (Bubblewrap/namespaces/prlimit) + refactoring modulare + suite test CI | ✅ DONE |
+| SBX-3 | Backend Windows nativo (Job Objects) — memory/CPU/kill-on-close via Win32 Job Objects, post-spawn enforcement in shell+skills | ✅ DONE |
+| SBX-4 | Runtime image gestita (baseline core + policy/versioning + build/pull + test CI) | ✅ DONE |
 | SBX-5 | UX finale Permissions/Sandbox semplificata (onboarding guidato + spiegazioni contestuali) | ✅ DONE |
-| SBX-6 | Test E2E cross-platform (macOS/Linux/Windows) e policy hardening finale | TODO |
+| SBX-6 | Test E2E cross-platform (macOS/Linux/Windows) + CI workflow sandbox-validation.yml | ✅ DONE |
 
-### Cosa manca per chiudere il cerchio Sandbox
+### Cosa manca per completare il Sandbox
 
-- Implementare backend hardened nativi per Linux e Windows (non solo strategia Docker/none).
-- Completare versioning/update policy dell'immagine runtime standard per skill/MCP.
+- Estendere la runtime image da baseline "core" a parity piu' ampia per skill/MCP browser-heavy.
 - Aggiungere policy di rete piu' granulari (es. allowlist host/domain per runtime isolato).
-- Chiudere hardening finale con test E2E cross-platform e verifiche sui fallback reali.
+- Primo run CI su GitHub Actions per validare le suite su runner reali (Linux bwrap, Windows, macOS).
+- SBX-3 v2: network isolation (AppContainer), filesystem restriction (NTFS ACL) — non bloccanti per MVP.
 
 ### Come funziona lo Skill Creator
 
@@ -400,7 +420,7 @@ Skill 'data-scraper' installed. Ready to use.
 
 > Obiettivo: portare la chat Web UI da "funzionante" a esperienza primaria, persistente e robusta.
 
-### Stato ad oggi (2026-03-06)
+### Stato ad oggi (2026-03-11)
 
 - ✅ **Fondazioni UX e loop migliorate**
   - Chat shell ridisegnata con composer sticky, model picker minimale, timeline tool/reasoning piu' leggibile.
@@ -420,7 +440,8 @@ Skill 'data-scraper' installed. Ready to use.
   - Supporto multimodale nativo nel provider layer per modelli compatibili (incl. OpenAI-compatible, Anthropic e Ollama vision).
   - Capability per modello configurabili dalla UI (`multimodal`, `image_input`, `native tool calls`), con prefill automatico per modelli noti e override manuale per custom/BYOK.
 - ⚠️ **Parziale / da chiudere**
-  - Mancano ancora i test E2E completi della chat (streaming, stop, resume, multi-sessione, attachment flow).
+  - Esiste ora una suite smoke manuale via Playwright MCP CLI per login/chat/browser (`scripts/e2e_*.sh`), inclusi send/stop, multi-sessione, restore run, attachment flow e MCP picker.
+  - Mancano ancora la formalizzazione release-grade di CHAT-7 (assert piu' rigorosi su streaming/errori, gating manuale stabile, copertura cross-platform).
   - Il supporto documento resta ibrido: testo locale quando possibile, altrimenti vision/MCP; il passaggio a document input nativo provider-specific e' da espandere.
   - Resta del polish UI finale da consolidare, ma non blocca l'uso primario della chat.
 
@@ -434,18 +455,14 @@ Skill 'data-scraper' installed. Ready to use.
 | CHAT-4 | Persistenza run su DB + restore dopo restart processo | ✅ DONE |
 | CHAT-5 | Composer `+` completo (immagini, documenti, ingressi MCP reali) + routing multimodale capability-based | ✅ DONE |
 | CHAT-6 | Stop profondo / cancellation propagation su provider e tool lunghi | ✅ DONE |
-| CHAT-7 | Test E2E Playwright per streaming/stop/resume/multi-sessione | TODO |
+| CHAT-7 | Smoke/E2E Playwright MCP per streaming/stop/resume/multi-sessione/attachment/MCP context | ⚠️ PARTIAL |
 
 ### Cosa manca per chiudere davvero la Chat
 
-- Completare **CHAT-7 / test E2E**:
-  - invio messaggio
-  - streaming
-  - stop
-  - cambio pagina durante run
-  - restore run attivo
-  - multi-sessione
-  - upload allegati + MCP context
+- Chiudere **CHAT-7** portando gli smoke manuali a suite piu' formale:
+  - asserzioni piu' robuste su streaming e stati finali
+  - failure/offline/reconnect cases
+  - promozione a checklist release/manual gate stabile
 - Estendere il **multimodale oltre il v1 attuale**:
   - input documento nativo dove il provider/model lo supporta chiaramente
   - OCR / pipeline documento binario piu' robusta
@@ -460,7 +477,7 @@ Skill 'data-scraper' installed. Ready to use.
 
 ### Ordine consigliato per chiuderla
 
-1. CHAT-7 test E2E completi
+1. formalizzare CHAT-7 sopra gli smoke manuali gia' presenti
 2. hardening multimodale/document pipeline
 3. polish finale streaming/layout
 
@@ -495,7 +512,7 @@ BrowserTool ─── tool unificato "browser" con ~17 azioni
 agent_loop.rs ─── browser_task_plan (veto/guard), execution_plan, supersede context
 ```
 
-### Stato ad oggi (2026-03-08)
+### Stato ad oggi (2026-03-11)
 
 - ✅ **Migrazione da custom Playwright sidecar a MCP**
   - Eliminati `src/browser/{actions,manager,snapshot,tool}.rs` (~4,500 LOC rimossi)
@@ -534,6 +551,10 @@ agent_loop.rs ─── browser_task_plan (veto/guard), execution_plan, supersed
 - ✅ **Execution plan** (`src/agent/execution_plan.rs`)
   - Piano strutturato per task browser complessi
   - Hinting form fields dal snapshot
+- ✅ **Smoke E2E manuali browser/chat**
+  - Smoke `/browser` via Playwright MCP CLI per prerequisiti e test connessione.
+  - Flow deterministico browser via chat su fixture locale self-contained (`data:` URL) che forza l'uso del tool `browser` e verifica token finale + activity card browser.
+  - Workflow manuale GitHub Actions dedicato per eseguire gli smoke on-demand.
 
 ### Cosa manca / miglioramenti futuri
 
@@ -544,7 +565,7 @@ agent_loop.rs ─── browser_task_plan (veto/guard), execution_plan, supersed
 - ⬚ **Screenshot/vision fallback**: quando il modello ha `image_input`, inviare screenshot
   per pagine dove lo snapshot accessibilita' non basta
 - ⬚ **Caching refs cross-action**: evitare snapshot ridondanti tracciando quali refs sono ancora validi
-- ⬚ **Test E2E browser**: test automatizzati del flow completo (navigate → fill → submit → extract)
+- ⬚ **Test E2E browser release-grade**: smoke manuali deterministici presenti, ma manca ancora promozione a gating stabile/cross-platform del flow completo (navigate → fill → submit → extract)
 - ⬚ **Rate limiting per sito**: delay configurabile tra azioni per evitare ban
 - ⬚ **Cookie consent auto-dismiss**: detect e click automatico sui banner cookie
   (senza usare `evaluate` — via `click` su ref riconosciuto)
@@ -811,25 +832,26 @@ Homun: "La fattura e' di 1.250€ da Fornitore XYZ per servizi consulenza,
 
 ## Sprint 7 — Canali Phase 2 (P2)
 
-> Obiettivo: completare i canali esistenti, aggiungerne di nuovi
+> Obiettivo: chiudere e irrobustire i canali gia' implementati, portandoli a parity/production quality
 
 | # | Task | File principali | LOC stimate | Stato |
 |---|------|----------------|-------------|-------|
-| 7.1 | **Completare Discord** | `channels/discord.rs` | ~100 | TODO |
+| 7.1 | **Discord hardening** | `channels/discord.rs` | ~100 | ⚠️ PARTIAL |
+| | Bot base attivo: inbound/outbound, allowlist, mention gating, typing indicator | | | |
 | | Test end-to-end | | | |
 | | Reaction ACKs | | | |
 | | Thread support | | | |
-| 7.2 | **Completare Slack** | `channels/slack.rs` | ~200 | TODO |
+| 7.2 | **Slack hardening** | `channels/slack.rs` | ~200 | ⚠️ PARTIAL |
+| | Implementazione base attiva: polling Web API, autodiscovery canali, outbound replies, allowlist | | | |
 | | Implementazione completa Bolt-style | | | |
 | | Slash commands | | | |
 | | Thread support | | | |
-| 7.3 | **Completare Email** | `channels/email.rs`, `web/pages.rs` | ~200 | TODO |
-| | IMAP polling + SMTP sending | | | |
-| | HTML parsing | | | |
+| 7.3 | **Email hardening** | `channels/email.rs`, `web/pages.rs` | ~200 | ⚠️ PARTIAL |
+| | Base attiva: multi-account IMAP + SMTP, HTML parsing, trigger-word/on-demand, Web UI account management | | | |
 | | Attachment handling | | | |
-| | Web UI: card Email nei settings (IMAP/SMTP/credentials) | | | |
-| 7.4 | **WhatsApp stabilizzazione** | `channels/whatsapp.rs` | ~100 | TODO |
-| | Reconnect robusto | | | |
+| 7.4 | **WhatsApp stabilizzazione** | `channels/whatsapp.rs` | ~100 | ⚠️ PARTIAL |
+| | Base attiva: session reconnect, allowlist fail-closed, pairing via TUI, grace period anti-replay | | | |
+| | Reconnect ancora piu' robusto | | | |
 | | Group support | | | |
 
 **Stima totale Sprint 7: ~600 LOC**
@@ -1197,13 +1219,13 @@ Sprint 5: Ecosistema (P1)                  ✅ DONE (~1,350 LOC)
   ✅ 5.4 Skill Adapter (ClawHub → Homun)
   ✅ 5.5 Skill Shield (sicurezza pre-install)
     |
-Programma Sandbox Trasversale (P0/P1)      ⚠️ PARTIAL
+Programma Sandbox Trasversale (P0/P1)      ✅ DONE
   ✅ SBX-1 Fondazioni unificate (Shell/MCP/Skills + API/UI)
-  TODO SBX-2 Linux hardened backend
-  TODO SBX-3 Windows backend
-  ⚠️ SBX-4 Runtime image + lifecycle
+  ✅ SBX-2 Linux backend + refactoring modulare (sandbox_exec.rs → sandbox/) + suite test CI
+  ✅ SBX-3 Windows backend — Job Objects (memory/CPU/kill-on-close), post-spawn enforcement
+  ✅ SBX-4 Runtime image core + lifecycle/build + test CI validazione
   ✅ SBX-5 UX finale Permissions/Sandbox
-  TODO SBX-6 E2E cross-platform hardening
+  ✅ SBX-6 E2E cross-platform + CI workflow sandbox-validation.yml (5 job)
     |
 Programma Chat Web UI (P1)                 ⚠️ PARTIAL
   ✅ CHAT-1 Refresh UI/UX base
@@ -1212,18 +1234,17 @@ Programma Chat Web UI (P1)                 ⚠️ PARTIAL
   ✅ CHAT-4 Persistenza run su DB
   ✅ CHAT-5 Composer + completo + routing multimodale
   ✅ CHAT-6 Stop profondo / cancel propagation
-  TODO CHAT-7 Test E2E chat
+  ⚠️ CHAT-7 Smoke manuali Playwright MCP (send/stop/restore/multi-sessione/attachment/MCP picker), manca formalizzazione release-grade
   ⚠️ Hardening multimodale documenti / OCR / MCP fallback policy
     |
-Programma Browser Automation (P1)          ✅ DONE
+Programma Browser Automation (P1)          ⚠️ PARTIAL
   ✅ Migrazione da custom sidecar a MCP (@playwright/mcp)
   ✅ Tool unificato "browser" (~17 azioni, schema piatto)
   ✅ Stealth anti-bot (addInitScript: webdriver, chrome, plugins)
   ✅ Snapshot compaction (compact_tree, agent-browser style)
   ✅ Orchestrazione (auto-snapshot, stability, autocomplete, veto)
-  ⬚ Stealth avanzato (CDP endpoint, Chrome flags)
-  ⬚ Screenshot/vision fallback
-  ⬚ Test E2E browser
+  ✅ Smoke manuali browser deterministici via Playwright MCP CLI
+  ⚠️ Restano hardening ed estensioni: stealth avanzato, screenshot/vision fallback, test E2E browser release-grade
     |
 Programma Design System (P1)               ✅ DONE
   ✅ Olive Moss Console — token architecture (light + dark)
@@ -1248,8 +1269,9 @@ Programma Workflow Engine (P1)             ✅ DONE (~2,310 LOC)
   ✅ WF-6 Web UI workflows (pagina, API, JS, CSS)
   ✅ WF-7 Trigger da automazioni/cron (OnceCell, migration 014, step builder)
     |
-Sprint 7: Canali Phase 2 (P2)              TODO (~600 LOC)
-  7.1-7.4 Discord, Slack, Email, WhatsApp
+Sprint 7: Canali Phase 2 (P2)              ⚠️ PARTIAL (~600 LOC)
+  ⚠️ Implementazioni base gia' presenti per Discord, Slack, Email, WhatsApp
+  TODO parity/hardening: test E2E, threads/groups, slash/Bolt UX, attachment handling, reconnect robustness
     |
 Sprint 8: Hardening (P2)                   ✅ COMPLETE (~360 LOC)
   ✅ 8.1 CI Pipeline
@@ -1289,8 +1311,8 @@ Sprint 9+: Future (P3)
   Voice, Extended thinking, Prometheus, distribuzione
 ```
 
-**Completato: Sprint 1-6 + Sprint 8 + SBX-1/5 + CHAT-1..6 + Browser + Design System + Workflow Engine + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4) + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
-**Rimanente: SBX-2..4/6, CHAT-7, Browser E2E, Sprint 7, BIZ-2..5, Mobile App, Sprint 9+**
+**Completato: Sprint 1-6 + Sprint 8 + SBX-1..6 + CHAT-1..6 + smoke manuali CHAT-7/Browser + core Browser + Design System + Workflow Engine + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4) + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
+**Rimanente: formalizzazione release-grade di CHAT-7 e Browser E2E, Sprint 7 hardening canali, BIZ-2..5, Mobile App, Sprint 9+**
 
 ---
 

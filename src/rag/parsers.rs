@@ -79,9 +79,7 @@ fn try_ocr_pdf(path: &Path) -> Result<String> {
     }
 
     // Check if pdftoppm is available (from poppler-utils)
-    let check_ppm = std::process::Command::new("pdftoppm")
-        .arg("-h")
-        .output();
+    let check_ppm = std::process::Command::new("pdftoppm").arg("-h").output();
     if check_ppm.is_err() {
         anyhow::bail!("pdftoppm not found (install poppler)");
     }
@@ -168,9 +166,7 @@ fn extract_text_from_docx_xml(xml: &str) -> String {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e))
-                if e.local_name().as_ref() == b"t" =>
-            {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.local_name().as_ref() == b"t" => {
                 in_text_el = true;
             }
             Ok(Event::End(e)) if e.local_name().as_ref() == b"t" => {

@@ -254,11 +254,7 @@ impl BusinessTool {
         }))))
     }
 
-    async fn handle_list(
-        &self,
-        engine: &BusinessEngine,
-        args: &Value,
-    ) -> Result<ToolResult> {
+    async fn handle_list(&self, engine: &BusinessEngine, args: &Value) -> Result<ToolResult> {
         let filter = args.get("filter").and_then(|v| v.as_str());
         let status_filter = match filter {
             Some("all") | None => None,
@@ -288,25 +284,19 @@ impl BusinessTool {
         }))))
     }
 
-    async fn handle_status(
-        &self,
-        engine: &BusinessEngine,
-        args: &Value,
-    ) -> Result<ToolResult> {
+    async fn handle_status(&self, engine: &BusinessEngine, args: &Value) -> Result<ToolResult> {
         let id = match args.get("business_id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => return Ok(ToolResult::error("Missing required parameter: business_id")),
         };
 
         let report = engine.status_report(id).await?;
-        Ok(ToolResult::success(json_output(json!({ "report": report }))))
+        Ok(ToolResult::success(json_output(
+            json!({ "report": report }),
+        )))
     }
 
-    async fn handle_research(
-        &self,
-        engine: &BusinessEngine,
-        args: &Value,
-    ) -> Result<ToolResult> {
+    async fn handle_research(&self, engine: &BusinessEngine, args: &Value) -> Result<ToolResult> {
         let business_id = match args.get("business_id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => return Ok(ToolResult::error("Missing required parameter: business_id")),
@@ -328,7 +318,14 @@ impl BusinessTool {
         let source = args.get("source").and_then(|v| v.as_str());
 
         let insight = engine
-            .add_insight(business_id, topic, insight_type, content, confidence, source)
+            .add_insight(
+                business_id,
+                topic,
+                insight_type,
+                content,
+                confidence,
+                source,
+            )
             .await?;
 
         Ok(ToolResult::success(json_output(json!({
@@ -424,7 +421,14 @@ impl BusinessTool {
             .ok_or_else(|| anyhow::anyhow!("Business not found"))?;
 
         let product = engine
-            .create_product(business_id, name, description, product_type, price, currency)
+            .create_product(
+                business_id,
+                name,
+                description,
+                product_type,
+                price,
+                currency,
+            )
             .await?;
 
         if biz.autonomy_level == BusinessAutonomy::Semi {
@@ -523,11 +527,7 @@ impl BusinessTool {
         }
     }
 
-    async fn handle_revenue(
-        &self,
-        engine: &BusinessEngine,
-        args: &Value,
-    ) -> Result<ToolResult> {
+    async fn handle_revenue(&self, engine: &BusinessEngine, args: &Value) -> Result<ToolResult> {
         let business_id = match args.get("business_id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => return Ok(ToolResult::error("Missing required parameter: business_id")),
@@ -545,11 +545,7 @@ impl BusinessTool {
         }))))
     }
 
-    async fn handle_review(
-        &self,
-        engine: &BusinessEngine,
-        args: &Value,
-    ) -> Result<ToolResult> {
+    async fn handle_review(&self, engine: &BusinessEngine, args: &Value) -> Result<ToolResult> {
         let business_id = match args.get("business_id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => return Ok(ToolResult::error("Missing required parameter: business_id")),
@@ -638,11 +634,7 @@ impl BusinessTool {
         }
     }
 
-    async fn handle_pause(
-        &self,
-        engine: &BusinessEngine,
-        args: &Value,
-    ) -> Result<ToolResult> {
+    async fn handle_pause(&self, engine: &BusinessEngine, args: &Value) -> Result<ToolResult> {
         let business_id = match args.get("business_id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => return Ok(ToolResult::error("Missing required parameter: business_id")),
@@ -656,11 +648,7 @@ impl BusinessTool {
         }
     }
 
-    async fn handle_close(
-        &self,
-        engine: &BusinessEngine,
-        args: &Value,
-    ) -> Result<ToolResult> {
+    async fn handle_close(&self, engine: &BusinessEngine, args: &Value) -> Result<ToolResult> {
         let business_id = match args.get("business_id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => return Ok(ToolResult::error("Missing required parameter: business_id")),

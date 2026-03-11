@@ -20,10 +20,9 @@ pub use executor::{
 };
 pub use installer::{InstallResult, InstalledSkillInfo, SkillInstaller};
 pub use loader::{
-    build_skill_activation_header, check_eligibility, extract_required_bins,
-    extract_requirements, list_skill_references, parse_allowed_tools, parse_skill_md_public,
-    resolve_skill_env, substitute_skill_variables, Skill, SkillMetadata, SkillRegistry,
-    SkillRequirements,
+    build_skill_activation_header, check_eligibility, extract_required_bins, extract_requirements,
+    list_skill_references, parse_allowed_tools, parse_skill_md_public, resolve_skill_env,
+    substitute_skill_variables, Skill, SkillMetadata, SkillRegistry, SkillRequirements,
 };
 pub use mcp_registry::{
     all_mcp_presets, find_mcp_preset, suggest_mcp_presets, McpEnvVar, McpServerPreset,

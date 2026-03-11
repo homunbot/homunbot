@@ -229,9 +229,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, conversation_id:
                         };
                         persist_run_snapshot(&state, &run).await;
 
-                        let thinking_override = parsed
-                            .get("thinking")
-                            .and_then(|v| v.as_bool());
+                        let thinking_override = parsed.get("thinking").and_then(|v| v.as_bool());
 
                         let inbound = InboundMessage {
                             channel: "web".to_string(),

@@ -913,9 +913,7 @@ mod tests {
     fn test_strip_think_tags() {
         let tag = "think";
         assert_eq!(
-            OllamaProvider::strip_think_tags(&format!(
-                "<{tag}>reasoning</{tag}> answer"
-            )),
+            OllamaProvider::strip_think_tags(&format!("<{tag}>reasoning</{tag}> answer")),
             "answer"
         );
         assert_eq!(
@@ -928,6 +926,9 @@ mod tests {
             )),
             "middle  end"
         );
-        assert_eq!(OllamaProvider::strip_think_tags(&format!("<{tag}>only thinking</{tag}>")), "");
+        assert_eq!(
+            OllamaProvider::strip_think_tags(&format!("<{tag}>only thinking</{tag}>")),
+            ""
+        );
     }
 }

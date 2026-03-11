@@ -209,7 +209,10 @@ impl Database {
         } else {
             None
         };
-        let completed_at = if matches!(status, StepStatus::Completed | StepStatus::Failed | StepStatus::Skipped) {
+        let completed_at = if matches!(
+            status,
+            StepStatus::Completed | StepStatus::Failed | StepStatus::Skipped
+        ) {
             Some(now.clone())
         } else {
             None

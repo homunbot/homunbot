@@ -145,7 +145,7 @@ pub async fn test_mcp_server_connection(
     server: &McpServerConfig,
     sandbox: Option<ExecutionSandboxConfig>,
 ) -> McpConnectionTestResult {
-    use crate::tools::sandbox_exec::resolve_sandbox_backend;
+    use crate::tools::sandbox::resolve::resolve_sandbox_backend;
     use crate::tools::McpManager;
 
     let mut servers = HashMap::new();

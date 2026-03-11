@@ -457,6 +457,33 @@ function setupSandboxControls() {
         });
     }
 
+    const buildImageBtn = document.getElementById('btn-build-sandbox-image');
+    if (buildImageBtn) {
+        buildImageBtn.addEventListener('click', async () => {
+            buildImageBtn.disabled = true;
+            buildImageBtn.textContent = 'Building...';
+            try {
+                const resp = await fetch('/api/v1/security/sandbox/image/build', {
+                    method: 'POST'
+                });
+                const data = await resp.json().catch(() => null);
+                if (!resp.ok) {
+                    throw new Error(data?.message || data || 'Failed to build sandbox runtime image');
+                }
+                currentSandboxImage = data?.status || null;
+                renderSandboxImage();
+                await loadSandboxEvents();
+                showToast(data?.message || 'Sandbox runtime image built', 'success');
+            } catch (e) {
+                console.error('Error building sandbox runtime image:', e);
+                showToast(e.message || 'Failed to build sandbox runtime image', 'error');
+            } finally {
+                buildImageBtn.disabled = false;
+                buildImageBtn.textContent = 'Build Runtime Baseline';
+            }
+        });
+    }
+
     const pullImageBtn = document.getElementById('btn-pull-sandbox-image');
     if (pullImageBtn) {
         pullImageBtn.addEventListener('click', async () => {
@@ -555,6 +582,8 @@ function setupSandboxControls() {
 
     [
         'sandbox-docker-image',
+        'sandbox-runtime-image-policy',
+        'sandbox-runtime-image-expected-version',
         'sandbox-docker-network',
         'sandbox-docker-memory',
         'sandbox-docker-cpus',
@@ -577,6 +606,8 @@ function renderSandbox() {
     const backendEl = document.getElementById('sandbox-backend');
     const strictEl = document.getElementById('sandbox-strict');
     const imageEl = document.getElementById('sandbox-docker-image');
+    const policyEl = document.getElementById('sandbox-runtime-image-policy');
+    const expectedVersionEl = document.getElementById('sandbox-runtime-image-expected-version');
     const networkEl = document.getElementById('sandbox-docker-network');
     const memoryEl = document.getElementById('sandbox-docker-memory');
     const cpusEl = document.getElementById('sandbox-docker-cpus');
@@ -587,6 +618,8 @@ function renderSandbox() {
     if (backendEl) backendEl.value = (currentSandbox.backend || 'auto').toLowerCase();
     if (strictEl) strictEl.checked = !!currentSandbox.strict;
     if (imageEl) imageEl.value = currentSandbox.docker_image || 'node:22-alpine';
+    if (policyEl) policyEl.value = (currentSandbox.runtime_image_policy || 'infer').toLowerCase();
+    if (expectedVersionEl) expectedVersionEl.value = currentSandbox.runtime_image_expected_version || '';
     if (networkEl) networkEl.value = (currentSandbox.docker_network || 'none').toLowerCase();
     if (memoryEl) memoryEl.value = Number(currentSandbox.docker_memory_mb || 0);
     if (cpusEl) cpusEl.value = Number(currentSandbox.docker_cpus || 0);
@@ -645,8 +678,9 @@ function renderSandboxStatus() {
         badgeEl.classList.add('badge-success');
     }
 
-    const dockerText = status.docker_available ? 'available' : 'unavailable';
-    statusEl.textContent = `${status.message} Docker: ${dockerText}.`;
+    const availabilityText = status.availability_summary
+        || `Docker: ${status.docker_available ? 'available' : 'unavailable'}.`;
+    statusEl.textContent = `${status.message} ${availabilityText}`.trim();
     updateRecommendedPresetButton(status);
     renderSandboxGuide(status);
 }
@@ -656,6 +690,7 @@ function renderSandboxImage() {
     const textEl = document.getElementById('sandbox-image-status-text');
     const factsEl = document.getElementById('sandbox-image-status-facts');
     const pullBtn = document.getElementById('btn-pull-sandbox-image');
+    const buildBtn = document.getElementById('btn-build-sandbox-image');
     if (!badgeEl || !textEl || !factsEl) return;
 
     const image = currentSandboxImage;
@@ -665,19 +700,67 @@ function renderSandboxImage() {
         textEl.textContent = 'Runtime image status unavailable.';
         factsEl.innerHTML = '<span class="sandbox-guide-fact">No runtime image facts loaded yet</span>';
         if (pullBtn) pullBtn.disabled = false;
+        if (buildBtn) buildBtn.disabled = false;
         return;
     }
 
-    badgeEl.textContent = image.present ? 'local' : (image.docker_available ? 'missing' : 'docker unavailable');
-    badgeEl.className = `badge ${image.present ? 'badge-success' : (image.docker_available ? 'badge-warning' : 'badge-neutral')}`;
+    let badgeText = 'unknown';
+    let badgeClass = 'badge-neutral';
+    if (!image.docker_available) {
+        badgeText = 'docker unavailable';
+        badgeClass = 'badge-neutral';
+    } else if (image.acceptability === 'acceptable') {
+        badgeText = 'aligned';
+        badgeClass = 'badge-success';
+    } else if (image.acceptability === 'action_required') {
+        badgeText = 'pull needed';
+        badgeClass = 'badge-error';
+    } else if (image.present) {
+        badgeText = String(image.drift_status || 'review').replaceAll('-', ' ');
+        badgeClass = 'badge-warning';
+    } else {
+        badgeText = 'missing';
+        badgeClass = 'badge-warning';
+    }
+    badgeEl.textContent = badgeText;
+    badgeEl.className = `badge ${badgeClass}`;
     textEl.textContent = image.message || 'Runtime image status loaded.';
 
     const facts = [
         `Image: ${image.image || 'node:22-alpine'}`,
+        `Repository: ${image.repository || 'unknown'}`,
+        `Configured policy: ${image.configured_policy || 'infer'}`,
+        `Policy source: ${image.policy_source || 'unknown'}`,
+        `Expected version: ${image.expected_version || 'unknown'}`,
+        `Policy: ${image.version_policy || 'unknown'}`,
+        `Drift: ${image.drift_status || 'unknown'}`,
+        `Baseline profile: ${image.canonical_baseline_profile || 'unknown'}`,
+        `Baseline aligned: ${image.canonical_baseline_aligned ? 'yes' : 'no'}`,
         `Present: ${image.present ? 'yes' : 'no'}`,
         `Size: ${formatSandboxBytes(image.size_bytes)}`,
         `Checked: ${formatSandboxTimestamp(image.checked_at)}`
     ];
+    if (image.tag) {
+        facts.push(`Tag: ${image.tag}`);
+    }
+    if (image.configured_expected_version) {
+        facts.push(`Configured expected version: ${image.configured_expected_version}`);
+    }
+    if (image.digest) {
+        facts.push(`Digest: ${image.digest}`);
+    }
+    if (image.last_pulled_at) {
+        facts.push(`Last pull: ${formatSandboxTimestamp(image.last_pulled_at)}`);
+    }
+    if (image.last_pulled_image) {
+        facts.push(`Last pulled ref: ${image.last_pulled_image}`);
+    }
+    if (image.canonical_baseline) {
+        facts.push(`Baseline: ${image.canonical_baseline}`);
+    }
+    if (image.canonical_baseline_note) {
+        facts.push(`Baseline note: ${image.canonical_baseline_note}`);
+    }
     if (image.created_at) {
         facts.push(`Built: ${formatSandboxTimestamp(image.created_at)}`);
     }
@@ -688,8 +771,19 @@ function renderSandboxImage() {
     if (pullBtn) {
         pullBtn.disabled = !image.docker_available;
         pullBtn.title = image.docker_available
-            ? 'Pull the configured runtime image locally'
+            ? (image.update_recommended
+                ? 'Pull the configured runtime image locally to reconcile drift'
+                : 'Pull the configured runtime image locally')
             : 'Docker is unavailable on this machine';
+    }
+    if (buildBtn) {
+        const supportsBuild = String(image.image || '').startsWith('homun/runtime-core');
+        buildBtn.disabled = !image.docker_available || !supportsBuild;
+        buildBtn.title = !image.docker_available
+            ? 'Docker is unavailable on this machine'
+            : (supportsBuild
+                ? 'Build the configured homun/runtime-core image from the local repo Dockerfile'
+                : 'Build action only supports homun/runtime-core tags');
     }
 }
 
@@ -842,7 +936,9 @@ function getDefaultSandboxPresetConfig(profile) {
             enabled: true,
             backend: 'auto',
             strict: true,
-            docker_image: 'node:22-alpine',
+            docker_image: 'homun/runtime-core:2026.03',
+            runtime_image_policy: 'versioned_tag',
+            runtime_image_expected_version: '2026.03',
             docker_network: 'none',
             docker_memory_mb: 512,
             docker_cpus: 1,
@@ -854,7 +950,9 @@ function getDefaultSandboxPresetConfig(profile) {
         enabled: true,
         backend: 'auto',
         strict: false,
-        docker_image: 'node:22-alpine',
+        docker_image: 'homun/runtime-core:2026.03',
+        runtime_image_policy: 'versioned_tag',
+        runtime_image_expected_version: '2026.03',
         docker_network: 'none',
         docker_memory_mb: 512,
         docker_cpus: 1,
@@ -887,6 +985,8 @@ function sandboxConfigMatches(a, b) {
         && String(a.backend || 'auto').toLowerCase() === String(b.backend || 'auto').toLowerCase()
         && !!a.strict === !!b.strict
         && String(a.docker_image || 'node:22-alpine') === String(b.docker_image || 'node:22-alpine')
+        && String(a.runtime_image_policy || 'infer').toLowerCase() === String(b.runtime_image_policy || 'infer').toLowerCase()
+        && String(a.runtime_image_expected_version || '') === String(b.runtime_image_expected_version || '')
         && String(a.docker_network || 'none').toLowerCase() === String(b.docker_network || 'none').toLowerCase()
         && Number(a.docker_memory_mb || 0) === Number(b.docker_memory_mb || 0)
         && Number(a.docker_cpus || 0) === Number(b.docker_cpus || 0)
@@ -946,6 +1046,15 @@ function renderSandboxGuide(status) {
         `Fallback: ${status.fallback_to_native ? 'active' : 'not needed'}`,
         `Current profile: ${activeProfile}`
     ];
+    const capabilityBackend = status.resolved_backend !== 'none'
+        ? status.resolved_backend
+        : status.configured_backend;
+    const capability = Array.isArray(status.capabilities)
+        ? status.capabilities.find((entry) => entry && entry.backend === capabilityBackend)
+        : null;
+    if (capability && capability.reason) {
+        facts.push(`Backend detail: ${capability.reason}`);
+    }
     factsEl.innerHTML = facts.map((fact) => `<span class="sandbox-guide-fact">${fact}</span>`).join('');
 }
 
@@ -955,6 +1064,8 @@ function applySandboxConfigToForm(config) {
     const backendEl = document.getElementById('sandbox-backend');
     const strictEl = document.getElementById('sandbox-strict');
     const imageEl = document.getElementById('sandbox-docker-image');
+    const policyEl = document.getElementById('sandbox-runtime-image-policy');
+    const expectedVersionEl = document.getElementById('sandbox-runtime-image-expected-version');
     const networkEl = document.getElementById('sandbox-docker-network');
     const memoryEl = document.getElementById('sandbox-docker-memory');
     const cpusEl = document.getElementById('sandbox-docker-cpus');
@@ -965,6 +1076,8 @@ function applySandboxConfigToForm(config) {
     if (backendEl) backendEl.value = (config.backend || 'auto').toLowerCase();
     if (strictEl) strictEl.checked = !!config.strict;
     if (imageEl) imageEl.value = config.docker_image || 'node:22-alpine';
+    if (policyEl) policyEl.value = (config.runtime_image_policy || 'infer').toLowerCase();
+    if (expectedVersionEl) expectedVersionEl.value = config.runtime_image_expected_version || '';
     if (networkEl) networkEl.value = (config.docker_network || 'none').toLowerCase();
     if (memoryEl) memoryEl.value = String(Number(config.docker_memory_mb || 0));
     if (cpusEl) cpusEl.value = String(Number(config.docker_cpus || 0));
@@ -997,7 +1110,9 @@ async function applySandboxProfile(profile) {
             enabled: false,
             backend: 'none',
             strict: false,
-            docker_image: 'node:22-alpine',
+            docker_image: 'homun/runtime-core:2026.03',
+            runtime_image_policy: 'versioned_tag',
+            runtime_image_expected_version: '2026.03',
             docker_network: 'none',
             docker_memory_mb: 512,
             docker_cpus: 1,
@@ -1022,7 +1137,9 @@ function applyMacosSafeSandboxPreset() {
         enabled: true,
         backend: 'auto',
         strict: false,
-        docker_image: 'node:22-alpine',
+        docker_image: 'homun/runtime-core:2026.03',
+        runtime_image_policy: 'versioned_tag',
+        runtime_image_expected_version: '2026.03',
         docker_network: 'none',
         docker_memory_mb: 512,
         docker_cpus: 1,
@@ -1040,7 +1157,9 @@ function applyMacosStrictSandboxPreset() {
         enabled: true,
         backend: 'auto',
         strict: true,
-        docker_image: 'node:22-alpine',
+        docker_image: 'homun/runtime-core:2026.03',
+        runtime_image_policy: 'versioned_tag',
+        runtime_image_expected_version: '2026.03',
         docker_network: 'none',
         docker_memory_mb: 512,
         docker_cpus: 1,
@@ -1055,6 +1174,8 @@ function collectSandboxForm() {
         backend: (document.getElementById('sandbox-backend')?.value || 'auto').toLowerCase(),
         strict: !!document.getElementById('sandbox-strict')?.checked,
         docker_image: (document.getElementById('sandbox-docker-image')?.value || 'node:22-alpine').trim(),
+        runtime_image_policy: (document.getElementById('sandbox-runtime-image-policy')?.value || 'infer').toLowerCase(),
+        runtime_image_expected_version: (document.getElementById('sandbox-runtime-image-expected-version')?.value || '').trim(),
         docker_network: (document.getElementById('sandbox-docker-network')?.value || 'none').toLowerCase(),
         docker_memory_mb: Math.max(0, parseInt(document.getElementById('sandbox-docker-memory')?.value || '0', 10) || 0),
         docker_cpus: Math.max(0, parseFloat(document.getElementById('sandbox-docker-cpus')?.value || '0') || 0),

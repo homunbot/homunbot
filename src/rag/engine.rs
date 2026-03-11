@@ -46,11 +46,7 @@ impl RagEngine {
     }
 
     /// Ingest a single file. Returns source_id if successful, None if already indexed (dedup).
-    pub async fn ingest_file(
-        &mut self,
-        path: &Path,
-        source_channel: &str,
-    ) -> Result<Option<i64>> {
+    pub async fn ingest_file(&mut self, path: &Path, source_channel: &str) -> Result<Option<i64>> {
         if !is_supported(path) {
             anyhow::bail!(
                 "Unsupported file type: {}",
@@ -191,11 +187,7 @@ impl RagEngine {
     }
 
     /// Hybrid search: vector + FTS5 + RRF merge (no temporal decay).
-    pub async fn search(
-        &mut self,
-        query: &str,
-        top_k: usize,
-    ) -> Result<Vec<RagSearchResult>> {
+    pub async fn search(&mut self, query: &str, top_k: usize) -> Result<Vec<RagSearchResult>> {
         let vector_results = self
             .engine
             .search(query, CANDIDATES_PER_SOURCE)
@@ -220,8 +212,7 @@ impl RagEngine {
         let chunk_ids: Vec<i64> = merged.iter().map(|&(id, _)| id).collect();
         let chunks = self.db.load_rag_chunks_by_ids(&chunk_ids).await?;
 
-        let chunk_map: HashMap<i64, RagChunkRow> =
-            chunks.into_iter().map(|c| (c.id, c)).collect();
+        let chunk_map: HashMap<i64, RagChunkRow> = chunks.into_iter().map(|c| (c.id, c)).collect();
 
         // Load source file names for attribution
         let source_ids: Vec<i64> = chunk_map
@@ -326,14 +317,14 @@ impl RagEngine {
 
             let chunks = self.db.load_rag_chunks_by_source(source.id).await?;
             for chunk in chunks {
-                let file_name = source_map.get(&chunk.source_id).cloned().unwrap_or_default();
+                let file_name = source_map
+                    .get(&chunk.source_id)
+                    .cloned()
+                    .unwrap_or_default();
 
                 // Fix empty headings by prepending filename (for FTS5 matching)
                 if chunk.heading.is_empty() && !file_name.is_empty() {
-                    let _ = self
-                        .db
-                        .update_rag_chunk_heading(chunk.id, &file_name)
-                        .await;
+                    let _ = self.db.update_rag_chunk_heading(chunk.id, &file_name).await;
                 }
 
                 let embed_text = format!("{}\n{}", file_name, chunk.content);

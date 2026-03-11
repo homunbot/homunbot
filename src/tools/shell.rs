@@ -9,7 +9,7 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock;
 
 use super::registry::{get_optional_string, get_string_param, Tool, ToolContext, ToolResult};
-use super::sandbox_exec::build_process_command;
+use super::sandbox::build_process_command;
 use crate::config::{Config, ExecutionSandboxConfig, OsShellProfile, ShellPermissions};
 
 /// Maximum output length before truncation (chars)
@@ -455,6 +455,20 @@ impl Tool for ShellTool {
         let mut child = match cmd.spawn() {
             Ok(child) => child,
             Err(e) => return Ok(ToolResult::error(format!("Failed to execute command: {e}"))),
+        };
+
+        // Apply Windows Job Object limits if using windows_native backend
+        #[cfg(target_os = "windows")]
+        let _job_guard = {
+            use crate::tools::sandbox::{resolve_sandbox_backend, ResolvedSandboxBackend};
+            match resolve_sandbox_backend(&sandbox_config) {
+                Ok(ResolvedSandboxBackend::WindowsNative) => child.id().and_then(|pid| {
+                    crate::tools::sandbox::enforce_job_limits(pid, &sandbox_config)
+                        .map_err(|e| tracing::warn!("Job Object enforcement failed: {e}"))
+                        .ok()
+                }),
+                _ => None,
+            }
         };
 
         let stdout_handle = child.stdout.take().map(|mut stdout| {

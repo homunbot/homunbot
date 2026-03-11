@@ -3,9 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
-use rmcp::model::{
-    CallToolRequestParams, RawContent, ReadResourceRequestParams, ResourceContents,
-};
+use rmcp::model::{CallToolRequestParams, RawContent, ReadResourceRequestParams, ResourceContents};
 use rmcp::service::{RunningService, ServiceExt};
 use rmcp::transport::TokioChildProcess;
 use serde_json::Value;
@@ -15,7 +13,7 @@ use crate::config::{Config, ExecutionSandboxConfig, McpServerConfig};
 use crate::storage::{global_secrets, SecretKey};
 
 use super::registry::{Tool, ToolContext, ToolResult};
-use super::sandbox_exec::build_process_command;
+use super::sandbox::build_process_command;
 
 /// Info about a connected MCP server (for TUI/status display)
 #[derive(Debug, Clone)]

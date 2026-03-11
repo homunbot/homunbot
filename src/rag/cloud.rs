@@ -50,11 +50,7 @@ impl CloudSync {
     }
 
     /// Sync resources from a single MCP server into the knowledge base.
-    pub async fn sync_from_mcp(
-        &self,
-        peer: &McpPeer,
-        server_name: &str,
-    ) -> Result<SyncReport> {
+    pub async fn sync_from_mcp(&self, peer: &McpPeer, server_name: &str) -> Result<SyncReport> {
         let resources = peer
             .list_resources()
             .await
@@ -175,7 +171,13 @@ fn safe_filename(name: &str, uri: &str) -> String {
     // Replace unsafe chars
     let safe: String = base
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
 
     if safe.is_empty() {

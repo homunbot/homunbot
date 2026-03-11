@@ -236,9 +236,7 @@ impl TelegramChannel {
         token: &str,
     ) -> Result<std::path::PathBuf> {
         // Step 1: get file path from Telegram API
-        let params = GetFileParams::builder()
-            .file_id(&doc.file_id)
-            .build();
+        let params = GetFileParams::builder().file_id(&doc.file_id).build();
         let file_info = api.get_file(&params).await?;
         let file_path = file_info
             .result
@@ -251,10 +249,7 @@ impl TelegramChannel {
         let bytes = response.bytes().await?;
 
         // Step 3: save to temp directory with original filename
-        let file_name = doc
-            .file_name
-            .as_deref()
-            .unwrap_or("telegram_document");
+        let file_name = doc.file_name.as_deref().unwrap_or("telegram_document");
         let dir = std::env::temp_dir().join("homun_telegram");
         tokio::fs::create_dir_all(&dir).await?;
         let dest = dir.join(file_name);

@@ -82,10 +82,7 @@ impl BrowserSession {
         drop(last_at);
 
         if idle {
-            tracing::info!(
-                timeout_secs,
-                "Browser idle timeout reached, auto-closing"
-            );
+            tracing::info!(timeout_secs, "Browser idle timeout reached, auto-closing");
             let _ = self.peer.call_tool("browser_close", json!({})).await;
             *self.last_url.write().await = None;
             *self.last_action_at.write().await = None;
@@ -241,10 +238,7 @@ impl BrowserTool {
         // runs BEFORE any page JavaScript (anti-bot detection countermeasure).
         self.inject_stealth().await;
 
-        if let Err(e) = self
-            .call_mcp("browser_navigate", json!({"url": url}))
-            .await
-        {
+        if let Err(e) = self.call_mcp("browser_navigate", json!({"url": url})).await {
             return Ok(ToolResult::error(format!("Navigate failed: {e}")));
         }
 
@@ -283,8 +277,8 @@ impl BrowserTool {
                     // Page is ready when:
                     // 1. Enough interactive elements AND count stabilized (not still growing), OR
                     // 2. Last attempt — return whatever we have
-                    let is_stable = interactive_count >= MIN_INTERACTIVE
-                        && interactive_count == prev_count;
+                    let is_stable =
+                        interactive_count >= MIN_INTERACTIVE && interactive_count == prev_count;
                     let is_last = attempt == DELAYS_MS.len() - 1;
 
                     if is_stable || is_last {
@@ -396,9 +390,7 @@ impl BrowserTool {
                 tracing::info!("Auto-snapshot after type: autocomplete suggestions found");
                 // Mark as snapshot since we just did one
                 self.last_was_snapshot.store(true, Ordering::Relaxed);
-                return Ok(ToolResult::success(format!(
-                    "{base_output}{suggestions}"
-                )));
+                return Ok(ToolResult::success(format!("{base_output}{suggestions}")));
             }
         }
 
@@ -415,20 +407,14 @@ impl BrowserTool {
 
         // Select all existing text first, then type over it
         let _ = self
-            .call_mcp(
-                "browser_click",
-                json!({"ref": ref_val}),
-            )
+            .call_mcp("browser_click", json!({"ref": ref_val}))
             .await;
         let _ = self
             .call_mcp("browser_press_key", json!({"key": "Control+a"}))
             .await;
 
         match self
-            .call_mcp(
-                "browser_type",
-                json!({"ref": ref_val, "text": text}),
-            )
+            .call_mcp("browser_type", json!({"ref": ref_val, "text": text}))
             .await
         {
             Ok(output) => Ok(ToolResult::success(compact_action_short(
@@ -464,10 +450,9 @@ impl BrowserTool {
 
     /// Execute the `press_key` action.
     async fn action_press_key(&self, args: &Value) -> Result<ToolResult> {
-        let key = args
-            .get("text")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("'text' parameter is required for press_key (e.g. \"Enter\", \"Tab\")"))?;
+        let key = args.get("text").and_then(|v| v.as_str()).ok_or_else(|| {
+            anyhow::anyhow!("'text' parameter is required for press_key (e.g. \"Enter\", \"Tab\")")
+        })?;
 
         match self
             .call_mcp("browser_press_key", json!({"key": key}))
@@ -488,7 +473,9 @@ impl BrowserTool {
             .call_mcp("browser_hover", json!({"ref": ref_val}))
             .await
         {
-            Ok(output) => Ok(ToolResult::success(compact_action_short(&output, "Hovered."))),
+            Ok(output) => Ok(ToolResult::success(compact_action_short(
+                &output, "Hovered.",
+            ))),
             Err(e) => Ok(ToolResult::error(format!("Hover failed: {e}"))),
         }
     }
@@ -546,7 +533,9 @@ impl BrowserTool {
             )
             .await
         {
-            Ok(output) => Ok(ToolResult::success(compact_action_short(&output, "Dragged."))),
+            Ok(output) => Ok(ToolResult::success(compact_action_short(
+                &output, "Dragged.",
+            ))),
             Err(e) => Ok(ToolResult::error(format!("Drag failed: {e}"))),
         }
     }
@@ -581,9 +570,7 @@ impl BrowserTool {
         let expression = args
             .get("expression")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                anyhow::anyhow!("'expression' parameter is required for evaluate")
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("'expression' parameter is required for evaluate"))?;
 
         // Block DOM manipulation — models use it as a crutch and it breaks SPAs
         let expr_lower = expression.to_lowercase();
@@ -616,10 +603,7 @@ impl BrowserTool {
         }
 
         match self
-            .call_mcp(
-                "browser_evaluate",
-                json!({"function": expression}),
-            )
+            .call_mcp("browser_evaluate", json!({"function": expression}))
             .await
         {
             Ok(output) => {
@@ -746,10 +730,7 @@ impl Tool for BrowserTool {
     }
 
     async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolResult> {
-        let action = args
-            .get("action")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
 
         // Reset consecutive snapshot flag for non-snapshot actions
         if action != "snapshot" {

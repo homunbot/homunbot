@@ -178,10 +178,7 @@ impl SessionStore {
     /// Validate a session by ID.
     pub async fn get(&self, session_id: &str) -> Option<WebSession> {
         let sessions = self.sessions.read().await;
-        sessions
-            .get(session_id)
-            .filter(|s| s.is_valid())
-            .cloned()
+        sessions.get(session_id).filter(|s| s.is_valid()).cloned()
     }
 
     /// Destroy a session (logout).
@@ -302,9 +299,7 @@ pub async fn auth_middleware(
             if let Some(db) = &state.db {
                 if let Ok(Some(token_row)) = db.load_webhook_token(&token).await {
                     if token_row.enabled {
-                        if let Ok(Some(user_row)) =
-                            db.lookup_user_by_webhook_token(&token).await
-                        {
+                        if let Ok(Some(user_row)) = db.lookup_user_by_webhook_token(&token).await {
                             // Update last_used (fire and forget)
                             let db_clone = db.clone();
                             let token_clone = token.clone();
@@ -427,10 +422,7 @@ pub async fn auth_rate_limit_middleware(
         }
         Err(retry_after) => (
             StatusCode::TOO_MANY_REQUESTS,
-            [(
-                "Retry-After",
-                retry_after.as_secs().max(1).to_string(),
-            )],
+            [("Retry-After", retry_after.as_secs().max(1).to_string())],
             Json(serde_json::json!({
                 "error": "rate_limited",
                 "message": "Too many requests. Please try again later.",
@@ -458,10 +450,7 @@ pub async fn api_rate_limit_middleware(
         }
         Err(retry_after) => (
             StatusCode::TOO_MANY_REQUESTS,
-            [(
-                "Retry-After",
-                retry_after.as_secs().max(1).to_string(),
-            )],
+            [("Retry-After", retry_after.as_secs().max(1).to_string())],
             Json(serde_json::json!({
                 "error": "rate_limited",
                 "message": "Too many API requests. Please try again later.",
@@ -594,10 +583,7 @@ pub async fn login_handler(
 }
 
 /// POST /api/auth/logout
-pub async fn logout_handler(
-    State(state): State<Arc<AppState>>,
-    req: Request,
-) -> Response {
+pub async fn logout_handler(State(state): State<Arc<AppState>>, req: Request) -> Response {
     if let Some(session_store) = &state.session_store {
         if let Some(cookie_value) = extract_session_cookie(&req) {
             if let Some(session_id) = session_store.verify_cookie(&cookie_value) {

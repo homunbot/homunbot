@@ -146,7 +146,10 @@ impl PromptSection for ToolsSection {
         // Tool routing rules — ALWAYS included based on registered tools,
         // regardless of native vs XML mode. In native mode, tool definitions
         // go via the API parameter but the LLM still needs behavioral guidance.
-        let has_browser = ctx.registered_tool_names.iter().any(|n| crate::browser::is_browser_tool(n));
+        let has_browser = ctx
+            .registered_tool_names
+            .iter()
+            .any(|n| crate::browser::is_browser_tool(n));
         let has_web_search = ctx.registered_tool_names.iter().any(|n| n == "web_search");
         let has_web_fetch = ctx.registered_tool_names.iter().any(|n| n == "web_fetch");
         let has_weather = ctx.registered_tool_names.iter().any(|n| n == "weather");
@@ -158,10 +161,7 @@ impl PromptSection for ToolsSection {
             .registered_tool_names
             .iter()
             .any(|n| n == "read_email_inbox");
-        let has_workflow = ctx
-            .registered_tool_names
-            .iter()
-            .any(|n| n == "workflow");
+        let has_workflow = ctx.registered_tool_names.iter().any(|n| n == "workflow");
 
         if has_browser || has_web_search || has_web_fetch {
             prompt.push_str("\n### Tool Routing Rules\n\n");
@@ -506,10 +506,7 @@ impl PromptSection for BusinessSection {
     }
 
     fn build(&self, ctx: &PromptContext<'_>) -> Result<String> {
-        let has_business = ctx
-            .registered_tool_names
-            .iter()
-            .any(|n| n == "business");
+        let has_business = ctx.registered_tool_names.iter().any(|n| n == "business");
 
         if !has_business {
             return Ok(String::new());

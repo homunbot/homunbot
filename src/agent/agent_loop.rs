@@ -318,18 +318,13 @@ impl AgentLoop {
     /// Set the RAG knowledge base engine.
     /// When set, each user message triggers a search for relevant knowledge base content.
     #[cfg(feature = "local-embeddings")]
-    pub fn set_rag_engine(
-        &mut self,
-        engine: Arc<tokio::sync::Mutex<crate::rag::RagEngine>>,
-    ) {
+    pub fn set_rag_engine(&mut self, engine: Arc<tokio::sync::Mutex<crate::rag::RagEngine>>) {
         self.rag_engine = Some(engine);
     }
 
     /// Get a clone of the shared RAG engine handle (for sharing with the web server).
     #[cfg(feature = "local-embeddings")]
-    pub fn rag_engine_handle(
-        &self,
-    ) -> Option<Arc<tokio::sync::Mutex<crate::rag::RagEngine>>> {
+    pub fn rag_engine_handle(&self) -> Option<Arc<tokio::sync::Mutex<crate::rag::RagEngine>>> {
         self.rag_engine.clone()
     }
 
@@ -702,8 +697,8 @@ impl AgentLoop {
             .iter()
             .map(|tool| tool.function.name.clone())
             .collect::<HashSet<_>>();
-        let browser_available = config.browser.enabled
-            && crate::browser::has_browser_tools(&available_tool_names);
+        let browser_available =
+            config.browser.enabled && crate::browser::has_browser_tools(&available_tool_names);
         if browser_routing.browser_required() && !browser_available {
             return Ok(format!(
                 "This request requires interactive browser automation ({}) but the browser is unavailable. \
@@ -766,7 +761,10 @@ impl AgentLoop {
                 let ch = channel.to_string();
                 let q = prompt_content.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = db.insert_skill_audit(&skill, &ch, &q, "slash_command").await {
+                    if let Err(e) = db
+                        .insert_skill_audit(&skill, &ch, &q, "slash_command")
+                        .await
+                    {
                         tracing::debug!(error = %e, "Skill audit insert failed (slash)");
                     }
                 });
@@ -851,7 +849,11 @@ impl AgentLoop {
                 let skill_names: std::collections::HashSet<String> =
                     if let Some(ref reg) = self.skill_registry {
                         let guard = reg.read().await;
-                        guard.list_for_model().into_iter().map(|(n, _)| n.to_string()).collect()
+                        guard
+                            .list_for_model()
+                            .into_iter()
+                            .map(|(n, _)| n.to_string())
+                            .collect()
                     } else {
                         std::collections::HashSet::new()
                     };
@@ -1264,8 +1266,12 @@ impl AgentLoop {
                             "Tool '{}' is disabled in this execution context.",
                             tool_call.name
                         ))
-                    } else if let Some(activated) = self.try_activate_skill(&tool_call.name, &tool_call.arguments).await {
-                        let query = tool_call.arguments
+                    } else if let Some(activated) = self
+                        .try_activate_skill(&tool_call.name, &tool_call.arguments)
+                        .await
+                    {
+                        let query = tool_call
+                            .arguments
                             .get("query")
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
@@ -1329,7 +1335,9 @@ impl AgentLoop {
                             let ch = channel.to_string();
                             let q = query.to_string();
                             tokio::spawn(async move {
-                                if let Err(e) = db.insert_skill_audit(&skill, &ch, &q, "tool_call").await {
+                                if let Err(e) =
+                                    db.insert_skill_audit(&skill, &ch, &q, "tool_call").await
+                                {
                                     tracing::debug!(error = %e, "Skill audit insert failed");
                                 }
                             });
@@ -1428,7 +1436,8 @@ impl AgentLoop {
 
                     // For unified browser tool, output is already compacted by BrowserTool.
                     // For all other tools, apply model context formatting.
-                    let tool_output = tool_result_for_model_context(&tool_call.name, &result.output);
+                    let tool_output =
+                        tool_result_for_model_context(&tool_call.name, &result.output);
 
                     messages.push(ChatMessage::tool_result(
                         &tool_call.id,
@@ -1756,8 +1765,7 @@ impl AgentLoop {
 
         let skill_dir = skill.path.clone();
         let allowed_tools = skill.meta.allowed_tools.clone();
-        let required_bins =
-            crate::skills::extract_required_bins(&skill.meta.metadata);
+        let required_bins = crate::skills::extract_required_bins(&skill.meta.metadata);
 
         // List available scripts and references
         let scripts = crate::skills::list_skill_scripts(&skill_dir);
@@ -1824,15 +1832,13 @@ impl AgentLoop {
 
         let skill_dir = skill.path.clone();
         let allowed_tools = skill.meta.allowed_tools.clone();
-        let required_bins =
-            crate::skills::extract_required_bins(&skill.meta.metadata);
+        let required_bins = crate::skills::extract_required_bins(&skill.meta.metadata);
 
         let scripts = crate::skills::list_skill_scripts(&skill_dir);
         let references = crate::skills::list_skill_references(&skill_dir);
 
-        let substituted = crate::skills::substitute_skill_variables(
-            &body, arguments, &skill_dir, None,
-        );
+        let substituted =
+            crate::skills::substitute_skill_variables(&body, arguments, &skill_dir, None);
 
         let header = crate::skills::build_skill_activation_header(
             skill_name,
@@ -2222,7 +2228,9 @@ fn extract_autocomplete_suggestions(snapshot_output: &str) -> Option<String> {
         result.push_str(s);
         result.push('\n');
     }
-    result.push_str("→ Click the matching option to select it (e.g. playwright__browser_click with ref=\"eN\")");
+    result.push_str(
+        "→ Click the matching option to select it (e.g. playwright__browser_click with ref=\"eN\")",
+    );
     Some(result)
 }
 
@@ -2375,9 +2383,8 @@ fn supersede_stale_browser_context(messages: &mut Vec<ChatMessage>) {
     // All but the last are stale — replace their content in-place
     // (preserving tool_call_id and name to keep the assistant↔tool chain valid)
     for &idx in &snapshot_indices[..snapshot_indices.len() - 1] {
-        let summary = build_snapshot_superseded_summary(
-            messages[idx].content.as_deref().unwrap_or(""),
-        );
+        let summary =
+            build_snapshot_superseded_summary(messages[idx].content.as_deref().unwrap_or(""));
         messages[idx].content = Some(summary);
     }
 
@@ -2727,16 +2734,13 @@ mod tests {
     use super::{
         browser_follow_up_instruction, build_browser_screenshot_context_message,
         compact_browser_action_short, compact_browser_action_with_tree,
-        extract_browser_screenshot_paths,
-        is_temporary_browser_screenshot_message, maybe_extend_iteration_budget, veto_tool_call,
-        IterationBudgetState, ToolExecutionSummary,
+        extract_browser_screenshot_paths, is_temporary_browser_screenshot_message,
+        maybe_extend_iteration_budget, veto_tool_call, IterationBudgetState, ToolExecutionSummary,
     };
     // Snapshot compaction and autocomplete functions moved to tools::browser
-    use crate::tools::browser::{
-        compact_browser_snapshot, extract_autocomplete_suggestions,
-    };
     use crate::agent::browser_task_plan::BrowserRoutingDecision;
     use crate::config::ModelCapabilities;
+    use crate::tools::browser::{compact_browser_snapshot, extract_autocomplete_suggestions};
     use std::collections::HashSet;
 
     fn tools(names: &[&str]) -> HashSet<String> {
@@ -2889,27 +2893,53 @@ mod tests {
 
         // Call 1 at iter=49 (near budget): new signature → extends
         maybe_extend_iteration_budget(
-            &mut active_budget, hard_max, base, 49, &summaries, &mut state,
+            &mut active_budget,
+            hard_max,
+            base,
+            49,
+            &summaries,
+            &mut state,
         );
-        assert!(active_budget > 50, "first call should extend (new signature)");
+        assert!(
+            active_budget > 50,
+            "first call should extend (new signature)"
+        );
         let extended_budget = active_budget;
 
         // Calls 2-4: same signature → stall_streak 1,2,3 — no more extensions
         for i in 0..3u32 {
             let iter = extended_budget - 1; // always near the limit
             maybe_extend_iteration_budget(
-                &mut active_budget, hard_max, base, iter, &summaries, &mut state,
+                &mut active_budget,
+                hard_max,
+                base,
+                iter,
+                &summaries,
+                &mut state,
             );
-            assert_eq!(active_budget, extended_budget,
-                "stall call {} — should not extend", i + 2);
+            assert_eq!(
+                active_budget,
+                extended_budget,
+                "stall call {} — should not extend",
+                i + 2
+            );
         }
 
         // Call 5: stall_streak=4 → budget CONTRACTS to iteration + 2
         let iter = 55_u32;
         maybe_extend_iteration_budget(
-            &mut active_budget, hard_max, base, iter, &summaries, &mut state,
+            &mut active_budget,
+            hard_max,
+            base,
+            iter,
+            &summaries,
+            &mut state,
         );
-        assert_eq!(active_budget, iter + 2, "should contract budget on prolonged stall (stall=4)");
+        assert_eq!(
+            active_budget,
+            iter + 2,
+            "should contract budget on prolonged stall (stall=4)"
+        );
     }
 
     #[test]
@@ -3102,7 +3132,11 @@ mod tests {
             .rev()
             .find(|m| is_browser_snapshot_tool_result(m))
             .unwrap();
-        assert!(last_snap.content.as_ref().unwrap().contains("button \"Submit\""));
+        assert!(last_snap
+            .content
+            .as_ref()
+            .unwrap()
+            .contains("button \"Submit\""));
     }
 
     #[test]
@@ -3131,9 +3165,15 @@ mod tests {
 
         supersede_stale_browser_context(&mut messages);
 
-        let policy_count = messages.iter().filter(|m| is_browser_follow_up_policy(m)).count();
+        let policy_count = messages
+            .iter()
+            .filter(|m| is_browser_follow_up_policy(m))
+            .count();
         assert_eq!(policy_count, 1);
-        let policy = messages.iter().find(|m| is_browser_follow_up_policy(m)).unwrap();
+        let policy = messages
+            .iter()
+            .find(|m| is_browser_follow_up_policy(m))
+            .unwrap();
         assert!(policy.content.as_ref().unwrap().contains("new hint"));
     }
 }

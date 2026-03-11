@@ -582,11 +582,7 @@ mod tests {
     fn explicit_plan_creation_marks_first_step_in_progress() {
         let mut state = ExecutionPlanState::new("build a website");
         state.set_explicit_plan(
-            vec![
-                "Design mockup".into(),
-                "Write HTML".into(),
-                "Deploy".into(),
-            ],
+            vec!["Design mockup".into(), "Write HTML".into(), "Deploy".into()],
             Some("Check site is live".into()),
         );
 
@@ -638,10 +634,7 @@ mod tests {
     fn runtime_message_renders_explicit_plan_not_constraints() {
         let mut state = ExecutionPlanState::new("do X and Y");
         // Would normally infer "Complete all sub-requests" constraint
-        state.set_explicit_plan(
-            vec!["Do X".into(), "Do Y".into()],
-            Some("Both done".into()),
-        );
+        state.set_explicit_plan(vec!["Do X".into(), "Do Y".into()], Some("Both done".into()));
         let content = state
             .runtime_message()
             .and_then(|msg| msg.content)

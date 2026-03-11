@@ -30,13 +30,13 @@ mod session;
 mod skills;
 mod storage;
 mod tools;
-mod workflows;
 #[cfg(feature = "cli")]
 mod tui;
 mod user;
 mod utils;
 #[cfg(feature = "web-ui")]
 mod web;
+mod workflows;
 
 #[cfg(feature = "cli")]
 use crate::channels::CliChannel;
@@ -57,7 +57,6 @@ use crate::tools::McpManager;
 
 #[cfg(feature = "local-embeddings")]
 use crate::tools::RememberTool;
-
 
 #[cfg(feature = "cli")]
 #[derive(Parser)]
@@ -761,9 +760,7 @@ async fn main() -> Result<()> {
             let mut config = Config::load()?;
             // Inject browser MCP server into config so it's treated like any other MCP server
             #[cfg(feature = "mcp")]
-            if let Some(browser_mcp) =
-                crate::browser::browser_mcp_server_config(&config.browser)
-            {
+            if let Some(browser_mcp) = crate::browser::browser_mcp_server_config(&config.browser) {
                 config.mcp.servers.insert(
                     crate::browser::BROWSER_MCP_SERVER_NAME.to_string(),
                     browser_mcp,
@@ -790,7 +787,9 @@ async fn main() -> Result<()> {
                 }
             }
             #[cfg(feature = "mcp")]
-            let mut _browser_session: Option<std::sync::Arc<crate::tools::BrowserSession>> = None;
+            let mut _browser_session: Option<
+                std::sync::Arc<crate::tools::BrowserSession>,
+            > = None;
             #[cfg(feature = "mcp")]
             if let Some(browser_peer) = mcp_manager.take_browser_peer() {
                 let browser_tool = crate::tools::BrowserTool::new(browser_peer);
@@ -813,8 +812,7 @@ async fn main() -> Result<()> {
                     if let Err(e) = engine.lock().await.reindex_if_needed().await {
                         tracing::warn!(error = %e, "Failed to reindex RAG at startup");
                     }
-                    tool_registry
-                        .register(Box::new(tools::KnowledgeTool::new(engine.clone())));
+                    tool_registry.register(Box::new(tools::KnowledgeTool::new(engine.clone())));
                 }
                 rag
             };
@@ -954,9 +952,7 @@ async fn main() -> Result<()> {
             // Inject browser MCP server into config BEFORE wrapping in Arc<RwLock>,
             // so runtime_config lookups in McpClientTool::execute() can find it.
             #[cfg(feature = "mcp")]
-            if let Some(browser_mcp) =
-                crate::browser::browser_mcp_server_config(&config.browser)
-            {
+            if let Some(browser_mcp) = crate::browser::browser_mcp_server_config(&config.browser) {
                 config.mcp.servers.insert(
                     crate::browser::BROWSER_MCP_SERVER_NAME.to_string(),
                     browser_mcp,
@@ -967,29 +963,39 @@ async fn main() -> Result<()> {
             let shared_config = Arc::new(tokio::sync::RwLock::new(config));
             // Snapshot for one-time startup operations (provider, tools, channels, etc.)
             let config = shared_config.read().await.clone();
-            tracing::info!(elapsed_ms = startup_t0.elapsed().as_millis(), "⏱ config loaded");
+            tracing::info!(
+                elapsed_ms = startup_t0.elapsed().as_millis(),
+                "⏱ config loaded"
+            );
 
             let db = Database::open(&config.storage.resolved_path()).await?;
-            tracing::info!(elapsed_ms = startup_t0.elapsed().as_millis(), "⏱ database opened");
+            tracing::info!(
+                elapsed_ms = startup_t0.elapsed().as_millis(),
+                "⏱ database opened"
+            );
 
             // Health tracker: shared between provider (records metrics) and web UI (exposes them)
             let health_tracker = Arc::new(provider::ProviderHealthTracker::new());
 
             // Try to create provider, but allow gateway to start without one
             // This enables configuration via Web UI
-            let provider = match provider::create_provider_with_health(&config, health_tracker.clone()) {
-                Ok(p) => Some(p),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "No provider configured. Gateway starting in setup mode. \
-                        Configure a provider at http://localhost:{}/setup",
-                        config.channels.web.port
-                    );
-                    None
-                }
-            };
-            tracing::info!(elapsed_ms = startup_t0.elapsed().as_millis(), "⏱ provider created");
+            let provider =
+                match provider::create_provider_with_health(&config, health_tracker.clone()) {
+                    Ok(p) => Some(p),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "No provider configured. Gateway starting in setup mode. \
+                            Configure a provider at http://localhost:{}/setup",
+                            config.channels.web.port
+                        );
+                        None
+                    }
+                };
+            tracing::info!(
+                elapsed_ms = startup_t0.elapsed().as_millis(),
+                "⏱ provider created"
+            );
 
             let session_manager = SessionManager::new(db.clone());
 
@@ -1014,8 +1020,7 @@ async fn main() -> Result<()> {
             // BusinessTool — late-bound OnceCell (BusinessEngine needs DB which is created later)
             let business_engine_cell = Arc::new(tokio::sync::OnceCell::new());
             if config.business.enabled {
-                tool_registry
-                    .register(Box::new(BusinessTool::new(business_engine_cell.clone())));
+                tool_registry.register(Box::new(BusinessTool::new(business_engine_cell.clone())));
             }
 
             // MCP servers are connected in the background (deferred) to avoid blocking
@@ -1047,14 +1052,16 @@ async fn main() -> Result<()> {
                     if let Err(e) = engine.lock().await.reindex_if_needed().await {
                         tracing::warn!(error = %e, "Failed to reindex RAG at startup");
                     }
-                    tool_registry
-                        .register(Box::new(tools::KnowledgeTool::new(engine.clone())));
+                    tool_registry.register(Box::new(tools::KnowledgeTool::new(engine.clone())));
                 }
                 rag
             };
             #[cfg(not(feature = "local-embeddings"))]
             let _rag_engine: Option<()> = None;
-            tracing::info!(elapsed_ms = startup_t0.elapsed().as_millis(), "⏱ RAG engine ready");
+            tracing::info!(
+                elapsed_ms = startup_t0.elapsed().as_millis(),
+                "⏱ RAG engine ready"
+            );
 
             // Capture tool names before moving registry (for system prompt routing rules)
             let tool_names: Vec<String> = tool_registry
@@ -1210,13 +1217,10 @@ async fn main() -> Result<()> {
             cron_scheduler.set_workflow_engine(workflow_engine.clone());
 
             // Create BusinessEngine and bind to the BusinessTool OnceCell
-            let business_engine = Arc::new(business::engine::BusinessEngine::new(
-                db_for_web.clone(),
-            ));
+            let business_engine =
+                Arc::new(business::engine::BusinessEngine::new(db_for_web.clone()));
             if business_engine_cell.set(business_engine.clone()).is_err() {
-                tracing::error!(
-                    "BusinessTool OnceCell was already initialized — this is a bug"
-                );
+                tracing::error!("BusinessTool OnceCell was already initialized — this is a bug");
             }
             if config.business.enabled {
                 tracing::info!("Business engine initialized (BusinessTool registered)");
@@ -1337,7 +1341,10 @@ async fn main() -> Result<()> {
             };
 
             // Run gateway and clean up PID file on exit
-            tracing::info!(elapsed_ms = startup_t0.elapsed().as_millis(), "⏱ gateway ready, starting channels");
+            tracing::info!(
+                elapsed_ms = startup_t0.elapsed().as_millis(),
+                "⏱ gateway ready, starting channels"
+            );
             let result = gateway.run().await;
 
             // Clean up PID file
@@ -2445,10 +2452,16 @@ async fn main() -> Result<()> {
                             println!("No sources indexed.");
                         }
                         Ok(sources) => {
-                            println!("{:<5} {:<30} {:<12} {:<8} {:<10}", "ID", "File", "Type", "Chunks", "Status");
+                            println!(
+                                "{:<5} {:<30} {:<12} {:<8} {:<10}",
+                                "ID", "File", "Type", "Chunks", "Status"
+                            );
                             println!("{}", "-".repeat(70));
                             for s in &sources {
-                                println!("{:<5} {:<30} {:<12} {:<8} {:<10}", s.id, s.file_name, s.doc_type, s.chunk_count, s.status);
+                                println!(
+                                    "{:<5} {:<30} {:<12} {:<8} {:<10}",
+                                    s.id, s.file_name, s.doc_type, s.chunk_count, s.status
+                                );
                             }
                             println!("\n{} source(s)", sources.len());
                         }
@@ -2463,7 +2476,13 @@ async fn main() -> Result<()> {
                         }
                         Ok(results) => {
                             for (i, r) in results.iter().enumerate() {
-                                println!("\n{}. [{}] (chunk {}, score {:.2})", i + 1, r.source_file, r.chunk.chunk_index, r.score);
+                                println!(
+                                    "\n{}. [{}] (chunk {}, score {:.2})",
+                                    i + 1,
+                                    r.source_file,
+                                    r.chunk.chunk_index,
+                                    r.score
+                                );
                                 if !r.chunk.heading.is_empty() {
                                     println!("   {}", r.chunk.heading);
                                 }
@@ -2485,10 +2504,8 @@ async fn main() -> Result<()> {
                 }
                 KnowledgeCommands::Sync { server } => {
                     let sync_dir = Config::data_dir().join("cloud-sync");
-                    let cloud_sync = crate::rag::CloudSync::new(
-                        std::sync::Arc::clone(&rag_handle),
-                        sync_dir,
-                    );
+                    let cloud_sync =
+                        crate::rag::CloudSync::new(std::sync::Arc::clone(&rag_handle), sync_dir);
 
                     let servers_to_sync: Vec<String> = match server {
                         Some(s) => vec![s],
@@ -2500,7 +2517,8 @@ async fn main() -> Result<()> {
                         println!("Or specify a server: homun knowledge sync <server-name>");
                     } else {
                         // Connect to MCP servers for sync
-                        let (mcp_manager, _tools) = crate::tools::mcp::McpManager::start(&config.mcp.servers).await;
+                        let (mcp_manager, _tools) =
+                            crate::tools::mcp::McpManager::start(&config.mcp.servers).await;
                         for srv in &servers_to_sync {
                             if let Some(peer) = mcp_manager.get_peer(srv) {
                                 match cloud_sync.sync_from_mcp(&peer, srv).await {
@@ -2666,7 +2684,8 @@ async fn main() -> Result<()> {
 
                     match info {
                         Some(u) => {
-                            let token = user_mgr.create_webhook_token(&u.id, &name, "admin").await?;
+                            let token =
+                                user_mgr.create_webhook_token(&u.id, &name, "admin").await?;
                             println!("✅ Created webhook token for user '{}':", u.username);
                             println!("   Token: {}", token);
                             println!("\n   Usage: POST /api/webhook/{}", token);

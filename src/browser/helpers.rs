@@ -48,10 +48,7 @@ mod tests {
 
     #[test]
     fn test_has_browser_tools() {
-        let with_unified = HashSet::from([
-            "web_search".to_string(),
-            "browser".to_string(),
-        ]);
+        let with_unified = HashSet::from(["web_search".to_string(), "browser".to_string()]);
         assert!(has_browser_tools(&with_unified));
 
         let with_mcp = HashSet::from([

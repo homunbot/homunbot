@@ -30,10 +30,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/v1/skills/audit", get(list_skill_audits))
         .route("/v1/skills/search", get(search_skills))
         .route("/v1/skills/install", axum::routing::post(install_skill))
-        .route(
-            "/v1/skills/create",
-            axum::routing::post(create_skill_api),
-        )
+        .route("/v1/skills/create", axum::routing::post(create_skill_api))
         .route(
             "/v1/skills/{name}",
             get(get_skill_detail).delete(delete_skill),
@@ -249,6 +246,10 @@ pub fn router() -> Router<Arc<AppState>> {
             axum::routing::post(pull_execution_sandbox_image),
         )
         .route(
+            "/v1/security/sandbox/image/build",
+            axum::routing::post(build_execution_sandbox_image),
+        )
+        .route(
             "/v1/security/sandbox/events",
             get(get_execution_sandbox_events),
         )
@@ -352,10 +353,7 @@ pub fn router() -> Router<Arc<AppState>> {
             "/v1/business/{id}/transactions",
             get(list_business_transactions_api),
         )
-        .route(
-            "/v1/business/{id}/revenue",
-            get(get_business_revenue_api),
-        );
+        .route("/v1/business/{id}/revenue", get(get_business_revenue_api));
 
     // --- Knowledge Base (RAG) ---
     #[cfg(feature = "local-embeddings")]
@@ -418,8 +416,7 @@ async fn stream_logs() -> Sse<impl futures::Stream<Item = Result<Event, Infallib
     let stream = futures::stream::unfold(rx, |mut rx| async move {
         match rx.recv().await {
             Ok(record) => {
-                let payload =
-                    serde_json::to_string(&record).unwrap_or_else(|_| "{}".to_string());
+                let payload = serde_json::to_string(&record).unwrap_or_else(|_| "{}".to_string());
                 let event = Event::default().event("log").data(payload);
                 Some((Ok(event), rx))
             }
@@ -870,9 +867,7 @@ async fn create_skill_api(
 
 // --- Scan skill ---
 
-async fn scan_skill_api(
-    Path(name): Path<String>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+async fn scan_skill_api(Path(name): Path<String>) -> Result<Json<serde_json::Value>, StatusCode> {
     let skills_dir = dirs::home_dir()
         .unwrap_or_default()
         .join(".homun")
@@ -1493,9 +1488,7 @@ struct ProviderView {
 
 // --- Provider Health ---
 
-async fn providers_health(
-    State(state): State<Arc<AppState>>,
-) -> Json<serde_json::Value> {
+async fn providers_health(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     match state.health_tracker.as_ref() {
         Some(tracker) => {
             let snapshots = tracker.snapshots();
@@ -1514,9 +1507,7 @@ async fn emergency_stop_handler(
     Json(report)
 }
 
-async fn resume_handler(
-    State(_state): State<Arc<AppState>>,
-) -> Json<serde_json::Value> {
+async fn resume_handler(State(_state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     crate::security::resume();
     Json(serde_json::json!({ "status": "resumed", "network": "online" }))
 }
@@ -8608,16 +8599,23 @@ fn normalize_execution_sandbox(
     let backend = sandbox.backend.trim().to_ascii_lowercase();
     let docker_network = sandbox.docker_network.trim().to_ascii_lowercase();
     let docker_image = sandbox.docker_image.trim().to_string();
+    let runtime_image_policy = sandbox.runtime_image_policy.trim().to_ascii_lowercase();
+    let runtime_image_expected_version = sandbox.runtime_image_expected_version.trim().to_string();
 
     let backend = if backend.is_empty() {
         "auto".to_string()
     } else {
         backend
     };
-    if backend != "none" && backend != "auto" && backend != "docker" {
+    if backend != "none"
+        && backend != "auto"
+        && backend != "docker"
+        && backend != "linux_native"
+        && backend != "windows_native"
+    {
         return Err((
             StatusCode::BAD_REQUEST,
-            "Invalid sandbox backend. Expected one of: auto, docker, none.".to_string(),
+            "Invalid sandbox backend. Expected one of: auto, docker, linux_native, windows_native, none.".to_string(),
         ));
     }
 
@@ -8630,6 +8628,22 @@ fn normalize_execution_sandbox(
         return Err((
             StatusCode::BAD_REQUEST,
             "Invalid docker network. Expected one of: none, bridge, host.".to_string(),
+        ));
+    }
+
+    let runtime_image_policy = if runtime_image_policy.is_empty() {
+        "infer".to_string()
+    } else {
+        runtime_image_policy
+    };
+    if runtime_image_policy != "infer"
+        && runtime_image_policy != "pinned"
+        && runtime_image_policy != "versioned_tag"
+        && runtime_image_policy != "floating"
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid runtime image policy. Expected one of: infer, pinned, versioned_tag, floating.".to_string(),
         ));
     }
 
@@ -8666,6 +8680,12 @@ fn normalize_execution_sandbox(
     } else {
         docker_image
     };
+    sandbox.runtime_image_policy = runtime_image_policy.clone();
+    sandbox.runtime_image_expected_version = if runtime_image_policy == "infer" {
+        String::new()
+    } else {
+        runtime_image_expected_version
+    };
 
     Ok(sandbox)
 }
@@ -8683,12 +8703,16 @@ mod sandbox_config_tests {
             backend: "DoCkEr".to_string(),
             docker_network: "Bridge".to_string(),
             docker_image: " node:22-alpine ".to_string(),
+            runtime_image_policy: " Pinned ".to_string(),
+            runtime_image_expected_version: " sha256:abc ".to_string(),
             ..ExecutionSandboxConfig::default()
         };
         let normalized = normalize_execution_sandbox(cfg).expect("valid sandbox config");
         assert_eq!(normalized.backend, "docker");
         assert_eq!(normalized.docker_network, "bridge");
         assert_eq!(normalized.docker_image, "node:22-alpine");
+        assert_eq!(normalized.runtime_image_policy, "pinned");
+        assert_eq!(normalized.runtime_image_expected_version, "sha256:abc");
     }
 
     #[test]
@@ -8699,6 +8723,16 @@ mod sandbox_config_tests {
         };
         let err = normalize_execution_sandbox(cfg).expect_err("expected backend validation error");
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn normalize_sandbox_accepts_linux_native_backend() {
+        let cfg = ExecutionSandboxConfig {
+            backend: "LiNuX_NaTiVe".to_string(),
+            ..ExecutionSandboxConfig::default()
+        };
+        let normalized = normalize_execution_sandbox(cfg).expect("valid linux native backend");
+        assert_eq!(normalized.backend, "linux_native");
     }
 
     #[test]
@@ -8721,6 +8755,29 @@ mod sandbox_config_tests {
         assert_eq!(normalized.docker_image, "node:22-alpine");
     }
 
+    #[test]
+    fn normalize_sandbox_clears_expected_version_when_policy_is_infer() {
+        let cfg = ExecutionSandboxConfig {
+            runtime_image_policy: "infer".to_string(),
+            runtime_image_expected_version: "sha256:abc".to_string(),
+            ..ExecutionSandboxConfig::default()
+        };
+        let normalized =
+            normalize_execution_sandbox(cfg).expect("expected normalized sandbox config");
+        assert_eq!(normalized.runtime_image_expected_version, "");
+    }
+
+    #[test]
+    fn normalize_sandbox_rejects_invalid_runtime_image_policy() {
+        let cfg = ExecutionSandboxConfig {
+            runtime_image_policy: "manual".to_string(),
+            ..ExecutionSandboxConfig::default()
+        };
+        let err =
+            normalize_execution_sandbox(cfg).expect_err("expected runtime image policy error");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
     #[tokio::test]
     async fn sandbox_presets_include_safe_and_strict() {
         let presets = get_execution_sandbox_presets().await.0;
@@ -8729,6 +8786,18 @@ mod sandbox_config_tests {
 
         let recommended_count = presets.iter().filter(|p| p.recommended).count();
         assert_eq!(recommended_count, 1);
+    }
+
+    #[tokio::test]
+    async fn sandbox_presets_point_to_canonical_runtime_baseline() {
+        let presets = get_execution_sandbox_presets().await.0;
+        for preset in presets {
+            if preset.id == "safe" || preset.id == "strict" {
+                assert_eq!(preset.config.docker_image, "homun/runtime-core:2026.03");
+                assert_eq!(preset.config.runtime_image_policy, "versioned_tag");
+                assert_eq!(preset.config.runtime_image_expected_version, "2026.03");
+            }
+        }
     }
 }
 
@@ -8744,6 +8813,8 @@ struct ExecutionSandboxStatusResponse {
     fallback_to_native: bool,
     recommended_preset: String,
     message: String,
+    availability_summary: String,
+    capabilities: Vec<crate::tools::sandbox::SandboxBackendCapability>,
 }
 
 #[derive(Serialize)]
@@ -8762,8 +8833,16 @@ struct ExecutionSandboxEventsQuery {
 
 #[derive(Serialize)]
 struct ExecutionSandboxImagePullResponse {
-    status: crate::tools::sandbox_exec::SandboxImageStatus,
+    status: crate::tools::sandbox::SandboxImageStatus,
     output: String,
+}
+
+#[derive(Serialize)]
+struct ExecutionSandboxImageBuildResponse {
+    status: crate::tools::sandbox::SandboxImageStatus,
+    built_image: String,
+    output: String,
+    message: String,
 }
 
 fn host_os_label() -> &'static str {
@@ -8793,10 +8872,13 @@ async fn get_execution_sandbox_status(
     let sandbox = config.security.execution_sandbox.clone();
     drop(config);
 
+    let capabilities = crate::tools::sandbox::current_sandbox_backend_capabilities();
+    let availability_summary =
+        crate::tools::sandbox::sandbox_backend_availability_summary(&capabilities);
     let configured_backend = sandbox.backend.trim().to_ascii_lowercase();
-    let docker_available = crate::tools::sandbox_exec::docker_backend_available();
+    let docker_available = crate::tools::sandbox::docker_backend_available();
     let (resolved_backend, valid, mut message) =
-        match crate::tools::sandbox_exec::resolve_sandbox_backend(&sandbox) {
+        match crate::tools::sandbox::resolve_sandbox_backend(&sandbox) {
             Ok(resolved) => (resolved.as_str().to_string(), true, String::new()),
             Err(e) => ("none".to_string(), false, e.to_string()),
         };
@@ -8804,7 +8886,11 @@ async fn get_execution_sandbox_status(
         && resolved_backend == "none"
         && configured_backend != "none"
         && !sandbox.strict;
-    let recommended_preset = if docker_available { "strict" } else { "safe" };
+    let recommended_preset = if capabilities.iter().any(|cap| cap.available) {
+        "strict"
+    } else {
+        "safe"
+    };
     if valid {
         message = if !sandbox.enabled {
             "Sandbox disabled.".to_string()
@@ -8831,6 +8917,8 @@ async fn get_execution_sandbox_status(
         fallback_to_native,
         recommended_preset: recommended_preset.to_string(),
         message,
+        availability_summary,
+        capabilities,
     })
 }
 
@@ -8840,6 +8928,10 @@ async fn get_execution_sandbox_presets() -> Json<Vec<ExecutionSandboxPresetRespo
     safe_cfg.enabled = true;
     safe_cfg.backend = "auto".to_string();
     safe_cfg.strict = false;
+    safe_cfg.docker_image =
+        crate::tools::sandbox::canonical_sandbox_runtime_baseline().to_string();
+    safe_cfg.runtime_image_policy = "versioned_tag".to_string();
+    safe_cfg.runtime_image_expected_version = "2026.03".to_string();
     safe_cfg.docker_network = "none".to_string();
     safe_cfg.docker_read_only_rootfs = true;
     safe_cfg.docker_mount_workspace = true;
@@ -8847,7 +8939,7 @@ async fn get_execution_sandbox_presets() -> Json<Vec<ExecutionSandboxPresetRespo
     let mut strict_cfg = safe_cfg.clone();
     strict_cfg.strict = true;
 
-    let docker_available = crate::tools::sandbox_exec::docker_backend_available();
+    let docker_available = crate::tools::sandbox::docker_backend_available();
     let host = host_os_label();
 
     Json(vec![
@@ -8873,12 +8965,14 @@ async fn get_execution_sandbox_presets() -> Json<Vec<ExecutionSandboxPresetRespo
 /// Inspect the configured sandbox runtime image.
 async fn get_execution_sandbox_image_status(
     State(state): State<Arc<AppState>>,
-) -> Json<crate::tools::sandbox_exec::SandboxImageStatus> {
+) -> Json<crate::tools::sandbox::SandboxImageStatus> {
     let config = state.config.read().await;
-    let image = config.security.execution_sandbox.docker_image.clone();
+    let sandbox = config.security.execution_sandbox.clone();
     drop(config);
 
-    Json(crate::tools::sandbox_exec::get_docker_image_status(&image))
+    Json(crate::tools::sandbox::get_runtime_image_status(
+        &sandbox,
+    ))
 }
 
 /// Pull the configured sandbox runtime image.
@@ -8886,10 +8980,10 @@ async fn pull_execution_sandbox_image(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ExecutionSandboxImagePullResponse>, (StatusCode, String)> {
     let config = state.config.read().await;
-    let image = config.security.execution_sandbox.docker_image.clone();
+    let sandbox = config.security.execution_sandbox.clone();
     drop(config);
 
-    let result = crate::tools::sandbox_exec::pull_docker_image(&image)
+    let result = crate::tools::sandbox::pull_runtime_image(&sandbox)
         .await
         .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
 
@@ -8899,12 +8993,32 @@ async fn pull_execution_sandbox_image(
     }))
 }
 
+/// Build the configured sandbox runtime image when it targets the repo baseline.
+async fn build_execution_sandbox_image(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ExecutionSandboxImageBuildResponse>, (StatusCode, String)> {
+    let config = state.config.read().await;
+    let sandbox = config.security.execution_sandbox.clone();
+    drop(config);
+
+    let result = crate::tools::sandbox::build_runtime_image(&sandbox)
+        .await
+        .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
+
+    Ok(Json(ExecutionSandboxImageBuildResponse {
+        status: result.status,
+        built_image: result.built_image,
+        output: result.output,
+        message: result.message,
+    }))
+}
+
 /// Return the most recent sandbox preparation events.
 async fn get_execution_sandbox_events(
     Query(query): Query<ExecutionSandboxEventsQuery>,
-) -> Json<Vec<crate::tools::sandbox_exec::SandboxEvent>> {
+) -> Json<Vec<crate::tools::sandbox::SandboxEvent>> {
     let limit = query.limit.unwrap_or(12).clamp(1, 50);
-    Json(crate::tools::sandbox_exec::list_recent_sandbox_events(
+    Json(crate::tools::sandbox::list_recent_sandbox_events(
         limit,
     ))
 }
@@ -11366,7 +11480,8 @@ fn generate_email_trigger_word() -> String {
 #[cfg(feature = "local-embeddings")]
 async fn knowledge_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let Some(ref rag) = state.rag_engine else {
-        return Json(serde_json::json!({"error": "Knowledge base not initialized"})).into_response();
+        return Json(serde_json::json!({"error": "Knowledge base not initialized"}))
+            .into_response();
     };
     let engine = rag.lock().await;
     match engine.stats().await {
@@ -11383,7 +11498,8 @@ async fn knowledge_stats(State(state): State<Arc<AppState>>) -> impl IntoRespons
 #[cfg(feature = "local-embeddings")]
 async fn list_knowledge_sources(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let Some(ref rag) = state.rag_engine else {
-        return Json(serde_json::json!({"error": "Knowledge base not initialized"})).into_response();
+        return Json(serde_json::json!({"error": "Knowledge base not initialized"}))
+            .into_response();
     };
     let engine = rag.lock().await;
     match engine.list_sources().await {
@@ -11509,10 +11625,7 @@ async fn ingest_knowledge(
     let mut errors = Vec::new();
 
     while let Ok(Some(field)) = multipart.next_field().await {
-        let file_name = field
-            .file_name()
-            .unwrap_or("upload.txt")
-            .to_string();
+        let file_name = field.file_name().unwrap_or("upload.txt").to_string();
 
         let Ok(bytes) = field.bytes().await else {
             errors.push(format!("{file_name}: failed to read upload"));
@@ -11534,7 +11647,9 @@ async fn ingest_knowledge(
         let mut engine = rag.lock().await;
         match engine.ingest_file(&tmp_path, "web").await {
             Ok(Some(id)) => ingested.push(serde_json::json!({"file": file_name, "source_id": id})),
-            Ok(None) => ingested.push(serde_json::json!({"file": file_name, "status": "duplicate"})),
+            Ok(None) => {
+                ingested.push(serde_json::json!({"file": file_name, "status": "duplicate"}))
+            }
             Err(e) => errors.push(format!("{file_name}: {e}")),
         }
 
@@ -11701,20 +11816,32 @@ async fn list_workflows_api(
     Query(q): Query<WorkflowListQuery>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let engine = state
-        .workflow_engine
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Workflow engine not available".into()))?;
+    let engine = state.workflow_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Workflow engine not available".into(),
+    ))?;
     let workflows = engine
         .list(q.status.as_deref())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let total = workflows.len();
-    let running = workflows.iter().filter(|w| w.status == crate::workflows::WorkflowStatus::Running).count();
-    let paused = workflows.iter().filter(|w| w.status == crate::workflows::WorkflowStatus::Paused).count();
-    let completed = workflows.iter().filter(|w| w.status == crate::workflows::WorkflowStatus::Completed).count();
-    let failed = workflows.iter().filter(|w| w.status == crate::workflows::WorkflowStatus::Failed).count();
+    let running = workflows
+        .iter()
+        .filter(|w| w.status == crate::workflows::WorkflowStatus::Running)
+        .count();
+    let paused = workflows
+        .iter()
+        .filter(|w| w.status == crate::workflows::WorkflowStatus::Paused)
+        .count();
+    let completed = workflows
+        .iter()
+        .filter(|w| w.status == crate::workflows::WorkflowStatus::Completed)
+        .count();
+    let failed = workflows
+        .iter()
+        .filter(|w| w.status == crate::workflows::WorkflowStatus::Failed)
+        .count();
 
     Ok(Json(serde_json::json!({
         "workflows": workflows,
@@ -11733,10 +11860,10 @@ async fn create_workflow_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<crate::workflows::WorkflowCreateRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let engine = state
-        .workflow_engine
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Workflow engine not available".into()))?;
+    let engine = state.workflow_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Workflow engine not available".into(),
+    ))?;
     let workflow_id = engine
         .create_and_start(req, "web", "web")
         .await
@@ -11749,10 +11876,10 @@ async fn get_workflow_api(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let engine = state
-        .workflow_engine
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Workflow engine not available".into()))?;
+    let engine = state.workflow_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Workflow engine not available".into(),
+    ))?;
     let workflow = engine
         .status(&id)
         .await
@@ -11766,10 +11893,10 @@ async fn approve_workflow_api(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let engine = state
-        .workflow_engine
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Workflow engine not available".into()))?;
+    let engine = state.workflow_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Workflow engine not available".into(),
+    ))?;
     let msg = engine
         .approve_and_resume(&id)
         .await
@@ -11782,10 +11909,10 @@ async fn cancel_workflow_api(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let engine = state
-        .workflow_engine
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Workflow engine not available".into()))?;
+    let engine = state.workflow_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Workflow engine not available".into(),
+    ))?;
     let msg = engine
         .cancel(&id)
         .await
@@ -11798,10 +11925,10 @@ async fn delete_workflow_api(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let engine = state
-        .workflow_engine
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Workflow engine not available".into()))?;
+    let engine = state.workflow_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Workflow engine not available".into(),
+    ))?;
     let msg = engine
         .delete(&id)
         .await
@@ -11814,10 +11941,10 @@ async fn restart_workflow_api(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let engine = state
-        .workflow_engine
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Workflow engine not available".into()))?;
+    let engine = state.workflow_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Workflow engine not available".into(),
+    ))?;
     let msg = engine
         .restart(&id)
         .await
@@ -11837,10 +11964,10 @@ async fn list_businesses_api(
     Query(q): Query<BusinessListQuery>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let engine = state
-        .business_engine
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
     let businesses = engine
         .db()
         .list_businesses(q.status.as_deref())
@@ -11880,10 +12007,10 @@ async fn create_business_api(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateBusinessRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let engine = state
-        .business_engine
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
 
     let autonomy =
         crate::business::BusinessAutonomy::from_str(req.autonomy.as_deref().unwrap_or("semi"));
@@ -11916,10 +12043,10 @@ async fn get_business_api(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let engine = state
-        .business_engine
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
     let biz = engine
         .db()
         .load_business(&id)
@@ -11943,10 +12070,10 @@ async fn pause_business_api(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let engine = state
-        .business_engine
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
     engine
         .pause(&id)
         .await
@@ -11959,10 +12086,10 @@ async fn resume_business_api(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let engine = state
-        .business_engine
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
     engine
         .resume(&id)
         .await
@@ -11975,10 +12102,10 @@ async fn close_business_api(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let engine = state
-        .business_engine
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
     engine
         .close(&id)
         .await
@@ -11991,10 +12118,10 @@ async fn list_business_strategies_api(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let engine = state
-        .business_engine
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
     let strategies = engine
         .db()
         .list_strategies(&id)
@@ -12008,10 +12135,10 @@ async fn list_business_products_api(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let engine = state
-        .business_engine
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
     let products = engine
         .db()
         .list_products(&id)
@@ -12025,10 +12152,10 @@ async fn list_business_transactions_api(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let engine = state
-        .business_engine
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
     let transactions = engine
         .db()
         .list_transactions(&id)
@@ -12042,10 +12169,10 @@ async fn get_business_revenue_api(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let engine = state
-        .business_engine
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Business engine not available".into()))?;
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
     let revenue = engine
         .get_revenue_summary(&id)
         .await

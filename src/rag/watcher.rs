@@ -62,22 +62,17 @@ impl RagWatcher {
 
         let mut watcher: RecommendedWatcher = {
             let tx = tx.clone();
-            notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
-                match res {
-                    Ok(event) => {
-                        if matches!(
-                            event.kind,
-                            EventKind::Create(_) | EventKind::Modify(_)
-                        ) {
-                            for path in event.paths {
-                                if path.is_file() && is_supported(&path) {
-                                    let _ = tx.try_send(path);
-                                }
+            notify::recommended_watcher(move |res: Result<Event, notify::Error>| match res {
+                Ok(event) => {
+                    if matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
+                        for path in event.paths {
+                            if path.is_file() && is_supported(&path) {
+                                let _ = tx.try_send(path);
                             }
                         }
                     }
-                    Err(e) => tracing::warn!(error = %e, "RAG watcher error"),
                 }
+                Err(e) => tracing::warn!(error = %e, "RAG watcher error"),
             })?
         };
 

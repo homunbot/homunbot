@@ -73,8 +73,7 @@ impl Config {
         // and must not be persisted to disk.
         let mut snapshot = self.clone();
         snapshot.mcp.servers.remove("playwright");
-        let content =
-            toml::to_string_pretty(&snapshot).context("Failed to serialize config")?;
+        let content = toml::to_string_pretty(&snapshot).context("Failed to serialize config")?;
         std::fs::write(path, content)
             .with_context(|| format!("Failed to write config to {}", path.display()))?;
         Ok(())
@@ -1690,8 +1689,12 @@ pub struct ExecutionSandboxConfig {
     pub backend: String,
     /// When true, fail execution if requested backend is unavailable.
     pub strict: bool,
-    /// Docker image used when backend resolves to docker.
+    /// Configured runtime image reference used by Docker and the runtime image lifecycle checks.
     pub docker_image: String,
+    /// Runtime image policy: infer, pinned, versioned_tag, or floating.
+    pub runtime_image_policy: String,
+    /// Expected image version override used when runtime_image_policy is explicit.
+    pub runtime_image_expected_version: String,
     /// Docker network mode (recommended: "none").
     pub docker_network: String,
     /// Memory limit (MB) for docker sandbox.
@@ -1711,6 +1714,8 @@ impl Default for ExecutionSandboxConfig {
             backend: "auto".to_string(),
             strict: false,
             docker_image: "node:22-alpine".to_string(),
+            runtime_image_policy: "infer".to_string(),
+            runtime_image_expected_version: String::new(),
             docker_network: "none".to_string(),
             docker_memory_mb: 512,
             docker_cpus: 1.0,

@@ -36,10 +36,8 @@ struct BusinessRow {
 
 impl BusinessRow {
     fn into_business(self) -> Business {
-        let context =
-            serde_json::from_str(&self.context_json).unwrap_or(serde_json::Value::Object(
-                serde_json::Map::new(),
-            ));
+        let context = serde_json::from_str(&self.context_json)
+            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
         let fiscal_config = self
             .fiscal_config_json
             .as_deref()
@@ -292,13 +290,11 @@ impl Database {
     }
 
     pub async fn load_business(&self, id: &str) -> Result<Option<Business>> {
-        let row = sqlx::query_as::<_, BusinessRow>(
-            "SELECT * FROM businesses WHERE id = ?",
-        )
-        .bind(id)
-        .fetch_optional(self.pool())
-        .await
-        .with_context(|| format!("Failed to load business {id}"))?;
+        let row = sqlx::query_as::<_, BusinessRow>("SELECT * FROM businesses WHERE id = ?")
+            .bind(id)
+            .fetch_optional(self.pool())
+            .await
+            .with_context(|| format!("Failed to load business {id}"))?;
 
         Ok(row.map(|r| r.into_business()))
     }
@@ -312,21 +308,15 @@ impl Database {
             .fetch_all(self.pool())
             .await?
         } else {
-            sqlx::query_as::<_, BusinessRow>(
-                "SELECT * FROM businesses ORDER BY created_at DESC",
-            )
-            .fetch_all(self.pool())
-            .await?
+            sqlx::query_as::<_, BusinessRow>("SELECT * FROM businesses ORDER BY created_at DESC")
+                .fetch_all(self.pool())
+                .await?
         };
 
         Ok(rows.into_iter().map(|r| r.into_business()).collect())
     }
 
-    pub async fn update_business_status(
-        &self,
-        id: &str,
-        status: BusinessStatus,
-    ) -> Result<()> {
+    pub async fn update_business_status(&self, id: &str, status: BusinessStatus) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         let closed_at = if status.is_terminal() {
             Some(now.clone())
@@ -348,11 +338,7 @@ impl Database {
         Ok(())
     }
 
-    pub async fn set_business_ooda_automation(
-        &self,
-        id: &str,
-        automation_id: &str,
-    ) -> Result<()> {
+    pub async fn set_business_ooda_automation(&self, id: &str, automation_id: &str) -> Result<()> {
         sqlx::query("UPDATE businesses SET ooda_automation_id = ? WHERE id = ?")
             .bind(automation_id)
             .bind(id)
@@ -427,11 +413,7 @@ impl Database {
         Ok(rows.into_iter().map(|r| r.into_strategy()).collect())
     }
 
-    pub async fn update_strategy_status(
-        &self,
-        id: &str,
-        status: StrategyStatus,
-    ) -> Result<()> {
+    pub async fn update_strategy_status(&self, id: &str, status: StrategyStatus) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         let approved_at = if status == StrategyStatus::Approved {
             Some(now.clone())

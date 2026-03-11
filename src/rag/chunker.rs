@@ -29,11 +29,46 @@ impl Default for ChunkOptions {
 
 /// Supported file extensions for RAG ingestion.
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "md", "markdown", "txt", "log", "rs", "py", "js", "ts", "go", "java", "c", "cpp", "h",
-    "hpp", "toml", "yaml", "yml", "json", "html", "htm", "css", "sh", "bash", "zsh", "sql",
-    "xml", "csv", "ini", "cfg", "conf", "env", "dockerfile", "makefile",
+    "md",
+    "markdown",
+    "txt",
+    "log",
+    "rs",
+    "py",
+    "js",
+    "ts",
+    "go",
+    "java",
+    "c",
+    "cpp",
+    "h",
+    "hpp",
+    "toml",
+    "yaml",
+    "yml",
+    "json",
+    "html",
+    "htm",
+    "css",
+    "sh",
+    "bash",
+    "zsh",
+    "sql",
+    "xml",
+    "csv",
+    "ini",
+    "cfg",
+    "conf",
+    "env",
+    "dockerfile",
+    "makefile",
     // Binary document formats (require feature-gated parsers)
-    "pdf", "docx", "xlsx", "xls", "xlsm", "odt",
+    "pdf",
+    "docx",
+    "xlsx",
+    "xls",
+    "xlsm",
+    "odt",
 ];
 
 /// Detect document type from file extension.
@@ -46,10 +81,13 @@ pub fn detect_doc_type(path: &Path) -> &'static str {
     {
         Some("md" | "markdown") => "markdown",
         Some("txt" | "log") => "text",
-        Some("rs" | "py" | "js" | "ts" | "go" | "java" | "c" | "cpp" | "h" | "hpp" | "css"
-            | "sh" | "bash" | "zsh" | "sql") => "code",
-        Some("toml" | "yaml" | "yml" | "json" | "xml" | "ini" | "cfg" | "conf" | "env"
-            | "csv") => "config",
+        Some(
+            "rs" | "py" | "js" | "ts" | "go" | "java" | "c" | "cpp" | "h" | "hpp" | "css" | "sh"
+            | "bash" | "zsh" | "sql",
+        ) => "code",
+        Some("toml" | "yaml" | "yml" | "json" | "xml" | "ini" | "cfg" | "conf" | "env" | "csv") => {
+            "config"
+        }
         Some("html" | "htm") => "html",
         Some("pdf") => "pdf",
         Some("docx" | "odt") => "docx",

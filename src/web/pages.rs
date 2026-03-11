@@ -75,16 +75,36 @@ const ICON_TOOLS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="current
 const ICON_ESTOP: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="6,1 12,1 17,6 17,12 12,17 6,17 1,12 1,6"/><rect x="6.5" y="6.5" width="5" height="5" rx="0.8"/></svg>"#;
 
 /// Pages that belong to the "Tools" sub-navigation group.
-const TOOLS_PAGES: &[&str] = &["automations", "workflows", "business", "skills", "mcp", "memory", "knowledge", "vault"];
+const TOOLS_PAGES: &[&str] = &[
+    "automations",
+    "workflows",
+    "business",
+    "skills",
+    "mcp",
+    "memory",
+    "knowledge",
+    "vault",
+];
 /// Pages that belong to the "Settings" sub-navigation group.
-const SETTINGS_PAGES: &[&str] = &["settings", "channels", "browser", "permissions", "approvals", "logs"];
+const SETTINGS_PAGES: &[&str] = &[
+    "settings",
+    "channels",
+    "browser",
+    "permissions",
+    "approvals",
+    "logs",
+];
 
 /// Build the sidebar navigation HTML.
 /// Renders 5 main icons + 2 static sub-navigation panels (Tools, Settings).
 /// Sub-nav panels are shown/hidden purely server-side via `.is-open` class.
 fn sidebar(active: &str) -> String {
     let a = |page: &str| -> &str {
-        if active == page { " active" } else { "" }
+        if active == page {
+            " active"
+        } else {
+            ""
+        }
     };
 
     let is_tools = TOOLS_PAGES.contains(&active);
@@ -1046,19 +1066,42 @@ async fn browser_page(State(state): State<Arc<AppState>>) -> Html<String> {
                 </section>
             </div>
         </main>"##,
-        browser_enabled_checked = if config.browser.enabled { "checked" } else { "" },
-        browser_headless_checked = if config.browser.headless { "checked" } else { "" },
+        browser_enabled_checked = if config.browser.enabled {
+            "checked"
+        } else {
+            ""
+        },
+        browser_headless_checked = if config.browser.headless {
+            "checked"
+        } else {
+            ""
+        },
         executable_path = config.browser.executable_path,
         browser_status = {
             let status = config.browser.runtime_status();
-            let enabled = if status.enabled { "Enabled" } else { "Disabled" };
-            let availability = if status.available { "available" } else { "unavailable" };
-            let executable = status.executable_path
+            let enabled = if status.enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            };
+            let availability = if status.available {
+                "available"
+            } else {
+                "unavailable"
+            };
+            let executable = status
+                .executable_path
                 .map(|path| format!("Chrome: {}", path))
                 .unwrap_or_else(|| "Chrome: not detected".to_string());
             match status.reason {
-                Some(reason) => format!("{} • MCP (Playwright) • {}. {} {}", enabled, availability, executable, reason),
-                None => format!("{} • MCP (Playwright) • {}. {}", enabled, availability, executable),
+                Some(reason) => format!(
+                    "{} • MCP (Playwright) • {}. {} {}",
+                    enabled, availability, executable, reason
+                ),
+                None => format!(
+                    "{} • MCP (Playwright) • {}. {}",
+                    enabled, availability, executable
+                ),
             }
         },
     );
@@ -1471,12 +1514,7 @@ async fn workflows_page() -> Html<String> {
             </div>
         </main>"#;
 
-    Html(page_html(
-        "Workflows",
-        "workflows",
-        body,
-        &["workflows.js"],
-    ))
+    Html(page_html("Workflows", "workflows", body, &["workflows.js"]))
 }
 
 // ─── Skills ─────────────────────────────────────────────────────
@@ -2560,6 +2598,7 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             </div>
                             <div class="form-actions">
                                 <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-sandbox-image">Refresh Image Status</button>
+                                <button type="button" class="btn btn-secondary btn-sm" id="btn-build-sandbox-image">Build Runtime Baseline</button>
                                 <button type="button" class="btn btn-primary btn-sm" id="btn-pull-sandbox-image">Pull Runtime Image</button>
                             </div>
                         </div>
@@ -2590,6 +2629,8 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <select id="sandbox-backend" class="input">
                                 <option value="auto">auto</option>
                                 <option value="docker">docker</option>
+                                <option value="linux_native">linux_native</option>
+                                <option value="windows_native">windows_native</option>
                                 <option value="none">none</option>
                             </select>
                         </div>
@@ -2604,6 +2645,22 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <div class="form-group">
                                 <label>Docker image</label>
                                 <input type="text" id="sandbox-docker-image" class="input" value="{sandbox_docker_image}">
+                                <div class="form-hint">Use a digest to pin the runtime. Core repo baseline: <code>homun/runtime-core:2026.03</code>. Versioned tags are reviewable; <code>latest</code> stays floating.</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Runtime image policy</label>
+                                <select id="sandbox-runtime-image-policy" class="input">
+                                    <option value="infer" {sandbox_runtime_policy_infer}>infer</option>
+                                    <option value="pinned" {sandbox_runtime_policy_pinned}>pinned</option>
+                                    <option value="versioned_tag" {sandbox_runtime_policy_versioned_tag}>versioned_tag</option>
+                                    <option value="floating" {sandbox_runtime_policy_floating}>floating</option>
+                                </select>
+                                <div class="form-hint">`infer` follows the image reference. Explicit policies let you require pinned or versioned refs even before pulling.</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Expected runtime version</label>
+                                <input type="text" id="sandbox-runtime-image-expected-version" class="input" value="{sandbox_runtime_image_expected_version}">
+                                <div class="form-hint">Optional override for the expected tag or digest when the policy is explicit.</div>
                             </div>
                             <div class="form-group">
                                 <label>Docker network</label>
@@ -2804,6 +2861,34 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
             ""
         },
         sandbox_docker_image = config.security.execution_sandbox.docker_image,
+        sandbox_runtime_policy_infer =
+            if config.security.execution_sandbox.runtime_image_policy == "infer" {
+                "selected"
+            } else {
+                ""
+            },
+        sandbox_runtime_policy_pinned =
+            if config.security.execution_sandbox.runtime_image_policy == "pinned" {
+                "selected"
+            } else {
+                ""
+            },
+        sandbox_runtime_policy_versioned_tag =
+            if config.security.execution_sandbox.runtime_image_policy == "versioned_tag" {
+                "selected"
+            } else {
+                ""
+            },
+        sandbox_runtime_policy_floating =
+            if config.security.execution_sandbox.runtime_image_policy == "floating" {
+                "selected"
+            } else {
+                ""
+            },
+        sandbox_runtime_image_expected_version = config
+            .security
+            .execution_sandbox
+            .runtime_image_expected_version,
         sandbox_docker_memory = config.security.execution_sandbox.docker_memory_mb,
         sandbox_docker_cpus = config.security.execution_sandbox.docker_cpus,
         sandbox_docker_readonly_checked =

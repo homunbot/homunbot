@@ -205,7 +205,6 @@ impl EmbeddingEngine {
         provider: Box<dyn EmbeddingProvider>,
         index_path: PathBuf,
     ) -> Result<Self> {
-
         // Create or load the USearch HNSW index
         let options = IndexOptions {
             dimensions: EMBEDDING_DIM,

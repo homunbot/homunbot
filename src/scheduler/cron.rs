@@ -253,10 +253,7 @@ impl CronScheduler {
                                 steps,
                                 deliver_to: automation.deliver_to.clone(),
                             };
-                            let channel = automation
-                                .deliver_to
-                                .as_deref()
-                                .unwrap_or("automation");
+                            let channel = automation.deliver_to.as_deref().unwrap_or("automation");
                             match engine.create_and_start(req, channel, channel).await {
                                 Ok(wf_id) => {
                                     let msg = format!("Workflow {wf_id} started");

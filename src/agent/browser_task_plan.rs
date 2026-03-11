@@ -123,13 +123,23 @@ impl BrowserTaskPlanState {
         self.veto_browser_action_inner(action, arguments)
     }
 
-    fn veto_browser_action_inner(&self, action: &str, arguments: &serde_json::Value) -> Option<String> {
-
+    fn veto_browser_action_inner(
+        &self,
+        action: &str,
+        arguments: &serde_json::Value,
+    ) -> Option<String> {
         if self.requires_fresh_snapshot
             && matches!(
                 action,
-                "click" | "type" | "select" | "choose_suggestion" | "submit_form" | "extract"
-                    | "select_option" | "fill_form" | "drag"
+                "click"
+                    | "type"
+                    | "select"
+                    | "choose_suggestion"
+                    | "submit_form"
+                    | "extract"
+                    | "select_option"
+                    | "fill_form"
+                    | "drag"
             )
         {
             return Some(

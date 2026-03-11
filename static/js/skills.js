@@ -113,8 +113,9 @@
             sandboxBadgeEl.classList.add('badge-success');
         }
 
-        var dockerText = status.docker_available ? 'available' : 'unavailable';
-        sandboxTextEl.textContent = (status.message || 'Sandbox status updated.') + ' Docker: ' + dockerText + '.';
+        var availabilityText = status.availability_summary
+            || ('Docker: ' + (status.docker_available ? 'available' : 'unavailable') + '.');
+        sandboxTextEl.textContent = ((status.message || 'Sandbox status updated.') + ' ' + availabilityText).trim();
     }
 
     function loadSandboxStatus() {

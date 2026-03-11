@@ -115,32 +115,19 @@ impl Tool for KnowledgeTool {
                 let mut engine = self.engine.lock().await;
 
                 if path.is_dir() {
-                    let ids = engine
-                        .ingest_directory(&path, recursive, "tool")
-                        .await?;
+                    let ids = engine.ingest_directory(&path, recursive, "tool").await?;
                     Ok(ToolResult {
-                        output: format!(
-                            "Ingested {} files from {}",
-                            ids.len(),
-                            path.display()
-                        ),
+                        output: format!("Ingested {} files from {}", ids.len(), path.display()),
                         is_error: false,
                     })
                 } else if path.is_file() {
                     match engine.ingest_file(&path, "tool").await? {
                         Some(id) => Ok(ToolResult {
-                            output: format!(
-                                "File {} indexed (source_id={})",
-                                path.display(),
-                                id
-                            ),
+                            output: format!("File {} indexed (source_id={})", path.display(), id),
                             is_error: false,
                         }),
                         None => Ok(ToolResult {
-                            output: format!(
-                                "File {} already indexed (skipped)",
-                                path.display()
-                            ),
+                            output: format!("File {} already indexed (skipped)", path.display()),
                             is_error: false,
                         }),
                     }
@@ -178,15 +165,16 @@ impl Tool for KnowledgeTool {
             }
 
             "remove" => {
-                let id_str = get_optional_string(&args, "source_id")
-                    .or_else(|| {
-                        args.get("source_id")
-                            .and_then(|v| v.as_i64())
-                            .map(|v| v.to_string())
-                    });
+                let id_str = get_optional_string(&args, "source_id").or_else(|| {
+                    args.get("source_id")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v.to_string())
+                });
 
                 let source_id: i64 = match id_str {
-                    Some(s) => s.parse().map_err(|_| anyhow::anyhow!("Invalid source_id"))?,
+                    Some(s) => s
+                        .parse()
+                        .map_err(|_| anyhow::anyhow!("Invalid source_id"))?,
                     None => anyhow::bail!("Missing required parameter: source_id"),
                 };
 

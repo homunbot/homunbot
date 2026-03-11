@@ -1,6 +1,6 @@
 # Homun — Guida al Testing
 
-> Last updated: 2026-03-03
+> Last updated: 2026-03-12
 > Binary: `cargo run` (debug) o `cargo build --release --features full`
 
 ---
@@ -22,7 +22,7 @@ homun chat -m "Ciao, come ti chiami?"
 
 # 5. Avviare il gateway (web UI + canali + cron)
 homun gateway
-# Dashboard: http://localhost:18080
+# Dashboard: https://ui.homun.bot
 ```
 
 ---
@@ -114,8 +114,10 @@ Avviare il gateway e aprire il browser:
 
 ```bash
 homun gateway
-# Apri http://localhost:18080
+# Apri https://ui.homun.bot
 ```
+
+Nota: la roadmap attuale considera `https://ui.homun.bot` l'entrypoint standard della Web UI. La porta resta interna al servizio.
 
 ### Pagine disponibili
 
@@ -138,6 +140,151 @@ homun gateway
 2. Scrivere un messaggio e inviare
 3. Verificare: risposta in streaming, tool call visibili, history mantenuta
 
+### Smoke via Playwright MCP/CLI
+
+Questi script riusano il wrapper Playwright CLI gia' usato nella toolchain Codex, senza introdurre `@playwright/test`.
+
+Prerequisiti:
+
+```bash
+command -v npx
+test -x "$HOME/.codex/skills/playwright/scripts/playwright_cli.sh" || test -x "./scripts/playwright_cli.sh"
+```
+
+Gli script caricano automaticamente `./.env` se presente.
+Per default la console resta compatta e il dettaglio completo del CLI finisce in `output/playwright/*.cli.log`.
+Per vedere tutto anche a terminale:
+
+```bash
+HOMUN_E2E_VERBOSE=1 ./scripts/e2e_chat_suite.sh
+```
+
+Smoke Web UI login/setup/chat shell:
+
+```bash
+HOMUN_E2E_USERNAME=admin \
+HOMUN_E2E_PASSWORD=changeme123 \
+./scripts/e2e_webui_smoke.sh
+```
+
+Smoke Browser settings + prerequisites check:
+
+```bash
+HOMUN_E2E_USERNAME=admin \
+HOMUN_E2E_PASSWORD=changeme123 \
+./scripts/e2e_browser_smoke.sh
+```
+
+Prompt opzionale per verificare anche il composer chat:
+
+```bash
+HOMUN_E2E_USERNAME=admin \
+HOMUN_E2E_PASSWORD=changeme123 \
+HOMUN_E2E_CHAT_PROMPT="Rispondi con la parola smoke" \
+./scripts/e2e_webui_smoke.sh
+```
+
+Smoke `send -> run attiva -> stop` per la chat web:
+
+```bash
+HOMUN_E2E_USERNAME=admin \
+HOMUN_E2E_PASSWORD=changeme123 \
+./scripts/e2e_chat_send_stop.sh
+```
+
+Prompt piu' lungo/pesante opzionale se il modello risponde troppo in fretta:
+
+```bash
+HOMUN_E2E_USERNAME=admin \
+HOMUN_E2E_PASSWORD=changeme123 \
+HOMUN_E2E_CHAT_PROMPT="Produce exactly 200 numbered lines. Keep writing until all 200 are complete." \
+./scripts/e2e_chat_send_stop.sh
+```
+
+Smoke multi-sessione:
+
+```bash
+HOMUN_E2E_USERNAME=admin \
+HOMUN_E2E_PASSWORD=changeme123 \
+./scripts/e2e_chat_multi_session.sh
+```
+
+Smoke restore dopo reload durante una run:
+
+```bash
+HOMUN_E2E_USERNAME=admin \
+HOMUN_E2E_PASSWORD=changeme123 \
+./scripts/e2e_chat_restore_run.sh
+```
+
+Smoke allegati documento:
+
+```bash
+HOMUN_E2E_USERNAME=admin \
+HOMUN_E2E_PASSWORD=changeme123 \
+./scripts/e2e_chat_attachment_smoke.sh
+```
+
+Smoke MCP picker:
+
+```bash
+HOMUN_E2E_USERNAME=admin \
+HOMUN_E2E_PASSWORD=changeme123 \
+./scripts/e2e_chat_mcp_picker_smoke.sh
+```
+
+Smoke browser tool flow deterministico via chat:
+
+```bash
+HOMUN_E2E_USERNAME=admin \
+HOMUN_E2E_PASSWORD=changeme123 \
+./scripts/e2e_browser_tool_flow.sh
+```
+
+Questo smoke non dipende da siti esterni: genera una fixture HTML self-contained come `data:` URL, forza l'agente a usare il tool `browser`, e verifica sia il token finale sia la presenza di activity card browser nella chat.
+
+Suite completa:
+
+```bash
+HOMUN_E2E_USERNAME=admin \
+HOMUN_E2E_PASSWORD=changeme123 \
+./scripts/e2e_chat_suite.sh
+```
+
+Artifact prodotti:
+
+- `output/playwright/webui-chat-smoke.snapshot.txt`
+- `output/playwright/webui-chat-smoke.png`
+- `output/playwright/e2e_webui_smoke.cli.log`
+- `output/playwright/browser-smoke.snapshot.txt`
+- `output/playwright/browser-smoke.png`
+- `output/playwright/e2e_browser_smoke.cli.log`
+- `output/playwright/chat-send-stop.snapshot.txt`
+- `output/playwright/chat-send-stop.png`
+- `output/playwright/e2e_chat_send_stop.cli.log`
+- `output/playwright/chat-multi-session.snapshot.txt`
+- `output/playwright/chat-multi-session.png`
+- `output/playwright/e2e_chat_multi_session.cli.log`
+- `output/playwright/chat-restore-run.snapshot.txt`
+- `output/playwright/chat-restore-run.png`
+- `output/playwright/e2e_chat_restore_run.cli.log`
+- `output/playwright/chat-attachment.snapshot.txt`
+- `output/playwright/chat-attachment.png`
+- `output/playwright/e2e_chat_attachment_smoke.cli.log`
+- `output/playwright/chat-mcp-picker.snapshot.txt`
+- `output/playwright/chat-mcp-picker.png`
+- `output/playwright/e2e_chat_mcp_picker_smoke.cli.log`
+- `output/playwright/browser-tool-flow.snapshot.txt`
+- `output/playwright/browser-tool-flow.png`
+- `output/playwright/e2e_browser_tool_flow.cli.log`
+
+Workflow GitHub Actions manuale/opzionale:
+
+- file: `.github/workflows/e2e-smoke.yml`
+- trigger: `workflow_dispatch`
+- segreti richiesti: `HOMUN_E2E_USERNAME`, `HOMUN_E2E_PASSWORD`
+- input principali: `base_url`, `script`, `verbose`
+
 ### Test Memory Search
 
 1. Aprire `/memory`
@@ -148,22 +295,22 @@ homun gateway
 
 ```bash
 # Health check
-curl http://localhost:18080/api/health
+curl https://ui.homun.bot/api/health
 
 # Status completo
-curl http://localhost:18080/api/status
+curl https://ui.homun.bot/api/status
 
 # Configurazione
-curl http://localhost:18080/api/config
+curl https://ui.homun.bot/api/config
 
 # Ricerca memorie (hybrid search)
-curl "http://localhost:18080/api/v1/memory/search?q=test&limit=5"
+curl "https://ui.homun.bot/api/v1/memory/search?q=test&limit=5"
 
 # Lista skills
-curl http://localhost:18080/api/v1/skills
+curl https://ui.homun.bot/api/v1/skills
 
 # Lista provider
-curl http://localhost:18080/api/v1/providers
+curl https://ui.homun.bot/api/v1/providers
 ```
 
 ---
@@ -240,7 +387,7 @@ In chat:
 
 Via API:
 ```bash
-curl "http://localhost:18080/api/v1/memory/search?q=preferenze&limit=5"
+curl "https://ui.homun.bot/api/v1/memory/search?q=preferenze&limit=5"
 ```
 
 ### Configurazione embedding
@@ -424,6 +571,55 @@ In chat, i tool MCP appaiono automaticamente con prefisso `servername_`:
 ```
 > Elenca i file in /tmp usando il server MCP filesystem
 ```
+
+---
+
+## 10b. Sandbox Execution
+
+Il sistema sandbox isola l'esecuzione di shell, MCP stdio e skill scripts.
+
+### Test unitari (31 test)
+
+```bash
+cargo test -- sandbox
+```
+
+### Test integrazione Linux (richiede bwrap)
+
+```bash
+# Su Linux con bubblewrap installato
+sudo apt-get install bubblewrap
+cargo test --test sandbox_linux_native -- --nocapture
+```
+
+Test inclusi: probe bwrap, echo sandboxed, env sanitization, network isolation, prlimit memory, workspace mount, rootfs read-only.
+
+### Test integrazione runtime image (richiede Docker)
+
+```bash
+# Build della baseline image
+./scripts/build_sandbox_runtime_image.sh
+
+# Esegui i test
+cargo test --test sandbox_runtime_image -- --nocapture
+```
+
+Test inclusi: build baseline, verifica node/python/bash/tsx, esecuzione sandboxed nella baseline.
+
+### Test E2E cross-platform
+
+```bash
+cargo test --test sandbox_e2e -- --nocapture
+```
+
+Test portabili che funzionano su macOS/Linux/Windows. I test saltano gracefully se Docker o bwrap non sono disponibili.
+
+### CI
+
+Il workflow `.github/workflows/sandbox-validation.yml` esegue automaticamente su push/PR ai file sandbox:
+- Linux native (Ubuntu + bwrap)
+- Runtime image (Ubuntu + Docker)
+- E2E su Linux, Windows, macOS
 
 ---
 

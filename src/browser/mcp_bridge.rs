@@ -39,10 +39,7 @@ pub fn browser_mcp_server_config(browser: &BrowserConfig) -> Option<McpServerCon
 
     // Browser executable path (use system Chrome instead of Playwright's bundled one)
     if let Some(executable) = browser.resolved_executable() {
-        args.push(format!(
-            "--executable-path={}",
-            executable.display()
-        ));
+        args.push(format!("--executable-path={}", executable.display()));
     }
 
     // User data directory for persistent profiles (cookies, sessions, etc.)

@@ -11,9 +11,9 @@ use crate::scheduler::{CronEvent, CronScheduler, ScheduledKind};
 use crate::security::PairingManager;
 use crate::session::SessionManager;
 use crate::storage::{AutomationUpdate, Database, EmailPendingRow};
+use crate::utils::strip_reasoning;
 use crate::workflows::engine::WorkflowEngine;
 use crate::workflows::WorkflowEvent;
-use crate::utils::strip_reasoning;
 use tokio::sync::RwLock;
 
 use super::email_approval::{ApprovalAction, EmailApprovalHandler};
@@ -127,10 +127,7 @@ impl Gateway {
     }
 
     /// Set the business engine for autonomous business management.
-    pub fn set_business_engine(
-        &mut self,
-        engine: Arc<crate::business::engine::BusinessEngine>,
-    ) {
+    pub fn set_business_engine(&mut self, engine: Arc<crate::business::engine::BusinessEngine>) {
         self.business_engine = Some(engine);
     }
 
@@ -810,7 +807,9 @@ impl Gateway {
                                     let confirm = OutboundMessage {
                                         channel: channel_name.clone(),
                                         chat_id: chat_id.clone(),
-                                        content: format!("📄 Indexed \"{file_name}\" into knowledge base."),
+                                        content: format!(
+                                            "📄 Indexed \"{file_name}\" into knowledge base."
+                                        ),
                                     };
                                     route_outbound(confirm, &senders_for_routing).await;
 
@@ -930,9 +929,7 @@ impl Gateway {
                 } else {
                     &[]
                 };
-                let thinking_override = inbound_metadata
-                    .as_ref()
-                    .and_then(|m| m.thinking_override);
+                let thinking_override = inbound_metadata.as_ref().and_then(|m| m.thinking_override);
 
                 // Process through agent loop (spawned per-message)
                 let agent = agent.clone();

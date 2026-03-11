@@ -33,11 +33,7 @@ pub struct WorkflowEngine {
 }
 
 impl WorkflowEngine {
-    pub fn new(
-        db: Database,
-        agent: Arc<AgentLoop>,
-        event_tx: mpsc::Sender<WorkflowEvent>,
-    ) -> Self {
+    pub fn new(db: Database, agent: Arc<AgentLoop>, event_tx: mpsc::Sender<WorkflowEvent>) -> Self {
         Self {
             db,
             agent,
@@ -86,7 +82,11 @@ impl WorkflowEngine {
             .ok_or_else(|| anyhow::anyhow!("Workflow {workflow_id} not found"))?;
 
         if workflow.status.is_terminal() {
-            bail!("Workflow {} is already {}", workflow_id, workflow.status.as_str());
+            bail!(
+                "Workflow {} is already {}",
+                workflow_id,
+                workflow.status.as_str()
+            );
         }
 
         // Mark as running
@@ -245,10 +245,7 @@ impl WorkflowEngine {
             deliver_to: workflow.deliver_to.clone(),
         };
 
-        let channel_chat = workflow
-            .created_by
-            .as_deref()
-            .unwrap_or("web:web");
+        let channel_chat = workflow.created_by.as_deref().unwrap_or("web:web");
         let (channel, chat_id) = channel_chat.rsplit_once(':').unwrap_or(("web", "web"));
 
         let new_id = self.create_and_start(req, channel, chat_id).await?;
@@ -415,23 +412,13 @@ async fn run_workflow_loop(
                 if step.retry_count < step.max_retries {
                     // Retry
                     db.increment_step_retry(&step.id).await?;
-                    db.update_step_status(
-                        &step.id,
-                        StepStatus::Pending,
-                        None,
-                        Some(&error_msg),
-                    )
-                    .await?;
+                    db.update_step_status(&step.id, StepStatus::Pending, None, Some(&error_msg))
+                        .await?;
                     // Loop will re-execute this step
                 } else {
                     // Max retries exhausted — fail workflow
-                    db.update_step_status(
-                        &step.id,
-                        StepStatus::Failed,
-                        None,
-                        Some(&error_msg),
-                    )
-                    .await?;
+                    db.update_step_status(&step.id, StepStatus::Failed, None, Some(&error_msg))
+                        .await?;
                     bail!(
                         "Step {} \"{}\" failed after {} retries: {}",
                         step_idx,

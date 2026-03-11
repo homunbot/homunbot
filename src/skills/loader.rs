@@ -217,7 +217,7 @@ impl SkillRegistry {
         Ok(Skill {
             meta,
             path: skill_dir.to_path_buf(),
-            body: None, // Loaded on demand (progressive disclosure)
+            body: None,     // Loaded on demand (progressive disclosure)
             eligible: true, // Checked later by check_all_eligibility()
         })
     }
@@ -534,7 +534,10 @@ pub fn check_eligibility(reqs: &SkillRequirements) -> Result<(), String> {
     // Check environment variables (all must be set)
     for var in &reqs.env {
         if std::env::var(var).is_err() {
-            return Err(format!("Required environment variable '{}' is not set", var));
+            return Err(format!(
+                "Required environment variable '{}' is not set",
+                var
+            ));
         }
     }
 
@@ -623,11 +626,7 @@ fn resolve_vault_value(
 ) -> String {
     use crate::storage::SecretKey;
     secrets
-        .and_then(|s| {
-            s.get(&SecretKey::custom(vault_key))
-                .ok()
-                .flatten()
-        })
+        .and_then(|s| s.get(&SecretKey::custom(vault_key)).ok().flatten())
         .unwrap_or_else(|| {
             tracing::warn!(
                 skill = %skill_name,
@@ -894,9 +893,14 @@ This should only load on demand.
 
     #[test]
     fn test_substitute_variables_all() {
-        let body = "Run $ARGUMENTS in ${SKILL_DIR}/scripts/ for $USER_NAME. Also ${CLAUDE_SKILL_DIR}.";
-        let result =
-            substitute_skill_variables(body, "my query", Path::new("/home/skills/test"), Some("Fabio"));
+        let body =
+            "Run $ARGUMENTS in ${SKILL_DIR}/scripts/ for $USER_NAME. Also ${CLAUDE_SKILL_DIR}.";
+        let result = substitute_skill_variables(
+            body,
+            "my query",
+            Path::new("/home/skills/test"),
+            Some("Fabio"),
+        );
         assert_eq!(
             result,
             "Run my query in /home/skills/test/scripts/ for Fabio. Also /home/skills/test."
@@ -906,16 +910,14 @@ This should only load on demand.
     #[test]
     fn test_substitute_variables_none() {
         let body = "No variables here, just plain instructions.";
-        let result =
-            substitute_skill_variables(body, "query", Path::new("/tmp/skill"), None);
+        let result = substitute_skill_variables(body, "query", Path::new("/tmp/skill"), None);
         assert_eq!(result, body);
     }
 
     #[test]
     fn test_substitute_variables_partial() {
         let body = "Path is ${SKILL_DIR} but no arguments used.";
-        let result =
-            substitute_skill_variables(body, "ignored", Path::new("/opt/skills/x"), None);
+        let result = substitute_skill_variables(body, "ignored", Path::new("/opt/skills/x"), None);
         assert_eq!(result, "Path is /opt/skills/x but no arguments used.");
     }
 
@@ -948,14 +950,8 @@ This should only load on demand.
 
     #[test]
     fn test_build_activation_header_minimal() {
-        let header = build_skill_activation_header(
-            "simple",
-            Path::new("/tmp/simple"),
-            &[],
-            &[],
-            None,
-            "",
-        );
+        let header =
+            build_skill_activation_header("simple", Path::new("/tmp/simple"), &[], &[], None, "");
         assert!(header.contains("Skill: simple"));
         assert!(header.contains("Skill directory: /tmp/simple"));
         assert!(!header.contains("scripts"));

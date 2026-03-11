@@ -1,262 +1,305 @@
-# 🧪 Homun
+# Homun
 
-**The digital homunculus that lives in your computer.**
+Homun is a personal AI agent in Rust with a local-first architecture, a web control plane, long-term memory, automations, MCP integration, browser automation, skills, and multi-channel delivery.
 
-Homun is an ultra-lightweight personal AI assistant written in Rust — a single binary, zero-dependency, skill-powered agent you manage remotely via Telegram, WhatsApp, Discord, or CLI.
+It is no longer just a small CLI bot. The current codebase includes:
 
-> *In alchemy, a homunculus is a small artificial being created to serve its maker.
-> Homun is yours.*
+- Interactive chat in CLI and Web UI
+- A full web dashboard with auth, setup wizard, logs, approvals, vault, memory, knowledge, MCP, workflows, automations, browser settings, and business screens
+- Long-term memory plus a personal RAG knowledge base
+- MCP server management and guided setup
+- Skill loading, creation, adaptation, and security scanning
+- Workflow orchestration and scheduled automations
+- Browser automation through `@playwright/mcp`
+- Multiple provider backends with failover and health tracking
 
-## Features
+## Current Status
 
-- 🦀 **Single Rust binary** — no Python, no Node.js runtime, no Docker required
-- 🧠 **Skill-powered** — compatible with the open [Agent Skills](https://github.com/agentskills/agentskills) standard
-- 📱 **Multi-channel** — Telegram, WhatsApp, Discord, and CLI
-- 🔒 **Local-first** — your data stays on your machine, works with Ollama for fully offline operation
-- ⚡ **14 LLM providers** — Anthropic, OpenAI, OpenRouter, Ollama, DeepSeek, Groq, Gemini, and more
-- 🔧 **8 built-in tools** — shell, file ops, web search, cron, MCP, message, subagent
-- 📅 **Cron scheduling** — schedule recurring tasks with natural language
-- 🧩 **MCP support** — connect Model Context Protocol servers
-- 💾 **Long-term memory** — LLM-powered memory consolidation across sessions
-- 🖥️ **TUI dashboard** — interactive terminal UI for configuration and management
+As of March 10, 2026, the codebase is substantially implemented. The core desktop/web experience, automations, RAG, workflows, MCP, browser tool, web auth/security, and skill runtime are present in code and covered by a large test suite.
+
+What is still incomplete or explicitly marked partial in the roadmap:
+
+- Native hardened sandbox backends for Linux and Windows, beyond the current first-pass `linux_native` Bubblewrap path
+- Sandbox runtime image lifecycle/versioning beyond the current explicit-policy model and last-pull drift tracking
+- Full CI-backed E2E coverage for web chat and browser flows, although manual smoke coverage now exists
+- Phase-2 channel hardening/polish for Discord, Slack, Email, and WhatsApp
+- Business modules beyond the current core engine
+- Mobile app
+
+`cargo test -q` currently reports 506 tests.
+
+## Build Profiles
+
+Homun is feature-gated. The build you install matters.
+
+| Build | Command | Includes |
+|------|---------|----------|
+| Default | `cargo install --path .` | CLI, Web UI, shell/file/web tools, vault, MCP, browser |
+| Gateway | `cargo install --path . --features gateway` | Multi-channel gateway, local embeddings/RAG, email, MCP |
+| Full | `cargo install --path . --features full` | Gateway + browser + vault 2FA |
+
+If you want the project in its current "full product" shape, use `--features full`.
+
+## Prerequisites
+
+The Rust binary is the core runtime, but some capabilities depend on external tools:
+
+- Node.js / `npx` for browser automation and many MCP servers
+- A browser installed locally for Playwright MCP
+- Docker if you want stricter sandbox isolation
+- Ollama if you want fully local models
 
 ## Quick Start
 
+Install the full build:
+
 ```bash
-# Install from source
-cargo install --path .
+cargo install --path . --features full
+```
 
-# Open the interactive dashboard to configure
+Initialize config and open the local dashboard/TUI:
+
+```bash
 homun config
+```
 
-# One-shot message
-homun chat -m "What's the weather in Rome?"
+Run the gateway:
 
-# Interactive chat
-homun chat
-
-# Start the gateway (all channels + cron + heartbeat)
+```bash
 homun gateway
 ```
 
-## Configuration
+With SEC-2 enabled as designed, the web app is exposed at `https://ui.homun.bot` without a port. Internally the service still uses the configured web port and local OS-level forwarding/TLS setup.
 
-Homun stores everything in `~/.homun/`. Run `homun config` to open the TUI dashboard, or edit `~/.homun/config.toml` directly:
+On first boot, the UI redirects to the setup wizard/login flow.
+
+Manual Playwright MCP smoke checks are available under `scripts/e2e_*.sh`, including a deterministic browser-tool flow via chat, with a manual GitHub Actions entrypoint in `.github/workflows/e2e-smoke.yml`.
+
+Implementation-oriented subsystem documentation now lives in `docs/services/`. Start with `docs/services/README.md` for the service map and use those documents as the source of truth for how each major subsystem works today in code.
+
+You can also use the CLI directly:
+
+```bash
+homun chat
+homun chat -m "Summarize today's priorities"
+homun status
+```
+
+## What Exists In Code Today
+
+### Interfaces
+
+- CLI chat and management commands
+- Web UI with authenticated pages for chat, dashboard, setup, channels, browser, automations, workflows, business, skills, MCP, memory, knowledge, vault, permissions, approvals, account, logs, login, and setup wizard
+- WebSocket streaming chat in the browser
+
+### Agent Core
+
+- Provider failover with retries and "last good" tracking
+- Session compaction and token accounting
+- Memory search injected into the agent loop
+- Tool routing rules for web search vs browser use
+- Stop/cancel propagation for web chat runs
+
+### Knowledge And Memory
+
+- Personal memory files plus searchable memory API/UI
+- RAG knowledge base with ingestion, chunking, embeddings, hybrid search, directory indexing, watcher support, and sensitive-content gating
+- File ingestion for advanced document types when built with local embeddings
+
+### Automation And Orchestration
+
+- Cron jobs
+- Rich automations with history, "run now", triggers, and Web UI
+- Workflow engine with steps, approvals, retries, resume, and web management
+- Subagent spawning
+
+### Skills And MCP
+
+- Skill loading from disk
+- Skill creation from prompts
+- Skill adaptation from legacy formats
+- Security scanning before install
+- MCP server catalog, install guidance, OAuth setup flows, and runtime management
+
+### Tools
+
+Depending on build flags and runtime configuration, Homun exposes tools such as:
+
+- `shell`
+- `read_file`, `write_file`, `edit_file`, `list_dir`
+- `web_search`, `web_fetch`
+- `vault`
+- `create_automation`
+- `create_skill`
+- `remember`
+- `knowledge`
+- `browser`
+- `mcp` server tools
+- `cron`
+- `send_message`
+- `spawn_subagent`
+- `workflow`
+- `business`
+- `read_email_inbox`
+
+### Security And Ops
+
+- Web authentication and setup wizard
+- API tokens with scopes
+- Native HTTPS support
+- API rate limiting
+- Approval gates and audit trail
+- E-stop / kill switch
+- Provider health monitoring
+- Execution sandbox configuration and UI
+- Service install helpers
+
+## Provider Support
+
+The provider layer has three main implementations:
+
+- Anthropic native
+- Ollama native
+- OpenAI-compatible providers
+
+On top of that, the config and UI support a broad provider catalog, including:
+
+- OpenAI
+- OpenRouter
+- Gemini
+- DeepSeek
+- Groq
+- Mistral
+- xAI
+- Together
+- Fireworks
+- Perplexity
+- Cohere
+- Venice
+- vLLM / custom OpenAI-compatible endpoints
+- Vercel
+- Cloudflare
+- Copilot
+- Bedrock
+- MiniMax
+- DashScope
+- Moonshot
+- Zhipu
+
+## Channel Support
+
+Channel support is real in the codebase, but not all channels are equally mature. External channels require the richer gateway/full builds.
+
+| Channel | State |
+|--------|-------|
+| CLI | Solid |
+| Web UI | Solid |
+| Telegram | Implemented |
+| Discord | Implemented, roadmap still tracks further completion/hardening |
+| Slack | Implemented, roadmap still tracks further completion/hardening |
+| WhatsApp | Implemented, roadmap still tracks stabilization |
+| Email | Implemented, roadmap still tracks completion/hardening |
+
+## Documentation
+
+- `README.md`: product-level overview and current status
+- `docs/ROADMAP.md`: milestone and delivery plan
+- `docs/IMPLEMENTATION-GAPS.md`: real implementation backlog derived from code + roadmap
+- `docs/SANDBOX-EXECUTION-PLAN.md`: technical breakdown for the remaining sandbox backlog
+- `docs/SANDBOX-RUNTIME-BASELINE.md`: canonical core Docker runtime baseline for sandboxed skills and MCP
+- `docs/TESTING-GUIDE.md`: manual and automated verification paths
+- `docs/services/README.md`: implementation-oriented subsystem map
+- `docs/services/*.md`: service-by-service runtime documentation tied to the current codebase
+
+## CLI Overview
+
+Top-level commands currently exposed by the richer builds include:
+
+```text
+homun chat
+homun gateway
+homun config
+homun provider
+homun status
+homun skills
+homun cron
+homun automations
+homun mcp
+homun memory
+homun knowledge
+homun users
+homun service
+homun stop
+homun restart
+```
+
+## Example Configuration
+
+Homun stores state in `~/.homun/`. Configuration lives in `~/.homun/config.toml`.
 
 ```toml
 [agent]
 model = "anthropic/claude-sonnet-4-20250514"
+fallback_models = ["openai/gpt-4o-mini", "ollama/qwen3:latest"]
 max_iterations = 20
-temperature = 0.7
 
 [providers.anthropic]
 api_key = "sk-ant-xxx"
 
-[providers.openrouter]
-api_key = "sk-or-v1-xxx"
+[providers.openai]
+api_key = "sk-proj-xxx"
 
 [providers.ollama]
 api_base = "http://localhost:11434/v1"
+
+[browser]
+enabled = true
+headless = true
+
+[tools.web_search]
+provider = "brave"
+api_key = "BSA-xxx"
 
 [channels.telegram]
 enabled = true
 token = "123456:ABC..."
 allow_from = ["123456789"]
-
-[channels.whatsapp]
-enabled = true
-phone_number = "393331234567"
-
-[channels.discord]
-enabled = true
-token = "your-discord-bot-token"
-
-[tools.web_search]
-provider = "brave"
-api_key = "BSA-xxx"
+pairing_required = true
+mention_required = true
 ```
 
-### Supported Providers
+## What The README Used To Miss
 
-| Provider | Model prefix | Notes |
-|----------|-------------|-------|
-| Anthropic | `anthropic/claude-*` | Native API with tool_use |
-| OpenAI | `openai/gpt-*` | Via OpenAI API |
-| OpenRouter | `openrouter/*` | 200+ models |
-| Ollama | `ollama/*` | Local, fully offline |
-| DeepSeek | `deepseek/*` | |
-| Groq | `groq/*` | Ultra-fast inference |
-| Gemini | `gemini/*` | Google AI |
-| + 7 more | See docs | Any OpenAI-compatible API |
+The previous README understated the current project. Compared with the actual codebase, it was missing:
 
-## Skills
+- The authenticated Web UI and setup wizard
+- Automations, workflows, approvals, permissions, account management, logs, and business screens
+- RAG knowledge base and related CLI/API/UI
+- MCP guided setup and OAuth flows
+- Skill creator, skill adapter, and skill shield
+- Browser automation through Playwright MCP
+- Broader provider catalog and provider failover
 
-Homun supports the open [Agent Skills](https://github.com/agentskills/agentskills) specification. Skills are directories with a `SKILL.md` that teaches the agent new capabilities.
+It also overstated one thing: full Homun usage is not "zero dependency" anymore if you want browser automation, MCP ecosystems, or hardened sandboxing.
 
-```bash
-# Search for skills
-homun skills search "weather"
+## Roadmap Snapshot
 
-# Install from GitHub
-homun skills add owner/repo
+The roadmap currently treats these areas as complete in code:
 
-# Install from ClawHub registry
-homun skills search "gmail"  # then install from TUI
+- Sprints 1 through 6
+- Sprint 8 hardening
+- Browser automation core
+- Workflow engine
+- Skill runtime parity
+- Web security
 
-# List installed
-homun skills list
+The main remaining roadmap items are:
 
-# Remove
-homun skills remove skill-name
-```
+- Sandbox hardening milestones
+- Chat/browser E2E test suites
+- Channel phase 2 completion
+- Business modules after the core engine
+- Mobile app
 
-Or use the TUI dashboard (`homun config` → Skills tab) for a visual experience with search, install, and auto-setup.
-
-## Tools
-
-Homun comes with 8 built-in tools:
-
-| Tool | Description |
-|------|-------------|
-| `shell` | Execute shell commands (with safety filters) |
-| `read_file` / `write_file` / `edit_file` | File operations with workspace isolation |
-| `list_dir` | Directory listing |
-| `web_search` | Search the web (Brave API) |
-| `web_fetch` | Fetch and read web pages |
-| `cron` | Schedule recurring tasks |
-| `send_message` | Send proactive messages to any channel |
-| `spawn_subagent` | Run background tasks |
-
-### MCP Servers
-
-Connect external tools via the [Model Context Protocol](https://modelcontextprotocol.io/):
-
-```bash
-# Add an MCP server
-homun mcp add filesystem --command npx --args "-y @modelcontextprotocol/server-filesystem /tmp"
-
-# List servers
-homun mcp list
-
-# Toggle on/off
-homun mcp toggle filesystem
-```
-
-## Channels
-
-### Telegram
-1. Create a bot via [@BotFather](https://t.me/BotFather)
-2. Set the token in config: `channels.telegram.token`
-3. Add your chat ID to `channels.telegram.allow_from`
-4. Run `homun gateway`
-
-### WhatsApp
-1. Set your phone number: `channels.whatsapp.phone_number = "393331234567"`
-2. Run `homun config` → WhatsApp tab → press `p` to pair
-3. Enter the pairing code on your phone
-4. Run `homun gateway`
-
-### Discord
-1. Create a bot at [Discord Developer Portal](https://discord.com/developers)
-2. Set token and channel ID in config
-3. Run `homun gateway`
-
-## Cron Jobs
-
-Schedule recurring tasks that run automatically:
-
-```bash
-# Add a cron job
-homun cron add "0 8 * * *" "Give me a morning briefing"
-
-# List jobs
-homun cron list
-
-# Remove
-homun cron remove <id>
-```
-
-Cron responses are delivered to the channel where the job was created.
-
-## Personalization
-
-Create files in `~/.homun/` to customize your homunculus:
-
-- **`SOUL.md`** — Personality and behavior instructions
-- **`USER.md`** — Information about you (name, preferences, context)
-- **`AGENTS.md`** — Agent-specific directives and rules
-
-Example `~/.homun/SOUL.md`:
-```markdown
-You are a witty, efficient assistant. You speak Italian when the user writes in Italian.
-You love making dad jokes but only occasionally.
-```
-
-## CLI Reference
-
-```
-homun                          # Interactive chat (default)
-homun chat                     # Interactive chat
-homun chat -m "message"        # One-shot message
-homun gateway                  # Start all channels + cron
-homun config                   # TUI dashboard
-homun config show              # Print config
-homun config get <key>         # Get a config value
-homun config set <key> <val>   # Set a config value
-homun status                   # Show agent status
-homun skills list              # List installed skills
-homun skills add owner/repo    # Install skill from GitHub
-homun skills remove <name>     # Remove a skill
-homun skills search <query>    # Search for skills
-homun cron list                # List cron jobs
-homun cron add <expr> <msg>    # Add a cron job
-homun cron remove <id>         # Remove a cron job
-homun mcp list                 # List MCP servers
-homun mcp add <name> ...       # Add MCP server
-homun mcp remove <name>        # Remove MCP server
-homun mcp toggle <name>        # Enable/disable MCP server
-homun provider list            # List providers
-homun provider test [name]     # Test a provider
-```
-
-## Architecture
-
-```
-~/.homun/
-├── config.toml          # Configuration
-├── homun.db          # SQLite (sessions, messages, memory, cron)
-├── workspace/           # Agent's working directory
-├── skills/              # Installed skills
-├── SOUL.md              # Personality (optional)
-├── USER.md              # User context (optional)
-├── AGENTS.md            # Agent directives (optional)
-└── MEMORY.md            # Long-term memory (auto-generated)
-```
-
-Built with:
-- **Tokio** — async runtime
-- **SQLite** (sqlx) — persistent storage
-- **Ratatui** — TUI dashboard
-- **Reqwest** — HTTP client
-- **Teloxide** — Telegram bot
-- **Serenity** — Discord bot
-
-## Development
-
-```bash
-# Check
-cargo check && cargo clippy
-
-# Test (167 tests)
-cargo test
-
-# Run with debug logging
-RUST_LOG=debug cargo run -- chat
-
-# Build release
-cargo build --release
-```
-
-## License
-
-MIT
+For the detailed operational status, see [docs/ROADMAP.md](docs/ROADMAP.md).

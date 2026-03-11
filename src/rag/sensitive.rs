@@ -59,9 +59,15 @@ mod tests {
 
     #[test]
     fn test_detects_api_key() {
-        assert!(is_sensitive("api_key: sk-abc123456789012345678901234567890"));
-        assert!(is_sensitive("OPENAI_API_KEY=sk-proj-abcdef1234567890abcdef12"));
-        assert!(is_sensitive("token = ghp_1234567890abcdef1234567890abcdef12345678"));
+        assert!(is_sensitive(
+            "api_key: sk-abc123456789012345678901234567890"
+        ));
+        assert!(is_sensitive(
+            "OPENAI_API_KEY=sk-proj-abcdef1234567890abcdef12"
+        ));
+        assert!(is_sensitive(
+            "token = ghp_1234567890abcdef1234567890abcdef12345678"
+        ));
     }
 
     #[test]
@@ -83,7 +89,9 @@ mod tests {
 
     #[test]
     fn test_normal_text_not_sensitive() {
-        assert!(!is_sensitive("This is a normal document about programming."));
+        assert!(!is_sensitive(
+            "This is a normal document about programming."
+        ));
         assert!(!is_sensitive("The key to success is hard work."));
         assert!(!is_sensitive("Meeting notes from today's session."));
     }

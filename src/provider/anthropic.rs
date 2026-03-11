@@ -112,9 +112,7 @@ enum ContentBlock {
     /// Extended thinking block — Claude's internal reasoning.
     /// We parse but discard its content (reasoning_filter handles display).
     #[serde(rename = "thinking")]
-    Thinking {
-        thinking: String,
-    },
+    Thinking { thinking: String },
 }
 
 #[derive(Serialize, Deserialize, Clone)]

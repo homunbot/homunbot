@@ -46,9 +46,7 @@ pub fn detect_model_capabilities(provider_name: &str, model: &str) -> ModelCapab
                 || model.contains("qwq")
                 || model.contains("marco-o1")
         }
-        "anthropic" => {
-            model.contains("claude-opus-4") || model.contains("claude-sonnet-4")
-        }
+        "anthropic" => model.contains("claude-opus-4") || model.contains("claude-sonnet-4"),
         _ => {
             model.contains("deepseek-r1")
                 || model.contains("deepseek-reasoner")
@@ -126,14 +124,20 @@ mod tests {
 
         // Anthropic thinking models
         assert!(supports_thinking("anthropic", "anthropic/claude-opus-4"));
-        assert!(supports_thinking("anthropic", "anthropic/claude-sonnet-4-20250514"));
+        assert!(supports_thinking(
+            "anthropic",
+            "anthropic/claude-sonnet-4-20250514"
+        ));
         assert!(!supports_thinking("anthropic", "anthropic/claude-3-haiku"));
 
         // OpenAI / generic thinking models
         assert!(supports_thinking("openai", "o1-preview"));
         assert!(supports_thinking("openai", "o3-mini"));
         assert!(supports_thinking("openrouter", "deepseek/deepseek-r1"));
-        assert!(supports_thinking("openrouter", "deepseek/deepseek-reasoner"));
+        assert!(supports_thinking(
+            "openrouter",
+            "deepseek/deepseek-reasoner"
+        ));
         assert!(!supports_thinking("openai", "gpt-4o"));
     }
 }
