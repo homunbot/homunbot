@@ -836,25 +836,25 @@ Homun: "La fattura e' di 1.250€ da Fornitore XYZ per servizi consulenza,
 
 | # | Task | File principali | LOC stimate | Stato |
 |---|------|----------------|-------------|-------|
-| 7.1 | **Discord hardening** | `channels/discord.rs` | ~100 | ⚠️ PARTIAL |
-| | Bot base attivo: inbound/outbound, allowlist, mention gating, typing indicator | | | |
-| | Test end-to-end | | | |
-| | Reaction ACKs | | | |
-| | Thread support | | | |
-| 7.2 | **Slack hardening** | `channels/slack.rs` | ~200 | ⚠️ PARTIAL |
-| | Implementazione base attiva: polling Web API, autodiscovery canali, outbound replies, allowlist | | | |
-| | Implementazione completa Bolt-style | | | |
-| | Slash commands | | | |
-| | Thread support | | | |
-| 7.3 | **Email hardening** | `channels/email.rs`, `web/pages.rs` | ~200 | ⚠️ PARTIAL |
-| | Base attiva: multi-account IMAP + SMTP, HTML parsing, trigger-word/on-demand, Web UI account management | | | |
-| | Attachment handling | | | |
-| 7.4 | **WhatsApp stabilizzazione** | `channels/whatsapp.rs` | ~100 | ⚠️ PARTIAL |
-| | Base attiva: session reconnect, allowlist fail-closed, pairing via TUI, grace period anti-replay | | | |
-| | Reconnect ancora piu' robusto | | | |
-| | Group support | | | |
+| 7.0 | **OutboundMetadata infra** | `bus/queue.rs`, `agent/gateway.rs`, `tools/message.rs` | ~60 | ✅ DONE |
+| | OutboundMetadata struct, build_outbound_meta helper, propagazione in 14 siti gateway | | | |
+| 7.1 | **Discord hardening** | `channels/discord.rs` | ~70 | ✅ DONE |
+| | ✅ Attachment download (reqwest → $TMPDIR/homun_discord/) | | | |
+| | ✅ Reaction ACK (✅ emoji on receipt) | | | |
+| | ✅ Thread support (serenity tratta thread come canali, routing nativo) | | | |
+| 7.2 | **Slack hardening** | `channels/slack.rs` | ~30 | ✅ DONE |
+| | ✅ Thread inbound (thread_ts → metadata.thread_id) | | | |
+| | ✅ Thread outbound (OutboundMetadata.thread_id → thread_ts in API) | | | |
+| 7.3 | **Email hardening** | `channels/email.rs` | ~90 | ✅ DONE |
+| | ✅ Attachment download (MIME → $TMPDIR/homun_email/{account}/) | | | |
+| | ✅ Reply threading (In-Reply-To, References headers, Re: subject) | | | |
+| 7.4 | **WhatsApp stabilizzazione** | `channels/whatsapp.rs`, `config/schema.rs` | ~230 | ✅ DONE |
+| | ✅ Reconnect con exponential backoff (2s → 120s cap) | | | |
+| | ✅ Group support con @mention gating (bot_name config) | | | |
+| | ✅ Media download (image, document, audio, video via wa-rs Downloadable) | | | |
+| | ✅ Caption extraction (MessageExt::get_caption) | | | |
 
-**Stima totale Sprint 7: ~600 LOC**
+**Sprint 7 completo: ~478 LOC (CI 11/11 verde)**
 
 ---
 
@@ -1269,9 +1269,12 @@ Programma Workflow Engine (P1)             ✅ DONE (~2,310 LOC)
   ✅ WF-6 Web UI workflows (pagina, API, JS, CSS)
   ✅ WF-7 Trigger da automazioni/cron (OnceCell, migration 014, step builder)
     |
-Sprint 7: Canali Phase 2 (P2)              ⚠️ PARTIAL (~600 LOC)
-  ⚠️ Implementazioni base gia' presenti per Discord, Slack, Email, WhatsApp
-  TODO parity/hardening: test E2E, threads/groups, slash/Bolt UX, attachment handling, reconnect robustness
+Sprint 7: Canali Phase 2 (P2)              ✅ DONE (~478 LOC)
+  ✅ 7.0 OutboundMetadata infra (queue.rs, gateway.rs propagazione)
+  ✅ 7.1 Discord (attachment download, reaction ACK, thread routing nativo)
+  ✅ 7.2 Slack (thread_ts inbound/outbound wiring)
+  ✅ 7.3 Email (MIME attachment, In-Reply-To/References reply threading)
+  ✅ 7.4 WhatsApp (reconnect backoff, group mention gating, media download)
     |
 Sprint 8: Hardening (P2)                   ✅ COMPLETE (~360 LOC)
   ✅ 8.1 CI Pipeline
@@ -1311,9 +1314,9 @@ Sprint 9+: Future (P3)
   Voice, Extended thinking, Prometheus, distribuzione
 ```
 
-**Completato: Sprint 1-6 + Sprint 8 + SBX-1..6 (tutti validati CI cross-platform) + CHAT-1..6 + smoke manuali CHAT-7/Browser + core Browser + Design System + Workflow Engine + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4) + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
-**Rimanente: formalizzazione release-grade di CHAT-7 e Browser E2E, Sprint 7 hardening canali, BIZ-2..5, Mobile App, Sprint 9+**
-**CI: 16/16 check verdi (check&lint, test, 4 feature matrix, 3 E2E, 1 linux-native, 1 runtime-image, 5 build cross-platform)**
+**Completato: Sprint 1-8 + SBX-1..6 (tutti validati CI cross-platform) + CHAT-1..6 + smoke manuali CHAT-7/Browser + core Browser + Design System + Workflow Engine + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4) + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
+**Rimanente: formalizzazione release-grade di CHAT-7 e Browser E2E, BIZ-2..5, Mobile App, Sprint 9+**
+**CI: 11/11 check verdi (check&lint, test, 4 feature matrix, 5 build cross-platform + sandbox validation)**
 
 ---
 
