@@ -5,7 +5,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::mpsc;
 
-use crate::bus::{InboundMessage, MessageMetadata, OutboundMessage, StreamMessage};
+use crate::bus::{
+    build_outbound_meta, InboundMessage, MessageMetadata, OutboundMessage, StreamMessage,
+};
 use crate::config::Config;
 use crate::scheduler::{CronEvent, CronScheduler, ScheduledKind};
 use crate::security::PairingManager;
@@ -608,6 +610,7 @@ impl Gateway {
                                         channel: channel_name.clone(),
                                         chat_id: chat_id.clone(),
                                         content: response,
+                                        metadata: None,
                                     };
                                     route_outbound(outbound, &senders_for_routing).await;
                                     continue;
@@ -649,6 +652,7 @@ impl Gateway {
                                 channel: email_ch,
                                 chat_id: pending.from_address.clone(),
                                 content: email_content,
+                                metadata: None,
                             };
                             route_outbound(email_msg, &senders_for_routing).await;
 
@@ -662,6 +666,7 @@ impl Gateway {
                                 channel: channel_name.clone(),
                                 chat_id: chat_id.clone(),
                                 content: format!("✅ Email inviata a {}", pending.from_address),
+                                metadata: None,
                             };
                             route_outbound(confirm, &senders_for_routing).await;
 
@@ -684,6 +689,7 @@ impl Gateway {
                                 channel: channel_name.clone(),
                                 chat_id: chat_id.clone(),
                                 content: "❌ Bozza scartata".to_string(),
+                                metadata: None,
                             };
                             route_outbound(confirm, &senders_for_routing).await;
 
@@ -707,6 +713,7 @@ impl Gateway {
                                     channel: channel_name.clone(),
                                     chat_id: chat_id.clone(),
                                     content: msg,
+                                    metadata: None,
                                 };
                                 route_outbound(out, &senders_for_routing).await;
                             }
@@ -741,6 +748,7 @@ impl Gateway {
                                             channel: modify_channel,
                                             chat_id: modify_chat_id,
                                             content: format!("❌ Errore nella rigenerazione: {e}"),
+                                            metadata: None,
                                         };
                                         route_outbound(err_msg, &modify_senders).await;
                                         return;
@@ -769,6 +777,7 @@ impl Gateway {
                                         channel: modify_channel,
                                         chat_id: modify_chat_id,
                                         content: msg,
+                                        metadata: None,
                                     };
                                     route_outbound(out, &modify_senders).await;
                                 }
@@ -810,6 +819,7 @@ impl Gateway {
                                         content: format!(
                                             "📄 Indexed \"{file_name}\" into knowledge base."
                                         ),
+                                        metadata: None,
                                     };
                                     route_outbound(confirm, &senders_for_routing).await;
 
@@ -836,6 +846,7 @@ impl Gateway {
                                         channel: channel_name.clone(),
                                         chat_id: chat_id.clone(),
                                         content: format!("📄 \"{file_name}\" already in knowledge base (duplicate)."),
+                                        metadata: None,
                                     };
                                     route_outbound(confirm, &senders_for_routing).await;
                                     let content_trimmed = inbound.content.trim();
@@ -851,6 +862,7 @@ impl Gateway {
                                         channel: channel_name.clone(),
                                         chat_id: chat_id.clone(),
                                         content: format!("❌ Failed to index \"{file_name}\": {e}"),
+                                        metadata: None,
                                     };
                                     route_outbound(confirm, &senders_for_routing).await;
                                     let content_trimmed = inbound.content.trim();
@@ -1087,12 +1099,14 @@ impl Gateway {
                             channel: notify_ch,
                             chat_id: notify_cid,
                             content: formatted,
+                            metadata: None,
                         }
                     } else {
                         OutboundMessage {
                             channel: channel_name.clone(),
                             chat_id: chat_id.clone(),
                             content,
+                            metadata: build_outbound_meta(inbound.metadata.as_ref()),
                         }
                     };
 
@@ -1325,6 +1339,7 @@ impl Gateway {
                                 channel: channel.to_string(),
                                 chat_id: chat_id.to_string(),
                                 content: notification,
+                                metadata: None,
                             };
                             route_outbound(outbound, &senders_for_wf).await;
                         }
@@ -1493,6 +1508,7 @@ async fn show_next_pending(
                 channel: channel.to_string(),
                 chat_id: chat_id.to_string(),
                 content: msg,
+                metadata: None,
             };
             route_outbound(out, senders).await;
         }

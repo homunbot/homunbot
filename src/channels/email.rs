@@ -31,7 +31,7 @@ use lettre::transport::smtp::authentication::Credentials;
 #[cfg(feature = "channel-email")]
 use lettre::{Message, SmtpTransport, Transport};
 #[cfg(feature = "channel-email")]
-use mail_parser::MessageParser;
+use mail_parser::{MessageParser, MimeHeaders};
 #[cfg(feature = "channel-email")]
 use rustls_pki_types::DnsName;
 #[cfg(feature = "channel-email")]
@@ -60,6 +60,8 @@ pub struct ParsedEmail {
     pub subject: String,
     pub body_text: String,
     pub message_id: String,
+    /// Path to first downloaded attachment (if any).
+    pub attachment_path: Option<String>,
 }
 
 /// Multi-account email channel.
@@ -648,12 +650,16 @@ async fn process_unseen_account(
             }
         }
 
+        // Download first attachment (if any)
+        let attachment_path = extract_email_attachment(&parsed, account_name).await;
+
         let email = ParsedEmail {
             uid,
             from: sender,
             subject: subject.clone(),
             body_text,
             message_id: msg_id,
+            attachment_path,
         };
 
         let item = QueueItem {
@@ -714,6 +720,7 @@ async fn emit_queue_event(
                     email_message_id: Some(email.message_id.clone()),
                     requires_approval,
                     is_digest: false,
+                    attachment_path: email.attachment_path.clone(),
                     ..Default::default()
                 }),
             };
@@ -783,6 +790,57 @@ async fn emit_queue_event(
 }
 
 // ---------------------------------------------------------------------------
+// Attachment extraction
+// ---------------------------------------------------------------------------
+
+/// Download the first attachment from a parsed email to a temp directory.
+#[cfg(feature = "channel-email")]
+async fn extract_email_attachment(
+    parsed: &mail_parser::Message<'_>,
+    account_name: &str,
+) -> Option<String> {
+    for part in parsed.attachments() {
+        let filename = part
+            .attachment_name()
+            .unwrap_or("email_attachment")
+            .to_string();
+        let body = part.contents();
+        if body.is_empty() {
+            continue;
+        }
+
+        let dir = std::env::temp_dir().join("homun_email").join(account_name);
+        if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+            warn!(error = %e, "Failed to create email attachment dir");
+            return None;
+        }
+
+        let dest = dir.join(&filename);
+        if let Err(e) = tokio::fs::write(&dest, body).await {
+            warn!(error = %e, "Failed to write email attachment");
+            return None;
+        }
+
+        info!(
+            account = account_name,
+            filename = %filename,
+            size = body.len(),
+            "Downloaded email attachment"
+        );
+        return Some(dest.to_string_lossy().to_string());
+    }
+    None
+}
+
+#[cfg(not(feature = "channel-email"))]
+async fn extract_email_attachment(
+    _parsed: &mail_parser::Message<'_>,
+    _account_name: &str,
+) -> Option<String> {
+    None
+}
+
+// ---------------------------------------------------------------------------
 // SMTP sending (per-account)
 // ---------------------------------------------------------------------------
 
@@ -802,15 +860,35 @@ async fn send_email_account(
         ("Homun Response", msg.content.as_str())
     };
 
-    let email = Message::builder()
+    let mut builder = Message::builder()
         .from(
             config
                 .from_address
                 .parse()
                 .context("Invalid from address")?,
         )
-        .to(msg.chat_id.parse().context("Invalid recipient address")?)
-        .subject(subject)
+        .to(msg.chat_id.parse().context("Invalid recipient address")?);
+
+    // Reply threading: use In-Reply-To and subject from outbound metadata
+    if let Some(ref meta) = msg.metadata {
+        if let Some(ref mid) = meta.email_message_id {
+            builder = builder.in_reply_to(mid.clone()).references(mid.clone());
+        }
+        if let Some(ref orig_subject) = meta.email_subject {
+            let reply_subject = if orig_subject.starts_with("Re: ") {
+                orig_subject.clone()
+            } else {
+                format!("Re: {orig_subject}")
+            };
+            builder = builder.subject(reply_subject);
+        } else {
+            builder = builder.subject(subject);
+        }
+    } else {
+        builder = builder.subject(subject);
+    }
+
+    let email = builder
         .singlepart(SinglePart::plain(body.to_string()))
         .context("Failed to build email")?;
 

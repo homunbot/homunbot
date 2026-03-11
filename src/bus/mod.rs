@@ -1,3 +1,6 @@
 pub mod queue;
 
-pub use queue::{InboundMessage, MessageBus, MessageMetadata, OutboundMessage, StreamMessage};
+pub use queue::{
+    build_outbound_meta, InboundMessage, MessageBus, MessageMetadata, OutboundMessage,
+    OutboundMetadata, StreamMessage,
+};

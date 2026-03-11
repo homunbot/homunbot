@@ -669,6 +669,14 @@ pub struct WhatsAppConfig {
     /// Require OTP pairing for unknown senders (default: false).
     #[serde(default)]
     pub pairing_required: bool,
+    /// Bot display name used for @mention detection in groups (e.g. "homun").
+    /// In groups, the bot only responds when mentioned by this name.
+    #[serde(default = "default_bot_name")]
+    pub bot_name: String,
+}
+
+fn default_bot_name() -> String {
+    "homun".to_string()
 }
 
 impl Default for WhatsAppConfig {
@@ -680,6 +688,7 @@ impl Default for WhatsAppConfig {
             skip_history_sync: true,
             allow_from: Vec::new(),
             pairing_required: false,
+            bot_name: default_bot_name(),
         }
     }
 }

@@ -50,6 +50,10 @@ pub struct MessageMetadata {
     /// `None` = use model default, `Some(true)` = force on, `Some(false)` = force off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_override: Option<bool>,
+    /// Thread identifier (Discord thread channel_id, Slack thread_ts).
+    /// Used to route replies back to the same thread.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
 }
 
 /// Message from a channel to the agent
@@ -71,12 +75,47 @@ impl InboundMessage {
     }
 }
 
+/// Optional metadata attached to outbound messages.
+///
+/// Carries channel-specific routing context (thread IDs, email headers)
+/// that channel implementations use for proper reply threading.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OutboundMetadata {
+    /// Discord/Slack thread identifier for threaded replies.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    /// Email In-Reply-To message ID for reply threading.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email_message_id: Option<String>,
+    /// Email subject for reply Subject line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email_subject: Option<String>,
+}
+
+/// Build outbound metadata from inbound metadata (thread/email context propagation).
+pub fn build_outbound_meta(inbound_meta: Option<&MessageMetadata>) -> Option<OutboundMetadata> {
+    let meta = inbound_meta?;
+    let has_data =
+        meta.thread_id.is_some() || meta.email_message_id.is_some() || meta.email_subject.is_some();
+    if !has_data {
+        return None;
+    }
+    Some(OutboundMetadata {
+        thread_id: meta.thread_id.clone(),
+        email_message_id: meta.email_message_id.clone(),
+        email_subject: meta.email_subject.clone(),
+    })
+}
+
 /// Message from the agent to a channel
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutboundMessage {
     pub channel: String,
     pub chat_id: String,
     pub content: String,
+    /// Optional metadata for channel-specific routing (threading, email headers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<OutboundMetadata>,
 }
 
 /// A streaming text chunk routed to a specific chat session.

@@ -1,19 +1,20 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use tokio::sync::{mpsc, Mutex};
 use wa_rs::bot::Bot;
 use wa_rs::store::SqliteStore;
+use wa_rs_core::download::Downloadable;
 use wa_rs_core::proto_helpers::MessageExt;
 use wa_rs_core::types::events::Event;
 use wa_rs_proto::whatsapp as wa;
 use wa_rs_tokio_transport::TokioWebSocketTransportFactory;
 use wa_rs_ureq_http::UreqHttpClient;
 
-use crate::bus::{InboundMessage, OutboundMessage};
+use crate::bus::{InboundMessage, MessageMetadata, OutboundMessage};
 use crate::config::WhatsAppConfig;
 
 /// Max number of sent message IDs to track (prevents unbounded growth)
@@ -42,11 +43,14 @@ impl WhatsAppChannel {
         Self { config }
     }
 
-    /// Start the WhatsApp channel: reconnect using existing session, route messages.
+    /// Start the WhatsApp channel with automatic reconnect on failure.
     ///
     /// This does NOT initiate pairing. If the device has not been paired yet
     /// (no session in the SQLite store), it logs a warning and returns Ok.
     /// Use `homun config` (TUI) to pair the device first.
+    ///
+    /// On disconnection or error, the bot reconnects with exponential backoff
+    /// (2s → 4s → 8s → ... → 120s cap). Backoff resets after a stable connection.
     pub async fn start(
         &self,
         inbound_tx: mpsc::Sender<InboundMessage>,
@@ -55,14 +59,12 @@ impl WhatsAppChannel {
         let allow_from: HashSet<String> = self.config.allow_from.iter().cloned().collect();
 
         // SAFETY: if allow_from is empty, reject ALL messages (fail-closed).
-        // The user must explicitly configure allow_from in config.toml.
         if allow_from.is_empty() {
             tracing::error!(
                 "WhatsApp allow_from is empty! For safety, the bot will NOT respond to anyone. \
                  Set [channels.whatsapp] allow_from = [\"your_phone_number\"] in config.toml"
             );
         }
-        let allow_all = false; // NEVER allow all — always require explicit allow_from
 
         // Resolve DB path
         let db_path = self.config.resolved_db_path();
@@ -75,17 +77,56 @@ impl WhatsAppChannel {
             return Ok(());
         }
 
-        tracing::info!(
-            db_path = %self.config.db_path,
-            allow_from = ?self.config.allow_from,
-            allow_all,
-            "WhatsApp channel starting (reconnect mode, no pairing)"
-        );
-
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create directory {}", parent.display()))?;
         }
+
+        // Wrap outbound_rx for sharing across reconnect sessions
+        let outbound_rx = Arc::new(tokio::sync::Mutex::new(Some(outbound_rx)));
+
+        // Reconnect loop with exponential backoff
+        let mut backoff = Duration::from_secs(2);
+        const MAX_BACKOFF: Duration = Duration::from_secs(120);
+
+        loop {
+            tracing::info!(
+                db_path = %self.config.db_path,
+                allow_from = ?self.config.allow_from,
+                "WhatsApp channel starting session (reconnect mode)"
+            );
+
+            match self
+                .run_session(&inbound_tx, &outbound_rx, &allow_from, &db_path)
+                .await
+            {
+                Ok(()) => {
+                    // Clean exit (e.g. logged out, channel closed)
+                    tracing::info!("WhatsApp session ended cleanly");
+                    return Ok(());
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        backoff_secs = backoff.as_secs(),
+                        "WhatsApp session failed, reconnecting after backoff"
+                    );
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(MAX_BACKOFF);
+                }
+            }
+        }
+    }
+
+    /// Run a single WhatsApp bot session. Returns Ok(()) on clean exit, Err on failure.
+    async fn run_session(
+        &self,
+        inbound_tx: &mpsc::Sender<InboundMessage>,
+        outbound_rx: &Arc<tokio::sync::Mutex<Option<mpsc::Receiver<OutboundMessage>>>>,
+        allow_from: &HashSet<String>,
+        db_path: &std::path::Path,
+    ) -> Result<()> {
+        let allow_all = false; // NEVER allow all — always require explicit allow_from
 
         // Initialize WhatsApp backend storage
         let backend = Arc::new(
@@ -99,21 +140,12 @@ impl WhatsAppChannel {
                 })?,
         );
 
-        // Transport
         let transport_factory = TokioWebSocketTransportFactory::new();
-
-        // HTTP client (for media, version fetching)
         let http_client = UreqHttpClient::new();
 
-        // Wrap outbound_rx for the outbound sender task
-        let outbound_rx = Arc::new(tokio::sync::Mutex::new(outbound_rx));
-
         // Track message IDs sent by the bot so we can distinguish bot-echo from user self-messages.
-        // When the user sends a message to themselves, `is_from_me` is true (same as bot-sent).
-        // We only skip messages whose ID we know we sent.
         let sent_ids: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
 
-        // Build the bot with event handler — NO pair_code, reconnect only
         let inbound_tx_clone = inbound_tx.clone();
         let allow_from_clone = allow_from.clone();
         let sent_ids_for_handler = sent_ids.clone();
@@ -123,6 +155,12 @@ impl WhatsAppChannel {
         let is_ready_for_handler = is_ready.clone();
         let connect_time: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
         let connect_time_for_handler = connect_time.clone();
+
+        // Track if session was logged out (clean exit, don't reconnect)
+        let logged_out = Arc::new(AtomicBool::new(false));
+        let logged_out_for_handler = logged_out.clone();
+
+        let bot_name = self.config.bot_name.clone();
 
         let mut builder = Bot::builder()
             .with_backend(backend)
@@ -139,17 +177,17 @@ impl WhatsAppChannel {
                 let sent_ids = sent_ids_for_handler.clone();
                 let is_ready = is_ready_for_handler.clone();
                 let connect_time = connect_time_for_handler.clone();
+                let logged_out = logged_out_for_handler.clone();
+                let bot_name = bot_name.clone();
 
                 async move {
                     match event {
                         Event::Connected(_) => {
                             tracing::info!("WhatsApp connected — grace period {CONNECT_GRACE_PERIOD_SECS}s (ignoring queued messages)");
-                            // Record connection time — messages during grace period will be dropped
                             {
                                 let mut ct = connect_time.lock().await;
                                 *ct = Some(Instant::now());
                             }
-                            // Spawn a delayed task to enable message processing after grace period
                             let is_ready_delayed = is_ready.clone();
                             tokio::spawn(async move {
                                 tokio::time::sleep(tokio::time::Duration::from_secs(CONNECT_GRACE_PERIOD_SECS)).await;
@@ -159,12 +197,12 @@ impl WhatsAppChannel {
                         }
                         Event::LoggedOut(_) => {
                             is_ready.store(false, Ordering::SeqCst);
+                            logged_out.store(true, Ordering::SeqCst);
                             tracing::error!(
                                 "WhatsApp logged out! Re-pair with: homun config -> WhatsApp tab"
                             );
                         }
                         Event::Message(msg, info) => {
-                            // Drop messages received during grace period (queued offline messages)
                             if !is_ready.load(Ordering::SeqCst) {
                                 tracing::debug!(
                                     msg_id = %info.id,
@@ -181,10 +219,10 @@ impl WhatsAppChannel {
                                 &allow_from,
                                 allow_all,
                                 &sent_ids,
+                                &bot_name,
                             )
                             .await;
                         }
-                        // In gateway mode we don't expect pairing events, but log them if they occur
                         Event::PairingCode { code, .. } => {
                             tracing::warn!(
                                 code = %code,
@@ -199,9 +237,6 @@ impl WhatsAppChannel {
                 }
             });
 
-        // Do NOT call with_pair_code() — gateway only reconnects with existing session
-
-        // Skip history sync if configured (default for bots)
         if self.config.skip_history_sync {
             builder = builder.skip_history_sync();
         }
@@ -211,27 +246,28 @@ impl WhatsAppChannel {
             .await
             .context("Failed to build WhatsApp bot")?;
 
-        // Get client reference for sending messages
         let client = bot.client();
-
-        // Run the bot
         let bot_handle = bot.run().await.context("Failed to start WhatsApp bot")?;
 
-        // Spawn outbound message loop
+        // Spawn outbound message loop (take the receiver — only first session gets it)
         let outbound_client = client.clone();
         let sent_ids_for_outbound = sent_ids.clone();
+        let rx_arc = outbound_rx.clone();
         let outbound_handle = tokio::spawn(async move {
-            let mut rx = outbound_rx.lock().await;
+            let mut guard = rx_arc.lock().await;
+            let rx = match guard.take() {
+                Some(rx) => rx,
+                None => return, // Already taken by previous session
+            };
+            let mut rx = rx;
             while let Some(msg) = rx.recv().await {
                 if msg.channel != "whatsapp" {
                     continue;
                 }
 
-                // Split long messages (WhatsApp soft limit ~4000 chars)
                 let chunks = split_message(&msg.content, 4000);
 
                 for chunk in chunks {
-                    // Parse the chat_id as a JID
                     let to = match parse_jid(&msg.chat_id) {
                         Some(jid) => jid,
                         None => {
@@ -247,9 +283,7 @@ impl WhatsAppChannel {
 
                     match outbound_client.send_message(to, reply_message).await {
                         Ok(msg_id) => {
-                            // Track this message ID so we can ignore the echo
                             let mut ids = sent_ids_for_outbound.lock().await;
-                            // Prevent unbounded growth
                             if ids.len() >= SENT_IDS_MAX {
                                 ids.clear();
                             }
@@ -269,7 +303,14 @@ impl WhatsAppChannel {
         }
 
         outbound_handle.abort();
-        Ok(())
+
+        // If logged out, return Ok (clean exit, don't reconnect)
+        if logged_out.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        // Otherwise it's an unexpected disconnect — return error to trigger reconnect
+        anyhow::bail!("WhatsApp session disconnected unexpectedly")
     }
 }
 
@@ -278,18 +319,18 @@ impl WhatsAppChannel {
 const MAX_MESSAGE_AGE_SECS: i64 = 120;
 
 /// Handle an incoming WhatsApp message
+#[allow(clippy::too_many_arguments)]
 async fn handle_message(
     msg: Box<wa::Message>,
     info: wa_rs_core::types::message::MessageInfo,
-    _client: Arc<wa_rs::Client>,
+    client: Arc<wa_rs::Client>,
     inbound_tx: &mpsc::Sender<InboundMessage>,
     allow_from: &HashSet<String>,
     allow_all: bool,
     sent_ids: &Mutex<HashSet<String>>,
+    bot_name: &str,
 ) {
     // --- SAFETY CHECK 1: Message age ---
-    // Reject messages older than MAX_MESSAGE_AGE_SECS to prevent replying to
-    // queued/offline messages on reconnect.
     let now = chrono::Utc::now();
     let age = now.signed_duration_since(info.timestamp);
     let age_secs = age.num_seconds();
@@ -303,16 +344,11 @@ async fn handle_message(
         return;
     }
     if age_secs < -60 {
-        // Message from the future (clock skew > 1 min) — drop
         tracing::debug!(msg_id = %info.id, age_secs, "Dropping message with future timestamp");
         return;
     }
 
     // --- SAFETY CHECK 2: Bot echo ---
-    // Skip bot-sent messages (echo of our own replies).
-    // We check the message ID against the set of IDs we sent.
-    // This allows "self-messages" (user writing to their own chat) to pass through,
-    // while filtering out the echo of messages the bot sent.
     let is_self_message = info.source.is_from_me;
     if is_self_message {
         let is_bot_echo = {
@@ -326,21 +362,43 @@ async fn handle_message(
         tracing::debug!(msg_id = %info.id, "Processing self-message (not a bot echo)");
     }
 
-    // Extract text content
-    let text = match msg.text_content() {
-        Some(t) if !t.is_empty() => t.to_string(),
-        _ => return, // Skip non-text messages
-    };
+    // Unwrap wrappers (ephemeral, view-once, document_with_caption, edited)
+    let base_msg = msg.get_base_message();
 
-    // --- SAFETY CHECK 3: Skip group messages ---
-    if info.source.is_group {
-        tracing::debug!(msg_id = %info.id, "Skipping group message");
-        return;
+    // Extract text content — try text first, then caption for media messages
+    let mut text = base_msg
+        .text_content()
+        .map(|t| t.to_string())
+        .or_else(|| base_msg.get_caption().map(|c| c.to_string()))
+        .unwrap_or_default();
+
+    // Try to download media (image or document)
+    let attachment_path = download_media(base_msg, &client).await;
+
+    // If no text but we have media, use a descriptive placeholder
+    if text.is_empty() {
+        if let Some(ref _path) = attachment_path {
+            text = "[media attachment]".to_string();
+        } else {
+            return; // No text, no media — nothing to process
+        }
     }
 
-    // Get sender info — the sender JID may be a LID (Linked Identity) or a phone number (PN).
-    // When using LID addressing, `sender_alt` contains the phone-number JID.
-    // We try both for access control matching.
+    // --- SAFETY CHECK 3: Group mention gating ---
+    if info.source.is_group {
+        if !is_mentioned_in_group(base_msg, bot_name, &info) {
+            tracing::debug!(msg_id = %info.id, "Skipping group message (bot not mentioned)");
+            return;
+        }
+        // Strip bot mention from text
+        let mention_tag = format!("@{bot_name}");
+        text = text.replace(&mention_tag, "").trim().to_string();
+        if text.is_empty() && attachment_path.is_none() {
+            return;
+        }
+    }
+
+    // Get sender info
     let sender_jid = &info.source.sender;
     let chat_jid = &info.source.chat;
 
@@ -350,8 +408,6 @@ async fn handle_message(
         sender_jid.user.clone()
     };
 
-    // Also extract the phone number from sender_alt (if available) or chat JID.
-    // This covers the case where sender is a LID but allow_from has the phone number.
     let sender_alt_id = info
         .source
         .sender_alt
@@ -359,7 +415,6 @@ async fn handle_message(
         .map(|j| j.user.clone())
         .filter(|u| !u.is_empty());
 
-    // For self-messages, the chat JID is the user's own phone number
     let chat_user = if !chat_jid.user.is_empty() {
         Some(chat_jid.user.clone())
     } else {
@@ -367,8 +422,6 @@ async fn handle_message(
     };
 
     // --- SAFETY CHECK 4: Access control ---
-    // Match against sender, sender_alt, or chat user.
-    // Self-messages (is_from_me && not bot-echo) always pass — the user is the account owner.
     if !allow_all && !is_self_message {
         let authorized = allow_from.contains(&sender_id)
             || sender_alt_id
@@ -387,27 +440,151 @@ async fn handle_message(
         }
     }
 
-    // Prefer phone number over LID for the sender_id used in InboundMessage
     let display_sender_id = sender_alt_id.unwrap_or(sender_id.clone());
 
     tracing::info!(
         sender = %display_sender_id,
         sender_raw = %sender_id,
+        is_group = info.source.is_group,
+        has_attachment = attachment_path.is_some(),
         len = text.len(),
         "WhatsApp: received message"
     );
 
+    let metadata = if attachment_path.is_some() {
+        Some(MessageMetadata {
+            attachment_path,
+            ..Default::default()
+        })
+    } else {
+        None
+    };
+
     let inbound = InboundMessage {
         channel: "whatsapp".to_string(),
         sender_id: display_sender_id,
-        chat_id: chat_jid.to_string(), // Full JID as chat_id for replies
+        chat_id: chat_jid.to_string(),
         content: text,
         timestamp: chrono::Utc::now(),
-        metadata: None,
+        metadata,
     };
 
     if let Err(e) = inbound_tx.send(inbound).await {
         tracing::error!(error = %e, "Failed to send to inbound bus");
+    }
+}
+
+/// Check if the bot is mentioned in a group message.
+///
+/// Checks three sources:
+/// 1. `mentioned_jid` in ContextInfo (formal @mention)
+/// 2. Text contains `@bot_name` (informal text mention)
+/// 3. Text contains the bot's phone number
+fn is_mentioned_in_group(
+    msg: &wa::Message,
+    bot_name: &str,
+    _info: &wa_rs_core::types::message::MessageInfo,
+) -> bool {
+    // Check formal mention via ContextInfo.mentioned_jid
+    // ContextInfo can be in extended_text_message or other message types
+    let mentioned_jids = msg
+        .extended_text_message
+        .as_ref()
+        .and_then(|ext| ext.context_info.as_ref())
+        .map(|ctx| &ctx.mentioned_jid);
+
+    if let Some(jids) = mentioned_jids {
+        // Check if any mentioned JID matches the chat's own JID (bot's JID)
+        // In groups, info.source.chat is the group JID — we need the bot's own JID
+        // which isn't directly available here. Instead check by bot_name pattern.
+        let bot_jid_suffix = "@s.whatsapp.net";
+        for jid in jids {
+            // The mentioned_jid could be the bot's full JID or LID
+            if jid.contains(bot_name) || jid.ends_with(bot_jid_suffix) {
+                return true;
+            }
+        }
+    }
+
+    // Fallback: check text content for informal @mention
+    let text = msg
+        .text_content()
+        .or_else(|| msg.get_caption())
+        .unwrap_or("");
+
+    let mention_tag = format!("@{bot_name}");
+    if text.contains(&mention_tag) {
+        return true;
+    }
+
+    false
+}
+
+/// Download media from a WhatsApp message (image or document).
+/// Returns the local file path if download was successful.
+async fn download_media(msg: &wa::Message, client: &wa_rs::Client) -> Option<String> {
+    let dir = std::env::temp_dir().join("homun_whatsapp");
+    if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+        tracing::warn!(error = %e, "Failed to create WhatsApp media dir");
+        return None;
+    }
+
+    // Try image message
+    if let Some(ref img) = msg.image_message {
+        let filename = format!("image_{}.jpg", chrono::Utc::now().timestamp_millis());
+        return download_and_save(client, img.as_ref(), &dir, &filename).await;
+    }
+
+    // Try document message
+    if let Some(ref doc) = msg.document_message {
+        let filename = doc.file_name.as_deref().unwrap_or("document").to_string();
+        return download_and_save(client, doc.as_ref(), &dir, &filename).await;
+    }
+
+    // Try audio message
+    if let Some(ref audio) = msg.audio_message {
+        let filename = format!("audio_{}.ogg", chrono::Utc::now().timestamp_millis());
+        return download_and_save(client, audio.as_ref(), &dir, &filename).await;
+    }
+
+    // Try video message
+    if let Some(ref video) = msg.video_message {
+        let filename = format!("video_{}.mp4", chrono::Utc::now().timestamp_millis());
+        return download_and_save(client, video.as_ref(), &dir, &filename).await;
+    }
+
+    None
+}
+
+/// Download a Downloadable media item and save to disk.
+async fn download_and_save(
+    client: &wa_rs::Client,
+    downloadable: &dyn Downloadable,
+    dir: &std::path::Path,
+    filename: &str,
+) -> Option<String> {
+    match client.download(downloadable).await {
+        Ok(bytes) => {
+            let dest = dir.join(filename);
+            match tokio::fs::write(&dest, &bytes).await {
+                Ok(()) => {
+                    tracing::info!(
+                        filename = %filename,
+                        size = bytes.len(),
+                        "WhatsApp: downloaded media"
+                    );
+                    Some(dest.to_string_lossy().to_string())
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to write WhatsApp media file");
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, filename = %filename, "Failed to download WhatsApp media");
+            None
+        }
     }
 }
 

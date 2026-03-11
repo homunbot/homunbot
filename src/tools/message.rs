@@ -76,6 +76,7 @@ impl Tool for MessageTool {
             channel: channel.clone(),
             chat_id: chat_id.clone(),
             content,
+            metadata: None,
         };
 
         match tx.send(outbound).await {

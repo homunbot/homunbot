@@ -10,7 +10,7 @@ use serenity::model::id::ChannelId;
 use serenity::prelude::*;
 use tokio::sync::mpsc;
 
-use crate::bus::{InboundMessage, OutboundMessage};
+use crate::bus::{InboundMessage, MessageMetadata, OutboundMessage};
 use crate::config::DiscordConfig;
 
 /// Discord channel — bot via serenity.
@@ -112,6 +112,31 @@ impl EventHandler for Handler {
         }
 
         let mut text = msg.content.clone();
+
+        // Download first attachment (if any)
+        let attachment_path = if let Some(attachment) = msg.attachments.first() {
+            match download_discord_attachment(attachment).await {
+                Ok(path) => {
+                    tracing::info!(
+                        filename = %attachment.filename,
+                        size = attachment.size,
+                        "Discord: downloaded attachment"
+                    );
+                    // If no text, use filename as content
+                    if text.is_empty() {
+                        text = format!("[document] {}", attachment.filename);
+                    }
+                    Some(path)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Discord: failed to download attachment");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         if text.is_empty() {
             return;
         }
@@ -169,13 +194,22 @@ impl EventHandler for Handler {
         // Send typing indicator
         let _ = ctx.http.broadcast_typing(msg.channel_id).await;
 
+        let metadata = if attachment_path.is_some() {
+            Some(MessageMetadata {
+                attachment_path,
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+
         let inbound = InboundMessage {
             channel: "discord".to_string(),
             sender_id,
             chat_id: chat_id.clone(),
             content: text,
             timestamp: chrono::Utc::now(),
-            metadata: None,
+            metadata,
         };
 
         if let Err(e) = self.inbound_tx.send(inbound).await {
@@ -190,6 +224,12 @@ impl EventHandler for Handler {
             {
                 tracing::error!(error = %e2, "Failed to send error message");
             }
+            return;
+        }
+
+        // React with checkmark to acknowledge receipt
+        if let Err(e) = msg.react(&ctx.http, '✅').await {
+            tracing::debug!(error = %e, "Discord: failed to add reaction ACK");
         }
     }
 
@@ -276,6 +316,30 @@ fn split_message(text: &str, max_len: usize) -> Vec<String> {
     }
 
     chunks
+}
+
+/// Download a Discord attachment to a temp directory.
+async fn download_discord_attachment(
+    attachment: &serenity::model::channel::Attachment,
+) -> Result<String> {
+    let dir = std::env::temp_dir().join("homun_discord");
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create Discord attachment dir: {e}"))?;
+
+    let bytes = reqwest::get(&attachment.url)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to download attachment: {e}"))?
+        .bytes()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read attachment bytes: {e}"))?;
+
+    let dest = dir.join(&attachment.filename);
+    tokio::fs::write(&dest, &bytes)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to write attachment: {e}"))?;
+
+    Ok(dest.to_string_lossy().to_string())
 }
 
 #[cfg(test)]

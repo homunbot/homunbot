@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use super::traits::Channel;
-use crate::bus::{InboundMessage, OutboundMessage};
+use crate::bus::{InboundMessage, MessageMetadata, OutboundMessage};
 use crate::config::SlackConfig;
 
 /// Slack channel implementation using Web API polling
@@ -207,9 +207,17 @@ impl Channel for SlackChannel {
         let client = self.client.clone();
         let _outbound_handle = tokio::spawn(async move {
             while let Some(msg) = outbound_rx.recv().await {
-                match send_slack_message(&client, &token, &msg.chat_id, &msg.content, None).await {
+                // Extract thread_ts from outbound metadata for threaded replies
+                let thread_ts = msg.metadata.as_ref().and_then(|m| m.thread_id.as_deref());
+                match send_slack_message(&client, &token, &msg.chat_id, &msg.content, thread_ts)
+                    .await
+                {
                     Ok(()) => {
-                        tracing::debug!("Sent message to Slack channel {}", msg.chat_id);
+                        tracing::debug!(
+                            channel = %msg.chat_id,
+                            threaded = thread_ts.is_some(),
+                            "Sent Slack message"
+                        );
                     }
                     Err(e) => {
                         tracing::warn!("Failed to send Slack message: {}", e);
@@ -342,14 +350,19 @@ impl Channel for SlackChannel {
                         // Update last seen timestamp
                         last_ts_by_channel.insert(channel_id.clone(), ts.to_string());
 
-                        // Build inbound message
+                        // Build inbound message (thread context for reply routing)
+                        let metadata = msg.thread_ts.as_ref().map(|ts| MessageMetadata {
+                            thread_id: Some(ts.clone()),
+                            ..Default::default()
+                        });
+
                         let inbound = InboundMessage {
                             channel: "slack".to_string(),
                             chat_id: channel_id.clone(),
                             sender_id: user.to_string(),
                             content,
                             timestamp: Utc::now(),
-                            metadata: None,
+                            metadata,
                         };
 
                         tracing::info!(
