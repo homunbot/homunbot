@@ -12,6 +12,8 @@ use crate::security::PairingManager;
 use crate::session::SessionManager;
 use crate::storage::{AutomationUpdate, Database, EmailPendingRow};
 use crate::utils::strip_reasoning;
+use crate::workflows::engine::WorkflowEngine;
+use crate::workflows::WorkflowEvent;
 use tokio::sync::RwLock;
 
 use super::email_approval::{ApprovalAction, EmailApprovalHandler};
@@ -65,6 +67,15 @@ pub struct Gateway {
     web_stream_tx: Option<mpsc::Sender<StreamMessage>>,
     /// Database handle passed to the web server for memory/vault APIs
     db: Database,
+    /// Provider health tracker for circuit breaker metrics (shared with web UI)
+    health_tracker: Option<Arc<crate::provider::ProviderHealthTracker>>,
+    /// Emergency stop handles — shared between gateway and web UI
+    estop_handles: Arc<tokio::sync::RwLock<crate::security::EStopHandles>>,
+    /// Workflow engine + event receiver for persistent multi-step tasks
+    workflow_engine: Option<Arc<WorkflowEngine>>,
+    workflow_event_rx: Option<mpsc::Receiver<WorkflowEvent>>,
+    /// Business engine for autonomous business management
+    business_engine: Option<Arc<crate::business::engine::BusinessEngine>>,
 }
 
 impl Gateway {
@@ -85,12 +96,44 @@ impl Gateway {
             tool_message_rx: None,
             web_stream_tx: None,
             db,
+            health_tracker: None,
+            estop_handles: Arc::new(tokio::sync::RwLock::new(
+                crate::security::EStopHandles::default(),
+            )),
+            workflow_engine: None,
+            workflow_event_rx: None,
+            business_engine: None,
         }
     }
 
     /// Set the receiver for tool-originated messages (from MessageTool)
     pub fn set_tool_message_rx(&mut self, rx: mpsc::Receiver<OutboundMessage>) {
         self.tool_message_rx = Some(rx);
+    }
+
+    /// Set the provider health tracker for circuit breaker + web UI metrics.
+    pub fn set_health_tracker(&mut self, tracker: Arc<crate::provider::ProviderHealthTracker>) {
+        self.health_tracker = Some(tracker);
+    }
+
+    /// Set the workflow engine and its event receiver.
+    pub fn set_workflow_engine(
+        &mut self,
+        engine: Arc<WorkflowEngine>,
+        event_rx: mpsc::Receiver<WorkflowEvent>,
+    ) {
+        self.workflow_engine = Some(engine);
+        self.workflow_event_rx = Some(event_rx);
+    }
+
+    /// Set the business engine for autonomous business management.
+    pub fn set_business_engine(&mut self, engine: Arc<crate::business::engine::BusinessEngine>) {
+        self.business_engine = Some(engine);
+    }
+
+    /// Get the estop handles Arc (for populating from main.rs after gateway creation).
+    pub fn estop_handles(&self) -> Arc<tokio::sync::RwLock<crate::security::EStopHandles>> {
+        self.estop_handles.clone()
     }
 
     /// Start the gateway — runs all channels + cron + agent loop.
@@ -283,17 +326,37 @@ impl Gateway {
             self.web_stream_tx = Some(stream_tx);
 
             let web_db = self.db.clone();
+            let web_health_tracker = self.health_tracker.clone();
+            let web_workflow_engine = self.workflow_engine.clone();
+            let web_business_engine = self.business_engine.clone();
+            let web_estop_handles = self.estop_handles.clone();
             // Share the memory searcher with the web server for hybrid search API
             #[cfg(feature = "local-embeddings")]
             let web_memory_searcher = self.agent.memory_searcher_handle();
+            #[cfg(feature = "local-embeddings")]
+            let web_rag_engine = self.agent.rag_engine_handle();
 
             let handle = tokio::spawn(async move {
                 let mut server =
                     WebServer::new(shared_config, web_inbound_tx, web_outbound_rx, web_db);
                 server.set_stream_rx(stream_rx);
+                if let Some(tracker) = web_health_tracker {
+                    server.set_health_tracker(tracker);
+                }
+                if let Some(wf_engine) = web_workflow_engine {
+                    server.set_workflow_engine(wf_engine);
+                }
+                if let Some(biz_engine) = web_business_engine {
+                    server.set_business_engine(biz_engine);
+                }
+                server.set_estop_handles(web_estop_handles);
                 #[cfg(feature = "local-embeddings")]
                 if let Some(searcher) = web_memory_searcher {
                     server.set_memory_searcher(searcher);
+                }
+                #[cfg(feature = "local-embeddings")]
+                if let Some(rag) = web_rag_engine {
+                    server.set_rag_engine(rag);
                 }
                 if let Err(e) = server.start().await {
                     tracing::error!(error = %e, "Web UI server error");
@@ -340,6 +403,26 @@ impl Gateway {
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "Memory cleanup failed (non-fatal)");
+                }
+            }
+            match crate::web::api::cleanup_chat_upload_dirs(
+                &self.db,
+                mem_config.conversation_retention_days,
+            )
+            .await
+            {
+                Ok(stats) => {
+                    if stats.files_deleted > 0 || stats.directories_deleted > 0 {
+                        tracing::info!(
+                            files = stats.files_deleted,
+                            directories = stats.directories_deleted,
+                            bytes = stats.bytes_deleted,
+                            "Chat upload cleanup completed"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Chat upload cleanup failed (non-fatal)");
                 }
             }
         }
@@ -452,15 +535,21 @@ impl Gateway {
         // --- Email approval handler ---
         let approval_handler = EmailApprovalHandler::new(self.db.clone(), &email_notify_routes);
 
+        // --- RAG engine handle for file ingestion ---
+        #[cfg(feature = "local-embeddings")]
+        let routing_rag_engine = self.agent.rag_engine_handle();
+
         // --- Main message routing loop ---
         let agent = self.agent.clone();
         let senders_for_routing = outbound_senders.clone();
         let web_stream_tx = self.web_stream_tx.take();
+        let web_stream_tx_for_wf = web_stream_tx.clone();
         let routing_db = self.db.clone();
 
         let routing_loop = tokio::spawn(async move {
             let approval_handler = std::sync::Arc::new(approval_handler);
-            while let Some(inbound) = inbound_rx.recv().await {
+            #[allow(unused_mut)] // `inbound` is mutated inside #[cfg(feature = "local-embeddings")]
+            while let Some(mut inbound) = inbound_rx.recv().await {
                 let session_key = inbound
                     .metadata
                     .as_ref()
@@ -692,6 +781,95 @@ impl Gateway {
                     }
                 }
 
+                // --- RAG file ingestion ---
+                // If the message has an attachment_path, ingest it into the knowledge base
+                // and notify the user.  When the user sends a file without a caption we
+                // skip the agent loop (the confirmation is enough).  When a caption is
+                // present we rewrite the message to hint the agent to use the knowledge tool.
+                #[cfg(feature = "local-embeddings")]
+                {
+                    let mut rag_skip_agent = false;
+                    if let Some(ref path) = inbound
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.attachment_path.clone())
+                    {
+                        if let Some(ref rag_mutex) = routing_rag_engine {
+                            let file_path = std::path::PathBuf::from(path);
+                            let file_name = file_path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_else(|| path.clone());
+                            let mut rag = rag_mutex.lock().await;
+                            match rag.ingest_file(&file_path, "telegram").await {
+                                Ok(Some(source_id)) => {
+                                    tracing::info!(source_id, file = %file_name, "RAG ingested Telegram file");
+                                    let confirm = OutboundMessage {
+                                        channel: channel_name.clone(),
+                                        chat_id: chat_id.clone(),
+                                        content: format!(
+                                            "📄 Indexed \"{file_name}\" into knowledge base."
+                                        ),
+                                    };
+                                    route_outbound(confirm, &senders_for_routing).await;
+
+                                    // If message content is just the filename (no user caption),
+                                    // skip the agent loop — the confirmation is sufficient.
+                                    let content_trimmed = inbound.content.trim();
+                                    if content_trimmed == file_name
+                                        || content_trimmed == "[document]"
+                                    {
+                                        rag_skip_agent = true;
+                                    } else {
+                                        // User wrote a caption — rewrite content with a hint so the
+                                        // agent knows to use the knowledge tool.
+                                        inbound.content = format!(
+                                            "[The file \"{file_name}\" has been indexed in the knowledge base (source_id={source_id}). \
+                                             Use the knowledge tool with action=\"search\" to retrieve its content.]\n\n{}",
+                                            inbound.content
+                                        );
+                                    }
+                                }
+                                Ok(None) => {
+                                    // Duplicate file
+                                    let confirm = OutboundMessage {
+                                        channel: channel_name.clone(),
+                                        chat_id: chat_id.clone(),
+                                        content: format!("📄 \"{file_name}\" already in knowledge base (duplicate)."),
+                                    };
+                                    route_outbound(confirm, &senders_for_routing).await;
+                                    let content_trimmed = inbound.content.trim();
+                                    if content_trimmed == file_name
+                                        || content_trimmed == "[document]"
+                                    {
+                                        rag_skip_agent = true;
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e, file = %file_name, "RAG ingestion failed");
+                                    let confirm = OutboundMessage {
+                                        channel: channel_name.clone(),
+                                        chat_id: chat_id.clone(),
+                                        content: format!("❌ Failed to index \"{file_name}\": {e}"),
+                                    };
+                                    route_outbound(confirm, &senders_for_routing).await;
+                                    let content_trimmed = inbound.content.trim();
+                                    if content_trimmed == file_name
+                                        || content_trimmed == "[document]"
+                                    {
+                                        rag_skip_agent = true;
+                                    }
+                                }
+                            }
+                            // Clean up the temp file
+                            let _ = tokio::fs::remove_file(&file_path).await;
+                        }
+                    }
+                    if rag_skip_agent {
+                        continue;
+                    }
+                }
+
                 // --- Email assisted/approval routing ---
                 // If the email requires approval, route the agent's response to the
                 // notify channel (e.g. Telegram) instead of back to the email sender.
@@ -751,6 +929,7 @@ impl Gateway {
                 } else {
                     &[]
                 };
+                let thinking_override = inbound_metadata.as_ref().and_then(|m| m.thinking_override);
 
                 // Process through agent loop (spawned per-message)
                 let agent = agent.clone();
@@ -781,13 +960,14 @@ impl Gateway {
                             });
 
                             let result = agent
-                                .process_message_streaming_with_blocked_tools(
+                                .process_message_streaming_with_options(
                                     &inbound.content,
                                     &session_key,
                                     &channel_name,
                                     &chat_id,
                                     chunk_tx,
                                     blocked_tools,
+                                    thinking_override,
                                 )
                                 .await;
 
@@ -1099,6 +1279,62 @@ impl Gateway {
             None
         };
 
+        // --- Workflow event loop: forward workflow notifications to channels ---
+        let workflow_loop = if let (Some(engine), Some(mut wf_rx)) =
+            (self.workflow_engine.take(), self.workflow_event_rx.take())
+        {
+            let senders_for_wf = outbound_senders.clone();
+            // Resume workflows that were interrupted by previous shutdown
+            let engine_for_resume = engine.clone();
+            tokio::spawn(async move {
+                match engine_for_resume.resume_on_startup().await {
+                    Ok(n) if n > 0 => {
+                        tracing::info!(count = n, "Resumed workflows from previous session");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to resume workflows on startup");
+                    }
+                    _ => {}
+                }
+            });
+
+            let stream_tx_wf = web_stream_tx_for_wf.clone();
+            Some(tokio::spawn(async move {
+                while let Some(event) = wf_rx.recv().await {
+                    let notification = event.format_notification();
+                    if let Some(deliver_to) = event.deliver_to() {
+                        if let Some((channel, chat_id)) = deliver_to.rsplit_once(':') {
+                            // For web channel: also send structured progress event
+                            if channel == "web" {
+                                if let Some(ref stx) = stream_tx_wf {
+                                    let progress = event.to_progress_json();
+                                    let _ = stx
+                                        .send(crate::bus::StreamMessage {
+                                            chat_id: chat_id.to_string(),
+                                            delta: progress.to_string(),
+                                            done: false,
+                                            event_type: Some("workflow_progress".to_string()),
+                                            tool_call_data: None,
+                                        })
+                                        .await;
+                                }
+                            }
+
+                            // Send text notification to all channels
+                            let outbound = OutboundMessage {
+                                channel: channel.to_string(),
+                                chat_id: chat_id.to_string(),
+                                content: notification,
+                            };
+                            route_outbound(outbound, &senders_for_wf).await;
+                        }
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+
         // Wait for Ctrl+C — first signal triggers graceful shutdown,
         // second signal forces immediate exit.
         tokio::signal::ctrl_c().await?;
@@ -1109,6 +1345,9 @@ impl Gateway {
         routing_loop.abort();
         cron_loop.abort();
         if let Some(handle) = tool_msg_loop {
+            handle.abort();
+        }
+        if let Some(handle) = workflow_loop {
             handle.abort();
         }
 

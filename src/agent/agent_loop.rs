@@ -17,7 +17,9 @@ use crate::skills::{loader::SkillRegistry, suggest_mcp_presets, McpServerPreset}
 use crate::storage::Database;
 use crate::tools::{ToolContext, ToolRegistry};
 
+use super::browser_task_plan::{BrowserRoutingDecision, BrowserTaskPlanState};
 use super::context::ContextBuilder;
+use super::execution_plan::{ExecutionPlanSnapshot, ExecutionPlanState};
 use super::memory::MemoryConsolidator;
 use super::verifier::{verify_actions, VerificationResult};
 
@@ -47,7 +49,9 @@ pub struct AgentLoop {
     config: Arc<RwLock<Config>>,
     context: ContextBuilder,
     session_manager: SessionManager,
-    tool_registry: ToolRegistry,
+    /// Tool registry — wrapped in Arc<RwLock> so MCP tools can be registered
+    /// in the background after the gateway has already started.
+    tool_registry: Arc<RwLock<ToolRegistry>>,
     memory: Arc<MemoryConsolidator>,
     /// Sender for proactive messages (set in Gateway mode)
     message_tx: Option<mpsc::Sender<OutboundMessage>>,
@@ -57,15 +61,121 @@ pub struct AgentLoop {
     /// Arc-wrapped so it can be shared with background consolidation tasks.
     /// Only functional with `local-embeddings` feature - dummy otherwise.
     memory_searcher: Option<Arc<tokio::sync::Mutex<MemorySearcher>>>,
+    /// Optional RAG engine for knowledge base search.
+    /// Shared with KnowledgeTool and web API.
+    #[cfg(feature = "local-embeddings")]
+    rag_engine: Option<Arc<tokio::sync::Mutex<crate::rag::RagEngine>>>,
     /// Set to true when the model doesn't support native function calling.
     /// Auto-detected on first error — tools are then injected into the system
     /// prompt as XML and parsed from the LLM's text response.
     use_xml_dispatch: AtomicBool,
     /// Database handle for token usage tracking.
     db: Database,
+    /// Shared browser session state for continuation hints and idle cleanup.
+    /// Wrapped in RwLock so MCP background startup can inject it after Arc wrapping.
+    #[cfg(feature = "mcp")]
+    browser_session: RwLock<Option<Arc<crate::tools::browser::BrowserSession>>>,
+}
+
+#[derive(Debug, Clone)]
+struct ToolExecutionSummary {
+    name: String,
+    signature: String,
+    useful: bool,
+}
+
+#[derive(Debug, Default)]
+struct IterationBudgetState {
+    last_signature: Option<String>,
+    stall_streak: u8,
+    extensions_used: u8,
+}
+
+/// Information returned when a skill is activated via tool call.
+///
+/// Contains the enriched skill body with variable substitution,
+/// directory info, available scripts/references, and metadata.
+struct ActivatedSkill {
+    /// Skill body with variables substituted ($ARGUMENTS, ${SKILL_DIR})
+    body: String,
+    /// Absolute path to the skill directory
+    skill_dir: std::path::PathBuf,
+    /// Available scripts in the skill's scripts/ directory
+    scripts: Vec<String>,
+    /// Available reference files in references/
+    references: Vec<String>,
+    /// Allowed tools restriction from frontmatter (if set)
+    allowed_tools: Option<String>,
+    /// Required binary dependencies from metadata.openclaw.requires.bins
+    required_bins: Vec<String>,
+}
+
+/// Check required binaries synchronously and return warning text.
+fn check_required_bins_sync(bins: &[String]) -> String {
+    if bins.is_empty() {
+        return String::new();
+    }
+
+    let mut warnings = String::new();
+    for bin in bins {
+        let found = std::process::Command::new("which")
+            .arg(bin)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !found {
+            warnings.push_str(&format!(
+                "⚠ Required binary '{bin}' not found. Install it before using this skill.\n"
+            ));
+        }
+    }
+    warnings
+}
+
+async fn emit_plan_update(
+    stream_tx: Option<&mpsc::Sender<crate::provider::StreamChunk>>,
+    plan: &ExecutionPlanSnapshot,
+    last_payload: &mut Option<String>,
+) {
+    let Some(tx) = stream_tx else {
+        return;
+    };
+    let Ok(payload) = serde_json::to_string(plan) else {
+        return;
+    };
+    if last_payload.as_deref() == Some(payload.as_str()) {
+        return;
+    }
+    *last_payload = Some(payload.clone());
+    let _ = tx
+        .send(crate::provider::StreamChunk {
+            delta: payload,
+            done: false,
+            event_type: Some("plan".to_string()),
+            tool_call_data: None,
+        })
+        .await;
+}
+
+fn merged_execution_snapshot(
+    execution_plan: &ExecutionPlanState,
+    browser_task_plan: &BrowserTaskPlanState,
+) -> ExecutionPlanSnapshot {
+    browser_task_plan.merged_snapshot(execution_plan.snapshot())
 }
 
 impl AgentLoop {
+    async fn cancel_browser_tool_if_needed(tool_name: &str, _chat_id: &str) {
+        // With MCP-based browser, the MCP server manages browser lifecycle.
+        // On stop, we log but don't need manual process cleanup.
+        #[cfg(feature = "browser")]
+        if crate::browser::is_browser_tool(tool_name) {
+            tracing::debug!(tool = %tool_name, "Browser tool cancelled (MCP server manages cleanup)");
+        }
+    }
+
     pub async fn new(
         provider: Arc<dyn Provider>,
         config: Arc<RwLock<Config>>,
@@ -109,13 +219,17 @@ impl AgentLoop {
             config,
             context,
             session_manager,
-            tool_registry,
+            tool_registry: Arc::new(RwLock::new(tool_registry)),
             memory,
             message_tx: None,
             skill_registry: None,
             memory_searcher: None,
+            #[cfg(feature = "local-embeddings")]
+            rag_engine: None,
             use_xml_dispatch: AtomicBool::new(use_xml_dispatch),
             db,
+            #[cfg(feature = "mcp")]
+            browser_session: RwLock::new(None),
         }
     }
 
@@ -123,6 +237,32 @@ impl AgentLoop {
     /// Called by the Gateway after constructing the routing table.
     pub fn set_message_tx(&mut self, tx: mpsc::Sender<OutboundMessage>) {
         self.message_tx = Some(tx);
+    }
+
+    /// Set the shared browser session for continuation hints and idle cleanup.
+    /// Takes &self (not &mut) so it can be called after Arc wrapping (deferred MCP startup).
+    #[cfg(feature = "mcp")]
+    pub async fn set_browser_session(&self, session: Arc<crate::tools::browser::BrowserSession>) {
+        *self.browser_session.write().await = Some(session);
+    }
+
+    /// Register tools into the shared registry after the AgentLoop has been created.
+    /// Used for deferred MCP tool registration — MCP servers connect in the background
+    /// and their tools are injected here once discovery completes.
+    pub async fn register_deferred_tools(&self, tools: Vec<Box<dyn crate::tools::Tool>>) {
+        let mut registry = self.tool_registry.write().await;
+        let count = tools.len();
+        for tool in tools {
+            registry.register(tool);
+        }
+        if count > 0 {
+            tracing::info!(tools = count, "Deferred tools registered into agent");
+        }
+    }
+
+    /// Get a clone of the tool registry Arc for deferred registration from outside.
+    pub fn tool_registry_handle(&self) -> Arc<RwLock<ToolRegistry>> {
+        self.tool_registry.clone()
     }
 
     /// Inject skills summary into the system prompt.
@@ -175,6 +315,19 @@ impl AgentLoop {
         self.memory_searcher.clone()
     }
 
+    /// Set the RAG knowledge base engine.
+    /// When set, each user message triggers a search for relevant knowledge base content.
+    #[cfg(feature = "local-embeddings")]
+    pub fn set_rag_engine(&mut self, engine: Arc<tokio::sync::Mutex<crate::rag::RagEngine>>) {
+        self.rag_engine = Some(engine);
+    }
+
+    /// Get a clone of the shared RAG engine handle (for sharing with the web server).
+    #[cfg(feature = "local-embeddings")]
+    pub fn rag_engine_handle(&self) -> Option<Arc<tokio::sync::Mutex<crate::rag::RagEngine>>> {
+        self.rag_engine.clone()
+    }
+
     /// Set registered tool names so the system prompt can include routing rules
     /// even in native function calling mode (where ctx.tools is empty).
     pub fn set_registered_tool_names(&mut self, names: Vec<String>) {
@@ -207,7 +360,7 @@ impl AgentLoop {
         channel: &str,
         chat_id: &str,
     ) -> Result<String> {
-        self.process_message_inner(content, session_key, channel, chat_id, None, &[])
+        self.process_message_inner(content, session_key, channel, chat_id, None, &[], None)
             .await
     }
 
@@ -221,8 +374,16 @@ impl AgentLoop {
         chat_id: &str,
         blocked_tools: &[&str],
     ) -> Result<String> {
-        self.process_message_inner(content, session_key, channel, chat_id, None, blocked_tools)
-            .await
+        self.process_message_inner(
+            content,
+            session_key,
+            channel,
+            chat_id,
+            None,
+            blocked_tools,
+            None,
+        )
+        .await
     }
 
     /// Process a message with optional streaming output.
@@ -235,12 +396,21 @@ impl AgentLoop {
         chat_id: &str,
         stream_tx: mpsc::Sender<crate::provider::StreamChunk>,
     ) -> Result<String> {
-        self.process_message_inner(content, session_key, channel, chat_id, Some(stream_tx), &[])
-            .await
+        self.process_message_inner(
+            content,
+            session_key,
+            channel,
+            chat_id,
+            Some(stream_tx),
+            &[],
+            None,
+        )
+        .await
     }
 
-    /// Streaming variant with per-request blocked tools.
-    pub async fn process_message_streaming_with_blocked_tools(
+    /// Streaming variant with per-request blocked tools and optional thinking override.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn process_message_streaming_with_options(
         &self,
         content: &str,
         session_key: &str,
@@ -248,6 +418,7 @@ impl AgentLoop {
         chat_id: &str,
         stream_tx: mpsc::Sender<crate::provider::StreamChunk>,
         blocked_tools: &[&str],
+        thinking_override: Option<bool>,
     ) -> Result<String> {
         self.process_message_inner(
             content,
@@ -256,10 +427,12 @@ impl AgentLoop {
             chat_id,
             Some(stream_tx),
             blocked_tools,
+            thinking_override,
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn process_message_inner(
         &self,
         content: &str,
@@ -268,6 +441,7 @@ impl AgentLoop {
         chat_id: &str,
         stream_tx: Option<mpsc::Sender<crate::provider::StreamChunk>>,
         blocked_tools: &[&str],
+        thinking_override: Option<bool>,
     ) -> Result<String> {
         crate::agent::stop::clear_stop();
         let blocked_set: HashSet<&str> = blocked_tools.iter().copied().collect();
@@ -275,11 +449,21 @@ impl AgentLoop {
         // Snapshot config for this request — picks up any changes from web UI.
         // Clone + drop lock immediately to avoid holding across LLM calls.
         let config = self.config.read().await.clone();
+        let prepared_turn =
+            crate::agent::attachment_router::prepare_turn(&config, content, stream_tx.as_ref())
+                .await?;
+        let prompt_content = prepared_turn
+            .user_message
+            .rendered_text()
+            .unwrap_or_default();
+        let browser_routing = BrowserRoutingDecision::from_prompt(&prompt_content);
+        let selected_model = prepared_turn.selected_model.clone();
+        let using_primary_model = selected_model == config.agent.model;
 
         // Lazy provider rebuild: if the model changed (e.g. user switched model
         // in the web UI), recreate the entire provider chain so the correct
         // backend (Anthropic, OpenAI-compat, Ollama) is used.
-        {
+        if using_primary_model {
             let current_model = self.provider_model.read().await;
             if *current_model != config.agent.model {
                 let new_model = config.agent.model.clone();
@@ -319,8 +503,55 @@ impl AgentLoop {
             }
         }
 
+        self.context.set_model_name(selected_model.clone()).await;
+
+        if let Some(ref tx) = stream_tx {
+            let _ = tx
+                .send(crate::provider::StreamChunk {
+                    delta: selected_model.clone(),
+                    done: false,
+                    event_type: Some("model".to_string()),
+                    tool_call_data: None,
+                })
+                .await;
+        }
+
         // Get the current provider for this request (clone the Arc, release lock)
-        let provider = self.provider.read().await.clone();
+        let disable_fallbacks = prepared_turn.selected_provider_mode
+            == crate::agent::attachment_router::SelectedProviderMode::Multimodal;
+        let provider = if using_primary_model && !disable_fallbacks {
+            self.provider.read().await.clone()
+        } else if disable_fallbacks {
+            crate::provider::factory::create_provider_for_model_without_fallbacks(
+                &config,
+                &selected_model,
+            )?
+        } else {
+            crate::provider::factory::create_provider_for_model(&config, &selected_model)?
+        };
+        let provider_name = config
+            .resolve_provider(&selected_model)
+            .map(|(name, _)| name)
+            .unwrap_or("unknown");
+        let selected_capabilities = config
+            .agent
+            .effective_model_capabilities(provider_name, &selected_model);
+
+        // Thinking preference is resolved below, after tool_defs are built,
+        // so we can suppress thinking when tools are available.
+        let thinking_pref = match thinking_override {
+            Some(val) => Some(val),
+            None => {
+                if selected_capabilities.thinking {
+                    Some(true)
+                } else {
+                    None
+                }
+            }
+        };
+
+        let xml_mode = config.should_use_xml_dispatch(provider_name, &selected_model);
+        self.use_xml_dispatch.store(xml_mode, Ordering::Relaxed);
 
         // Get conversation history from SQLite
         let history = self
@@ -333,7 +564,7 @@ impl AgentLoop {
         #[cfg(feature = "local-embeddings")]
         if let Some(ref searcher_mutex) = self.memory_searcher {
             let mut searcher = searcher_mutex.lock().await;
-            match searcher.search(content, 5).await {
+            match searcher.search(&prompt_content, 5).await {
                 Ok(results) if !results.is_empty() => {
                     let memories_text = results
                         .iter()
@@ -361,19 +592,54 @@ impl AgentLoop {
             }
         }
 
+        // Search RAG knowledge base and inject into context
+        #[cfg(feature = "local-embeddings")]
+        if let Some(ref rag_mutex) = self.rag_engine {
+            let results_per_query = config.knowledge.results_per_query;
+            let mut rag = rag_mutex.lock().await;
+            match rag.search(&prompt_content, results_per_query).await {
+                Ok(results) if !results.is_empty() => {
+                    let knowledge_text = results
+                        .iter()
+                        .map(|r| {
+                            format!(
+                                "- [RAG: {} (chunk {})] {}",
+                                r.source_file, r.chunk.chunk_index, r.chunk.content
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    self.context.set_rag_knowledge(knowledge_text).await;
+                    tracing::debug!(
+                        results = results.len(),
+                        "Injected RAG knowledge into context"
+                    );
+                }
+                Ok(_) => {
+                    self.context.set_rag_knowledge(String::new()).await;
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "RAG search failed, continuing without");
+                    self.context.set_rag_knowledge(String::new()).await;
+                }
+            }
+        }
+
         self.context
-            .set_mcp_suggestions(build_mcp_suggestions(&config, content))
+            .set_mcp_suggestions(build_mcp_suggestions(&config, &prompt_content))
             .await;
 
         // Build initial messages for the LLM
         // Get tool definitions for the LLM (built-in tools + skills as tools)
-        let mut tool_defs = self.tool_registry.get_definitions();
+        let mut tool_defs = self.tool_registry.read().await.get_definitions();
 
         // Register installed skills as tool definitions so the LLM can call them.
         // Each skill becomes a callable tool with a `query` parameter.
+        // Only model-invocable skills are registered (ineligible or disable-model-invocation
+        // skills are hidden from the LLM).
         if let Some(registry) = &self.skill_registry {
             let guard = registry.read().await;
-            for (name, desc) in guard.list() {
+            for (name, desc) in guard.list_for_model() {
                 tool_defs.push(crate::provider::ToolDefinition {
                     tool_type: "function".to_string(),
                     function: crate::provider::FunctionDefinition {
@@ -401,8 +667,45 @@ impl AgentLoop {
             tool_defs.retain(|td| !blocked_set.contains(td.function.name.as_str()));
         }
 
+        if browser_routing.browser_required() {
+            tool_defs.sort_by_key(|tool| {
+                if crate::browser::is_browser_tool(&tool.function.name) {
+                    0
+                } else if tool.function.name == "web_search" {
+                    1
+                } else if tool.function.name == "web_fetch" {
+                    2
+                } else {
+                    3
+                }
+            });
+        }
+
         let has_tools = !tool_defs.is_empty();
-        let xml_mode = self.use_xml_dispatch.load(Ordering::Relaxed);
+
+        // Resolve effective thinking: when tools are available, disable thinking.
+        // Reasoning models (DeepSeek-R1, QwQ) tend to "reason in text" instead
+        // of calling tools when thinking is active, breaking the agent loop.
+        let effective_think = if has_tools && thinking_pref == Some(true) {
+            tracing::debug!("Thinking disabled: tools are available and take priority");
+            None
+        } else {
+            thinking_pref
+        };
+
+        let available_tool_names = tool_defs
+            .iter()
+            .map(|tool| tool.function.name.clone())
+            .collect::<HashSet<_>>();
+        let browser_available =
+            config.browser.enabled && crate::browser::has_browser_tools(&available_tool_names);
+        if browser_routing.browser_required() && !browser_available {
+            return Ok(format!(
+                "This request requires interactive browser automation ({}) but the browser is unavailable. \
+                 Enable it in [browser] config and ensure @playwright/mcp is accessible via npx.",
+                browser_routing.reason()
+            ));
+        }
 
         // Convert tool definitions to ToolInfo for the new prompt system
         let tool_infos: Vec<crate::agent::ToolInfo> = if xml_mode && has_tools {
@@ -422,35 +725,110 @@ impl AgentLoop {
         // or without tools (for native tool calling mode)
         let mut messages = if xml_mode {
             self.context
-                .build_messages_with_tools(&history, content, &tool_infos)
+                .build_messages_with_user_message(
+                    &history,
+                    prepared_turn.user_message.clone(),
+                    &tool_infos,
+                )
                 .await
         } else {
-            self.context.build_messages(&history, content).await
+            self.context
+                .build_messages_with_user_message(&history, prepared_turn.user_message.clone(), &[])
+                .await
         };
 
+        // Skill tool policy: when a skill with allowed-tools is activated,
+        // this restricts which tools the LLM can call for the remainder of this turn.
+        let mut skill_allowed_tools: Option<std::collections::HashSet<String>> = None;
+
+        // Check for /skill-name slash command invocation.
+        // If matched, inject the skill instructions as a system message
+        // so the LLM gets skill context without a tool-call round-trip.
+        if let Some((skill_injection, allowed_tools_raw)) =
+            self.try_resolve_slash_command(&prompt_content).await
+        {
+            messages.push(ChatMessage::system(&skill_injection));
+            // If the skill has allowed-tools, activate hard enforcement
+            if let Some(ref tools_str) = allowed_tools_raw {
+                skill_allowed_tools = Some(crate::skills::parse_allowed_tools(tools_str));
+                tracing::info!("Skill tool policy activated via slash command");
+            }
+            // SKL-6: audit log for slash command activation (fire-and-forget)
+            if let Some(skill_name) = prompt_content.trim().strip_prefix('/') {
+                let name = skill_name.split_whitespace().next().unwrap_or(skill_name);
+                let db = self.db.clone();
+                let skill = name.to_string();
+                let ch = channel.to_string();
+                let q = prompt_content.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = db
+                        .insert_skill_audit(&skill, &ch, &q, "slash_command")
+                        .await
+                    {
+                        tracing::debug!(error = %e, "Skill audit insert failed (slash)");
+                    }
+                });
+            }
+        }
+
+        // Save base tool_defs before the loop for policy-based filtering
+        let base_tool_defs = tool_defs.clone();
+
         // Build tool context with real channel info so tools can route responses
-        let tool_ctx = ToolContext {
+        let mut tool_ctx = ToolContext {
             workspace: Config::workspace_dir().to_string_lossy().to_string(),
             channel: channel.to_string(),
             chat_id: chat_id.to_string(),
             message_tx: self.message_tx.clone(),
             approval_manager: crate::tools::global_approval_manager(),
+            skill_env: None,
         };
+
+        // Browser session: idle cleanup and continuation hint
+        #[cfg(feature = "mcp")]
+        if let Some(ref session) = *self.browser_session.read().await {
+            // Close browser if idle too long (frees resources)
+            session
+                .close_if_idle(crate::tools::browser::BROWSER_IDLE_TIMEOUT_SECS)
+                .await;
+
+            // If browser is still active, tell the model so it continues from there
+            if let Some(hint) = session.continuation_hint().await {
+                messages.push(ChatMessage::user(&hint));
+            }
+        }
 
         let mut final_content: Option<String> = None;
         let mut tools_used: Vec<String> = Vec::new();
         let mut total_usage = Usage::default();
-        let max_iterations = config.agent.max_iterations;
+        let mut execution_plan = ExecutionPlanState::new(&prompt_content);
+        let mut browser_task_plan = BrowserTaskPlanState::new(&prompt_content);
+        let mut last_plan_payload: Option<String> = None;
+        let base_max_iterations = config.agent.max_iterations.max(1);
+        // Safety valve only — stall detection is the real limiter.
+        // Browser tasks need 40-80+ iterations for complex forms;
+        // non-browser tasks rarely exceed base + a few extensions.
+        let hard_max_iterations = (base_max_iterations + 80).min(120);
+        let mut active_iteration_budget = base_max_iterations;
+        let mut budget_state = IterationBudgetState::default();
+        let mut iteration = 1;
 
-        'agent_loop: for iteration in 1..=max_iterations {
+        'agent_loop: while iteration <= active_iteration_budget && iteration <= hard_max_iterations
+        {
             if crate::agent::stop::is_stop_requested() {
                 final_content = Some("Stopped by user.".to_string());
                 break;
             }
+            emit_plan_update(
+                stream_tx.as_ref(),
+                &merged_execution_snapshot(&execution_plan, &browser_task_plan),
+                &mut last_plan_payload,
+            )
+            .await;
             tracing::debug!(
                 iteration,
-                max_iterations,
-                model = %config.agent.model,
+                max_iterations = active_iteration_budget,
+                model = %selected_model,
                 provider = %provider.name(),
                 tools = tool_defs.len(),
                 xml_mode,
@@ -463,31 +841,67 @@ impl AgentLoop {
             // chat_stream. It handles both text and tool calls in the SSE
             // stream. Text deltas are forwarded to the client in real-time;
             // tool call deltas are accumulated and returned in ChatResponse.
-            let api_tools = if xml_mode {
-                Vec::new()
+            // SKL-4: when a skill policy is active, filter tool_defs to only
+            // include allowed tools. Skills are always kept so the model can
+            // still activate other skills during the same turn.
+            let effective_tool_defs = if let Some(ref allowed) = skill_allowed_tools {
+                // Collect skill names so we can whitelist them in the filter
+                let skill_names: std::collections::HashSet<String> =
+                    if let Some(ref reg) = self.skill_registry {
+                        let guard = reg.read().await;
+                        guard
+                            .list_for_model()
+                            .into_iter()
+                            .map(|(n, _)| n.to_string())
+                            .collect()
+                    } else {
+                        std::collections::HashSet::new()
+                    };
+                base_tool_defs
+                    .iter()
+                    .filter(|td| {
+                        allowed.contains(&td.function.name)
+                            || skill_names.contains(&td.function.name)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
             } else {
                 tool_defs.clone()
             };
+            let api_tools = if xml_mode {
+                Vec::new()
+            } else {
+                effective_tool_defs.clone()
+            };
             let use_streaming = stream_tx.is_some();
 
-            let active_model = &config.agent.model;
+            let active_model = &selected_model;
+            let mut request_messages = messages.clone();
+            if let Some(plan_message) = execution_plan.runtime_message() {
+                request_messages.push(plan_message);
+            }
+            if let Some(plan_message) = browser_task_plan.runtime_message(browser_available) {
+                request_messages.push(plan_message);
+            }
+
             let request = ChatRequest {
-                messages: messages.clone(),
+                messages: request_messages.clone(),
                 tools: api_tools,
                 model: active_model.clone(),
                 max_tokens: config.agent.effective_max_tokens(active_model),
                 temperature: config.agent.effective_temperature(active_model),
+                think: effective_think,
             };
 
             // Estimate context size for debugging
-            let ctx_chars: usize = messages
+            let ctx_chars: usize = request_messages
                 .iter()
-                .map(|m| m.content.as_ref().map_or(0, |c| c.len()))
+                .map(|m| m.estimated_text_len())
                 .sum();
-            let ctx_msgs = messages.len();
+            let ctx_msgs = request_messages.len();
             tracing::info!(
                 provider = %provider.name(),
-                model = %config.agent.model,
+                model = %selected_model,
                 streaming = use_streaming,
                 context_chars = ctx_chars,
                 messages = ctx_msgs,
@@ -497,9 +911,16 @@ impl AgentLoop {
 
             let response = if use_streaming {
                 let tx = stream_tx.as_ref().unwrap().clone();
-                match provider.chat_stream(request, tx).await {
+                match tokio::select! {
+                    response = provider.chat_stream(request, tx) => response,
+                    _ = crate::agent::stop::wait_for_stop() => Err(crate::agent::stop::cancellation_error()),
+                } {
                     Ok(r) => r,
                     Err(e) => {
+                        if crate::agent::stop::is_stop_requested() {
+                            final_content = Some("Stopped by user.".to_string());
+                            break 'agent_loop;
+                        }
                         // Check if the model rejected tool use — if so, switch to XML dispatch
                         let err_lower = e.to_string().to_lowercase();
                         let tool_rejected = !xml_mode
@@ -534,25 +955,53 @@ impl AgentLoop {
                                 .collect();
                             messages = self
                                 .context
-                                .build_messages_with_tools(&history, content, &xml_tool_infos)
+                                .build_messages_with_user_message(
+                                    &history,
+                                    prepared_turn.user_message.clone(),
+                                    &xml_tool_infos,
+                                )
                                 .await;
 
+                            let mut retry_messages = messages.clone();
+                            if let Some(plan_message) = execution_plan.runtime_message() {
+                                retry_messages.push(plan_message);
+                            }
+                            if let Some(plan_message) =
+                                browser_task_plan.runtime_message(browser_available)
+                            {
+                                retry_messages.push(plan_message);
+                            }
                             let retry_request = ChatRequest {
-                                messages: messages.clone(),
+                                messages: retry_messages,
                                 tools: Vec::new(),
                                 model: active_model.clone(),
                                 max_tokens: config.agent.effective_max_tokens(active_model),
                                 temperature: config.agent.effective_temperature(active_model),
+                                think: None,
                             };
-                            provider
-                                .chat(retry_request)
-                                .await
-                                .context("XML dispatch fallback also failed")?
+                            let retry_response = tokio::select! {
+                                response = provider.chat(retry_request) => response,
+                                _ = crate::agent::stop::wait_for_stop() => Err(crate::agent::stop::cancellation_error()),
+                            };
+                            if crate::agent::stop::is_stop_requested() {
+                                final_content = Some("Stopped by user.".to_string());
+                                break 'agent_loop;
+                            }
+                            retry_response.context("XML dispatch fallback also failed")?
                         } else {
                             // Regular streaming failure — try non-streaming with same tools
                             tracing::warn!(error = ?e, "Streaming failed, falling back to non-streaming");
+                            let mut fallback_messages = messages.clone();
+                            if let Some(plan_message) = execution_plan.runtime_message() {
+                                fallback_messages.push(plan_message);
+                            }
+                            if let Some(plan_message) =
+                                browser_task_plan.runtime_message(browser_available)
+                            {
+                                fallback_messages.push(plan_message);
+                            }
                             let request2 = ChatRequest {
-                                messages: messages.clone(),
+                                messages: fallback_messages,
                                 tools: if xml_mode {
                                     Vec::new()
                                 } else {
@@ -561,18 +1010,31 @@ impl AgentLoop {
                                 model: active_model.clone(),
                                 max_tokens: config.agent.effective_max_tokens(active_model),
                                 temperature: config.agent.effective_temperature(active_model),
+                                think: effective_think,
                             };
-                            provider
-                                .chat(request2)
-                                .await
-                                .context("Non-streaming fallback also failed")?
+                            let fallback_response = tokio::select! {
+                                response = provider.chat(request2) => response,
+                                _ = crate::agent::stop::wait_for_stop() => Err(crate::agent::stop::cancellation_error()),
+                            };
+                            if crate::agent::stop::is_stop_requested() {
+                                final_content = Some("Stopped by user.".to_string());
+                                break 'agent_loop;
+                            }
+                            fallback_response.context("Non-streaming fallback also failed")?
                         }
                     }
                 }
             } else {
-                match provider.chat(request).await {
+                match tokio::select! {
+                    response = provider.chat(request) => response,
+                    _ = crate::agent::stop::wait_for_stop() => Err(crate::agent::stop::cancellation_error()),
+                } {
                     Ok(r) => r,
                     Err(e) => {
+                        if crate::agent::stop::is_stop_requested() {
+                            final_content = Some("Stopped by user.".to_string());
+                            break 'agent_loop;
+                        }
                         // Auto-detect: if the model rejects tool specs,
                         // switch to XML dispatch mode and retry this iteration
                         if !xml_mode && has_tools && iteration == 1 {
@@ -608,19 +1070,39 @@ impl AgentLoop {
                                     .collect();
                                 messages = self
                                     .context
-                                    .build_messages_with_tools(&history, content, &xml_tool_infos)
+                                    .build_messages_with_user_message(
+                                        &history,
+                                        prepared_turn.user_message.clone(),
+                                        &xml_tool_infos,
+                                    )
                                     .await;
 
+                                let mut retry_messages = messages.clone();
+                                if let Some(plan_message) = execution_plan.runtime_message() {
+                                    retry_messages.push(plan_message);
+                                }
+                                if let Some(plan_message) =
+                                    browser_task_plan.runtime_message(browser_available)
+                                {
+                                    retry_messages.push(plan_message);
+                                }
                                 let retry_request = ChatRequest {
-                                    messages: messages.clone(),
+                                    messages: retry_messages,
                                     tools: Vec::new(),
                                     model: active_model.clone(),
                                     max_tokens: config.agent.effective_max_tokens(active_model),
                                     temperature: config.agent.effective_temperature(active_model),
+                                    think: None,
                                 };
-                                provider
-                                    .chat(retry_request)
-                                    .await
+                                let retry_response = tokio::select! {
+                                    response = provider.chat(retry_request) => response,
+                                    _ = crate::agent::stop::wait_for_stop() => Err(crate::agent::stop::cancellation_error()),
+                                };
+                                if crate::agent::stop::is_stop_requested() {
+                                    final_content = Some("Stopped by user.".to_string());
+                                    break 'agent_loop;
+                                }
+                                retry_response
                                     .context("Failed to get response from LLM (XML mode retry)")?
                             } else {
                                 return Err(e.context("Failed to get response from LLM provider"));
@@ -631,6 +1113,8 @@ impl AgentLoop {
                     }
                 }
             };
+
+            clear_temporary_browser_screenshot_context(&mut messages);
 
             tracing::debug!(
                 tokens = response.usage.total_tokens,
@@ -694,24 +1178,67 @@ impl AgentLoop {
                 messages.push(ChatMessage {
                     role: "assistant".to_string(),
                     content: response.content.clone(),
+                    content_parts: None,
                     tool_calls: Some(tool_call_serialized),
                     tool_call_id: None,
                     name: None,
                 });
 
                 // Execute each tool call
+                let mut tool_summaries = Vec::new();
                 for tool_call in &response.tool_calls {
                     if crate::agent::stop::is_stop_requested() {
                         final_content = Some("Stopped by user.".to_string());
                         break 'agent_loop;
                     }
-                    tools_used.push(tool_call.name.clone());
 
                     tracing::info!(
                         tool = %tool_call.name,
                         iteration,
                         "Executing tool"
                     );
+
+                    let vetoed = veto_tool_call(
+                        &tool_call.name,
+                        &prompt_content,
+                        &available_tool_names,
+                        &browser_routing,
+                    );
+                    if let Some(message) = vetoed {
+                        tracing::info!(
+                            tool = %tool_call.name,
+                            reason = %message,
+                            "Tool call vetoed by runtime guard"
+                        );
+                        messages.push(ChatMessage::tool_result(
+                            &tool_call.id,
+                            &tool_call.name,
+                            &message,
+                        ));
+                        continue;
+                    }
+
+                    // Browser veto: consecutive snapshot guard is inside BrowserTool;
+                    // here we only check the browser task planner veto.
+                    if crate::browser::is_browser_tool(&tool_call.name) {
+                        if let Some(message) =
+                            browser_task_plan.veto_browser_action(&tool_call.arguments)
+                        {
+                            tracing::info!(
+                                tool = %tool_call.name,
+                                reason = %message,
+                                "Browser action vetoed by browser planner"
+                            );
+                            messages.push(ChatMessage::tool_result(
+                                &tool_call.id,
+                                &tool_call.name,
+                                &message,
+                            ));
+                            continue;
+                        }
+                    }
+
+                    tools_used.push(tool_call.name.clone());
 
                     // Notify frontend that a tool is being called
                     if let Some(ref tx) = stream_tx {
@@ -733,36 +1260,163 @@ impl AgentLoop {
                     }
 
                     // --- OBSERVE: Execute and add result ---
-                    // First check if this is a registered tool; if not, check
-                    // if it matches an installed skill (on-demand body loading).
+                    // Check blocked tools, skills, and finally real tools.
                     let result = if blocked_set.contains(tool_call.name.as_str()) {
                         crate::tools::ToolResult::error(format!(
                             "Tool '{}' is disabled in this execution context.",
                             tool_call.name
                         ))
-                    } else if self.tool_registry.get(&tool_call.name).is_some() {
-                        self.tool_registry
-                            .execute(&tool_call.name, tool_call.arguments.clone(), &tool_ctx)
-                            .await
-                    } else if let Some(body) = self.try_load_skill_body(&tool_call.name).await {
+                    } else if let Some(activated) = self
+                        .try_activate_skill(&tool_call.name, &tool_call.arguments)
+                        .await
+                    {
+                        let query = tool_call
+                            .arguments
+                            .get("query")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
                         tracing::info!(
                             skill = %tool_call.name,
-                            body_len = body.len(),
-                            "Skill activated — returning SKILL.md body"
+                            body_len = activated.body.len(),
+                            scripts = activated.scripts.len(),
+                            references = activated.references.len(),
+                            has_allowed_tools = activated.allowed_tools.is_some(),
+                            "Skill activated — returning enriched SKILL.md body"
                         );
+                        let header = crate::skills::build_skill_activation_header(
+                            &tool_call.name,
+                            &activated.skill_dir,
+                            &activated.scripts,
+                            &activated.references,
+                            activated.allowed_tools.as_deref(),
+                            query,
+                        );
+                        let bin_warnings = check_required_bins_sync(&activated.required_bins);
                         let output = format!(
-                            "[SKILL INSTRUCTIONS — follow these steps to complete the task]\n\n{}\n\n\
-                            [END SKILL INSTRUCTIONS — now execute the commands above using the shell tool to get the answer]",
-                            body
+                            "[SKILL ACTIVATED: {}]\n\n\
+                             {}{}\n\
+                             {}\n\n\
+                             [END SKILL INSTRUCTIONS]",
+                            tool_call.name, header, bin_warnings, activated.body
                         );
+                        // SKL-4: activate tool policy if skill has allowed-tools
+                        if let Some(ref tools_str) = activated.allowed_tools {
+                            skill_allowed_tools =
+                                Some(crate::skills::parse_allowed_tools(tools_str));
+                            tracing::info!(
+                                skill = %tool_call.name,
+                                allowed = ?skill_allowed_tools,
+                                "Skill tool policy activated"
+                            );
+                        }
+
+                        // SKL-5: resolve skill env vars from config
+                        {
+                            let cfg = self.config.read().await;
+                            let skill_env_map = crate::skills::resolve_skill_env(
+                                &tool_call.name,
+                                &cfg.skills,
+                                None, // TODO: pass secrets when vault is integrated
+                            );
+                            if !skill_env_map.is_empty() {
+                                tracing::info!(
+                                    skill = %tool_call.name,
+                                    env_keys = ?skill_env_map.keys().collect::<Vec<_>>(),
+                                    "Skill env vars resolved from config"
+                                );
+                                tool_ctx.skill_env = Some(skill_env_map);
+                            }
+                        }
+
+                        // SKL-6: audit log (fire-and-forget)
+                        {
+                            let db = self.db.clone();
+                            let skill = tool_call.name.clone();
+                            let ch = channel.to_string();
+                            let q = query.to_string();
+                            tokio::spawn(async move {
+                                if let Err(e) =
+                                    db.insert_skill_audit(&skill, &ch, &q, "tool_call").await
+                                {
+                                    tracing::debug!(error = %e, "Skill audit insert failed");
+                                }
+                            });
+                        }
+
                         crate::tools::ToolResult {
                             output,
                             is_error: false,
                         }
+                    } else if skill_allowed_tools
+                        .as_ref()
+                        .is_some_and(|allowed| !allowed.contains(&tool_call.name))
+                    {
+                        // SKL-4: tool not permitted by active skill policy
+                        tracing::warn!(
+                            tool = %tool_call.name,
+                            "Tool blocked by skill allowed-tools policy"
+                        );
+                        crate::tools::ToolResult::error(format!(
+                            "Tool '{}' is not permitted by the active skill's tool policy. \
+                             Only these tools are allowed: {:?}",
+                            tool_call.name,
+                            skill_allowed_tools.as_ref().unwrap()
+                        ))
                     } else {
-                        self.tool_registry
-                            .execute(&tool_call.name, tool_call.arguments.clone(), &tool_ctx)
-                            .await
+                        // Resolve per-tool timeout from config
+                        let tool_timeout = {
+                            let cfg = self.config.read().await;
+                            let secs = cfg
+                                .tools
+                                .timeouts
+                                .get(&tool_call.name)
+                                .copied()
+                                .unwrap_or(cfg.tools.default_timeout_secs);
+                            if secs == 0 {
+                                std::time::Duration::MAX
+                            } else {
+                                std::time::Duration::from_secs(secs)
+                            }
+                        };
+
+                        match tokio::select! {
+                            result = async {
+                                let reg = self.tool_registry.read().await;
+                                reg.execute(&tool_call.name, tool_call.arguments.clone(), &tool_ctx).await
+                            } => Ok(result),
+                            _ = crate::agent::stop::wait_for_stop() => Err(crate::agent::stop::cancellation_error()),
+                            _ = tokio::time::sleep(tool_timeout) => {
+                                tracing::warn!(tool = %tool_call.name, timeout_secs = tool_timeout.as_secs(), "Tool execution timed out");
+                                Ok(crate::tools::ToolResult::error(format!(
+                                    "Tool '{}' timed out after {} seconds. Consider breaking the task into smaller steps.",
+                                    tool_call.name, tool_timeout.as_secs()
+                                )))
+                            }
+                        } {
+                            Ok(result) => result,
+                            Err(_) => {
+                                Self::cancel_browser_tool_if_needed(
+                                    &tool_call.name,
+                                    &tool_ctx.chat_id,
+                                )
+                                .await;
+                                if let Some(ref tx) = stream_tx {
+                                    if let Err(e) = tx
+                                        .send(crate::provider::StreamChunk {
+                                            delta: tool_call.name.clone(),
+                                            done: false,
+                                            event_type: Some("tool_end".to_string()),
+                                            tool_call_data: None,
+                                        })
+                                        .await
+                                    {
+                                        tracing::warn!(error = %e, "Failed to send cancelled tool_end stream event");
+                                    }
+                                }
+                                final_content = Some("Stopped by user.".to_string());
+                                break 'agent_loop;
+                            }
+                        }
                     };
 
                     // Notify frontend that tool execution finished
@@ -780,11 +1434,65 @@ impl AgentLoop {
                         }
                     }
 
+                    // For unified browser tool, output is already compacted by BrowserTool.
+                    // For all other tools, apply model context formatting.
+                    let tool_output =
+                        tool_result_for_model_context(&tool_call.name, &result.output);
+
                     messages.push(ChatMessage::tool_result(
                         &tool_call.id,
                         &tool_call.name,
-                        &result.output,
+                        &tool_output,
                     ));
+
+                    // For browser tool: extract action from args for tracking
+                    #[cfg(feature = "mcp")]
+                    let browser_action = if crate::browser::is_browser_tool(&tool_call.name) {
+                        crate::tools::browser::browser_action_from_args(&tool_call.arguments)
+                    } else {
+                        None
+                    };
+                    #[cfg(not(feature = "mcp"))]
+                    let browser_action: Option<&str> = None;
+
+                    // When a new snapshot arrives, replace all older snapshots with
+                    // a one-line summary to keep the context window lean.
+                    if browser_action == Some("snapshot") {
+                        supersede_stale_browser_context(&mut messages);
+                    }
+
+                    execution_plan.note_tool_result(
+                        &tool_call.name,
+                        &tool_call.arguments,
+                        &result.output,
+                        result.is_error,
+                    );
+                    if let Some(action) = browser_action {
+                        browser_task_plan.note_browser_result(Some(action), &result.output);
+                    }
+                    emit_plan_update(
+                        stream_tx.as_ref(),
+                        &merged_execution_snapshot(&execution_plan, &browser_task_plan),
+                        &mut last_plan_payload,
+                    )
+                    .await;
+                    tool_summaries.push(ToolExecutionSummary {
+                        name: tool_call.name.clone(),
+                        signature: tool_call_signature(&tool_call.name, &tool_call.arguments),
+                        useful: !result.is_error && !result.output.trim().is_empty(),
+                    });
+
+                    if crate::browser::is_browser_tool(&tool_call.name) {
+                        // With MCP, screenshots are returned as base64 in the tool output.
+                        // No file path extraction or temporary artifact tracking needed.
+                        if let Some(follow_up) = browser_follow_up_instruction(&result.output) {
+                            tracing::debug!(
+                                tool = %tool_call.name,
+                                "Injecting browser form follow-up policy"
+                            );
+                            messages.push(ChatMessage::user(&follow_up));
+                        }
+                    }
 
                     if crate::agent::stop::is_stop_requested() {
                         final_content = Some("Stopped by user.".to_string());
@@ -792,8 +1500,28 @@ impl AgentLoop {
                     }
                 }
 
-                // No reflection prompt needed — modern LLMs reason about
-                // tool results naturally without an extra user nudge.
+                maybe_extend_iteration_budget(
+                    &mut active_iteration_budget,
+                    hard_max_iterations,
+                    base_max_iterations,
+                    iteration,
+                    &tool_summaries,
+                    &mut budget_state,
+                );
+
+                // Inject a hint when the model starts stalling so it can
+                // course-correct before the budget is contracted.
+                if budget_state.stall_streak == 3 {
+                    tracing::warn!("Model is repeating the same actions — injecting stall hint");
+                    messages.push(ChatMessage::user(
+                        "⚠ You are repeating the same actions without progress. \
+                         STOP and change your approach:\n\
+                         - If you typed into a field, call snapshot to see the result\n\
+                         - If autocomplete suggestions appeared, click the matching option\n\
+                         - If a field is not working, try a different strategy\n\
+                         - If the task is truly impossible, tell the user why",
+                    ));
+                }
             } else {
                 // No tool calls → check for hallucination before accepting as final
                 let response_text = response.content.clone().unwrap_or_default();
@@ -839,20 +1567,27 @@ impl AgentLoop {
                         messages.push(ChatMessage::user(&verification_prompt));
 
                         // Continue the loop — LLM must now actually use the tool
+                        iteration += 1;
                         continue;
                     }
                 }
             }
+
+            iteration += 1;
         }
 
         if final_content.is_none() && !crate::agent::stop::is_stop_requested() {
             tracing::warn!(
-                max_iterations,
+                max_iterations = active_iteration_budget,
+                hard_max_iterations,
                 tools_used = tools_used.len(),
                 "Max iterations reached without final response; attempting forced finalization"
             );
 
             let mut finalization_messages = messages.clone();
+            if let Some(plan_message) = execution_plan.runtime_message() {
+                finalization_messages.push(plan_message);
+            }
             finalization_messages.push(ChatMessage::user(
                 "The tool and iteration budget is exhausted. Do not call any tools, browser actions, functions, or MCP integrations. Using only the evidence, tool outputs, and sources already collected in this conversation, provide the best possible final answer now. If the information is incomplete, clearly separate confirmed findings, likely but unconfirmed points, and remaining unknowns. Do not ask to continue browsing unless it is strictly necessary.",
             ));
@@ -860,12 +1595,16 @@ impl AgentLoop {
             let finalization_request = ChatRequest {
                 messages: finalization_messages,
                 tools: Vec::new(),
-                model: config.agent.model.clone(),
-                max_tokens: config.agent.effective_max_tokens(&config.agent.model),
-                temperature: config.agent.effective_temperature(&config.agent.model),
+                model: selected_model.clone(),
+                max_tokens: config.agent.effective_max_tokens(&selected_model),
+                temperature: config.agent.effective_temperature(&selected_model),
+                think: None,
             };
 
-            match provider.chat(finalization_request).await {
+            match tokio::select! {
+                response = provider.chat(finalization_request) => response,
+                _ = crate::agent::stop::wait_for_stop() => Err(crate::agent::stop::cancellation_error()),
+            } {
                 Ok(response) => {
                     total_usage.prompt_tokens += response.usage.prompt_tokens;
                     total_usage.completion_tokens += response.usage.completion_tokens;
@@ -902,7 +1641,11 @@ impl AgentLoop {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "Forced finalization failed");
+                    if crate::agent::stop::is_stop_requested() {
+                        final_content = Some("Stopped by user.".to_string());
+                    } else {
+                        tracing::warn!(error = %e, "Forced finalization failed");
+                    }
                 }
             }
         }
@@ -957,28 +1700,14 @@ impl AgentLoop {
             );
         }
 
-        // Auto-cleanup browser if it was used in this session
-        // This ensures the browser process is closed even if the LLM forgot to call 'close'
-        #[cfg(feature = "browser")]
-        if tools_used.iter().any(|t| t == "browser") {
-            let chat_id = chat_id.to_string();
-            tokio::spawn(async move {
-                let manager = crate::browser::global_browser_manager();
-                if manager.is_running().await {
-                    tracing::info!(chat_id = %chat_id, "Auto-cleaning up browser after task completion");
-                    // Close all pages for this chat_id (across all profiles)
-                    if let Err(e) = manager.close_page(&chat_id).await {
-                        tracing::warn!(error = %e, "Failed to cleanup browser pages");
-                    }
-                }
-            });
-        }
+        // With MCP-based browser, the MCP server manages browser lifecycle.
+        // Cleanup happens when the MCP server shuts down (McpManager::shutdown).
 
         // Record token usage (fire-and-forget)
         if total_usage.total_tokens > 0 {
             let db = self.db.clone();
             let sk = session_key.to_string();
-            let model = config.agent.model.clone();
+            let model = selected_model.clone();
             let prov = provider.name().to_string();
             tokio::spawn(async move {
                 if let Err(e) = db
@@ -1003,23 +1732,140 @@ impl AgentLoop {
         Ok(safe_response)
     }
 
-    /// Try to load a skill's full SKILL.md body by name.
-    /// Returns `Some(body)` if a matching skill is found, `None` otherwise.
-    /// This enables "progressive disclosure": the system prompt only lists
-    /// skill names + descriptions, and the full body is loaded on-demand
-    /// when the LLM decides to activate a skill.
-    async fn try_load_skill_body(&self, name: &str) -> Option<String> {
+    /// Activate a skill: load its SKILL.md body, substitute variables,
+    /// list available scripts/references, and return enriched context.
+    ///
+    /// This enables ClawHub/OpenClaw compatibility — the LLM gets:
+    /// - The skill directory path (to run scripts, read references)
+    /// - Available scripts and references with full paths
+    /// - Variable substitution ($ARGUMENTS, ${SKILL_DIR})
+    /// - Allowed-tools restriction (prompt-based enforcement)
+    async fn try_activate_skill(
+        &self,
+        name: &str,
+        arguments: &serde_json::Value,
+    ) -> Option<ActivatedSkill> {
         let registry = self.skill_registry.as_ref()?;
         let mut guard = registry.write().await;
-        let skill = guard.get_mut(name)?;
 
-        match skill.load_body().await {
-            Ok(body) => Some(body.to_string()),
-            Err(e) => {
-                tracing::warn!(skill = %name, error = %e, "Failed to load skill body");
-                None
+        // If skill not found, rescan from disk (may have been created at runtime)
+        if guard.get(name).is_none() {
+            tracing::debug!(skill = %name, "Skill not in registry, rescanning from disk");
+            if let Err(e) = guard.scan_and_load().await {
+                tracing::warn!(error = %e, "Failed to rescan skills");
             }
         }
+
+        let skill = guard.get_mut(name)?;
+
+        let body = match skill.load_body().await {
+            Ok(body) => body.to_string(),
+            Err(e) => {
+                tracing::warn!(skill = %name, error = %e, "Failed to load skill body");
+                return None;
+            }
+        };
+
+        let skill_dir = skill.path.clone();
+        let allowed_tools = skill.meta.allowed_tools.clone();
+        let required_bins = crate::skills::extract_required_bins(&skill.meta.metadata);
+
+        // List available scripts and references
+        let scripts = crate::skills::list_skill_scripts(&skill_dir);
+        let references = crate::skills::list_skill_references(&skill_dir);
+
+        // Substitute variables for Claude Code / ClawHub compatibility
+        let query = arguments
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let substituted_body =
+            crate::skills::substitute_skill_variables(&body, query, &skill_dir, None);
+
+        Some(ActivatedSkill {
+            body: substituted_body,
+            skill_dir,
+            scripts,
+            references,
+            allowed_tools,
+            required_bins,
+        })
+    }
+
+    /// Try to resolve a `/skill-name args` slash command.
+    ///
+    /// Returns `Some((enriched_body, allowed_tools))` if the message matches an installed skill,
+    /// `None` otherwise (message is not a slash command or skill not found).
+    /// The `allowed_tools` is the raw string from the skill's frontmatter for tool policy enforcement.
+    async fn try_resolve_slash_command(&self, message: &str) -> Option<(String, Option<String>)> {
+        let trimmed = message.trim();
+        if !trimmed.starts_with('/') {
+            return None;
+        }
+
+        // Parse: /skill-name rest of message
+        let without_slash = &trimmed[1..];
+        let (skill_name, arguments) = match without_slash.split_once(char::is_whitespace) {
+            Some((name, args)) => (name, args.trim()),
+            None => (without_slash, ""),
+        };
+
+        let registry = self.skill_registry.as_ref()?;
+        let mut guard = registry.write().await;
+
+        // Check if this matches an installed skill
+        guard.get(skill_name)?;
+
+        let skill = guard.get_mut(skill_name)?;
+
+        // Check invocation policy: user-invocable: false → block slash commands
+        if !skill.meta.user_invocable {
+            tracing::debug!(skill = %skill_name, "Skill not user-invocable, ignoring slash command");
+            return None;
+        }
+        let body = match skill.load_body().await {
+            Ok(b) => b.to_string(),
+            Err(e) => {
+                tracing::warn!(skill = %skill_name, error = %e, "Failed to load skill for slash command");
+                return None;
+            }
+        };
+
+        let skill_dir = skill.path.clone();
+        let allowed_tools = skill.meta.allowed_tools.clone();
+        let required_bins = crate::skills::extract_required_bins(&skill.meta.metadata);
+
+        let scripts = crate::skills::list_skill_scripts(&skill_dir);
+        let references = crate::skills::list_skill_references(&skill_dir);
+
+        let substituted =
+            crate::skills::substitute_skill_variables(&body, arguments, &skill_dir, None);
+
+        let header = crate::skills::build_skill_activation_header(
+            skill_name,
+            &skill_dir,
+            &scripts,
+            &references,
+            allowed_tools.as_deref(),
+            arguments,
+        );
+
+        // Check required binaries and add warnings
+        let bin_warnings = check_required_bins_sync(&required_bins);
+
+        tracing::info!(
+            skill = %skill_name,
+            arguments = %arguments,
+            "Slash command activated skill"
+        );
+
+        let enriched = format!(
+            "[SKILL ACTIVATED: {skill_name}]\n\n\
+             {header}{bin_warnings}\n\
+             {substituted}\n\n\
+             [END SKILL INSTRUCTIONS]"
+        );
+        Some((enriched, allowed_tools))
     }
 
     /// Trigger memory consolidation and session compaction if thresholds exceeded.
@@ -1262,4 +2108,1074 @@ fn mcp_user_value_hint(preset: &McpServerPreset) -> &'static str {
         return "local file access";
     }
     "that service"
+}
+
+fn tool_call_signature(tool_name: &str, arguments: &serde_json::Value) -> String {
+    let args = serde_json::to_string(arguments).unwrap_or_else(|_| "{}".to_string());
+    format!("{tool_name}:{args}")
+}
+
+fn maybe_extend_iteration_budget(
+    active_budget: &mut u32,
+    hard_max_iterations: u32,
+    base_max_iterations: u32,
+    iteration: u32,
+    tool_summaries: &[ToolExecutionSummary],
+    state: &mut IterationBudgetState,
+) {
+    if tool_summaries.is_empty() {
+        state.stall_streak = state.stall_streak.saturating_add(1);
+        // Active contraction: if model stalls too long, cut the budget short.
+        if state.stall_streak >= 4 && *active_budget > iteration + 2 {
+            *active_budget = iteration + 2;
+            tracing::warn!(
+                iteration,
+                active_budget = *active_budget,
+                stall_streak = state.stall_streak,
+                "Contracted iteration budget — model is stalling (empty tool calls)"
+            );
+        }
+        return;
+    }
+
+    let signature = tool_summaries
+        .iter()
+        .map(|summary| summary.signature.as_str())
+        .collect::<Vec<_>>()
+        .join("|");
+    let useful = tool_summaries.iter().any(|summary| summary.useful);
+    let repeated_signature = state.last_signature.as_deref() == Some(signature.as_str());
+
+    if useful && !repeated_signature {
+        state.stall_streak = 0;
+    } else {
+        state.stall_streak = state.stall_streak.saturating_add(1);
+    }
+    state.last_signature = Some(signature);
+
+    // Active contraction: if stalling for 4+ rounds, cut the budget to
+    // current iteration + 2 so the model has a last chance then stops.
+    if state.stall_streak >= 4 && *active_budget > iteration + 2 {
+        *active_budget = iteration + 2;
+        tracing::warn!(
+            iteration,
+            active_budget = *active_budget,
+            stall_streak = state.stall_streak,
+            "Contracted iteration budget — model is repeating the same actions"
+        );
+        return;
+    }
+
+    // Don't extend if: stalling, not useful, or repeating the same actions.
+    // Repeated signatures mean no progress — extending would just waste tokens.
+    if state.stall_streak >= 3 || !useful || repeated_signature {
+        return;
+    }
+
+    if iteration + 1 < *active_budget {
+        return;
+    }
+
+    let browser_heavy = tool_summaries
+        .iter()
+        .any(|summary| crate::browser::is_browser_tool(&summary.name));
+    let search_heavy = tool_summaries
+        .iter()
+        .any(|summary| matches!(summary.name.as_str(), "web_search" | "web_fetch"));
+    let extension = if browser_heavy {
+        10
+    } else if search_heavy {
+        4
+    } else {
+        3
+    };
+
+    let next_budget = (*active_budget + extension)
+        .max(base_max_iterations)
+        .min(hard_max_iterations);
+    if next_budget > *active_budget {
+        *active_budget = next_budget;
+        state.extensions_used = state.extensions_used.saturating_add(1);
+        tracing::info!(
+            iteration,
+            active_budget = *active_budget,
+            hard_max_iterations,
+            browser_heavy,
+            search_heavy,
+            "Extended iteration budget after observing continued progress"
+        );
+    }
+}
+
+/// Extract autocomplete options (listbox/option elements) from a snapshot output.
+/// Returns a short text summarizing available suggestions.
+fn extract_autocomplete_suggestions(snapshot_output: &str) -> Option<String> {
+    let mut suggestions = Vec::new();
+    for line in snapshot_output.lines() {
+        let trimmed = line.trim().trim_start_matches("- ");
+        if trimmed.starts_with("option ") && trimmed.contains("[ref=") {
+            suggestions.push(trimmed.to_string());
+        }
+    }
+    if suggestions.is_empty() {
+        return None;
+    }
+    let mut result = format!(
+        "\n\nAutocomplete dropdown appeared with {} suggestion(s):\n",
+        suggestions.len()
+    );
+    for s in suggestions.iter().take(10) {
+        result.push_str("  - ");
+        result.push_str(s);
+        result.push('\n');
+    }
+    result.push_str(
+        "→ Click the matching option to select it (e.g. playwright__browser_click with ref=\"eN\")",
+    );
+    Some(result)
+}
+
+fn extract_browser_screenshot_paths(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("📁 File: "))
+        .map(str::trim)
+        .filter(|path| {
+            let lower = path.to_ascii_lowercase();
+            lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")
+        })
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn build_browser_screenshot_context_message(
+    tool_output: &str,
+    capabilities: &crate::config::ModelCapabilities,
+) -> Option<ChatMessage> {
+    if !(capabilities.multimodal || capabilities.image_input) {
+        return None;
+    }
+
+    let screenshot_path = extract_browser_screenshot_paths(tool_output).pop()?;
+    Some(ChatMessage::user_parts(vec![
+        crate::provider::ChatContentPart::Text {
+            text: "Temporary browser evaluation screenshot from the current page. Inspect this visual state together with the browser snapshot/tool result before deciding whether more searching is needed. If the answer is already visible here, answer from this evidence.".to_string(),
+        },
+        crate::provider::ChatContentPart::Image {
+            path: screenshot_path,
+            media_type: "image/png".to_string(),
+        },
+    ]))
+}
+
+fn browser_follow_up_instruction(tool_output: &str) -> Option<String> {
+    let trimmed = tool_output.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    let blocked_submit = lower.contains("blocked click on element [")
+        && lower.contains("form still looks incomplete");
+    let has_suggestions = lower.contains("visible suggestions:");
+    let has_autocomplete = lower.contains("autocomplete/combobox")
+        || lower.contains("autocomplete still open")
+        || lower.contains("combobox-style field");
+    let has_date_picker = lower.contains("date picker appears to be open");
+    let has_time_picker = lower.contains("time options appear to be open");
+
+    if !(blocked_submit
+        || has_suggestions
+        || has_autocomplete
+        || has_date_picker
+        || has_time_picker)
+    {
+        return None;
+    }
+
+    let mut checklist = Vec::new();
+    if has_suggestions || has_autocomplete {
+        checklist.push(
+            "If a field shows suggestions or behaves like a combobox, explicitly select the visible option before moving on."
+                .to_string(),
+        );
+    }
+    if has_date_picker {
+        checklist.push(
+            "If the site opened a date picker, choose the requested date from the picker and verify the field updated."
+                .to_string(),
+        );
+    }
+    if has_time_picker {
+        checklist.push(
+            "If the site opened time options, select the requested departure/arrival time explicitly."
+                .to_string(),
+        );
+    }
+    if blocked_submit {
+        checklist.push(
+            "Do not attempt to submit again until all required visible fields are confirmed and no autocomplete/picker is left unresolved."
+                .to_string(),
+        );
+    }
+    checklist.push(
+        "After each field change, inspect the updated browser snapshot before deciding the next action."
+            .to_string(),
+    );
+
+    Some(format!(
+        "Browser form policy reminder based on the latest page state:\n- {}",
+        checklist.join("\n- ")
+    ))
+}
+
+fn clear_temporary_browser_screenshot_context(messages: &mut Vec<ChatMessage>) {
+    messages.retain(|message| !is_temporary_browser_screenshot_message(message));
+}
+
+/// Returns `true` if this message is a tool result from a browser snapshot action.
+///
+/// With the unified browser tool, snapshot results come from tool named `"browser"`
+/// and contain the compacted accessibility tree with "interactive" count.
+fn is_browser_snapshot_tool_result(msg: &ChatMessage) -> bool {
+    if msg.role != "tool" {
+        return false;
+    }
+    let is_browser = msg.name.as_deref() == Some("browser");
+    if !is_browser {
+        return false;
+    }
+    // Distinguish snapshot results from other browser actions by content markers.
+    // Snapshot output contains "interactive elements)" — other actions don't.
+    msg.content
+        .as_deref()
+        .is_some_and(|c| c.contains("interactive elements)"))
+}
+
+/// Returns `true` if this is an injected browser form policy reminder.
+fn is_browser_follow_up_policy(msg: &ChatMessage) -> bool {
+    msg.role == "user"
+        && msg
+            .content
+            .as_deref()
+            .is_some_and(|c| c.starts_with("Browser form policy reminder"))
+}
+
+/// After a new `browser_snapshot` tool result is pushed, replace all older
+/// snapshot results with a compact one-line summary and remove stale
+/// follow-up policy messages.
+///
+/// This keeps the model focused on the **current** page state rather than
+/// accumulating 6K chars per snapshot × N iterations.
+fn supersede_stale_browser_context(messages: &mut Vec<ChatMessage>) {
+    // Collect indices of ALL browser snapshot tool results
+    let snapshot_indices: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, msg)| is_browser_snapshot_tool_result(msg))
+        .map(|(i, _)| i)
+        .collect();
+
+    // Need at least 2 snapshots for there to be "stale" ones
+    if snapshot_indices.len() < 2 {
+        return;
+    }
+
+    // All but the last are stale — replace their content in-place
+    // (preserving tool_call_id and name to keep the assistant↔tool chain valid)
+    for &idx in &snapshot_indices[..snapshot_indices.len() - 1] {
+        let summary =
+            build_snapshot_superseded_summary(messages[idx].content.as_deref().unwrap_or(""));
+        messages[idx].content = Some(summary);
+    }
+
+    // Remove all follow-up policy messages except the most recent one
+    let policy_indices: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, msg)| is_browser_follow_up_policy(msg))
+        .map(|(i, _)| i)
+        .collect();
+
+    if policy_indices.len() > 1 {
+        // Remove from end to avoid index shift issues
+        for &idx in policy_indices[..policy_indices.len() - 1].iter().rev() {
+            messages.remove(idx);
+        }
+    }
+}
+
+/// Build a short one-line summary for a superseded browser snapshot.
+fn build_snapshot_superseded_summary(snapshot_content: &str) -> String {
+    let url = snapshot_content
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("Page URL: ")
+                .or_else(|| line.trim().strip_prefix("page url: "))
+        })
+        .unwrap_or("unknown");
+
+    let interactive_count = snapshot_content
+        .lines()
+        .filter(|line| line.contains("[ref="))
+        .count();
+
+    format!(
+        "[Previous snapshot superseded — page: {url}, {interactive_count} interactive elements]"
+    )
+}
+
+fn is_temporary_browser_screenshot_message(message: &ChatMessage) -> bool {
+    let Some(parts) = &message.content_parts else {
+        return false;
+    };
+    parts.iter().any(|part| {
+        matches!(
+            part,
+            crate::provider::ChatContentPart::Text { text }
+                if text.starts_with("Temporary browser evaluation screenshot from the current page.")
+        )
+    })
+}
+
+fn temporary_browser_screenshot_path_from_message(message: &ChatMessage) -> Option<String> {
+    if !is_temporary_browser_screenshot_message(message) {
+        return None;
+    }
+
+    message
+        .content_parts
+        .as_ref()?
+        .iter()
+        .find_map(|part| match part {
+            crate::provider::ChatContentPart::Image { path, .. } => Some(path.clone()),
+            _ => None,
+        })
+}
+
+fn tool_result_for_model_context(_tool_name: &str, output: &str) -> String {
+    // BrowserTool already compacts its own output — pass through as-is.
+    // For other tools, return raw output.
+    output.to_string()
+}
+
+// compact_browser_snapshot moved to tools::browser — agent_loop no longer
+// needs its own copy since BrowserTool handles compaction internally.
+
+/// Compact a browser action (click, navigate) that returns a page tree.
+///
+/// NOTE: No longer used in production — BrowserTool handles its own compaction.
+/// Kept for test compatibility.
+#[cfg(test)]
+fn compact_browser_action_with_tree(output: &str, prefix: &str) -> String {
+    const MAX_CHARS: usize = 8_000;
+
+    let (header_lines, tree_lines) = split_browser_output(output);
+
+    // If no tree in the output, just return headers
+    if tree_lines.is_empty() {
+        let mut s = String::from(prefix);
+        s.push(' ');
+        for line in &header_lines {
+            s.push_str(line);
+            s.push(' ');
+        }
+        return s.trim().to_string();
+    }
+
+    let mut compact = String::from(prefix);
+    compact.push('\n');
+    for line in &header_lines {
+        compact.push_str(line);
+        compact.push('\n');
+    }
+
+    let interactive_count = tree_lines.iter().filter(|l| l.contains("[ref=")).count();
+    compact.push_str(&format!(
+        "Page now has {} interactive elements. Call snapshot to see full refs.\n",
+        interactive_count,
+    ));
+
+    // Hard truncation — we intentionally keep this small (UTF-8 safe)
+    if compact.len() > MAX_CHARS {
+        truncate_utf8(&mut compact, MAX_CHARS);
+        compact.push_str("\n...[truncated]");
+    }
+
+    compact
+}
+
+/// NOTE: No longer used in production — BrowserTool handles its own compaction.
+/// Kept for test compatibility.
+#[cfg(test)]
+fn compact_browser_action_short(output: &str) -> String {
+    let (header_lines, _) = split_browser_output(output);
+    if header_lines.is_empty() {
+        // No header found — keep first 500 chars of output
+        let truncated = if output.len() > 500 {
+            let mut s = output.to_string();
+            truncate_utf8(&mut s, 500);
+            s.push_str("...");
+            s
+        } else {
+            output.to_string()
+        };
+        return truncated;
+    }
+    header_lines.join("\n")
+}
+
+/// Truncate a string to at most `max_bytes`, snapping to a char boundary.
+/// Never panics on multi-byte UTF-8 characters.
+fn truncate_utf8(s: &mut String, max_bytes: usize) {
+    if s.len() <= max_bytes {
+        return;
+    }
+    // Walk backwards from max_bytes to find a valid char boundary
+    let mut end = max_bytes;
+    while !s.is_char_boundary(end) && end > 0 {
+        end -= 1;
+    }
+    s.truncate(end);
+}
+
+/// Split browser tool output into header lines and accessibility tree lines.
+fn split_browser_output(output: &str) -> (Vec<&str>, Vec<&str>) {
+    let mut header_lines: Vec<&str> = Vec::new();
+    let mut tree_lines: Vec<&str> = Vec::new();
+    let mut in_tree = false;
+
+    for raw_line in output.lines() {
+        let line = raw_line.trim_end();
+        if line.starts_with("[image:") {
+            continue;
+        }
+        if !in_tree && line.trim_start().starts_with("- ") {
+            in_tree = true;
+        }
+        if in_tree {
+            tree_lines.push(line);
+        } else {
+            header_lines.push(line);
+        }
+    }
+
+    (header_lines, tree_lines)
+}
+
+// element_priority and append_interactive_elements moved to tools::browser
+// (replaced by compact_tree with agent-browser approach).
+
+fn veto_tool_call(
+    tool_name: &str,
+    user_prompt: &str,
+    available_tool_names: &HashSet<String>,
+    browser_routing: &BrowserRoutingDecision,
+) -> Option<String> {
+    let text = user_prompt.to_ascii_lowercase();
+    let has_web_search = available_tool_names.contains("web_search");
+    let has_web_fetch = available_tool_names.contains("web_fetch");
+    let has_browser = crate::browser::has_browser_tools(available_tool_names);
+    let has_web_stack = has_web_search || has_web_fetch || has_browser;
+    let explicit_weather_intent = [
+        "meteo",
+        "tempo",
+        "weather",
+        "forecast",
+        "temperatura",
+        "temperature",
+        "pioggia",
+        "rain",
+        "vento",
+        "wind",
+        "umid",
+        "sole",
+        "nuvol",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle));
+    if explicit_weather_intent && tool_name == "weather" {
+        return None;
+    }
+
+    let mentions_sport = [
+        "partita",
+        "gioca",
+        "giocher",
+        "match",
+        "fixture",
+        "schedule",
+        "calendario",
+        "classifica",
+        "serie a",
+        "champions",
+        "napoli",
+        "milan",
+        "inter",
+        "juventus",
+        "torino",
+        "roma",
+        "lazio",
+        "atalanta",
+        "sport",
+        "goal",
+        "risultato",
+        "score",
+        "standing",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle));
+    let mentions_news_or_events = ["news", "notizie", "evento", "eventi"]
+        .iter()
+        .any(|needle| text.contains(needle));
+
+    if tool_name == "weather" && (mentions_sport || mentions_news_or_events) {
+        return Some(
+            "Tool vetoed: the weather tool is only for forecasts and conditions. \
+For sports schedules, fixtures, standings, events, or current news, use web_search first and then web_fetch/browser if needed."
+                .to_string(),
+        );
+    }
+
+    let explicit_browser_intent = [
+        "usa il browser",
+        "use the browser",
+        "apri il browser",
+        "open the browser",
+        "clicca",
+        "click",
+        "login",
+        "accedi",
+        "upload",
+        "form",
+        "snapshot",
+        "navigate",
+        "naviga",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle));
+    let web_research_intent = [
+        "cerca",
+        "search",
+        "trova",
+        "find",
+        "news",
+        "notizie",
+        "ultime",
+        "latest",
+        "oggi",
+        "current",
+        "calendario",
+        "fixture",
+        "schedule",
+        "classifica",
+        "standing",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle));
+    let has_known_url =
+        text.contains("http://") || text.contains("https://") || text.contains("www.");
+
+    if browser_routing.browser_required() {
+        if crate::browser::is_browser_tool(tool_name) {
+            return None;
+        }
+
+        if tool_name == "web_fetch" {
+            return Some(format!(
+                "Tool vetoed: this request requires interactive browser automation ({}). Do not use web_fetch as a surrogate for JS-heavy booking/comparison sites; use the browser tools first.",
+                browser_routing.reason()
+            ));
+        }
+
+        if tool_name == "web_search" && browser_routing.named_sources_known() {
+            return Some(format!(
+                "Tool vetoed: the required interactive sources are already known ({}). Open them with the browser tools instead of doing a generic web search first.",
+                browser_routing.required_sources().join(", ")
+            ));
+        }
+    }
+
+    if crate::browser::is_browser_tool(tool_name)
+        && has_web_search
+        && web_research_intent
+        && !explicit_browser_intent
+        && !browser_routing.browser_required()
+    {
+        return Some(
+            "Tool vetoed: browser should not be the first step for routine web research when web_search is available. \
+Use web_search first to find candidate sources, then use web_fetch or browser only if interaction or JS rendering is actually needed."
+                .to_string(),
+        );
+    }
+
+    let explicit_shell_intent = [
+        "shell", "bash", "terminal", "comando", "command", "script", "grep", "ls ", "pwd", "cat ",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle));
+    let web_lookup_intent = web_research_intent || has_known_url;
+
+    if tool_name == "shell" && has_web_stack && web_lookup_intent && !explicit_shell_intent {
+        return Some(
+            "Tool vetoed: shell should not be used for web lookup or current-information research when web_search/web_fetch/browser are available. \
+Use web_search first, then web_fetch or browser if needed."
+                .to_string(),
+        );
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        browser_follow_up_instruction, build_browser_screenshot_context_message,
+        compact_browser_action_short, compact_browser_action_with_tree,
+        extract_browser_screenshot_paths, is_temporary_browser_screenshot_message,
+        maybe_extend_iteration_budget, veto_tool_call, IterationBudgetState, ToolExecutionSummary,
+    };
+    // Snapshot compaction and autocomplete functions moved to tools::browser
+    use crate::agent::browser_task_plan::BrowserRoutingDecision;
+    use crate::config::ModelCapabilities;
+    #[cfg(feature = "mcp")]
+    use crate::tools::browser::{compact_browser_snapshot, extract_autocomplete_suggestions};
+    use std::collections::HashSet;
+
+    fn tools(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    #[test]
+    fn vetoes_weather_for_sports_schedule_queries() {
+        let veto = veto_tool_call(
+            "weather",
+            "oggi gioca il Napoli?",
+            &tools(&["weather", "web_search", "browser"]),
+            &BrowserRoutingDecision::from_prompt("oggi gioca il Napoli?"),
+        );
+        assert!(veto.is_some());
+    }
+
+    #[test]
+    fn allows_weather_for_actual_forecast_queries() {
+        let veto = veto_tool_call(
+            "weather",
+            "che tempo fa a Napoli oggi?",
+            &tools(&["weather", "web_search"]),
+            &BrowserRoutingDecision::from_prompt("che tempo fa a Napoli oggi?"),
+        );
+        assert!(veto.is_none());
+    }
+
+    #[test]
+    fn vetoes_browser_for_routine_research_when_web_search_exists() {
+        let veto = veto_tool_call(
+            "browser",
+            "cerca se oggi gioca il Napoli",
+            &tools(&["browser", "web_search", "web_fetch"]),
+            &BrowserRoutingDecision::from_prompt("cerca se oggi gioca il Napoli"),
+        );
+        assert!(veto.is_some());
+    }
+
+    #[test]
+    fn allows_browser_when_user_explicitly_requests_it() {
+        let veto = veto_tool_call(
+            "browser",
+            "usa il browser per cercarlo",
+            &tools(&["browser", "web_search", "web_fetch"]),
+            &BrowserRoutingDecision::from_prompt("usa il browser per cercarlo"),
+        );
+        assert!(veto.is_none());
+    }
+
+    #[test]
+    fn vetoes_shell_for_web_lookup_when_web_tools_exist() {
+        let veto = veto_tool_call(
+            "shell",
+            "cerca online il calendario del Napoli",
+            &tools(&["shell", "web_search", "browser"]),
+            &BrowserRoutingDecision::from_prompt("cerca online il calendario del Napoli"),
+        );
+        assert!(veto.is_some());
+    }
+
+    #[test]
+    fn vetoes_web_fetch_for_browser_first_booking_tasks() {
+        let prompt =
+            "mi trovi un treno per domani da napoli a milano confrontando trenitalia e italo";
+        let veto = veto_tool_call(
+            "web_fetch",
+            prompt,
+            &tools(&["browser", "web_fetch", "web_search"]),
+            &BrowserRoutingDecision::from_prompt(prompt),
+        );
+        assert!(veto.is_some());
+    }
+
+    #[test]
+    fn vetoes_web_search_when_named_interactive_sources_are_already_known() {
+        let prompt =
+            "mi trovi un treno per domani da napoli a milano confrontando trenitalia e italo";
+        let veto = veto_tool_call(
+            "web_search",
+            prompt,
+            &tools(&["browser", "web_fetch", "web_search"]),
+            &BrowserRoutingDecision::from_prompt(prompt),
+        );
+        assert!(veto.is_some());
+    }
+
+    #[test]
+    fn extends_iteration_budget_when_progress_continues_near_limit() {
+        let mut active_budget = 4;
+        let mut state = IterationBudgetState::default();
+        let tool_summaries = vec![ToolExecutionSummary {
+            name: "browser".to_string(),
+            signature: "browser:{\"action\":\"click\"}".to_string(),
+            useful: true,
+        }];
+
+        maybe_extend_iteration_budget(&mut active_budget, 12, 4, 4, &tool_summaries, &mut state);
+
+        assert!(active_budget > 4);
+    }
+
+    #[test]
+    fn browser_budget_extends_beyond_old_cap_when_making_progress() {
+        let mut active_budget = 20_u32;
+        let mut state = IterationBudgetState::default();
+        let hard_max = 100_u32;
+        let base = 20_u32;
+
+        // Simulate 8 consecutive productive browser iterations at the budget edge.
+        // Old logic capped at 4 extensions; new logic has no cap.
+        for i in 0..8u32 {
+            let summaries = vec![ToolExecutionSummary {
+                name: "browser".to_string(),
+                signature: format!("browser:{{\"action\":\"step_{i}\"}}"),
+                useful: true,
+            }];
+            let iter = active_budget; // snapshot before mutable borrow
+            maybe_extend_iteration_budget(
+                &mut active_budget,
+                hard_max,
+                base,
+                iter,
+                &summaries,
+                &mut state,
+            );
+        }
+
+        // With 8 extensions × 10 = 80, budget should be 20 + 80 = 100 (capped at hard_max)
+        assert_eq!(active_budget, hard_max);
+        assert_eq!(state.extensions_used, 8);
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn stall_streak_stops_extensions_then_contracts_budget() {
+        let mut active_budget = 50_u32;
+        let mut state = IterationBudgetState::default();
+        let hard_max = 100_u32;
+        let base = 20_u32;
+        // Simulate: model already used an earlier different signature,
+        // then starts repeating "snapshot" at iteration 49 (near budget).
+        state.last_signature = Some("browser:{\"action\":\"click\"}".to_string());
+
+        let summaries = vec![ToolExecutionSummary {
+            name: "browser".to_string(),
+            signature: "browser:{\"action\":\"snapshot\"}".to_string(),
+            useful: true,
+        }];
+
+        // Call 1 at iter=49 (near budget): new signature → extends
+        maybe_extend_iteration_budget(
+            &mut active_budget,
+            hard_max,
+            base,
+            49,
+            &summaries,
+            &mut state,
+        );
+        assert!(
+            active_budget > 50,
+            "first call should extend (new signature)"
+        );
+        let extended_budget = active_budget;
+
+        // Calls 2-4: same signature → stall_streak 1,2,3 — no more extensions
+        for i in 0..3u32 {
+            let iter = extended_budget - 1; // always near the limit
+            maybe_extend_iteration_budget(
+                &mut active_budget,
+                hard_max,
+                base,
+                iter,
+                &summaries,
+                &mut state,
+            );
+            assert_eq!(
+                active_budget,
+                extended_budget,
+                "stall call {} — should not extend",
+                i + 2
+            );
+        }
+
+        // Call 5: stall_streak=4 → budget CONTRACTS to iteration + 2
+        let iter = 55_u32;
+        maybe_extend_iteration_budget(
+            &mut active_budget,
+            hard_max,
+            base,
+            iter,
+            &summaries,
+            &mut state,
+        );
+        assert_eq!(
+            active_budget,
+            iter + 2,
+            "should contract budget on prolonged stall (stall=4)"
+        );
+    }
+
+    #[test]
+    fn extracts_autocomplete_suggestions_from_snapshot() {
+        let output = "\
+- page\n\
+  - combobox \"From\" [ref=e12]\n\
+  - listbox [ref=e30]\n\
+    - option \"Napoli Centrale\" [ref=e31]\n\
+    - option \"Napoli Afragola\" [ref=e32]\n\
+  - button \"Search\" [ref=e20]\n";
+        let suggestions = extract_autocomplete_suggestions(output).unwrap();
+        assert!(suggestions.contains("Napoli Centrale"));
+        assert!(suggestions.contains("e31"));
+        assert!(suggestions.contains("Napoli Afragola"));
+        assert!(suggestions.contains("Click the matching option"));
+    }
+
+    #[test]
+    fn no_autocomplete_suggestions_when_no_options() {
+        let output = "\
+- page\n\
+  - combobox \"From\" [ref=e12]\n\
+  - button \"Search\" [ref=e20]\n";
+        assert!(extract_autocomplete_suggestions(output).is_none());
+    }
+
+    #[test]
+    fn extracts_browser_screenshot_paths_from_tool_output() {
+        let output = "Screenshot saved!\n\n📁 File: /tmp/browser/screenshot_1.png\n🌐 View at: /api/v1/browser/screenshots/screenshot_1.png";
+        let paths = extract_browser_screenshot_paths(output);
+        assert_eq!(paths, vec!["/tmp/browser/screenshot_1.png".to_string()]);
+    }
+
+    #[test]
+    fn builds_browser_screenshot_context_only_for_multimodal_models() {
+        let msg = build_browser_screenshot_context_message(
+            "📁 File: /tmp/browser/screenshot_1.png",
+            &ModelCapabilities {
+                multimodal: true,
+                image_input: true,
+                tool_calls: true,
+                thinking: false,
+            },
+        );
+        assert!(msg.is_some());
+        assert!(is_temporary_browser_screenshot_message(
+            msg.as_ref().unwrap()
+        ));
+
+        let none = build_browser_screenshot_context_message(
+            "📁 File: /tmp/browser/screenshot_1.png",
+            &ModelCapabilities {
+                multimodal: false,
+                image_input: false,
+                tool_calls: true,
+                thinking: false,
+            },
+        );
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn builds_browser_follow_up_instruction_for_unresolved_form_state() {
+        let instruction = browser_follow_up_instruction(
+            "Typed into element [e1] (length: 16)\nVisible suggestions: Napoli Centrale | Napoli Afragola. This field likely requires selecting an explicit suggestion before continuing.\nA date picker appears to be open. Choose the requested date explicitly before searching.",
+        )
+        .expect("expected follow-up instruction");
+
+        assert!(instruction.contains("explicitly select the visible option"));
+        assert!(instruction.contains("choose the requested date"));
+    }
+
+    #[test]
+    #[cfg(feature = "mcp")]
+    fn compacts_browser_snapshot_with_tree_hierarchy() {
+        let output = "Navigated to https://example.com\n\
+            [image: base64_data_here]\n\
+            Page URL: https://example.com\n\
+            - generic [ref=e1]\n\
+            - combobox \"Departure\" [ref=e2]\n\
+            - paragraph \"Fill in the form\"\n\
+            - combobox \"Arrival\" [ref=e3]\n\
+            - generic [ref=e4]\n\
+            - button \"Search\" [ref=e5]\n\
+            - link \"Help\" [ref=e6]\n\
+            - footer\n\
+            - paragraph \"Copyright 2024\"";
+        let compact = compact_browser_snapshot(output);
+        // Image metadata stripped
+        assert!(!compact.contains("[image:"));
+        // Header preserved
+        assert!(compact.contains("Page URL: https://example.com"));
+        // Form fields preserved (tree hierarchy, no flat sections)
+        assert!(compact.contains("combobox \"Departure\" [ref=e2]"));
+        assert!(compact.contains("combobox \"Arrival\" [ref=e3]"));
+        // Buttons/links preserved
+        assert!(compact.contains("button \"Search\" [ref=e5]"));
+        assert!(compact.contains("link \"Help\" [ref=e6]"));
+        // With compact_tree, generic elements WITH refs are kept (they have [ref=])
+        assert!(compact.contains("generic [ref=e1]"));
+        // Form plan instruction present since combobox fields exist
+        assert!(compact.contains("FORM PLAN"));
+        // Non-interactive content stripped
+        assert!(!compact.contains("Copyright 2024"));
+    }
+
+    #[test]
+    #[cfg(feature = "mcp")]
+    fn compacts_large_snapshot_within_budget() {
+        let mut output = String::from("Page URL: https://example.com\n");
+        for i in 0..200 {
+            if i % 10 == 0 {
+                output.push_str(&format!("- button \"Button {i}\" [ref=e{i}]\n"));
+            } else {
+                output.push_str(&format!("- paragraph \"Lorem ipsum paragraph {i}\"\n"));
+            }
+        }
+        let compact = compact_browser_snapshot(&output);
+        // With compact_tree, only [ref=] lines are kept + form plan if applicable
+        assert!(compact.contains("[ref=e0]"));
+        assert!(compact.contains("[ref=e10]"));
+        // Non-interactive paragraphs should be stripped
+        assert!(!compact.contains("Lorem ipsum paragraph 1\n"));
+    }
+
+    #[test]
+    fn compact_click_strips_tree_shows_summary() {
+        let output = "Clicked element.\n\
+            - heading \"Page Title\"\n\
+            - button \"Submit\" [ref=e5]\n\
+            - input \"Name\" [ref=e6]\n\
+            - paragraph \"Some text\"";
+        let compact = compact_browser_action_with_tree(output, "Clicked.");
+        // Should contain action prefix
+        assert!(compact.contains("Clicked."));
+        // Should mention interactive element count
+        assert!(compact.contains("2 interactive elements"));
+        // Should NOT contain the full tree
+        assert!(!compact.contains("[ref=e5]"));
+        assert!(!compact.contains("Some text"));
+    }
+
+    #[test]
+    fn compact_type_keeps_only_header() {
+        let output = "Typed into element [e1] (length: 6)\nSome extra info here";
+        let compact = compact_browser_action_short(output);
+        // No tree means first 500 chars kept
+        assert!(compact.contains("Typed into element"));
+    }
+
+    #[test]
+    fn supersedes_stale_browser_snapshots() {
+        use super::{
+            build_snapshot_superseded_summary, is_browser_snapshot_tool_result,
+            supersede_stale_browser_context,
+        };
+        use crate::provider::ChatMessage;
+
+        // With unified browser tool, snapshots come from tool "browser"
+        // and contain " interactive elements)" marker from compact_browser_snapshot
+        let mut messages = vec![
+            ChatMessage::tool_result(
+                "tc1",
+                "browser",
+                "Page URL: https://example.com\n(2 interactive elements) Use ref=\"eN\" exactly as shown.\n\n- heading \"Test\" [ref=e1]\n- link \"More\" [ref=e2]",
+            ),
+            ChatMessage::user(
+                "Browser form policy reminder based on the latest page state:\n- old hint",
+            ),
+            ChatMessage::tool_result(
+                "tc2",
+                "browser",
+                "Page URL: https://example.com/page2\n(3 interactive elements) Use ref=\"eN\" exactly as shown.\n\n- button \"Submit\" [ref=e3]\n- input \"Name\" [ref=e4]\n- input \"Email\" [ref=e5]",
+            ),
+        ];
+
+        supersede_stale_browser_context(&mut messages);
+
+        // First snapshot replaced with summary
+        let first_content = messages[0].content.as_ref().unwrap();
+        assert!(
+            first_content.contains("[Previous snapshot superseded"),
+            "old snapshot should be superseded: {first_content}"
+        );
+        assert!(first_content.contains("example.com"));
+        assert!(first_content.contains("2 interactive elements"));
+
+        // Latest snapshot preserved in full
+        let last_snap = messages
+            .iter()
+            .rev()
+            .find(|m| is_browser_snapshot_tool_result(m))
+            .unwrap();
+        assert!(last_snap
+            .content
+            .as_ref()
+            .unwrap()
+            .contains("button \"Submit\""));
+    }
+
+    #[test]
+    fn removes_stale_follow_up_policy_messages() {
+        use super::{is_browser_follow_up_policy, supersede_stale_browser_context};
+        use crate::provider::ChatMessage;
+
+        let mut messages = vec![
+            ChatMessage::tool_result(
+                "tc1",
+                "browser",
+                "Page URL: https://a.com\n(1 interactive elements) Use ref=\"eN\" exactly as shown.\n\n- input [ref=e1]",
+            ),
+            ChatMessage::user(
+                "Browser form policy reminder based on the latest page state:\n- old hint",
+            ),
+            ChatMessage::tool_result(
+                "tc2",
+                "browser",
+                "Page URL: https://b.com\n(1 interactive elements) Use ref=\"eN\" exactly as shown.\n\n- input [ref=e2]",
+            ),
+            ChatMessage::user(
+                "Browser form policy reminder based on the latest page state:\n- new hint",
+            ),
+        ];
+
+        supersede_stale_browser_context(&mut messages);
+
+        let policy_count = messages
+            .iter()
+            .filter(|m| is_browser_follow_up_policy(m))
+            .count();
+        assert_eq!(policy_count, 1);
+        let policy = messages
+            .iter()
+            .find(|m| is_browser_follow_up_policy(m))
+            .unwrap();
+        assert!(policy.content.as_ref().unwrap().contains("new hint"));
+    }
 }

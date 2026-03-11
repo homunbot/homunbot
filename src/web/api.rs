@@ -1,13 +1,16 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
+use std::path::{Component, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{Path, Query, State, WebSocketUpgrade};
-use axum::http::StatusCode;
+use axum::extract::{Multipart, Path, Query, State, WebSocketUpgrade};
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::{IntoResponse, Json};
+use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
 use axum::Router;
 use futures::{SinkExt, StreamExt};
@@ -17,18 +20,24 @@ use super::server::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
     let api_router = Router::new()
-        .route("/health", get(health))
+        // Note: /health and /v1/webhook/{token} are registered as public routes in server.rs
         .route("/v1/logs/stream", get(stream_logs))
         .route("/v1/logs/recent", get(recent_logs))
         .route("/v1/status", get(status))
         .route("/v1/config", get(get_config))
         .route("/v1/config", axum::routing::patch(patch_config))
         .route("/v1/skills", get(list_skills))
+        .route("/v1/skills/audit", get(list_skill_audits))
         .route("/v1/skills/search", get(search_skills))
         .route("/v1/skills/install", axum::routing::post(install_skill))
+        .route("/v1/skills/create", axum::routing::post(create_skill_api))
         .route(
             "/v1/skills/{name}",
             get(get_skill_detail).delete(delete_skill),
+        )
+        .route(
+            "/v1/skills/{name}/scan",
+            axum::routing::post(scan_skill_api),
         )
         .route("/v1/skills/catalog/status", get(catalog_status))
         .route("/v1/skills/catalog/counts", get(catalog_counts))
@@ -50,7 +59,12 @@ pub fn router() -> Router<Arc<AppState>> {
             axum::routing::post(deactivate_provider),
         )
         .route("/v1/providers/test", axum::routing::post(test_provider))
+        .route("/v1/providers/health", get(providers_health))
         .route("/v1/providers/models", get(list_all_models))
+        .route(
+            "/v1/providers/model-capabilities",
+            axum::routing::post(resolve_model_capabilities),
+        )
         .route("/v1/providers/ollama/models", get(list_ollama_models))
         .route(
             "/v1/providers/ollama-cloud/models",
@@ -113,8 +127,7 @@ pub fn router() -> Router<Arc<AppState>> {
             axum::routing::post(generate_or_get_trigger_word),
         )
         .route("/v1/channels/whatsapp/pair", get(ws_whatsapp_pair))
-        // --- Webhook Ingress ---
-        .route("/v1/webhook/{token}", axum::routing::post(webhook_ingress))
+        // Note: /v1/webhook/{token} is registered as public route in server.rs
         // --- Account ---
         .route("/v1/account", get(get_account))
         .route(
@@ -150,8 +163,24 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         // --- Chat ---
         .route(
+            "/v1/chat/conversations",
+            get(list_chat_conversations).post(create_chat_conversation),
+        )
+        .route(
+            "/v1/chat/conversations/{conversation_id}",
+            axum::routing::patch(update_chat_conversation).delete(delete_chat_conversation),
+        )
+        .route(
             "/v1/chat/history",
             get(chat_history).delete(clear_chat_history),
+        )
+        .route(
+            "/v1/chat/uploads",
+            axum::routing::post(upload_chat_attachment),
+        )
+        .route(
+            "/v1/chat/uploads/{conversation_id}/{file_name}",
+            get(get_chat_uploaded_file),
         )
         .route("/v1/chat/run", get(current_chat_run))
         .route("/v1/chat/compact", axum::routing::post(compact_chat))
@@ -217,6 +246,10 @@ pub fn router() -> Router<Arc<AppState>> {
             axum::routing::post(pull_execution_sandbox_image),
         )
         .route(
+            "/v1/security/sandbox/image/build",
+            axum::routing::post(build_execution_sandbox_image),
+        )
+        .route(
             "/v1/security/sandbox/events",
             get(get_execution_sandbox_events),
         )
@@ -267,25 +300,107 @@ pub fn router() -> Router<Arc<AppState>> {
             axum::routing::post(run_automation_now),
         )
         // --- Usage ---
-        .route("/v1/usage", get(get_usage));
+        .route("/v1/usage", get(get_usage))
+        // --- Workflows ---
+        .route(
+            "/v1/workflows",
+            get(list_workflows_api).post(create_workflow_api),
+        )
+        .route("/v1/workflows/{id}", get(get_workflow_api))
+        .route(
+            "/v1/workflows/{id}/approve",
+            axum::routing::post(approve_workflow_api),
+        )
+        .route(
+            "/v1/workflows/{id}/cancel",
+            axum::routing::post(cancel_workflow_api),
+        )
+        .route(
+            "/v1/workflows/{id}/delete",
+            axum::routing::post(delete_workflow_api),
+        )
+        .route(
+            "/v1/workflows/{id}/restart",
+            axum::routing::post(restart_workflow_api),
+        )
+        // --- Business Autopilot ---
+        .route(
+            "/v1/business",
+            get(list_businesses_api).post(create_business_api),
+        )
+        .route("/v1/business/{id}", get(get_business_api))
+        .route(
+            "/v1/business/{id}/pause",
+            axum::routing::post(pause_business_api),
+        )
+        .route(
+            "/v1/business/{id}/resume",
+            axum::routing::post(resume_business_api),
+        )
+        .route(
+            "/v1/business/{id}/close",
+            axum::routing::post(close_business_api),
+        )
+        .route(
+            "/v1/business/{id}/strategies",
+            get(list_business_strategies_api),
+        )
+        .route(
+            "/v1/business/{id}/products",
+            get(list_business_products_api),
+        )
+        .route(
+            "/v1/business/{id}/transactions",
+            get(list_business_transactions_api),
+        )
+        .route("/v1/business/{id}/revenue", get(get_business_revenue_api));
+
+    // --- Knowledge Base (RAG) ---
+    #[cfg(feature = "local-embeddings")]
+    let api_router = api_router
+        .route("/v1/knowledge/stats", get(knowledge_stats))
+        .route(
+            "/v1/knowledge/sources",
+            get(list_knowledge_sources).delete(delete_knowledge_source),
+        )
+        .route("/v1/knowledge/search", get(search_knowledge))
+        .route(
+            "/v1/knowledge/ingest",
+            axum::routing::post(ingest_knowledge),
+        )
+        .route(
+            "/v1/knowledge/ingest-directory",
+            axum::routing::post(ingest_knowledge_directory),
+        )
+        .route(
+            "/v1/knowledge/reveal",
+            axum::routing::post(reveal_knowledge_chunk),
+        );
 
     // --- Browser (optional) ---
     #[cfg(feature = "browser")]
     let api_router = api_router.route("/v1/browser/test", axum::routing::post(test_browser));
 
+    // --- Emergency Stop ---
+
     api_router
+        .route(
+            "/v1/emergency-stop",
+            axum::routing::post(emergency_stop_handler),
+        )
+        .route("/v1/resume", axum::routing::post(resume_handler))
 }
 
 // --- Health check ---
 
 #[derive(Serialize)]
-struct HealthResponse {
+pub(crate) struct HealthResponse {
     status: &'static str,
     version: &'static str,
     uptime_secs: u64,
 }
 
-async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
+pub async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
@@ -298,34 +413,31 @@ async fn stream_logs() -> Sse<impl futures::Stream<Item = Result<Event, Infallib
     let rx = crate::logs::subscribe();
 
     let stream = futures::stream::unfold(rx, |mut rx| async move {
-        loop {
-            match rx.recv().await {
-                Ok(record) => {
-                    let payload =
-                        serde_json::to_string(&record).unwrap_or_else(|_| "{}".to_string());
-                    let event = Event::default().event("log").data(payload);
-                    return Some((Ok(event), rx));
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                    let lag_record = crate::logs::LogRecord {
-                        timestamp: chrono::Utc::now().to_rfc3339(),
-                        level: "warn".to_string(),
-                        target: "homun.logs".to_string(),
-                        message: format!(
-                            "Log stream dropped {skipped} events because the client was too slow"
-                        ),
-                        module_path: None,
-                        file: None,
-                        line: None,
-                        fields: Vec::new(),
-                    };
-                    let payload =
-                        serde_json::to_string(&lag_record).unwrap_or_else(|_| "{}".to_string());
-                    let event = Event::default().event("log").data(payload);
-                    return Some((Ok(event), rx));
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+        match rx.recv().await {
+            Ok(record) => {
+                let payload = serde_json::to_string(&record).unwrap_or_else(|_| "{}".to_string());
+                let event = Event::default().event("log").data(payload);
+                Some((Ok(event), rx))
             }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                let lag_record = crate::logs::LogRecord {
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    level: "warn".to_string(),
+                    target: "homun.logs".to_string(),
+                    message: format!(
+                        "Log stream dropped {skipped} events because the client was too slow"
+                    ),
+                    module_path: None,
+                    file: None,
+                    line: None,
+                    fields: Vec::new(),
+                };
+                let payload =
+                    serde_json::to_string(&lag_record).unwrap_or_else(|_| "{}".to_string());
+                let event = Event::default().event("log").data(payload);
+                Some((Ok(event), rx))
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => None,
         }
     });
 
@@ -542,6 +654,46 @@ async fn list_skills() -> Json<Vec<SkillView>> {
     )
 }
 
+/// SKL-6: List recent skill audit entries.
+async fn list_skill_audits(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<AuditQueryParams>,
+) -> Json<Vec<SkillAuditView>> {
+    let limit = params.limit.unwrap_or(50).min(200);
+    let rows = if let Some(ref db) = state.db {
+        db.list_skill_audits(limit).await.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    Json(
+        rows.into_iter()
+            .map(|r| SkillAuditView {
+                id: r.id,
+                timestamp: r.timestamp,
+                skill_name: r.skill_name,
+                channel: r.channel,
+                query: r.query,
+                activation_type: r.activation_type,
+            })
+            .collect(),
+    )
+}
+
+#[derive(serde::Deserialize)]
+struct AuditQueryParams {
+    limit: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct SkillAuditView {
+    id: i64,
+    timestamp: String,
+    skill_name: String,
+    channel: String,
+    query: Option<String>,
+    activation_type: String,
+}
+
 #[derive(serde::Deserialize)]
 struct InstallRequest {
     source: String,
@@ -611,6 +763,132 @@ async fn install_skill(
             message: e.to_string(),
             security_report: None,
         })),
+    }
+}
+
+// --- Create skill ---
+
+#[derive(Deserialize)]
+struct CreateSkillRequest {
+    prompt: String,
+    name: Option<String>,
+    language: Option<String>,
+    #[serde(default)]
+    overwrite: bool,
+}
+
+#[derive(Serialize)]
+struct CreateSkillResponse {
+    ok: bool,
+    name: String,
+    path: String,
+    language: String,
+    reused_skills: Vec<String>,
+    smoke_test_passed: bool,
+    validation_notes: Vec<String>,
+    message: String,
+    security_report: Option<SecurityReportDetailView>,
+}
+
+#[derive(Serialize)]
+struct SecurityReportDetailView {
+    risk_score: u8,
+    blocked: bool,
+    scanned_files: usize,
+    summary: String,
+    warnings: Vec<SecurityWarningView>,
+}
+
+#[derive(Serialize)]
+struct SecurityWarningView {
+    severity: String,
+    category: String,
+    description: String,
+    file: Option<String>,
+    line: Option<usize>,
+}
+
+fn security_detail_view(report: &crate::skills::SecurityReport) -> SecurityReportDetailView {
+    SecurityReportDetailView {
+        risk_score: report.risk_score,
+        blocked: report.blocked,
+        scanned_files: report.scanned_files,
+        summary: report.summary(),
+        warnings: report
+            .warnings
+            .iter()
+            .map(|w| SecurityWarningView {
+                severity: format!("{:?}", w.severity),
+                category: format!("{:?}", w.category),
+                description: w.description.clone(),
+                file: w.file.clone(),
+                line: w.line,
+            })
+            .collect(),
+    }
+}
+
+async fn create_skill_api(
+    Json(req): Json<CreateSkillRequest>,
+) -> Result<Json<CreateSkillResponse>, StatusCode> {
+    let request = crate::skills::SkillCreationRequest {
+        prompt: req.prompt,
+        name: req.name,
+        language: req.language,
+        overwrite: req.overwrite,
+    };
+
+    match crate::skills::create_skill(request).await {
+        Ok(result) => Ok(Json(CreateSkillResponse {
+            ok: true,
+            name: result.name,
+            path: result.path.display().to_string(),
+            language: result.script_language,
+            reused_skills: result.reused_skills,
+            smoke_test_passed: result.smoke_test_passed,
+            validation_notes: result.validation_notes,
+            message: String::new(),
+            security_report: Some(security_detail_view(&result.security_report)),
+        })),
+        Err(e) => Ok(Json(CreateSkillResponse {
+            ok: false,
+            name: String::new(),
+            path: String::new(),
+            language: String::new(),
+            reused_skills: vec![],
+            smoke_test_passed: false,
+            validation_notes: vec![],
+            message: e.to_string(),
+            security_report: None,
+        })),
+    }
+}
+
+// --- Scan skill ---
+
+async fn scan_skill_api(Path(name): Path<String>) -> Result<Json<serde_json::Value>, StatusCode> {
+    let skills_dir = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".homun")
+        .join("skills");
+    let skill_dir = skills_dir.join(&name);
+
+    if !skill_dir.exists() {
+        return Ok(Json(serde_json::json!({
+            "ok": false,
+            "message": format!("Skill '{}' not found", name),
+        })));
+    }
+
+    match crate::skills::scan_skill_package(&skill_dir).await {
+        Ok(report) => Ok(Json(serde_json::json!({
+            "ok": true,
+            "report": security_detail_view(&report),
+        }))),
+        Err(e) => Ok(Json(serde_json::json!({
+            "ok": false,
+            "message": e.to_string(),
+        }))),
     }
 }
 
@@ -1207,6 +1485,32 @@ struct ProviderView {
     active: bool,
 }
 
+// --- Provider Health ---
+
+async fn providers_health(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    match state.health_tracker.as_ref() {
+        Some(tracker) => {
+            let snapshots = tracker.snapshots();
+            Json(serde_json::json!({ "providers": snapshots }))
+        }
+        None => Json(serde_json::json!({ "providers": [] })),
+    }
+}
+
+// --- Emergency Stop ---
+
+async fn emergency_stop_handler(
+    State(state): State<Arc<AppState>>,
+) -> Json<crate::security::EStopReport> {
+    let report = crate::security::emergency_stop(&state.estop_handles).await;
+    Json(report)
+}
+
+async fn resume_handler(State(_state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    crate::security::resume();
+    Json(serde_json::json!({ "status": "resumed", "network": "online" }))
+}
+
 async fn list_providers(State(state): State<Arc<AppState>>) -> Json<Vec<ProviderView>> {
     let config = state.config.read().await;
 
@@ -1596,6 +1900,7 @@ async fn test_provider(
         model: model.clone(),
         max_tokens: 12,
         temperature: 0.0,
+        think: None,
     };
 
     let result =
@@ -1729,6 +2034,9 @@ struct AllModelsResponse {
     ollama_cloud_configured: bool,
     hidden_models: std::collections::HashMap<String, Vec<String>>,
     model_overrides: std::collections::HashMap<String, crate::config::ModelOverrides>,
+    model_capabilities: std::collections::HashMap<String, crate::config::ModelCapabilities>,
+    effective_model_capabilities:
+        std::collections::HashMap<String, crate::config::ModelCapabilities>,
 }
 
 async fn list_all_models(State(state): State<Arc<AppState>>) -> Json<AllModelsResponse> {
@@ -1800,6 +2108,27 @@ async fn list_all_models(State(state): State<Arc<AppState>>) -> Json<AllModelsRe
         }
     }
 
+    let mut capability_models = HashSet::new();
+    for entry in &models {
+        capability_models.insert(entry.model.clone());
+    }
+    if !current_model.is_empty() {
+        capability_models.insert(current_model.clone());
+    }
+    if !vision_model.is_empty() {
+        capability_models.insert(vision_model.clone());
+    }
+    for model in &config.agent.fallback_models {
+        capability_models.insert(model.clone());
+    }
+    for model in config.agent.model_overrides.keys() {
+        capability_models.insert(model.clone());
+    }
+    let model_capabilities =
+        build_model_capabilities_map(&config, capability_models.clone().into_iter(), false);
+    let effective_model_capabilities =
+        build_model_capabilities_map(&config, capability_models.into_iter(), true);
+
     Json(AllModelsResponse {
         ok: true,
         models,
@@ -1809,6 +2138,67 @@ async fn list_all_models(State(state): State<Arc<AppState>>) -> Json<AllModelsRe
         ollama_cloud_configured,
         hidden_models,
         model_overrides: config.agent.model_overrides.clone(),
+        model_capabilities,
+        effective_model_capabilities,
+    })
+}
+
+#[derive(Deserialize)]
+struct ModelCapabilitiesRequest {
+    models: Vec<String>,
+    #[serde(default)]
+    apply_overrides: bool,
+}
+
+#[derive(Serialize)]
+struct ModelCapabilitiesResponse {
+    ok: bool,
+    model_capabilities: std::collections::HashMap<String, crate::config::ModelCapabilities>,
+}
+
+fn build_model_capabilities_map<I>(
+    config: &crate::config::Config,
+    models: I,
+    apply_overrides: bool,
+) -> std::collections::HashMap<String, crate::config::ModelCapabilities>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut result = HashMap::new();
+    for model in models {
+        if model.trim().is_empty() {
+            continue;
+        }
+        let provider_name = config
+            .resolve_provider(&model)
+            .map(|(name, _)| name)
+            .unwrap_or("unknown");
+        result.insert(
+            model.clone(),
+            if apply_overrides {
+                config
+                    .agent
+                    .effective_model_capabilities(provider_name, &model)
+            } else {
+                crate::provider::capabilities::detect_model_capabilities(provider_name, &model)
+            },
+        );
+    }
+    result
+}
+
+async fn resolve_model_capabilities(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<ModelCapabilitiesRequest>,
+) -> Json<ModelCapabilitiesResponse> {
+    let config = state.config.read().await;
+    Json(ModelCapabilitiesResponse {
+        ok: true,
+        model_capabilities: build_model_capabilities_map(
+            &config,
+            payload.models.into_iter(),
+            payload.apply_overrides,
+        ),
     })
 }
 
@@ -2788,6 +3178,7 @@ async fn load_mcpmarket_fallback(limit: usize) -> Vec<McpMarketItem> {
         .collect()
 }
 
+#[allow(clippy::type_complexity)]
 async fn load_mcpmarket_index(limit: usize) -> HashMap<String, McpLeaderboardEntry> {
     static MCPMARKET_INDEX_CACHE: OnceLock<
         Mutex<Option<(Instant, HashMap<String, McpLeaderboardEntry>)>>,
@@ -4148,11 +4539,8 @@ fn fallback_env_help_for_spec(
         } else {
             "GitHub token used to access repositories, issues, and pull requests.".to_string()
         };
-        out.where_to_get = if language.is_italian() {
-            "GitHub -> Settings -> Developer settings -> Personal access tokens.".to_string()
-        } else {
-            "GitHub -> Settings -> Developer settings -> Personal access tokens.".to_string()
-        };
+        out.where_to_get =
+            "GitHub -> Settings -> Developer settings -> Personal access tokens.".to_string();
         out.retrieval_steps = vec![
             if language.is_italian() {
                 "Apri la pagina GitHub Personal Access Tokens.".to_string()
@@ -4369,12 +4757,10 @@ fn fallback_env_help_for_spec(
                 } else {
                     format!("Open {} and look for: {}", url, clues[0])
                 }
+            } else if language.is_italian() {
+                format!("Cerca nella documentazione questo passaggio: {}", clues[0])
             } else {
-                if language.is_italian() {
-                    format!("Cerca nella documentazione questo passaggio: {}", clues[0])
-                } else {
-                    format!("Look in documentation for: {}", clues[0])
-                }
+                format!("Look in documentation for: {}", clues[0])
             };
             out.retrieval_steps = clues
                 .iter()
@@ -4429,12 +4815,10 @@ fn build_fallback_install_guide(
             } else {
                 format!("Open docs for {}: {}", display_name, docs)
             }
+        } else if language.is_italian() {
+            format!("Rivedi questo server: {} ({})", display_name, req.id)
         } else {
-            if language.is_italian() {
-                format!("Rivedi questo server: {} ({})", display_name, req.id)
-            } else {
-                format!("Review this server: {} ({})", display_name, req.id)
-            }
+            format!("Review this server: {} ({})", display_name, req.id)
         },
         if language.is_italian() {
             "Raccogli le credenziali richieste con la guida qui sotto e salva i segreti nel Vault (vault://...)".to_string()
@@ -4548,6 +4932,7 @@ async fn try_generate_install_guide_with_llm(
             model,
             max_tokens: 700,
             temperature: 0.2,
+            think: None,
         }),
     )
     .await
@@ -4695,9 +5080,7 @@ fn display_name_from_package(pkg: &str) -> String {
         .replace("-server", "")
         .replace("mcp-", "")
         .replace("-mcp", "")
-        .replace('.', " ")
-        .replace('_', " ")
-        .replace('-', " ");
+        .replace(['.', '_', '-'], " ");
     name.split_whitespace()
         .map(|w| {
             let mut chars = w.chars();
@@ -4847,8 +5230,20 @@ struct McpServerView {
     command: Option<String>,
     args: Vec<String>,
     url: Option<String>,
+    capabilities: Vec<String>,
     enabled: bool,
     env: Vec<McpServerEnvView>,
+}
+
+fn normalize_mcp_capabilities(values: &[String]) -> Vec<String> {
+    let mut out = values
+        .iter()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    out.sort();
+    out.dedup();
+    out
 }
 
 fn mcp_env_preview(value: &str) -> (String, bool) {
@@ -4888,6 +5283,7 @@ async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> Json<Vec<McpSer
                 command: server.command.clone(),
                 args: server.args.clone(),
                 url: server.url.clone(),
+                capabilities: normalize_mcp_capabilities(&server.capabilities),
                 enabled: server.enabled,
                 env,
             }
@@ -5023,6 +5419,8 @@ struct McpServerUpsertRequest {
     url: Option<String>,
     #[serde(default)]
     env: HashMap<String, String>,
+    #[serde(default)]
+    capabilities: Vec<String>,
     enabled: Option<bool>,
     overwrite: Option<bool>,
 }
@@ -5056,6 +5454,7 @@ async fn upsert_mcp_server(
         .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
         .filter(|(k, _)| !k.is_empty())
         .collect::<HashMap<_, _>>();
+    let capabilities = normalize_mcp_capabilities(&req.capabilities);
 
     if transport == "stdio" && command.clone().unwrap_or_default().is_empty() {
         return Err(StatusCode::BAD_REQUEST);
@@ -5070,6 +5469,7 @@ async fn upsert_mcp_server(
         args,
         url,
         env,
+        capabilities,
         enabled: req.enabled.unwrap_or(true),
     };
 
@@ -5610,7 +6010,7 @@ async fn configure_channel(
                 && default_acc
                     .trigger_word
                     .as_ref()
-                    .map_or(true, |t| t.is_empty())
+                    .is_none_or(|t| t.is_empty())
             {
                 if let Ok(secrets) = crate::storage::global_secrets() {
                     let key = crate::storage::SecretKey::custom("email.default.trigger_word");
@@ -6276,6 +6676,8 @@ struct MemoryCleanupResponse {
     ok: bool,
     messages_deleted: u64,
     chunks_deleted: u64,
+    uploads_deleted: u64,
+    upload_dirs_deleted: u64,
     message: String,
 }
 
@@ -6300,15 +6702,22 @@ async fn run_memory_cleanup(
     drop(config); // Release lock before DB operation
 
     match db.run_memory_cleanup(conv_days, hist_days).await {
-        Ok(result) => Ok(Json(MemoryCleanupResponse {
-            ok: true,
-            messages_deleted: result.messages_deleted,
-            chunks_deleted: result.chunks_deleted,
-            message: format!(
-                "Cleaned up {} old messages and {} old history chunks",
-                result.messages_deleted, result.chunks_deleted
-            ),
-        })),
+        Ok(result) => {
+            let upload_cleanup = cleanup_chat_upload_dirs(db, conv_days)
+                .await
+                .unwrap_or_default();
+            Ok(Json(MemoryCleanupResponse {
+                ok: true,
+                messages_deleted: result.messages_deleted,
+                chunks_deleted: result.chunks_deleted,
+                uploads_deleted: upload_cleanup.files_deleted,
+                upload_dirs_deleted: upload_cleanup.directories_deleted,
+                message: format!(
+                    "Cleaned up {} old messages, {} old history chunks, and {} uploaded chat files",
+                    result.messages_deleted, result.chunks_deleted, upload_cleanup.files_deleted
+                ),
+            }))
+        }
         Err(e) => {
             tracing::error!(error = %e, "Memory cleanup failed");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -7379,6 +7788,7 @@ async fn update_2fa_settings(
 #[derive(Deserialize)]
 struct ChatHistoryQuery {
     limit: Option<u32>,
+    conversation_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -7387,6 +7797,475 @@ struct ChatHistoryMessage {
     content: String,
     tools_used: Vec<String>,
     timestamp: String,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    attachments: Vec<super::chat_attachments::ChatAttachment>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    mcp_servers: Vec<super::chat_attachments::ChatMcpServerRef>,
+}
+
+#[derive(Serialize)]
+struct ChatConversationSummary {
+    conversation_id: String,
+    title: String,
+    preview: String,
+    created_at: String,
+    updated_at: String,
+    message_count: u32,
+    archived: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_run: Option<super::run_state::WebChatRunSnapshot>,
+}
+
+#[derive(Deserialize)]
+struct ChatConversationListQuery {
+    limit: Option<u32>,
+    q: Option<String>,
+    include_archived: Option<bool>,
+}
+
+#[derive(Deserialize, Default)]
+struct ChatConversationQuery {
+    conversation_id: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Default)]
+struct ChatConversationMetadata {
+    title: Option<String>,
+    archived: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct UpdateChatConversationRequest {
+    title: Option<String>,
+    archived: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct ChatUploadResponse {
+    ok: bool,
+    attachment: super::chat_attachments::ChatAttachment,
+}
+
+struct ValidatedChatUpload {
+    kind: String,
+    content_type: String,
+    max_bytes: usize,
+}
+
+fn web_session_key(conversation_id: &str) -> String {
+    format!("web:{conversation_id}")
+}
+
+fn chat_uploads_root() -> PathBuf {
+    crate::config::Config::workspace_dir().join(".chat-uploads")
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct ChatUploadCleanupStats {
+    pub files_deleted: u64,
+    pub directories_deleted: u64,
+    pub bytes_deleted: u64,
+}
+
+async fn collect_upload_dir_stats(
+    path: &std::path::Path,
+) -> std::io::Result<ChatUploadCleanupStats> {
+    let mut stats = ChatUploadCleanupStats::default();
+    let mut stack = vec![path.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        let mut entries = match tokio::fs::read_dir(&dir).await {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+
+        while let Some(entry) = entries.next_entry().await? {
+            let file_type = entry.file_type().await?;
+            if file_type.is_dir() {
+                stats.directories_deleted += 1;
+                stack.push(entry.path());
+            } else {
+                stats.files_deleted += 1;
+                if let Ok(metadata) = entry.metadata().await {
+                    stats.bytes_deleted += metadata.len();
+                }
+            }
+        }
+    }
+
+    Ok(stats)
+}
+
+async fn remove_chat_upload_dir(conversation_id: &str) -> std::io::Result<ChatUploadCleanupStats> {
+    let conversation = sanitize_chat_segment(conversation_id, "default");
+    let path = chat_uploads_root().join(conversation);
+    let mut stats = collect_upload_dir_stats(&path).await?;
+    match tokio::fs::remove_dir_all(&path).await {
+        Ok(()) => {
+            stats.directories_deleted += 1;
+            Ok(stats)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ChatUploadCleanupStats::default()),
+        Err(e) => Err(e),
+    }
+}
+
+pub(crate) async fn cleanup_chat_upload_dirs(
+    db: &crate::storage::Database,
+    retention_days: u32,
+) -> anyhow::Result<ChatUploadCleanupStats> {
+    let root = chat_uploads_root();
+    if !root.exists() {
+        return Ok(ChatUploadCleanupStats::default());
+    }
+
+    let rows = db.list_sessions_by_prefix("web:%", 5000).await?;
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
+    let cutoff_str = cutoff.format("%Y-%m-%d %H:%M:%S").to_string();
+    let keep = rows
+        .into_iter()
+        .filter_map(|row| {
+            row.key
+                .strip_prefix("web:")
+                .map(|conversation_id| (conversation_id.to_string(), row.updated_at))
+        })
+        .filter(|(_, updated_at)| updated_at >= &cutoff_str)
+        .map(|(conversation_id, _)| sanitize_chat_segment(&conversation_id, "default"))
+        .collect::<HashSet<_>>();
+
+    let mut stats = ChatUploadCleanupStats::default();
+    let mut entries = tokio::fs::read_dir(&root).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let file_type = entry.file_type().await?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        let dir_name = entry.file_name().to_string_lossy().to_string();
+        if keep.contains(&dir_name) {
+            continue;
+        }
+        let dir_stats = remove_chat_upload_dir(&dir_name).await?;
+        stats.files_deleted += dir_stats.files_deleted;
+        stats.directories_deleted += dir_stats.directories_deleted;
+        stats.bytes_deleted += dir_stats.bytes_deleted;
+    }
+
+    Ok(stats)
+}
+
+fn sanitize_chat_segment(value: &str, fallback: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+
+    if sanitized.is_empty() {
+        fallback.to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn chat_upload_path(conversation_id: &str, file_name: &str) -> Option<PathBuf> {
+    let conversation = sanitize_chat_segment(conversation_id, "default");
+    let file_name = sanitize_chat_segment(file_name, "upload.bin");
+    let path = chat_uploads_root().join(conversation).join(file_name);
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return None;
+    }
+    Some(path)
+}
+
+fn validate_chat_upload_kind(
+    kind: &str,
+    file_name: &str,
+    content_type: Option<&str>,
+) -> Option<ValidatedChatUpload> {
+    let normalized_kind = kind.trim().to_lowercase();
+    let extension = std::path::Path::new(file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_lowercase())
+        .unwrap_or_default();
+    let guessed = content_type
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| {
+            mime_guess::from_path(file_name)
+                .first_or_octet_stream()
+                .essence_str()
+                .to_string()
+        });
+
+    match normalized_kind.as_str() {
+        "image" if guessed.starts_with("image/") => Some(ValidatedChatUpload {
+            kind: "image".to_string(),
+            content_type: guessed,
+            max_bytes: 15 * 1024 * 1024,
+        }),
+        "document" => {
+            let allowed = matches!(extension.as_str(), "pdf" | "md" | "txt" | "doc" | "docx")
+                || matches!(
+                    guessed.as_str(),
+                    "application/pdf"
+                        | "text/markdown"
+                        | "text/plain"
+                        | "application/msword"
+                        | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                );
+            if allowed {
+                Some(ValidatedChatUpload {
+                    kind: "document".to_string(),
+                    content_type: guessed,
+                    max_bytes: 25 * 1024 * 1024,
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn chat_conversation_id(query: &ChatConversationQuery) -> String {
+    query
+        .conversation_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("default")
+        .to_string()
+}
+
+fn chat_conversation_title(metadata: &str, first_user_message: Option<&str>) -> String {
+    let metadata_title = parse_chat_conversation_metadata(metadata)
+        .title
+        .filter(|value| !value.trim().is_empty());
+
+    metadata_title
+        .or_else(|| {
+            first_user_message
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(truncate_conversation_label)
+        })
+        .unwrap_or_else(|| "New conversation".to_string())
+}
+
+fn truncate_conversation_label(value: &str) -> String {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = compact.chars();
+    let truncated: String = chars.by_ref().take(48).collect();
+    if chars.next().is_some() {
+        format!("{truncated}…")
+    } else if truncated.is_empty() {
+        "New conversation".to_string()
+    } else {
+        truncated
+    }
+}
+
+fn parse_chat_conversation_metadata(metadata: &str) -> ChatConversationMetadata {
+    serde_json::from_str(metadata).unwrap_or_default()
+}
+
+fn chat_message_label(raw: &str) -> String {
+    let parsed = super::chat_attachments::parse_message_content(raw);
+    let text = parsed.text.trim().to_string();
+    if !text.is_empty() {
+        return text;
+    }
+    if let Some(attachment) = parsed.attachments.first() {
+        return attachment.name.clone();
+    }
+    parsed
+        .mcp_servers
+        .first()
+        .map(|server| server.name.clone())
+        .unwrap_or_default()
+}
+
+fn build_chat_conversation_summary(
+    state: &Arc<AppState>,
+    row: crate::storage::SessionListRow,
+) -> Option<ChatConversationSummary> {
+    let conversation_id = row.key.strip_prefix("web:")?.to_string();
+    let session_key = web_session_key(&conversation_id);
+    let metadata = parse_chat_conversation_metadata(&row.metadata);
+    let first_user_message = row.first_user_message.as_deref().map(chat_message_label);
+    let title = metadata
+        .title
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| chat_conversation_title(&row.metadata, first_user_message.as_deref()));
+    let preview = row
+        .last_message_preview
+        .as_deref()
+        .map(chat_message_label)
+        .map(|value| truncate_conversation_label(&value))
+        .unwrap_or_default();
+    let updated_at = row.last_message_at.unwrap_or(row.updated_at);
+    Some(ChatConversationSummary {
+        conversation_id,
+        title,
+        preview,
+        created_at: row.created_at,
+        updated_at,
+        message_count: row.message_count.max(0) as u32,
+        archived: metadata.archived.unwrap_or(false),
+        active_run: state.web_runs.active_snapshot(&session_key),
+    })
+}
+
+async fn list_chat_conversations(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ChatConversationListQuery>,
+) -> Result<Json<Vec<ChatConversationSummary>>, StatusCode> {
+    let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let rows = db
+        .list_sessions_by_prefix("web:%", q.limit.unwrap_or(50))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let search = q.q.as_deref().map(|value| value.trim().to_lowercase());
+    let include_archived = q.include_archived.unwrap_or(false);
+
+    let conversations = rows
+        .into_iter()
+        .filter_map(|row| build_chat_conversation_summary(&state, row))
+        .filter(|conversation| {
+            if !include_archived && conversation.archived {
+                return false;
+            }
+            if let Some(search) = search.as_deref() {
+                let haystack = format!(
+                    "{} {}",
+                    conversation.title.to_lowercase(),
+                    conversation.preview.to_lowercase()
+                );
+                haystack.contains(search)
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    Ok(Json(conversations))
+}
+
+async fn create_chat_conversation(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ChatConversationSummary>, StatusCode> {
+    let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let conversation_id = uuid::Uuid::new_v4().to_string();
+    let session_key = web_session_key(&conversation_id);
+    let metadata = serde_json::json!({});
+
+    db.upsert_session(&session_key, 0)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    db.set_session_metadata(&session_key, &metadata.to_string())
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let session = db
+        .load_session(&session_key)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(ChatConversationSummary {
+        conversation_id,
+        title: String::new(),
+        preview: String::new(),
+        created_at: session.created_at,
+        updated_at: session.updated_at,
+        message_count: 0,
+        archived: false,
+        active_run: None,
+    }))
+}
+
+async fn update_chat_conversation(
+    State(state): State<Arc<AppState>>,
+    Path(conversation_id): Path<String>,
+    Json(req): Json<UpdateChatConversationRequest>,
+) -> Result<Json<ChatConversationSummary>, StatusCode> {
+    let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let session_key = web_session_key(&conversation_id);
+    let existing = db
+        .load_session(&session_key)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let mut metadata = parse_chat_conversation_metadata(&existing.metadata);
+    if let Some(title) = req.title {
+        let title = title.trim();
+        metadata.title = if title.is_empty() {
+            None
+        } else {
+            Some(truncate_conversation_label(title))
+        };
+    }
+    if let Some(archived) = req.archived {
+        metadata.archived = Some(archived);
+    }
+
+    let metadata_json =
+        serde_json::to_string(&metadata).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    db.set_session_metadata(&session_key, &metadata_json)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let rows = db
+        .list_sessions_by_prefix(&session_key, 1)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let row = rows.into_iter().next().ok_or(StatusCode::NOT_FOUND)?;
+    let summary = build_chat_conversation_summary(&state, row).ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok(Json(summary))
+}
+
+async fn delete_chat_conversation(
+    State(state): State<Arc<AppState>>,
+    Path(conversation_id): Path<String>,
+) -> Result<Json<OkResponse>, StatusCode> {
+    let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let session_key = web_session_key(&conversation_id);
+
+    state.web_runs.clear_session(&session_key);
+    let _ = db.delete_web_chat_runs(&session_key).await;
+    let deleted = db
+        .delete_session(&session_key)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if deleted {
+        if let Err(e) = remove_chat_upload_dir(&conversation_id).await {
+            tracing::warn!(conversation_id = %conversation_id, error = %e, "Failed to remove chat upload directory");
+        }
+    }
+
+    Ok(Json(OkResponse {
+        ok: deleted,
+        message: Some(if deleted {
+            "Conversation deleted".to_string()
+        } else {
+            "Conversation not found".to_string()
+        }),
+    }))
 }
 
 async fn chat_history(
@@ -7395,9 +8274,15 @@ async fn chat_history(
 ) -> Result<Json<Vec<ChatHistoryMessage>>, StatusCode> {
     let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     let limit = q.limit.unwrap_or(50);
+    let conversation_id = q
+        .conversation_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("default");
+    let session_key = web_session_key(conversation_id);
 
     let rows = db
-        .load_messages("web:default", limit)
+        .load_messages(&session_key, limit)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -7406,11 +8291,14 @@ async fn chat_history(
         .filter(|r| r.role == "user" || r.role == "assistant")
         .map(|r| {
             let tools: Vec<String> = serde_json::from_str(&r.tools_used).unwrap_or_default();
+            let parsed = super::chat_attachments::parse_message_content(&r.content);
             ChatHistoryMessage {
                 role: r.role,
-                content: r.content,
+                content: parsed.text,
                 tools_used: tools,
                 timestamp: r.timestamp,
+                attachments: parsed.attachments,
+                mcp_servers: parsed.mcp_servers,
             }
         })
         .collect();
@@ -7418,17 +8306,142 @@ async fn chat_history(
     Ok(Json(messages))
 }
 
-/// Clear chat history for the web session
-async fn clear_chat_history(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<OkResponse>, StatusCode> {
-    let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+async fn upload_chat_attachment(
+    mut multipart: Multipart,
+) -> Result<Json<ChatUploadResponse>, StatusCode> {
+    let mut conversation_id = "default".to_string();
+    let mut kind = "image".to_string();
+    let mut file_name = None;
+    let mut content_type = None;
+    let mut bytes = None;
 
-    db.clear_messages("web:default")
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+    {
+        match field.name() {
+            Some("conversation_id") => {
+                conversation_id = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+            }
+            Some("kind") => {
+                kind = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+            }
+            Some("file") => {
+                file_name = Some(field.file_name().unwrap_or("upload.bin").to_string());
+                content_type = field.content_type().map(ToString::to_string);
+                bytes = Some(field.bytes().await.map_err(|_| StatusCode::BAD_REQUEST)?);
+            }
+            _ => {}
+        }
+    }
+
+    let file_name = sanitize_chat_segment(file_name.as_deref().unwrap_or("upload.bin"), "image");
+    let bytes = bytes.ok_or(StatusCode::BAD_REQUEST)?;
+    let validated = validate_chat_upload_kind(&kind, &file_name, content_type.as_deref())
+        .ok_or(StatusCode::UNSUPPORTED_MEDIA_TYPE)?;
+    if bytes.is_empty() || bytes.len() > validated.max_bytes {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    let conversation_id = sanitize_chat_segment(&conversation_id, "default");
+    let extension = std::path::Path::new(&file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| sanitize_chat_segment(value, "bin"))
+        .filter(|value| !value.is_empty());
+    let stored_name = match extension {
+        Some(ext) => format!("{}.{}", uuid::Uuid::new_v4(), ext),
+        None => uuid::Uuid::new_v4().to_string(),
+    };
+    let path = chat_upload_path(&conversation_id, &stored_name).ok_or(StatusCode::BAD_REQUEST)?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    tokio::fs::write(&path, &bytes)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    state.web_runs.clear_session("web:default");
+    Ok(Json(ChatUploadResponse {
+        ok: true,
+        attachment: super::chat_attachments::ChatAttachment {
+            kind: validated.kind,
+            name: file_name,
+            stored_path: path.to_string_lossy().to_string(),
+            preview_url: format!("/api/v1/chat/uploads/{conversation_id}/{stored_name}"),
+            content_type: validated.content_type,
+            size_bytes: bytes.len() as u64,
+        },
+    }))
+}
+
+async fn get_chat_uploaded_file(
+    Path((conversation_id, file_name)): Path<(String, String)>,
+) -> Result<Response, StatusCode> {
+    let path = chat_upload_path(&conversation_id, &file_name).ok_or(StatusCode::BAD_REQUEST)?;
+    let data = tokio::fs::read(&path)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    let content_type = mime_guess::from_path(&path).first_or_octet_stream();
+
+    let mut response = Response::new(Body::from(data));
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_str(content_type.as_ref())
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=3600"),
+    );
+    Ok(response)
+}
+
+#[cfg(test)]
+mod chat_upload_tests {
+    use super::validate_chat_upload_kind;
+
+    #[test]
+    fn accepts_supported_image_uploads() {
+        let upload = validate_chat_upload_kind("image", "photo.png", Some("image/png"))
+            .expect("expected image upload to validate");
+        assert_eq!(upload.kind, "image");
+        assert_eq!(upload.content_type, "image/png");
+    }
+
+    #[test]
+    fn accepts_supported_document_uploads() {
+        let upload = validate_chat_upload_kind("document", "report.pdf", Some("application/pdf"))
+            .expect("expected document upload to validate");
+        assert_eq!(upload.kind, "document");
+        assert_eq!(upload.content_type, "application/pdf");
+    }
+
+    #[test]
+    fn rejects_unsupported_document_uploads() {
+        assert!(
+            validate_chat_upload_kind("document", "archive.zip", Some("application/zip")).is_none()
+        );
+    }
+}
+
+/// Clear chat history for the web session
+async fn clear_chat_history(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ChatConversationQuery>,
+) -> Result<Json<OkResponse>, StatusCode> {
+    let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let conversation_id = chat_conversation_id(&q);
+    let session_key = web_session_key(&conversation_id);
+
+    db.clear_messages(&session_key)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let _ = db.delete_web_chat_runs(&session_key).await;
+
+    state.web_runs.clear_session(&session_key);
 
     Ok(Json(OkResponse {
         ok: true,
@@ -7438,17 +8451,36 @@ async fn clear_chat_history(
 
 async fn current_chat_run(
     State(state): State<Arc<AppState>>,
+    Query(q): Query<ChatConversationQuery>,
 ) -> Result<Json<Option<super::run_state::WebChatRunSnapshot>>, StatusCode> {
-    Ok(Json(state.web_runs.active_snapshot("web:default")))
+    let conversation_id = chat_conversation_id(&q);
+    let session_key = web_session_key(&conversation_id);
+
+    if let Some(run) = state.web_runs.active_snapshot(&session_key) {
+        return Ok(Json(Some(run)));
+    }
+
+    let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let run = db
+        .load_restorable_web_chat_run(&session_key)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(run))
 }
 
 /// Compact chat conversation (trigger memory consolidation)
-async fn compact_chat(State(state): State<Arc<AppState>>) -> Result<Json<OkResponse>, StatusCode> {
+async fn compact_chat(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ChatConversationQuery>,
+) -> Result<Json<OkResponse>, StatusCode> {
     let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let conversation_id = chat_conversation_id(&q);
+    let session_key = web_session_key(&conversation_id);
 
     // Check if there are enough messages to consolidate
     let count = db
-        .count_messages("web:default")
+        .count_messages(&session_key)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -7461,7 +8493,7 @@ async fn compact_chat(State(state): State<Arc<AppState>>) -> Result<Json<OkRespo
 
     // Trigger consolidation by resetting the last_consolidated counter
     // The agent loop will handle the actual consolidation on next message
-    db.upsert_session("web:default", 0)
+    db.upsert_session(&session_key, 0)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -7472,12 +8504,24 @@ async fn compact_chat(State(state): State<Arc<AppState>>) -> Result<Json<OkRespo
 }
 
 /// Request cancellation of the current web chat run.
-async fn stop_chat_run(State(state): State<Arc<AppState>>) -> Result<Json<OkResponse>, StatusCode> {
-    let active = state.web_runs.request_stop("web:default");
+async fn stop_chat_run(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ChatConversationQuery>,
+) -> Result<Json<OkResponse>, StatusCode> {
+    let conversation_id = chat_conversation_id(&q);
+    let session_key = web_session_key(&conversation_id);
+    let active = state.web_runs.request_stop(&session_key);
+    if let Some(run) = active.as_ref() {
+        if let Some(db) = state.db.as_ref() {
+            if let Err(error) = db.upsert_web_chat_run(run).await {
+                tracing::error!(run_id = %run.run_id, %error, "Failed to persist stopping web chat run");
+            }
+        }
+    }
     crate::agent::stop::request_stop();
     Ok(Json(OkResponse {
         ok: true,
-        message: Some(if active {
+        message: Some(if active.is_some() {
             "Stop requested".to_string()
         } else {
             "No active chat run".to_string()
@@ -7546,16 +8590,23 @@ fn normalize_execution_sandbox(
     let backend = sandbox.backend.trim().to_ascii_lowercase();
     let docker_network = sandbox.docker_network.trim().to_ascii_lowercase();
     let docker_image = sandbox.docker_image.trim().to_string();
+    let runtime_image_policy = sandbox.runtime_image_policy.trim().to_ascii_lowercase();
+    let runtime_image_expected_version = sandbox.runtime_image_expected_version.trim().to_string();
 
     let backend = if backend.is_empty() {
         "auto".to_string()
     } else {
         backend
     };
-    if backend != "none" && backend != "auto" && backend != "docker" {
+    if backend != "none"
+        && backend != "auto"
+        && backend != "docker"
+        && backend != "linux_native"
+        && backend != "windows_native"
+    {
         return Err((
             StatusCode::BAD_REQUEST,
-            "Invalid sandbox backend. Expected one of: auto, docker, none.".to_string(),
+            "Invalid sandbox backend. Expected one of: auto, docker, linux_native, windows_native, none.".to_string(),
         ));
     }
 
@@ -7568,6 +8619,22 @@ fn normalize_execution_sandbox(
         return Err((
             StatusCode::BAD_REQUEST,
             "Invalid docker network. Expected one of: none, bridge, host.".to_string(),
+        ));
+    }
+
+    let runtime_image_policy = if runtime_image_policy.is_empty() {
+        "infer".to_string()
+    } else {
+        runtime_image_policy
+    };
+    if runtime_image_policy != "infer"
+        && runtime_image_policy != "pinned"
+        && runtime_image_policy != "versioned_tag"
+        && runtime_image_policy != "floating"
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid runtime image policy. Expected one of: infer, pinned, versioned_tag, floating.".to_string(),
         ));
     }
 
@@ -7604,6 +8671,12 @@ fn normalize_execution_sandbox(
     } else {
         docker_image
     };
+    sandbox.runtime_image_policy = runtime_image_policy.clone();
+    sandbox.runtime_image_expected_version = if runtime_image_policy == "infer" {
+        String::new()
+    } else {
+        runtime_image_expected_version
+    };
 
     Ok(sandbox)
 }
@@ -7621,12 +8694,16 @@ mod sandbox_config_tests {
             backend: "DoCkEr".to_string(),
             docker_network: "Bridge".to_string(),
             docker_image: " node:22-alpine ".to_string(),
+            runtime_image_policy: " Pinned ".to_string(),
+            runtime_image_expected_version: " sha256:abc ".to_string(),
             ..ExecutionSandboxConfig::default()
         };
         let normalized = normalize_execution_sandbox(cfg).expect("valid sandbox config");
         assert_eq!(normalized.backend, "docker");
         assert_eq!(normalized.docker_network, "bridge");
         assert_eq!(normalized.docker_image, "node:22-alpine");
+        assert_eq!(normalized.runtime_image_policy, "pinned");
+        assert_eq!(normalized.runtime_image_expected_version, "sha256:abc");
     }
 
     #[test]
@@ -7637,6 +8714,16 @@ mod sandbox_config_tests {
         };
         let err = normalize_execution_sandbox(cfg).expect_err("expected backend validation error");
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn normalize_sandbox_accepts_linux_native_backend() {
+        let cfg = ExecutionSandboxConfig {
+            backend: "LiNuX_NaTiVe".to_string(),
+            ..ExecutionSandboxConfig::default()
+        };
+        let normalized = normalize_execution_sandbox(cfg).expect("valid linux native backend");
+        assert_eq!(normalized.backend, "linux_native");
     }
 
     #[test]
@@ -7659,6 +8746,29 @@ mod sandbox_config_tests {
         assert_eq!(normalized.docker_image, "node:22-alpine");
     }
 
+    #[test]
+    fn normalize_sandbox_clears_expected_version_when_policy_is_infer() {
+        let cfg = ExecutionSandboxConfig {
+            runtime_image_policy: "infer".to_string(),
+            runtime_image_expected_version: "sha256:abc".to_string(),
+            ..ExecutionSandboxConfig::default()
+        };
+        let normalized =
+            normalize_execution_sandbox(cfg).expect("expected normalized sandbox config");
+        assert_eq!(normalized.runtime_image_expected_version, "");
+    }
+
+    #[test]
+    fn normalize_sandbox_rejects_invalid_runtime_image_policy() {
+        let cfg = ExecutionSandboxConfig {
+            runtime_image_policy: "manual".to_string(),
+            ..ExecutionSandboxConfig::default()
+        };
+        let err =
+            normalize_execution_sandbox(cfg).expect_err("expected runtime image policy error");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
     #[tokio::test]
     async fn sandbox_presets_include_safe_and_strict() {
         let presets = get_execution_sandbox_presets().await.0;
@@ -7667,6 +8777,18 @@ mod sandbox_config_tests {
 
         let recommended_count = presets.iter().filter(|p| p.recommended).count();
         assert_eq!(recommended_count, 1);
+    }
+
+    #[tokio::test]
+    async fn sandbox_presets_point_to_canonical_runtime_baseline() {
+        let presets = get_execution_sandbox_presets().await.0;
+        for preset in presets {
+            if preset.id == "safe" || preset.id == "strict" {
+                assert_eq!(preset.config.docker_image, "homun/runtime-core:2026.03");
+                assert_eq!(preset.config.runtime_image_policy, "versioned_tag");
+                assert_eq!(preset.config.runtime_image_expected_version, "2026.03");
+            }
+        }
     }
 }
 
@@ -7682,6 +8804,8 @@ struct ExecutionSandboxStatusResponse {
     fallback_to_native: bool,
     recommended_preset: String,
     message: String,
+    availability_summary: String,
+    capabilities: Vec<crate::tools::sandbox::SandboxBackendCapability>,
 }
 
 #[derive(Serialize)]
@@ -7700,8 +8824,16 @@ struct ExecutionSandboxEventsQuery {
 
 #[derive(Serialize)]
 struct ExecutionSandboxImagePullResponse {
-    status: crate::tools::sandbox_exec::SandboxImageStatus,
+    status: crate::tools::sandbox::SandboxImageStatus,
     output: String,
+}
+
+#[derive(Serialize)]
+struct ExecutionSandboxImageBuildResponse {
+    status: crate::tools::sandbox::SandboxImageStatus,
+    built_image: String,
+    output: String,
+    message: String,
 }
 
 fn host_os_label() -> &'static str {
@@ -7731,10 +8863,13 @@ async fn get_execution_sandbox_status(
     let sandbox = config.security.execution_sandbox.clone();
     drop(config);
 
+    let capabilities = crate::tools::sandbox::current_sandbox_backend_capabilities();
+    let availability_summary =
+        crate::tools::sandbox::sandbox_backend_availability_summary(&capabilities);
     let configured_backend = sandbox.backend.trim().to_ascii_lowercase();
-    let docker_available = crate::tools::sandbox_exec::docker_backend_available();
+    let docker_available = crate::tools::sandbox::docker_backend_available();
     let (resolved_backend, valid, mut message) =
-        match crate::tools::sandbox_exec::resolve_sandbox_backend(&sandbox) {
+        match crate::tools::sandbox::resolve_sandbox_backend(&sandbox) {
             Ok(resolved) => (resolved.as_str().to_string(), true, String::new()),
             Err(e) => ("none".to_string(), false, e.to_string()),
         };
@@ -7742,7 +8877,11 @@ async fn get_execution_sandbox_status(
         && resolved_backend == "none"
         && configured_backend != "none"
         && !sandbox.strict;
-    let recommended_preset = if docker_available { "strict" } else { "safe" };
+    let recommended_preset = if capabilities.iter().any(|cap| cap.available) {
+        "strict"
+    } else {
+        "safe"
+    };
     if valid {
         message = if !sandbox.enabled {
             "Sandbox disabled.".to_string()
@@ -7769,23 +8908,30 @@ async fn get_execution_sandbox_status(
         fallback_to_native,
         recommended_preset: recommended_preset.to_string(),
         message,
+        availability_summary,
+        capabilities,
     })
 }
 
 /// List opinionated execution sandbox presets for the current host.
 async fn get_execution_sandbox_presets() -> Json<Vec<ExecutionSandboxPresetResponse>> {
-    let mut safe_cfg = crate::config::ExecutionSandboxConfig::default();
-    safe_cfg.enabled = true;
-    safe_cfg.backend = "auto".to_string();
-    safe_cfg.strict = false;
-    safe_cfg.docker_network = "none".to_string();
-    safe_cfg.docker_read_only_rootfs = true;
-    safe_cfg.docker_mount_workspace = true;
+    let safe_cfg = crate::config::ExecutionSandboxConfig {
+        enabled: true,
+        backend: "auto".to_string(),
+        strict: false,
+        docker_image: crate::tools::sandbox::canonical_sandbox_runtime_baseline().to_string(),
+        runtime_image_policy: "versioned_tag".to_string(),
+        runtime_image_expected_version: "2026.03".to_string(),
+        docker_network: "none".to_string(),
+        docker_read_only_rootfs: true,
+        docker_mount_workspace: true,
+        ..Default::default()
+    };
 
     let mut strict_cfg = safe_cfg.clone();
     strict_cfg.strict = true;
 
-    let docker_available = crate::tools::sandbox_exec::docker_backend_available();
+    let docker_available = crate::tools::sandbox::docker_backend_available();
     let host = host_os_label();
 
     Json(vec![
@@ -7811,12 +8957,12 @@ async fn get_execution_sandbox_presets() -> Json<Vec<ExecutionSandboxPresetRespo
 /// Inspect the configured sandbox runtime image.
 async fn get_execution_sandbox_image_status(
     State(state): State<Arc<AppState>>,
-) -> Json<crate::tools::sandbox_exec::SandboxImageStatus> {
+) -> Json<crate::tools::sandbox::SandboxImageStatus> {
     let config = state.config.read().await;
-    let image = config.security.execution_sandbox.docker_image.clone();
+    let sandbox = config.security.execution_sandbox.clone();
     drop(config);
 
-    Json(crate::tools::sandbox_exec::get_docker_image_status(&image))
+    Json(crate::tools::sandbox::get_runtime_image_status(&sandbox))
 }
 
 /// Pull the configured sandbox runtime image.
@@ -7824,10 +8970,10 @@ async fn pull_execution_sandbox_image(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ExecutionSandboxImagePullResponse>, (StatusCode, String)> {
     let config = state.config.read().await;
-    let image = config.security.execution_sandbox.docker_image.clone();
+    let sandbox = config.security.execution_sandbox.clone();
     drop(config);
 
-    let result = crate::tools::sandbox_exec::pull_docker_image(&image)
+    let result = crate::tools::sandbox::pull_runtime_image(&sandbox)
         .await
         .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
 
@@ -7837,14 +8983,32 @@ async fn pull_execution_sandbox_image(
     }))
 }
 
+/// Build the configured sandbox runtime image when it targets the repo baseline.
+async fn build_execution_sandbox_image(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ExecutionSandboxImageBuildResponse>, (StatusCode, String)> {
+    let config = state.config.read().await;
+    let sandbox = config.security.execution_sandbox.clone();
+    drop(config);
+
+    let result = crate::tools::sandbox::build_runtime_image(&sandbox)
+        .await
+        .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
+
+    Ok(Json(ExecutionSandboxImageBuildResponse {
+        status: result.status,
+        built_image: result.built_image,
+        output: result.output,
+        message: result.message,
+    }))
+}
+
 /// Return the most recent sandbox preparation events.
 async fn get_execution_sandbox_events(
     Query(query): Query<ExecutionSandboxEventsQuery>,
-) -> Json<Vec<crate::tools::sandbox_exec::SandboxEvent>> {
+) -> Json<Vec<crate::tools::sandbox::SandboxEvent>> {
     let limit = query.limit.unwrap_or(12).clamp(1, 50);
-    Json(crate::tools::sandbox_exec::list_recent_sandbox_events(
-        limit,
-    ))
+    Json(crate::tools::sandbox::list_recent_sandbox_events(limit))
 }
 
 #[derive(Deserialize)]
@@ -8190,7 +9354,7 @@ async fn browse_directories(
 
 /// Request body for webhook ingress
 #[derive(Debug, Deserialize)]
-struct WebhookRequest {
+pub(crate) struct WebhookRequest {
     /// The message to send to the agent
     message: String,
     /// Optional: conversation ID for threading (defaults to "webhook")
@@ -8200,7 +9364,7 @@ struct WebhookRequest {
 
 /// Response for webhook ingress
 #[derive(Debug, Serialize)]
-struct WebhookResponse {
+pub(crate) struct WebhookResponse {
     status: &'static str,
     user: String,
     conversation_id: String,
@@ -8208,7 +9372,7 @@ struct WebhookResponse {
 
 /// Error response for webhook ingress
 #[derive(Debug, Serialize)]
-struct WebhookError {
+pub(crate) struct WebhookError {
     error: &'static str,
     message: String,
 }
@@ -8220,7 +9384,7 @@ struct WebhookError {
 ///
 /// POST /api/v1/webhook/{token}
 /// Body: { "message": "...", "conversation_id": "optional" }
-async fn webhook_ingress(
+pub async fn webhook_ingress(
     Path(token): Path<String>,
     State(state): State<Arc<AppState>>,
     Json(body): Json<WebhookRequest>,
@@ -8355,6 +9519,7 @@ struct TokenResponse {
     token: String,
     name: String,
     enabled: bool,
+    scope: String,
     last_used: Option<String>,
     created_at: String,
 }
@@ -8369,6 +9534,8 @@ struct AddIdentityRequest {
 #[derive(Debug, Deserialize)]
 struct CreateTokenRequest {
     name: String,
+    /// Token scope: "admin" (default), "read", "write"
+    scope: Option<String>,
 }
 
 /// Get the owner account info (first user in database)
@@ -8602,6 +9769,7 @@ async fn list_tokens(
             token: t.token,
             name: t.name,
             enabled: t.enabled,
+            scope: t.scope,
             last_used: t.last_used,
             created_at: t.created_at,
         })
@@ -8646,7 +9814,8 @@ async fn create_token(
     // Generate token
     let token = format!("wh_{}", uuid::Uuid::new_v4().simple());
 
-    db.create_webhook_token(&token, &owner.id, &body.name)
+    let scope = body.scope.as_deref().unwrap_or("admin");
+    db.create_webhook_token(&token, &owner.id, &body.name, scope)
         .await
         .map_err(|e| {
             (
@@ -8659,6 +9828,7 @@ async fn create_token(
         token,
         name: body.name,
         enabled: true,
+        scope: scope.to_string(),
         last_used: None,
         created_at: chrono::Utc::now().to_rfc3339(),
     }))
@@ -8737,6 +9907,9 @@ async fn toggle_token(
         token,
         name: current.map(|t| t.name.clone()).unwrap_or_default(),
         enabled: new_enabled,
+        scope: current
+            .map(|t| t.scope.clone())
+            .unwrap_or_else(|| "admin".to_string()),
         last_used: current.and_then(|t| t.last_used.clone()),
         created_at: current.map(|t| t.created_at.clone()).unwrap_or_default(),
     }))
@@ -8754,27 +9927,29 @@ struct BrowserTestResponse {
 #[cfg(feature = "browser")]
 async fn test_browser(State(state): State<Arc<AppState>>) -> Json<BrowserTestResponse> {
     let config = state.config.read().await;
-
-    if !config.browser.enabled {
+    let status = config.browser.runtime_status();
+    if !status.available {
         return Json(BrowserTestResponse {
             success: false,
-            message: "Browser automation is disabled in configuration".to_string(),
+            message: status.reason.unwrap_or_else(|| {
+                "Browser automation is unavailable in the current configuration".to_string()
+            }),
         });
     }
 
-    // Try to get the browser manager and test it
-    let manager = crate::browser::global_browser_manager();
-
-    match manager.test_connection().await {
-        Ok(()) => Json(BrowserTestResponse {
-            success: true,
-            message: "Browser launched successfully".to_string(),
-        }),
-        Err(e) => Json(BrowserTestResponse {
-            success: false,
-            message: format!("Failed to launch browser: {}", e),
-        }),
-    }
+    // With MCP-based browser, the Playwright server starts on demand when the agent
+    // first calls a browser tool. We just confirm prerequisites are met.
+    let exe_info = status
+        .executable_path
+        .map(|p| format!(" (Chrome: {})", p))
+        .unwrap_or_default();
+    Json(BrowserTestResponse {
+        success: true,
+        message: format!(
+            "Browser prerequisites OK. MCP server (@playwright/mcp) will start on first use{}.",
+            exe_info
+        ),
+    })
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -9028,6 +10203,7 @@ struct CreateAutomationRequest {
     trigger_value: Option<String>,
     enabled: Option<bool>,
     deliver_to: Option<String>,
+    workflow_steps: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Deserialize)]
@@ -9044,6 +10220,8 @@ struct PatchAutomationRequest {
     status: Option<String>,
     deliver_to: Option<String>,
     clear_deliver_to: Option<bool>,
+    workflow_steps: Option<Vec<serde_json::Value>>,
+    clear_workflow_steps: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -9351,6 +10529,27 @@ async fn create_automation(
         )
     })?;
 
+    // Save workflow steps if provided
+    if let Some(steps) = req.workflow_steps {
+        if !steps.is_empty() {
+            let steps_json = serde_json::to_string(&steps).map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid workflow steps: {e}"),
+                )
+            })?;
+            let _ = db
+                .update_automation(
+                    &id,
+                    crate::storage::AutomationUpdate {
+                        workflow_steps_json: Some(Some(steps_json)),
+                        ..Default::default()
+                    },
+                )
+                .await;
+        }
+    }
+
     let created = db.load_automation(&id).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -9430,6 +10629,23 @@ async fn patch_automation(
             normalize_automation_trigger(Some(desired_trigger), desired_trigger_value)?;
         update.trigger_kind = Some(trigger_kind);
         update.trigger_value = Some(trigger_value);
+    }
+
+    // Handle workflow steps
+    if req.clear_workflow_steps.unwrap_or(false) {
+        update.workflow_steps_json = Some(None);
+    } else if let Some(steps) = req.workflow_steps {
+        if steps.is_empty() {
+            update.workflow_steps_json = Some(None);
+        } else {
+            let steps_json = serde_json::to_string(&steps).map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid workflow steps: {e}"),
+                )
+            })?;
+            update.workflow_steps_json = Some(Some(steps_json));
+        }
     }
 
     let final_prompt = update
@@ -10244,4 +11460,710 @@ fn generate_email_trigger_word() -> String {
         result.push(chars[idx]);
     }
     result
+}
+
+// ─── Knowledge Base (RAG) API ──────────────────────────────────────
+
+/// GET /api/v1/knowledge/stats
+#[cfg(feature = "local-embeddings")]
+async fn knowledge_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let Some(ref rag) = state.rag_engine else {
+        return Json(serde_json::json!({"error": "Knowledge base not initialized"}))
+            .into_response();
+    };
+    let engine = rag.lock().await;
+    match engine.stats().await {
+        Ok(stats) => Json(serde_json::json!(stats)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/v1/knowledge/sources
+#[cfg(feature = "local-embeddings")]
+async fn list_knowledge_sources(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let Some(ref rag) = state.rag_engine else {
+        return Json(serde_json::json!({"error": "Knowledge base not initialized"}))
+            .into_response();
+    };
+    let engine = rag.lock().await;
+    match engine.list_sources().await {
+        Ok(sources) => Json(serde_json::json!({"sources": sources})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/v1/knowledge/sources?id=N
+#[cfg(feature = "local-embeddings")]
+async fn delete_knowledge_source(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let Some(ref rag) = state.rag_engine else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "Knowledge base not initialized"})),
+        )
+            .into_response();
+    };
+
+    let Some(id_str) = params.get("id") else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Missing 'id' parameter"})),
+        )
+            .into_response();
+    };
+
+    let Ok(source_id) = id_str.parse::<i64>() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid 'id' parameter"})),
+        )
+            .into_response();
+    };
+
+    let mut engine = rag.lock().await;
+    match engine.remove_source(source_id).await {
+        Ok(_) => Json(serde_json::json!({"ok": true})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/v1/knowledge/search?q=...&limit=5
+#[cfg(feature = "local-embeddings")]
+async fn search_knowledge(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let Some(ref rag) = state.rag_engine else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "Knowledge base not initialized"})),
+        )
+            .into_response();
+    };
+
+    let Some(query) = params.get("q") else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Missing 'q' parameter"})),
+        )
+            .into_response();
+    };
+
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(5);
+
+    let mut engine = rag.lock().await;
+    match engine.search(query, limit).await {
+        Ok(results) => {
+            let items: Vec<serde_json::Value> = results
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "source_file": r.source_file,
+                        "chunk_index": r.chunk.chunk_index,
+                        "heading": r.chunk.heading,
+                        "content": r.chunk.content,
+                        "score": r.score,
+                        "sensitive": r.chunk.sensitive,
+                        "chunk_id": r.chunk.id,
+                    })
+                })
+                .collect();
+            Json(serde_json::json!({"results": items})).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// POST /api/v1/knowledge/ingest — multipart file upload
+#[cfg(feature = "local-embeddings")]
+async fn ingest_knowledge(
+    State(state): State<Arc<AppState>>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let Some(ref rag) = state.rag_engine else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "Knowledge base not initialized"})),
+        )
+            .into_response();
+    };
+
+    let mut ingested = Vec::new();
+    let mut errors = Vec::new();
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let file_name = field.file_name().unwrap_or("upload.txt").to_string();
+
+        let Ok(bytes) = field.bytes().await else {
+            errors.push(format!("{file_name}: failed to read upload"));
+            continue;
+        };
+
+        // Write to a temp file so RagEngine can process it
+        let tmp_dir = std::env::temp_dir().join("homun_uploads");
+        if let Err(e) = std::fs::create_dir_all(&tmp_dir) {
+            errors.push(format!("{file_name}: {e}"));
+            continue;
+        }
+        let tmp_path = tmp_dir.join(&file_name);
+        if let Err(e) = std::fs::write(&tmp_path, &bytes) {
+            errors.push(format!("{file_name}: {e}"));
+            continue;
+        }
+
+        let mut engine = rag.lock().await;
+        match engine.ingest_file(&tmp_path, "web").await {
+            Ok(Some(id)) => ingested.push(serde_json::json!({"file": file_name, "source_id": id})),
+            Ok(None) => {
+                ingested.push(serde_json::json!({"file": file_name, "status": "duplicate"}))
+            }
+            Err(e) => errors.push(format!("{file_name}: {e}")),
+        }
+
+        // Clean up temp file
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+
+    Json(serde_json::json!({
+        "ingested": ingested,
+        "errors": errors,
+    }))
+    .into_response()
+}
+
+/// POST /api/v1/knowledge/ingest-directory — index a server-side folder
+#[cfg(feature = "local-embeddings")]
+async fn ingest_knowledge_directory(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let Some(ref rag) = state.rag_engine else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "Knowledge base not initialized"})),
+        )
+            .into_response();
+    };
+
+    let path_str = req["path"].as_str().unwrap_or("");
+    if path_str.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Missing 'path' field"})),
+        )
+            .into_response();
+    }
+    let recursive = req["recursive"].as_bool().unwrap_or(false);
+
+    // Expand tilde
+    let path = if let Some(rest) = path_str.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            home.join(rest)
+        } else {
+            std::path::PathBuf::from(path_str)
+        }
+    } else {
+        std::path::PathBuf::from(path_str)
+    };
+
+    if !path.is_dir() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": format!("Not a directory: {}", path.display())})),
+        )
+            .into_response();
+    }
+
+    let mut engine = rag.lock().await;
+    match engine.ingest_directory(&path, recursive, "web").await {
+        Ok(ids) => Json(serde_json::json!({
+            "indexed": ids.len(),
+            "source_ids": ids,
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// POST /api/v1/knowledge/reveal — reveal a sensitive chunk (optionally with TOTP)
+#[cfg(feature = "local-embeddings")]
+async fn reveal_knowledge_chunk(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let Some(ref rag) = state.rag_engine else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "Knowledge base not initialized"})),
+        )
+            .into_response();
+    };
+
+    let Some(chunk_id) = req["chunk_id"].as_i64() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Missing 'chunk_id'"})),
+        )
+            .into_response();
+    };
+
+    // If 2FA is enabled, verify TOTP code
+    #[cfg(feature = "vault-2fa")]
+    {
+        use crate::security::{TotpManager, TwoFactorStorage};
+
+        if let Ok(storage) = TwoFactorStorage::new() {
+            if let Ok(config) = storage.load() {
+                if config.enabled {
+                    let code = req["code"].as_str().unwrap_or("");
+                    if code.is_empty() {
+                        return (
+                            StatusCode::UNAUTHORIZED,
+                            Json(serde_json::json!({"error": "2FA code required", "requires_2fa": true})),
+                        )
+                            .into_response();
+                    }
+                    match TotpManager::new(&config.totp_secret, &config.account) {
+                        Ok(manager) => {
+                            if !manager.verify(code) {
+                                return (
+                                    StatusCode::FORBIDDEN,
+                                    Json(serde_json::json!({"error": "Invalid 2FA code"})),
+                                )
+                                    .into_response();
+                            }
+                        }
+                        Err(_) => {
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({"error": "2FA configuration error"})),
+                            )
+                                .into_response();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let engine = rag.lock().await;
+    match engine.reveal_chunk(chunk_id).await {
+        Ok(Some(chunk)) => Json(serde_json::json!({
+            "chunk_id": chunk.id,
+            "content": chunk.content,
+            "heading": chunk.heading,
+        }))
+        .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Chunk not found"})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+// ─── Workflow API ────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct WorkflowListQuery {
+    status: Option<String>,
+}
+
+/// GET /api/v1/workflows?status=running
+async fn list_workflows_api(
+    Query(q): Query<WorkflowListQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state.workflow_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Workflow engine not available".into(),
+    ))?;
+    let workflows = engine
+        .list(q.status.as_deref())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let total = workflows.len();
+    let running = workflows
+        .iter()
+        .filter(|w| w.status == crate::workflows::WorkflowStatus::Running)
+        .count();
+    let paused = workflows
+        .iter()
+        .filter(|w| w.status == crate::workflows::WorkflowStatus::Paused)
+        .count();
+    let completed = workflows
+        .iter()
+        .filter(|w| w.status == crate::workflows::WorkflowStatus::Completed)
+        .count();
+    let failed = workflows
+        .iter()
+        .filter(|w| w.status == crate::workflows::WorkflowStatus::Failed)
+        .count();
+
+    Ok(Json(serde_json::json!({
+        "workflows": workflows,
+        "stats": {
+            "total": total,
+            "running": running,
+            "paused": paused,
+            "completed": completed,
+            "failed": failed,
+        }
+    })))
+}
+
+/// POST /api/v1/workflows
+async fn create_workflow_api(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<crate::workflows::WorkflowCreateRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state.workflow_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Workflow engine not available".into(),
+    ))?;
+    let workflow_id = engine
+        .create_and_start(req, "web", "web")
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "workflow_id": workflow_id })))
+}
+
+/// GET /api/v1/workflows/{id}
+async fn get_workflow_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state.workflow_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Workflow engine not available".into(),
+    ))?;
+    let workflow = engine
+        .status(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, format!("Workflow {id} not found")))?;
+    Ok(Json(serde_json::to_value(&workflow).unwrap_or_default()))
+}
+
+/// POST /api/v1/workflows/{id}/approve
+async fn approve_workflow_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state.workflow_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Workflow engine not available".into(),
+    ))?;
+    let msg = engine
+        .approve_and_resume(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "message": msg })))
+}
+
+/// POST /api/v1/workflows/{id}/cancel
+async fn cancel_workflow_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state.workflow_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Workflow engine not available".into(),
+    ))?;
+    let msg = engine
+        .cancel(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "message": msg })))
+}
+
+/// POST /api/v1/workflows/{id}/delete
+async fn delete_workflow_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state.workflow_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Workflow engine not available".into(),
+    ))?;
+    let msg = engine
+        .delete(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "message": msg })))
+}
+
+/// POST /api/v1/workflows/{id}/restart
+async fn restart_workflow_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state.workflow_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Workflow engine not available".into(),
+    ))?;
+    let msg = engine
+        .restart(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "message": msg })))
+}
+
+// ─── Business Autopilot API ─────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct BusinessListQuery {
+    status: Option<String>,
+}
+
+/// GET /api/v1/business?status=active
+async fn list_businesses_api(
+    Query(q): Query<BusinessListQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
+    let businesses = engine
+        .db()
+        .list_businesses(q.status.as_deref())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let total = businesses.len();
+    let active = businesses
+        .iter()
+        .filter(|b| b.status == crate::business::BusinessStatus::Active)
+        .count();
+    let total_revenue: f64 = businesses.iter().map(|b| b.budget_spent).sum();
+
+    Ok(Json(serde_json::json!({
+        "businesses": businesses,
+        "stats": {
+            "total": total,
+            "active": active,
+            "total_budget_spent": total_revenue,
+        }
+    })))
+}
+
+#[derive(Deserialize)]
+struct CreateBusinessRequest {
+    name: String,
+    description: Option<String>,
+    autonomy: Option<String>,
+    budget: Option<f64>,
+    currency: Option<String>,
+    ooda_interval: Option<String>,
+    deliver_to: Option<String>,
+}
+
+/// POST /api/v1/business
+async fn create_business_api(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateBusinessRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
+
+    let autonomy =
+        crate::business::BusinessAutonomy::from_str(req.autonomy.as_deref().unwrap_or("semi"));
+    let currency = req.currency.as_deref().unwrap_or("EUR");
+    let ooda_interval = req.ooda_interval.as_deref().unwrap_or("every:86400");
+
+    let biz = engine
+        .launch(
+            &req.name,
+            req.description.as_deref(),
+            autonomy,
+            req.budget,
+            currency,
+            ooda_interval,
+            req.deliver_to.as_deref(),
+            None, // created_by
+            None, // fiscal_config
+        )
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "business": biz,
+        "message": format!("Business '{}' launched", biz.name),
+    })))
+}
+
+/// GET /api/v1/business/{id}
+async fn get_business_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
+    let biz = engine
+        .db()
+        .load_business(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, format!("Business {id} not found")))?;
+
+    let revenue = engine
+        .get_revenue_summary(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "business": biz,
+        "revenue": revenue,
+    })))
+}
+
+/// POST /api/v1/business/{id}/pause
+async fn pause_business_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
+    engine
+        .pause(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "message": "Business paused" })))
+}
+
+/// POST /api/v1/business/{id}/resume
+async fn resume_business_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
+    engine
+        .resume(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "message": "Business resumed" })))
+}
+
+/// POST /api/v1/business/{id}/close
+async fn close_business_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
+    engine
+        .close(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "message": "Business closed" })))
+}
+
+/// GET /api/v1/business/{id}/strategies
+async fn list_business_strategies_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
+    let strategies = engine
+        .db()
+        .list_strategies(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "strategies": strategies })))
+}
+
+/// GET /api/v1/business/{id}/products
+async fn list_business_products_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
+    let products = engine
+        .db()
+        .list_products(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "products": products })))
+}
+
+/// GET /api/v1/business/{id}/transactions
+async fn list_business_transactions_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
+    let transactions = engine
+        .db()
+        .list_transactions(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "transactions": transactions })))
+}
+
+/// GET /api/v1/business/{id}/revenue
+async fn get_business_revenue_api(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let engine = state.business_engine.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Business engine not available".into(),
+    ))?;
+    let revenue = engine
+        .get_revenue_summary(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "revenue": revenue })))
 }

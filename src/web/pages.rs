@@ -10,10 +10,15 @@ use super::server::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/", get(dashboard))
+        .route("/", get(chat_page))
+        .route("/dashboard", get(dashboard))
         .route("/setup", get(setup_page))
+        .route("/channels", get(channels_page))
+        .route("/browser", get(browser_page))
         .route("/chat", get(chat_page))
         .route("/automations", get(automations_page))
+        .route("/workflows", get(workflows_page))
+        .route("/business", get(business_page))
         .route("/skills", get(skills_page))
         .route("/mcp", get(mcp_page))
         .route(
@@ -25,6 +30,7 @@ pub fn router() -> Router<Arc<AppState>> {
             get(mcp_github_oauth_callback_page),
         )
         .route("/memory", get(memory_page))
+        .route("/knowledge", get(knowledge_page))
         .route("/vault", get(vault_page))
         .route("/permissions", get(permissions_page))
         .route("/approvals", get(approvals_page))
@@ -47,6 +53,9 @@ const ICON_VAULT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="current
 const ICON_PERMISSIONS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="16" height="12" rx="1.5"/><circle cx="9" cy="10" r="2"/><path d="M5 4V3a4 4 0 0 1 8 0v1"/></svg>"#;
 const ICON_APPROVALS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1v4M9 13v4M1 9h4M13 9h4"/><circle cx="9" cy="9" r="3"/><path d="M6 9l2 2 4-4"/></svg>"#;
 const ICON_ACCOUNT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="6" r="3.5"/><path d="M3 17c0-3.5 2.5-6 6-6s6 2.5 6 6"/></svg>"#;
+const ICON_LOGOUT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15H3.5A1.5 1.5 0 0 1 2 13.5v-9A1.5 1.5 0 0 1 3.5 3H6"/><path d="M12 12l4-3-4-3"/><path d="M16 9H7"/></svg>"#;
+const ICON_KNOWLEDGE: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h5l2 2h7v10H2z"/><path d="M6 9h6"/><path d="M6 12h4"/></svg>"#;
+const ICON_WORKFLOWS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="4" r="2"/><circle cx="13" cy="4" r="2"/><circle cx="9" cy="14" r="2"/><path d="M5 6v2a3 3 0 0 0 3 3h1"/><path d="M13 6v2a3 3 0 0 1-3 3h-1"/></svg>"#;
 
 /// Channel icons — minimal stroke SVGs for dashboard/settings
 const ICON_WEB: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="7.5"/><path d="M1.5 9h15"/><path d="M9 1.5a11.5 11.5 0 0 1 3 7.5 11.5 11.5 0 0 1-3 7.5"/><path d="M9 1.5a11.5 11.5 0 0 0-3 7.5 11.5 11.5 0 0 0 3 7.5"/></svg>"#;
@@ -59,129 +68,139 @@ const ICON_EMAIL: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="current
 /// Logo icon — serves the SVG logotype via <img> tag.
 const LOGO_ICON: &str = r#"<div class="logo-icon" title="HOMUN"></div>"#;
 
-/// Build the sidebar navigation HTML
+/// Tools icon — wrench/gear for the Tools flyout trigger.
+const ICON_TOOLS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 1.5a4.5 4.5 0 0 0-3.6 7.2L2 14.1 3.9 16l5.4-5.4A4.5 4.5 0 1 0 11 1.5z"/></svg>"#;
+
+/// Emergency stop icon — octagon with square stop symbol.
+const ICON_ESTOP: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="6,1 12,1 17,6 17,12 12,17 6,17 1,12 1,6"/><rect x="6.5" y="6.5" width="5" height="5" rx="0.8"/></svg>"#;
+
+/// Pages that belong to the "Tools" sub-navigation group.
+const TOOLS_PAGES: &[&str] = &[
+    "automations",
+    "workflows",
+    "business",
+    "skills",
+    "mcp",
+    "memory",
+    "knowledge",
+    "vault",
+];
+/// Pages that belong to the "Settings" sub-navigation group.
+const SETTINGS_PAGES: &[&str] = &[
+    "settings",
+    "channels",
+    "browser",
+    "permissions",
+    "approvals",
+    "logs",
+];
+
+/// Build the sidebar navigation HTML.
+/// Renders 5 main icons + 2 static sub-navigation panels (Tools, Settings).
+/// Sub-nav panels are shown/hidden purely server-side via `.is-open` class.
 fn sidebar(active: &str) -> String {
-    // Settings submenu (only visible when settings is active)
-    let settings_submenu = if active == "settings" {
-        r##"<div class="nav-submenu">
-            <a href="#section-providers" class="nav-submenu-link">Model &amp; Providers</a>
-            <a href="#section-channels" class="nav-submenu-link">Channels</a>
-            <a href="#section-browser" class="nav-submenu-link">Browser</a>
-            <a href="#section-memory" class="nav-submenu-link">Memory</a>
-            <a href="#section-theme" class="nav-submenu-link">Theme</a>
-        </div>"##
-    } else {
-        ""
+    let a = |page: &str| -> &str {
+        if active == page {
+            " active"
+        } else {
+            ""
+        }
     };
 
-    let links = format!(
-        r##"<div class="nav-group nav-group-featured">
-            <a href="/chat" class="nav-link{chat_active}">
-                <span class="nav-icon">{icon_chat}</span>
-                <span class="nav-label">Chat</span>
-            </a>
-        </div>
-        <div class="nav-section">Main</div>
-        <a href="/" class="nav-link{dash_active}">
-            <span class="nav-icon">{icon_dash}</span>
-            <span class="nav-label">Dashboard</span>
-        </a>
-        <a href="/automations" class="nav-link{automations_active}">
-            <span class="nav-icon">{icon_automations}</span>
-            <span class="nav-label">Automations</span>
-        </a>
-        <a href="/skills" class="nav-link{skills_active}">
-            <span class="nav-icon">{icon_skills}</span>
-            <span class="nav-label">Skills</span>
-        </a>
-        <a href="/mcp" class="nav-link{mcp_active}">
-            <span class="nav-icon">{icon_mcp}</span>
-            <span class="nav-label">MCP</span>
-        </a>
-        <a href="/memory" class="nav-link{memory_active}">
-            <span class="nav-icon">{icon_memory}</span>
-            <span class="nav-label">Memory</span>
-        </a>
-        <a href="/vault" class="nav-link{vault_active}">
-            <span class="nav-icon">{icon_vault}</span>
-            <span class="nav-label">Vault</span>
-        </a>
-        <a href="/permissions" class="nav-link{perms_active}">
-            <span class="nav-icon">{icon_perms}</span>
-            <span class="nav-label">Permissions</span>
-        </a>
-        <a href="/approvals" class="nav-link{approvals_active}">
-            <span class="nav-icon">{icon_approvals}</span>
-            <span class="nav-label">Approvals</span>
-        </a>
-        <a href="/account" class="nav-link{account_active}">
-            <span class="nav-icon">{icon_account}</span>
-            <span class="nav-label">Account</span>
-        </a>
-        <div class="nav-section">Settings</div>
-        <div class="nav-group nav-group-settings">
-            <a href="/setup" class="nav-link{settings_active}">
-                <span class="nav-icon">{icon_settings}</span>
-                <span class="nav-label">Settings</span>
-            </a>
-            {settings_submenu}
-        </div>
-        <a href="/logs" class="nav-link{logs_active}">
-            <span class="nav-icon">{icon_logs}</span>
-            <span class="nav-label">Logs</span>
-        </a>"##,
-        chat_active = if active == "chat" { " active" } else { "" },
-        dash_active = if active == "dashboard" { " active" } else { "" },
-        automations_active = if active == "automations" {
-            " active"
-        } else {
-            ""
-        },
-        skills_active = if active == "skills" { " active" } else { "" },
-        mcp_active = if active == "mcp" { " active" } else { "" },
-        memory_active = if active == "memory" { " active" } else { "" },
-        vault_active = if active == "vault" { " active" } else { "" },
-        perms_active = if active == "permissions" {
-            " active"
-        } else {
-            ""
-        },
-        approvals_active = if active == "approvals" { " active" } else { "" },
-        account_active = if active == "account" { " active" } else { "" },
-        settings_active = if active == "settings" { " active" } else { "" },
-        logs_active = if active == "logs" { " active" } else { "" },
-        icon_chat = ICON_CHAT,
-        icon_dash = ICON_DASHBOARD,
-        icon_automations = ICON_AUTOMATIONS,
-        icon_skills = ICON_SKILLS,
-        icon_mcp = ICON_MCP,
-        icon_memory = ICON_MEMORY,
-        icon_vault = ICON_VAULT,
-        icon_perms = ICON_PERMISSIONS,
-        icon_approvals = ICON_APPROVALS,
-        icon_account = ICON_ACCOUNT,
-        icon_settings = ICON_SETTINGS,
-        icon_logs = ICON_LOGS,
-        settings_submenu = settings_submenu,
-    );
+    let is_tools = TOOLS_PAGES.contains(&active);
+    let is_settings = SETTINGS_PAGES.contains(&active);
+
+    let tools_active = if is_tools { " active" } else { "" };
+    let settings_active = if is_settings { " active" } else { "" };
+
+    let tools_open = if is_tools { " is-open" } else { "" };
+    let settings_open = if is_settings { " is-open" } else { "" };
 
     format!(
         r##"<nav class="sidebar">
             <div class="sidebar-header">
-                <a href="/" class="logo-link">
-                    {icon}
-                </a>
+                <a href="/" class="logo-link">{logo}</a>
             </div>
             <div class="nav">
-                {links}
+                <div class="nav-group nav-group-featured">
+                    <a href="/chat" class="nav-link{chat_a}" data-label="Chat">
+                        <span class="nav-icon">{ic_chat}</span>
+                    </a>
+                </div>
+                <a href="/dashboard" class="nav-link{dash_a}" data-label="Dashboard">
+                    <span class="nav-icon">{ic_dash}</span>
+                </a>
+                <a href="/automations" class="nav-link{tools_a}" data-label="Tools">
+                    <span class="nav-icon">{ic_tools}</span>
+                </a>
+                <button type="button" class="nav-link nav-estop" id="nav-estop-btn" data-label="Stop" title="Emergency Stop">
+                    <span class="nav-icon">{ic_estop}</span>
+                </button>
             </div>
-            <div class="sidebar-footer">
-                <span class="version-badge">v{version}</span>
+            <div class="nav-bottom">
+                <a href="/account" class="nav-link{account_a}" data-label="Account">
+                    <span class="nav-icon">{ic_account}</span>
+                </a>
+                <a href="/setup" class="nav-link{settings_a}" data-label="Settings">
+                    <span class="nav-icon">{ic_settings}</span>
+                </a>
+                <button type="button" class="nav-link nav-logout" id="nav-logout-btn" data-label="Logout" title="Sign out" onclick="fetch('/api/auth/logout',{{method:'POST'}}).then(()=>location.href='/login')">
+                    <span class="nav-icon">{ic_logout}</span>
+                </button>
+            </div>
+            <div class="sidebar-subnav{tools_open}" id="tools-subnav">
+                <div class="sidebar-subnav-header">Tools</div>
+                <a href="/automations" class="sidebar-subnav-link{automations_a}">Automations</a>
+                <a href="/workflows" class="sidebar-subnav-link{workflows_a}">Workflows</a>
+                <a href="/business" class="sidebar-subnav-link{business_a}">Business</a>
+                <a href="/skills" class="sidebar-subnav-link{skills_a}">Skills</a>
+                <a href="/mcp" class="sidebar-subnav-link{mcp_a}">MCP Servers</a>
+                <a href="/memory" class="sidebar-subnav-link{memory_a}">Memory</a>
+                <a href="/knowledge" class="sidebar-subnav-link{knowledge_a}">Knowledge</a>
+                <a href="/vault" class="sidebar-subnav-link{vault_a}">Vault</a>
+            </div>
+            <div class="sidebar-subnav{settings_open}" id="settings-subnav">
+                <div class="sidebar-subnav-header">Settings</div>
+                <a href="/setup" class="sidebar-subnav-link{setup_a}">Model &amp; Providers</a>
+                <a href="/channels" class="sidebar-subnav-link{channels_a}">Channels</a>
+                <a href="/browser" class="sidebar-subnav-link{browser_a}">Browser</a>
+                <a href="/permissions" class="sidebar-subnav-link{perms_a}">Permissions</a>
+                <a href="/approvals" class="sidebar-subnav-link{approvals_a}">Approvals</a>
+                <a href="/logs" class="sidebar-subnav-link{logs_a}">Logs</a>
             </div>
         </nav>"##,
-        icon = LOGO_ICON,
-        links = links,
-        version = env!("CARGO_PKG_VERSION"),
+        logo = LOGO_ICON,
+        // Main icons
+        chat_a = a("chat"),
+        dash_a = a("dashboard"),
+        account_a = a("account"),
+        tools_a = tools_active,
+        settings_a = settings_active,
+        ic_chat = ICON_CHAT,
+        ic_dash = ICON_DASHBOARD,
+        ic_account = ICON_ACCOUNT,
+        ic_tools = ICON_TOOLS,
+        ic_estop = ICON_ESTOP,
+        ic_settings = ICON_SETTINGS,
+        ic_logout = ICON_LOGOUT,
+        // Tools subnav
+        tools_open = tools_open,
+        automations_a = a("automations"),
+        workflows_a = a("workflows"),
+        business_a = a("business"),
+        skills_a = a("skills"),
+        mcp_a = a("mcp"),
+        memory_a = a("memory"),
+        knowledge_a = a("knowledge"),
+        vault_a = a("vault"),
+        // Settings subnav
+        settings_open = settings_open,
+        setup_a = a("settings"),
+        channels_a = a("channels"),
+        browser_a = a("browser"),
+        perms_a = a("permissions"),
+        approvals_a = a("approvals"),
+        logs_a = a("logs"),
     )
 }
 
@@ -191,7 +210,7 @@ fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String 
     let script_tags: String = scripts
         .iter()
         .map(|s| format!(r#"<script src="/static/js/{s}"></script>"#))
-        .collect();
+        .collect::<String>();
 
     format!(
         r##"<!DOCTYPE html>
@@ -208,6 +227,7 @@ fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String 
     <script>
     (function() {{
         const theme = localStorage.getItem('homun-theme') || 'system';
+        const accent = localStorage.getItem('homun-accent') || 'moss';
         const configuredLanguage = localStorage.getItem('homun-language') || 'system';
         const resolvedLanguage = configuredLanguage === 'system'
             ? ((navigator.language || 'en').split('-')[0] || 'en')
@@ -215,6 +235,39 @@ fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String 
         document.documentElement.lang = resolvedLanguage;
         if (theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {{
             document.documentElement.classList.add('dark');
+        }}
+        if (accent && accent.startsWith('#')) {{
+            // Custom color — derive accent family inline to avoid flash
+            var h, s, l;
+            (function(hex) {{
+                var r = parseInt(hex.slice(1,3),16)/255, g = parseInt(hex.slice(3,5),16)/255, b = parseInt(hex.slice(5,7),16)/255;
+                var mx = Math.max(r,g,b), mn = Math.min(r,g,b); l = (mx+mn)/2;
+                if (mx===mn) {{ h=s=0; }} else {{
+                    var d=mx-mn; s = l>0.5 ? d/(2-mx-mn) : d/(mx+mn);
+                    if (mx===r) h=((g-b)/d+(g<b?6:0))/6;
+                    else if (mx===g) h=((b-r)/d+2)/6;
+                    else h=((r-g)/d+4)/6;
+                }}
+                h=Math.round(h*360); s=Math.round(s*100); l=Math.round(l*100);
+            }})(accent);
+            function hx(hh,ss,ll) {{
+                ss/=100; ll/=100; var a=ss*Math.min(ll,1-ll);
+                function f(n) {{ var k=(n+hh/30)%12; return Math.round(255*(ll-a*Math.max(Math.min(k-3,9-k,1),-1))).toString(16).padStart(2,'0'); }}
+                return '#'+f(0)+f(8)+f(4);
+            }}
+            var isDk = document.documentElement.classList.contains('dark');
+            var st = document.documentElement.style;
+            st.setProperty('--accent', accent);
+            st.setProperty('--accent-hover', hx(h, s, isDk ? Math.min(l+8,80) : Math.max(l-8,20)));
+            st.setProperty('--accent-active', hx(h, s, isDk ? l : Math.max(l-14,15)));
+            st.setProperty('--accent-light', hx(h, isDk ? Math.max(s-30,10) : Math.min(s+5,40), isDk ? 18 : 90));
+            st.setProperty('--accent-border', hx(h, isDk ? Math.max(s-15,15) : Math.min(s,35), isDk ? 30 : 75));
+            st.setProperty('--accent-text', isDk ? hx(h, Math.min(s+10,100), Math.min(l+15,85)) : accent);
+            st.setProperty('--focus-ring', hx(h, Math.min(s+5,60), isDk ? Math.min(l+10,70) : Math.min(l+10,55)));
+            st.setProperty('--selection-bg', hx(h, isDk ? 20 : 25, isDk ? 22 : 82));
+            st.setProperty('--chart-primary', accent);
+        }} else if (accent && accent !== 'moss') {{
+            document.documentElement.setAttribute('data-accent', accent);
         }}
     }})();
     </script>
@@ -224,7 +277,72 @@ fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String 
         {sidebar_html}
         {body}
     </div>
+    <div class="estop-modal-backdrop" id="estop-modal" hidden>
+        <div class="estop-modal" role="dialog" aria-modal="true">
+            <div class="estop-modal-icon">&#x26D4;</div>
+            <h3 class="estop-modal-title">Emergency Stop</h3>
+            <p class="estop-modal-copy">This will immediately:</p>
+            <ul class="estop-modal-list">
+                <li>Stop the agent loop</li>
+                <li>Take the network offline</li>
+                <li>Close the browser</li>
+                <li>Shut down MCP servers</li>
+                <li>Cancel all subagents</li>
+            </ul>
+            <div class="estop-modal-actions">
+                <button type="button" class="btn btn-ghost btn-sm" id="estop-modal-cancel">Cancel</button>
+                <button type="button" class="btn estop-modal-confirm" id="estop-modal-confirm">Stop Everything</button>
+            </div>
+        </div>
+    </div>
     {script_tags}
+    <script>
+    (function() {{
+        var btn = document.getElementById('nav-estop-btn');
+        var modal = document.getElementById('estop-modal');
+        var confirmBtn = document.getElementById('estop-modal-confirm');
+        var cancelBtn = document.getElementById('estop-modal-cancel');
+        if (!btn || !modal) return;
+
+        function showModal() {{ modal.hidden = false; }}
+        function hideModal() {{ modal.hidden = true; }}
+
+        btn.addEventListener('click', showModal);
+        cancelBtn.addEventListener('click', hideModal);
+        modal.addEventListener('click', function(e) {{
+            if (e.target === modal) hideModal();
+        }});
+
+        confirmBtn.addEventListener('click', async function() {{
+            hideModal();
+            btn.disabled = true;
+            btn.classList.add('is-stopped');
+            confirmBtn.disabled = true;
+            confirmBtn.textContent = 'Stopping\u2026';
+            try {{
+                var res = await fetch('/api/v1/emergency-stop', {{ method: 'POST' }});
+                var report = await res.json();
+                var parts = [];
+                if (report.browser_closed) parts.push('Browser closed');
+                if (report.mcp_shutdown) parts.push('MCP shut down');
+                if (report.subagents_cancelled > 0) parts.push(report.subagents_cancelled + ' subagents cancelled');
+                parts.push('Network offline');
+                confirmBtn.textContent = 'Stopped';
+                // Show brief toast-style feedback
+                var toast = document.createElement('div');
+                toast.className = 'estop-toast';
+                toast.textContent = 'Emergency Stop: ' + parts.join(', ');
+                document.body.appendChild(toast);
+                setTimeout(function() {{ toast.remove(); }}, 5000);
+            }} catch (e) {{
+                btn.disabled = false;
+                btn.classList.remove('is-stopped');
+                confirmBtn.disabled = false;
+                confirmBtn.textContent = 'Stop Everything';
+            }}
+        }});
+    }})();
+    </script>
 </body>
 </html>"##
     )
@@ -270,6 +388,9 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                         <h1 class="page-title">Dashboard</h1>
                         <span class="badge badge-success">Running</span>
                     </div>
+                    <button class="btn estop-btn" id="estop-btn" title="Emergency Stop — kill all agent activity">
+                        &#x26A0; Emergency Stop
+                    </button>
                 </div>
 
                 {no_model_warning}
@@ -563,59 +684,6 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     </details>
                 </section>
 
-                <section class="section" id="section-channels">
-                    <h2>Channels</h2>
-                    <div class="provider-grid" id="channel-grid">
-                        {channels_html}
-                    </div>
-                </section>
-
-                <section class="section" id="section-browser">
-                    <h2>Browser Automation</h2>
-                    <div class="form-hint" style="margin-bottom:12px;">Uses Chrome/Chromium via CDP. Auto-detected: {browser_status}.</div>
-                    <form class="form" id="browser-form">
-                        <div class="setting-toggle-row">
-                            <div class="setting-toggle-info">
-                                <span class="setting-toggle-name">Headless Mode</span>
-                                <span class="setting-toggle-desc">Run browser without visible window</span>
-                            </div>
-                            <div class="toggle-wrap">
-                                <input type="checkbox" id="browser-headless" name="headless" class="toggle-input" {browser_headless_checked}>
-                                <label class="toggle-label" for="browser-headless"></label>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Chrome Executable Path</label>
-                            <input type="text" id="browser-executable" name="executable_path" value="{executable_path}" class="input" placeholder="Auto-detect (leave empty)">
-                            <div class="form-hint">Leave empty to auto-detect. Override if Chrome is in a custom location.</div>
-                        </div>
-                        <div class="form-row--2">
-                            <div class="form-group">
-                                <label>Action Timeout (s)</label>
-                                <input type="number" id="browser-action-timeout" name="action_timeout_secs" value="{action_timeout_secs}" min="5" max="300" class="input">
-                                <div class="form-hint">Max time for click, type, etc.</div>
-                            </div>
-                            <div class="form-group">
-                                <label>Navigation Timeout (s)</label>
-                                <input type="number" id="browser-nav-timeout" name="navigation_timeout_secs" value="{navigation_timeout_secs}" min="5" max="300" class="input">
-                                <div class="form-hint">Max time for page loads.</div>
-                            </div>
-                        </div>
-                        <div class="form-row--2">
-                            <div class="form-group">
-                                <label>Snapshot Limit</label>
-                                <input type="number" id="browser-snapshot-limit" name="snapshot_limit" value="{snapshot_limit}" min="10" max="500" class="input">
-                                <div class="form-hint">Max elements in accessibility tree.</div>
-                            </div>
-                        </div>
-                        <div class="form-actions">
-                            <button type="submit" class="btn btn-primary">Save Browser Config</button>
-                            <button type="button" class="btn btn-secondary" id="btn-test-browser">Test Connection</button>
-                        </div>
-                        <div id="browser-result" class="form-hint" style="margin-top:10px;"></div>
-                    </form>
-                </section>
-
                 <section class="section" id="section-memory">
                     <h2>Memory</h2>
                     <form class="form" id="memory-form">
@@ -674,8 +742,110 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                                 <div class="form-hint">Used for guided explanations and assistant text in the Web UI.</div>
                             </div>
                         </div>
+                        <div class="form-group" style="margin-top:16px;">
+                            <label>Accent Color</label>
+                            <div class="accent-picker" id="accent-picker">
+                                <button type="button" class="accent-swatch" data-accent="moss" title="Moss (default)"><span style="background:#628A4A"></span></button>
+                                <button type="button" class="accent-swatch" data-accent="terracotta" title="Terracotta"><span style="background:#B85C38"></span></button>
+                                <button type="button" class="accent-swatch" data-accent="plum" title="Plum"><span style="background:#7A5C68"></span></button>
+                                <button type="button" class="accent-swatch" data-accent="stone" title="Stone"><span style="background:#7A7268"></span></button>
+                                <label class="accent-swatch accent-custom-label" title="Custom color">
+                                    <input type="color" id="accent-custom-input" value="#628A4A">
+                                    <span class="accent-custom-preview"></span>
+                                </label>
+                            </div>
+                            <div class="form-hint">Choose a preset or pick your own accent color.</div>
+                        </div>
                         <button type="submit" class="btn btn-primary">Save Appearance</button>
                     </form>
+                </section>
+            </div>
+        </main>
+
+        "##,
+        active_model_display = active_model_display,
+        active_provider_display = active_provider_display,
+        active_banner_hidden = if config.agent.model.is_empty() {
+            "style=\"display:none\""
+        } else {
+            ""
+        },
+        no_model_hidden = if config.agent.model.is_empty() {
+            ""
+        } else {
+            "style=\"display:none\""
+        },
+        vision_model = config.agent.vision_model,
+        max_tokens = config.agent.max_tokens,
+        temperature = config.agent.temperature,
+        max_iterations = config.agent.max_iterations,
+        xml_fallback_delay_ms = config.agent.xml_fallback_delay_ms,
+        fallback_models_json = serde_json::to_string(&config.agent.fallback_models)
+            .unwrap_or_else(|_| "[]".to_string()),
+        conversation_retention_days = config.memory.conversation_retention_days,
+        history_retention_days = config.memory.history_retention_days,
+        daily_archive_months = config.memory.daily_archive_months,
+        auto_cleanup_checked = if config.memory.auto_cleanup {
+            "checked"
+        } else {
+            ""
+        },
+        theme_system = if config.ui.theme == "system" {
+            "selected"
+        } else {
+            ""
+        },
+        theme_light = if config.ui.theme == "light" {
+            "selected"
+        } else {
+            ""
+        },
+        theme_dark = if config.ui.theme == "dark" {
+            "selected"
+        } else {
+            ""
+        },
+        language_system = if config.ui.language == "system" {
+            "selected"
+        } else {
+            ""
+        },
+        language_it = if config.ui.language == "it" {
+            "selected"
+        } else {
+            ""
+        },
+        language_en = if config.ui.language == "en" {
+            "selected"
+        } else {
+            ""
+        },
+        providers_html = providers_html,
+        catalog_modal_html = catalog_modal_html,
+    );
+
+    Html(page_html("Settings", "settings", &body, &["setup.js"]))
+}
+
+// ─── Channels ──────────────────────────────────────────────────
+
+async fn channels_page(State(state): State<Arc<AppState>>) -> Html<String> {
+    let config = state.config.read().await;
+    let channels_html = build_channels_cards_html(&config);
+
+    let body = format!(
+        r##"<main class="content">
+            <div class="content-inner">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">Channels</h1>
+                    </div>
+                </div>
+
+                <section class="section" id="section-channels">
+                    <div class="provider-grid" id="channel-grid">
+                        {channels_html}
+                    </div>
                 </section>
             </div>
         </main>
@@ -837,32 +1007,66 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     <button type="button" id="btn-wa-pair" class="btn btn-success" style="display:none;">Start Pairing</button>
                 </div>
             </div>
-        </div>
+        </div>"##,
+        channels_html = channels_html,
+    );
 
-        "##,
-        active_model_display = active_model_display,
-        active_provider_display = active_provider_display,
-        active_banner_hidden = if config.agent.model.is_empty() {
-            "style=\"display:none\""
-        } else {
-            ""
-        },
-        no_model_hidden = if config.agent.model.is_empty() {
-            ""
-        } else {
-            "style=\"display:none\""
-        },
-        vision_model = config.agent.vision_model,
-        max_tokens = config.agent.max_tokens,
-        temperature = config.agent.temperature,
-        max_iterations = config.agent.max_iterations,
-        xml_fallback_delay_ms = config.agent.xml_fallback_delay_ms,
-        fallback_models_json = serde_json::to_string(&config.agent.fallback_models)
-            .unwrap_or_else(|_| "[]".to_string()),
-        conversation_retention_days = config.memory.conversation_retention_days,
-        history_retention_days = config.memory.history_retention_days,
-        daily_archive_months = config.memory.daily_archive_months,
-        auto_cleanup_checked = if config.memory.auto_cleanup {
+    Html(page_html("Channels", "channels", &body, &["setup.js"]))
+}
+
+// ─── Browser ──────────────────────────────────────────────────
+
+async fn browser_page(State(state): State<Arc<AppState>>) -> Html<String> {
+    let config = state.config.read().await;
+
+    let body = format!(
+        r##"<main class="content">
+            <div class="content-inner">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">Browser Automation</h1>
+                    </div>
+                </div>
+
+                <section class="section" id="section-browser">
+                    <div class="form-hint" style="margin-bottom:12px;">{browser_status}</div>
+                    <form class="form" id="browser-form">
+                        <div class="setting-toggle-row">
+                            <div class="setting-toggle-info">
+                                <span class="setting-toggle-name">Enable Browser</span>
+                                <span class="setting-toggle-desc">Register the browser tool and use it for dynamic web tasks</span>
+                            </div>
+                            <div class="toggle-wrap">
+                                <input type="checkbox" id="browser-enabled" name="enabled" class="toggle-input" {browser_enabled_checked}>
+                                <label class="toggle-label" for="browser-enabled"></label>
+                            </div>
+                        </div>
+                        <div class="setting-toggle-row">
+                            <div class="setting-toggle-info">
+                                <span class="setting-toggle-name">Headless Mode</span>
+                                <span class="setting-toggle-desc">Run browser without visible window</span>
+                            </div>
+                            <div class="toggle-wrap">
+                                <input type="checkbox" id="browser-headless" name="headless" class="toggle-input" {browser_headless_checked}>
+                                <label class="toggle-label" for="browser-headless"></label>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Chrome Executable Path</label>
+                            <input type="text" id="browser-executable" name="executable_path" value="{executable_path}" class="input" placeholder="Auto-detect (leave empty)">
+                            <div class="form-hint">Leave empty to auto-detect. Override if Chrome is in a custom location.</div>
+                        </div>
+                        <div class="form-hint" style="margin-top:10px;">Timeouts and snapshot settings are managed by the Playwright MCP server.</div>
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-primary">Save Browser Config</button>
+                            <button type="button" class="btn btn-secondary" id="btn-test-browser">Test Connection</button>
+                        </div>
+                        <div id="browser-result" class="form-hint" style="margin-top:10px;"></div>
+                    </form>
+                </section>
+            </div>
+        </main>"##,
+        browser_enabled_checked = if config.browser.enabled {
             "checked"
         } else {
             ""
@@ -873,51 +1077,36 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
             ""
         },
         executable_path = config.browser.executable_path,
-        browser_status = if config.browser.resolved_executable().is_some() {
-            let path = config.browser.resolved_executable().unwrap();
-            format!("Chrome found at {}", path.display())
-        } else {
-            "Chrome not found — install Chrome or set path below".to_string()
+        browser_status = {
+            let status = config.browser.runtime_status();
+            let enabled = if status.enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            };
+            let availability = if status.available {
+                "available"
+            } else {
+                "unavailable"
+            };
+            let executable = status
+                .executable_path
+                .map(|path| format!("Chrome: {}", path))
+                .unwrap_or_else(|| "Chrome: not detected".to_string());
+            match status.reason {
+                Some(reason) => format!(
+                    "{} • MCP (Playwright) • {}. {} {}",
+                    enabled, availability, executable, reason
+                ),
+                None => format!(
+                    "{} • MCP (Playwright) • {}. {}",
+                    enabled, availability, executable
+                ),
+            }
         },
-        action_timeout_secs = config.browser.action_timeout_secs,
-        navigation_timeout_secs = config.browser.navigation_timeout_secs,
-        snapshot_limit = config.browser.snapshot_limit,
-        theme_system = if config.ui.theme == "system" {
-            "selected"
-        } else {
-            ""
-        },
-        theme_light = if config.ui.theme == "light" {
-            "selected"
-        } else {
-            ""
-        },
-        theme_dark = if config.ui.theme == "dark" {
-            "selected"
-        } else {
-            ""
-        },
-        language_system = if config.ui.language == "system" {
-            "selected"
-        } else {
-            ""
-        },
-        language_it = if config.ui.language == "it" {
-            "selected"
-        } else {
-            ""
-        },
-        language_en = if config.ui.language == "en" {
-            "selected"
-        } else {
-            ""
-        },
-        providers_html = providers_html,
-        catalog_modal_html = catalog_modal_html,
-        channels_html = build_channels_cards_html(&config),
     );
 
-    Html(page_html("Settings", "settings", &body, &["setup.js"]))
+    Html(page_html("Browser", "browser", &body, &["setup.js"]))
 }
 
 // ─── Chat ───────────────────────────────────────────────────────
@@ -936,62 +1125,164 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
         r#"<main class="content chat-layout">
             <div class="content-inner">
                 <div class="chat-shell">
-                    <div class="chat-topbar">
-                        <span class="chat-connection" id="ws-status">Connecting…</span>
-                        <div class="chat-actions">
-                            <button class="btn btn-ghost btn-sm" id="btn-new-chat" title="New conversation">
-                            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="3" x2="9" y2="15"/><line x1="3" y1="9" x2="15" y2="9"/></svg>
-                            </button>
-                            <button class="btn btn-ghost btn-sm" id="btn-compact-chat" title="Compact conversation">
-                            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 9 12 15 6"/></svg>
-                            </button>
-                            <button class="btn btn-ghost btn-sm" id="btn-clear-chat" title="Clear screen">
-                            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 4 9 9 14 4"/><polyline points="4 14 9 9 14 14"/></svg>
-                            </button>
+                    <aside class="chat-sidebar">
+                        <div class="chat-sidebar-header">
+                            <span class="chat-sidebar-title">Conversations</span>
+                            <div class="chat-sidebar-actions">
+                                <button class="btn-icon" id="btn-chat-search" title="Search">
+                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="7.5" r="5.5"/><path d="M12 12l4.5 4.5"/></svg>
+                                </button>
+                                <button class="btn-icon" id="btn-new-chat" title="New conversation">
+                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="3" x2="9" y2="15"/><line x1="3" y1="9" x2="15" y2="9"/></svg>
+                                </button>
+                            </div>
                         </div>
-                    </div>
-                    <div class="chat-thread-wrap">
-                        <div class="chat-empty-state" id="chat-empty-state">
-                            <div class="chat-empty-kicker">Homun is ready</div>
-                            <h2>Ask, search, inspect tools, or connect services.</h2>
-                            <p>The chat will show reasoning blocks, tool activity and formatted answers in one continuous workspace.</p>
+                        <div class="chat-conversation-list" id="chat-conversation-list"></div>
+                        <div class="chat-bulk-actions" id="chat-bulk-actions" hidden>
+                            <span class="chat-bulk-count" id="chat-bulk-count">0 selected</span>
+                            <div class="chat-bulk-buttons">
+                                <button class="btn-icon" id="btn-bulk-archive" title="Archive selected">
+                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="14" height="3" rx="1"/><path d="M3 6v8a1 1 0 001 1h10a1 1 0 001-1V6"/><path d="M7 10h4"/></svg>
+                                </button>
+                                <button class="btn-icon is-danger" id="btn-bulk-delete" title="Delete selected">
+                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h12"/><path d="M7 5V3h4v2"/><path d="M5 5v10a1 1 0 001 1h6a1 1 0 001-1V5"/></svg>
+                                </button>
+                                <button class="btn-icon" id="btn-bulk-cancel" title="Cancel selection">
+                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="5" x2="13" y2="13"/><line x1="13" y1="5" x2="5" y2="13"/></svg>
+                                </button>
+                            </div>
                         </div>
-                        <div class="chat-messages" id="messages"></div>
-                    </div>
-                    <div class="chat-composer-dock">
-                        <div class="chat-composer-shell" id="chat-config" data-model="{current_model}" data-vision-model="{current_vision_model}">
-                            <div class="chat-composer-toolbar">
-                                <div class="chat-plus-wrap">
-                                    <button type="button" class="chat-plus-btn" id="btn-chat-plus" title="Add attachments or services">+</button>
-                                    <div class="chat-plus-menu" id="chat-plus-menu" hidden>
-                                        <button type="button" class="chat-plus-item" id="btn-chat-upload-image">Add image</button>
-                                        <button type="button" class="chat-plus-item" id="btn-chat-upload-doc">Add document</button>
-                                        <button type="button" class="chat-plus-item" id="btn-chat-open-mcp">Open MCP</button>
+                    </aside>
+                    <section class="chat-main">
+                        <div class="chat-topbar">
+                            <div class="chat-topbar-leading">
+                                <div class="chat-topbar-meta">
+                                    <div class="chat-topbar-title" id="chat-conversation-title">New conversation</div>
+                                    <div class="chat-topbar-statusline">
+                                        <span class="chat-connection" id="ws-status">Connecting…</span>
+                                        <span class="chat-run-model" id="chat-run-model" hidden></span>
+                                        <span class="chat-run-badge is-idle is-dot-only" id="chat-run-badge" aria-label="idle"></span>
                                     </div>
                                 </div>
                             </div>
-                            <form class="chat-input" id="chat-form">
-                                <textarea id="chat-text" placeholder="Reply to Homun…" autocomplete="off" class="input chat-textarea" rows="1"></textarea>
-                                <button type="button" class="chat-send-btn" id="btn-send" aria-label="Send message">
-                                    <span class="chat-send-spinner" aria-hidden="true"></span>
-                                    <svg class="chat-send-icon chat-send-icon--send" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h9"/><path d="M9 3l6 6-6 6"/></svg>
-                                    <svg class="chat-send-icon chat-send-icon--stop" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="7" height="7" rx="1.2"/></svg>
+                            <div class="chat-actions">
+                                <button class="btn btn-ghost btn-sm" id="btn-new-chat-topbar" title="New conversation">
+                                <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="3" x2="9" y2="15"/><line x1="3" y1="9" x2="15" y2="9"/></svg>
                                 </button>
-                            </form>
-                            <div class="chat-composer-footer">
-                                <div class="chat-model-selector">
-                                    <select id="chat-model-select" class="input input-sm" aria-label="Model">
-                                        <option value="{current_model}">{current_model}</option>
-                                    </select>
+                                <button class="btn btn-ghost btn-sm" id="btn-clear-chat" title="Clear screen">
+                                <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 4 9 9 14 4"/><polyline points="4 14 9 9 14 14"/></svg>
+                                </button>
+                                <button class="btn btn-ghost btn-sm chat-sidebar-toggle-btn" id="btn-chat-sidebar" title="Toggle sidebar" aria-label="Toggle sidebar">
+                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="14" height="12" rx="1.5"/><line x1="7" y1="3" x2="7" y2="15"/><line x1="10.5" y1="6" x2="13" y2="6"/><line x1="10.5" y1="9" x2="13" y2="9"/><line x1="10.5" y1="12" x2="13" y2="12"/></svg>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="chat-thread-wrap">
+                            <section class="chat-plan-panel collapsed" id="chat-plan-panel" hidden>
+                                <button type="button" class="chat-plan-header" id="chat-plan-toggle" aria-expanded="false">
+                                    <span class="chat-plan-header-copy">
+                                        <span class="chat-plan-kicker">Task plan</span>
+                                        <span class="chat-plan-objective" id="chat-plan-objective"></span>
+                                    </span>
+                                    <span class="chat-plan-toggle-icon">›</span>
+                                </button>
+                                <div class="chat-plan-grid">
+                                    <div class="chat-plan-column" id="chat-plan-done-wrap" hidden>
+                                        <div class="chat-plan-label">Done</div>
+                                        <ul class="chat-plan-list" id="chat-plan-done"></ul>
+                                    </div>
+                                    <div class="chat-plan-column" id="chat-plan-remaining-wrap" hidden>
+                                        <div class="chat-plan-label">Remaining</div>
+                                        <ul class="chat-plan-list" id="chat-plan-remaining"></ul>
+                                    </div>
+                                </div>
+                                <div class="chat-plan-column chat-plan-constraints" id="chat-plan-constraints-wrap" hidden>
+                                    <div class="chat-plan-label">Constraints</div>
+                                    <ul class="chat-plan-list" id="chat-plan-constraints"></ul>
+                                </div>
+                            </section>
+                            <div class="chat-empty-state" id="chat-empty-state">
+                                <div class="chat-empty-kicker">Homun is ready</div>
+                                <h2>Ask, search, inspect tools, or connect services.</h2>
+                                <p>The chat will show reasoning blocks, tool activity and formatted answers in one continuous workspace.</p>
+                            </div>
+                            <div class="chat-messages" id="messages"></div>
+                        </div>
+                        <div class="chat-composer-dock">
+                            <div class="chat-composer-shell" id="chat-config" data-model="{current_model}" data-vision-model="{current_vision_model}">
+                                <form class="chat-input" id="chat-form">
+                                    <textarea id="chat-text" placeholder="Reply to Homun…" autocomplete="off" class="input chat-textarea" rows="1" autofocus></textarea>
+                                    <div class="chat-attachment-strip" id="chat-attachment-strip" hidden></div>
+                                    <div class="chat-input-bottom">
+                                        <div class="chat-composer-footer">
+                                            <div class="chat-model-selector">
+                                                <select id="chat-model-select" class="input input-sm" aria-label="Model">
+                                                    <option value="{current_model}">{current_model}</option>
+                                                </select>
+                                            </div>
+                                            <div class="chat-model-capabilities" id="chat-model-capabilities" hidden></div>
+                                        </div>
+                                        <div class="chat-input-actions">
+                                            <div class="chat-plus-wrap">
+                                                <button type="button" class="chat-plus-btn" id="btn-chat-plus" title="Add attachments or services">+</button>
+                                                <div class="chat-plus-menu" id="chat-plus-menu" hidden>
+                                                    <button type="button" class="chat-plus-item" id="btn-chat-upload-image">Add image</button>
+                                                    <button type="button" class="chat-plus-item" id="btn-chat-upload-doc">Add document</button>
+                                                    <button type="button" class="chat-plus-item" id="btn-chat-open-mcp">Open MCP</button>
+                                                </div>
+                                                <div class="chat-mcp-picker" id="chat-mcp-picker" hidden>
+                                                    <div class="chat-mcp-picker-header">
+                                                        <input type="text" id="chat-mcp-search" class="input chat-mcp-search" placeholder="Search MCP servers" autocomplete="off">
+                                                        <a href="/mcp" class="chat-mcp-manage-link">Manage</a>
+                                                    </div>
+                                                    <div class="chat-mcp-picker-list" id="chat-mcp-picker-list"></div>
+                                                </div>
+                                            </div>
+                                            <button type="button" class="chat-send-btn" id="btn-send" aria-label="Send message">
+                                                <span class="chat-send-spinner" aria-hidden="true"></span>
+                                                <svg class="chat-send-icon chat-send-icon--send" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h9"/><path d="M9 3l6 6-6 6"/></svg>
+                                                <svg class="chat-send-icon chat-send-icon--stop" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="7" height="7" rx="1.2"/></svg>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                        <input type="file" id="chat-image-input" accept="image/*" multiple hidden>
+                        <input type="file" id="chat-doc-input" accept=".pdf,.md,.txt,.doc,.docx" multiple hidden>
+                        <div class="chat-modal-backdrop" id="chat-modal-backdrop" hidden>
+                            <div class="chat-modal" role="dialog" aria-modal="true" aria-labelledby="chat-modal-title">
+                                <div class="chat-modal-header">
+                                    <h3 id="chat-modal-title">Confirm action</h3>
+                                </div>
+                                <p class="chat-modal-copy" id="chat-modal-copy"></p>
+                                <div class="chat-modal-actions">
+                                    <button type="button" class="btn btn-ghost btn-sm" id="chat-modal-cancel">Cancel</button>
+                                    <button type="button" class="btn btn-primary btn-sm" id="chat-modal-confirm">Confirm</button>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                    <input type="file" id="chat-image-input" accept="image/*" hidden>
-                    <input type="file" id="chat-doc-input" accept=".pdf,.md,.txt,.doc,.docx" hidden>
+                    </section>
                 </div>
             </div>
         </main>
+        <!-- Search Modal -->
+        <div id="chat-search-modal" class="chat-search-modal" hidden>
+            <div class="chat-search-modal-backdrop"></div>
+            <div class="chat-search-modal-content">
+                <div class="chat-search-modal-header">
+                    <svg class="chat-search-modal-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="7.5" r="5.5"/><path d="M12 12l4.5 4.5"/></svg>
+                    <input type="text" id="chat-search-input" class="chat-search-modal-input" placeholder="Search conversations…" autocomplete="off">
+                    <button class="chat-search-modal-close" id="btn-chat-search-close">&times;</button>
+                </div>
+                <div class="chat-search-modal-options">
+                    <label class="chat-search-option">
+                        <input type="checkbox" id="chat-search-include-archived"> Show archived
+                    </label>
+                </div>
+                <div class="chat-search-modal-results" id="chat-search-results"></div>
+            </div>
+        </div>
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>"#,
         current_model = current_model,
@@ -1094,6 +1385,18 @@ async fn automations_page() -> Html<String> {
                             </div>
                         </div>
 
+                        <div class="form-group">
+                            <label class="toggle-label">
+                                <input type="checkbox" id="automation-workflow-toggle">
+                                Execute as multi-step workflow
+                            </label>
+                            <div class="form-hint">When enabled, the automation runs as a workflow with distinct steps instead of a single prompt.</div>
+                        </div>
+                        <div id="automation-workflow-steps" style="display:none;">
+                            <div id="automation-wf-step-list"></div>
+                            <button type="button" class="btn btn-secondary btn-sm" id="automation-add-wf-step">+ Add Step</button>
+                        </div>
+
                         <div class="actions">
                             <button class="btn btn-primary" type="submit">Create Automation</button>
                         </div>
@@ -1126,6 +1429,92 @@ async fn automations_page() -> Html<String> {
         body,
         &["automations.js"],
     ))
+}
+
+// ─── Workflows ──────────────────────────────────────────────────
+
+async fn workflows_page() -> Html<String> {
+    let body = r#"<main class="content">
+            <div class="content-inner">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">Workflows</h1>
+                        <span class="badge badge-info" id="workflows-count">0</span>
+                    </div>
+                    <div class="actions">
+                        <button class="btn btn-secondary btn-sm" id="btn-workflows-refresh">Refresh</button>
+                    </div>
+                </div>
+
+                <div class="stats-grid" style="grid-template-columns:repeat(4,1fr)">
+                    <div class="stat-card">
+                        <div class="stat-label">Total</div>
+                        <div class="stat-value" id="stat-total">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Running</div>
+                        <div class="stat-value" id="stat-running">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Completed</div>
+                        <div class="stat-value" id="stat-completed">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Failed</div>
+                        <div class="stat-value" id="stat-failed">0</div>
+                    </div>
+                </div>
+
+                <section class="section">
+                    <h2>Create Workflow</h2>
+                    <form id="workflow-create-form" class="form form--full">
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="wf-name">Name</label>
+                                <input id="wf-name" class="input" type="text" maxlength="120" placeholder="Research & Report">
+                            </div>
+                            <div class="form-group">
+                                <label for="wf-deliver-to">Deliver To</label>
+                                <select id="wf-deliver-to" class="input">
+                                    <option value="web:web">Web UI</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="wf-objective">Objective</label>
+                            <textarea id="wf-objective" class="input" rows="2" placeholder="Describe the high-level goal of this workflow."></textarea>
+                            <div class="form-hint">The objective is shared with every step for context.</div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Steps</label>
+                            <div id="wf-steps-container"></div>
+                            <button type="button" class="btn btn-secondary btn-sm" id="wf-add-step" style="margin-top:0.5rem;">+ Add Step</button>
+                        </div>
+
+                        <div class="actions">
+                            <button class="btn btn-primary" type="submit">Create Workflow</button>
+                        </div>
+                    </form>
+                </section>
+
+                <section class="section">
+                    <h2>Workflow List</h2>
+                    <div id="workflows-list" class="item-list">
+                        <div class="empty-state">
+                            <p>Loading workflows...</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="section" id="workflow-detail-section" style="display:none;">
+                    <h2>Workflow Detail</h2>
+                    <div id="workflow-detail"></div>
+                </section>
+            </div>
+        </main>"#;
+
+    Html(page_html("Workflows", "workflows", body, &["workflows.js"]))
 }
 
 // ─── Skills ─────────────────────────────────────────────────────
@@ -1232,7 +1621,43 @@ async fn skills_page() -> Html<String> {
                         <span class="badge badge-info" id="installed-count">{count} installed</span>
                         {source_chips_html}
                     </div>
+                    <button type="button" class="btn btn-primary btn-sm" id="create-skill-toggle-btn">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"><path d="M8 3v10M3 8h10"/></svg>Create Skill
+                    </button>
                 </div>
+
+                <section class="section skill-creator-panel" id="skill-creator-panel" style="display:none">
+                    <h2>Create a New Skill</h2>
+                    <p class="form-hint" style="margin-bottom:16px">Describe what the skill should do. Homun will generate the SKILL.md, script, run a security scan, and install it.</p>
+                    <div class="form-group">
+                        <label class="form-label" for="creator-prompt">What should this skill do?</label>
+                        <textarea class="input" id="creator-prompt" rows="3" placeholder="e.g. Check disk space and report usage in a formatted table"></textarea>
+                    </div>
+                    <div class="form-row--2">
+                        <div class="form-group">
+                            <label class="form-label" for="creator-name">Skill name <span class="form-hint">(optional, auto-generated)</span></label>
+                            <input class="input" id="creator-name" type="text" placeholder="my-skill-name">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="creator-language">Script language</label>
+                            <select class="input" id="creator-language">
+                                <option value="">Auto-detect</option>
+                                <option value="python">Python</option>
+                                <option value="bash">Bash</option>
+                                <option value="javascript">JavaScript</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label"><input type="checkbox" id="creator-overwrite"> Replace existing skill with same name</label>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-primary btn-sm" id="creator-submit-btn">Create Skill</button>
+                        <button type="button" class="btn btn-secondary btn-sm" id="creator-cancel-btn">Cancel</button>
+                        <span class="skills-search-spinner" id="creator-spinner" style="display:none"></span>
+                    </div>
+                    <div id="creator-result" style="display:none"></div>
+                </section>
 
                 <section class="section">
                     <div class="mcp-sandbox-panel">
@@ -1423,6 +1848,11 @@ async fn mcp_page(State(state): State<Arc<AppState>>) -> Html<String> {
                                     <label for="mcp-env">Environment Variables (KEY=VALUE, one per line)</label>
                                     <textarea id="mcp-env" name="env" class="input" rows="5" placeholder="API_TOKEN=vault://mcp.custom.token"></textarea>
                                     <div class="form-hint">For secrets, prefer vault references: <code>vault://my_key</code>.</div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="mcp-capabilities">Capabilities (comma-separated)</label>
+                                    <input id="mcp-capabilities" name="capabilities" class="input" type="text" placeholder="image-analysis, ocr">
+                                    <div class="form-hint">Used for automatic attachment fallback routing.</div>
                                 </div>
                                 <div class="form-actions">
                                     <button class="btn btn-primary" type="submit">Save Server</button>
@@ -2168,6 +2598,7 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             </div>
                             <div class="form-actions">
                                 <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-sandbox-image">Refresh Image Status</button>
+                                <button type="button" class="btn btn-secondary btn-sm" id="btn-build-sandbox-image">Build Runtime Baseline</button>
                                 <button type="button" class="btn btn-primary btn-sm" id="btn-pull-sandbox-image">Pull Runtime Image</button>
                             </div>
                         </div>
@@ -2198,6 +2629,8 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <select id="sandbox-backend" class="input">
                                 <option value="auto">auto</option>
                                 <option value="docker">docker</option>
+                                <option value="linux_native">linux_native</option>
+                                <option value="windows_native">windows_native</option>
                                 <option value="none">none</option>
                             </select>
                         </div>
@@ -2212,6 +2645,22 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <div class="form-group">
                                 <label>Docker image</label>
                                 <input type="text" id="sandbox-docker-image" class="input" value="{sandbox_docker_image}">
+                                <div class="form-hint">Use a digest to pin the runtime. Core repo baseline: <code>homun/runtime-core:2026.03</code>. Versioned tags are reviewable; <code>latest</code> stays floating.</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Runtime image policy</label>
+                                <select id="sandbox-runtime-image-policy" class="input">
+                                    <option value="infer" {sandbox_runtime_policy_infer}>infer</option>
+                                    <option value="pinned" {sandbox_runtime_policy_pinned}>pinned</option>
+                                    <option value="versioned_tag" {sandbox_runtime_policy_versioned_tag}>versioned_tag</option>
+                                    <option value="floating" {sandbox_runtime_policy_floating}>floating</option>
+                                </select>
+                                <div class="form-hint">`infer` follows the image reference. Explicit policies let you require pinned or versioned refs even before pulling.</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Expected runtime version</label>
+                                <input type="text" id="sandbox-runtime-image-expected-version" class="input" value="{sandbox_runtime_image_expected_version}">
+                                <div class="form-hint">Optional override for the expected tag or digest when the policy is explicit.</div>
                             </div>
                             <div class="form-group">
                                 <label>Docker network</label>
@@ -2412,6 +2861,34 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
             ""
         },
         sandbox_docker_image = config.security.execution_sandbox.docker_image,
+        sandbox_runtime_policy_infer =
+            if config.security.execution_sandbox.runtime_image_policy == "infer" {
+                "selected"
+            } else {
+                ""
+            },
+        sandbox_runtime_policy_pinned =
+            if config.security.execution_sandbox.runtime_image_policy == "pinned" {
+                "selected"
+            } else {
+                ""
+            },
+        sandbox_runtime_policy_versioned_tag =
+            if config.security.execution_sandbox.runtime_image_policy == "versioned_tag" {
+                "selected"
+            } else {
+                ""
+            },
+        sandbox_runtime_policy_floating =
+            if config.security.execution_sandbox.runtime_image_policy == "floating" {
+                "selected"
+            } else {
+                ""
+            },
+        sandbox_runtime_image_expected_version = config
+            .security
+            .execution_sandbox
+            .runtime_image_expected_version,
         sandbox_docker_memory = config.security.execution_sandbox.docker_memory_mb,
         sandbox_docker_cpus = config.security.execution_sandbox.docker_cpus,
         sandbox_docker_readonly_checked =
@@ -3409,4 +3886,382 @@ async fn approvals_page(State(state): State<Arc<AppState>>) -> Html<String> {
 
     let html = page_html("Approvals", "approvals", &body, &["approvals.js"]);
     Html(html)
+}
+
+// ─── Knowledge Page ────────────────────────────────────────────────
+
+async fn knowledge_page(State(_state): State<Arc<AppState>>) -> Html<String> {
+    let body = r##"<main class="content">
+        <div class="content-inner">
+            <div class="page-header">
+                <div>
+                    <h1>Knowledge Base</h1>
+                    <p class="page-subtitle">Personal document knowledge base — upload files and search across your documents.</p>
+                </div>
+            </div>
+
+            <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)" id="knowledge-stats">
+                <div class="stat-card">
+                    <div class="stat-label">Sources</div>
+                    <div class="stat-value" id="stat-sources">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Chunks</div>
+                    <div class="stat-value" id="stat-chunks">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Vectors</div>
+                    <div class="stat-value" id="stat-vectors">—</div>
+                </div>
+            </div>
+
+            <div class="knowledge-grid">
+                <div class="knowledge-panel">
+                    <h2>Upload Files</h2>
+                    <div class="upload-zone" id="upload-zone">
+                        <div class="upload-icon">
+                            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                <polyline points="14 2 14 8 20 8"/>
+                                <line x1="12" y1="18" x2="12" y2="12"/>
+                                <line x1="9" y1="15" x2="12" y2="12"/>
+                                <line x1="15" y1="15" x2="12" y2="12"/>
+                            </svg>
+                        </div>
+                        <p>Drag & drop files here or <label for="file-input" class="upload-label">browse</label></p>
+                        <p class="upload-hint">Supports: .md, .txt, .pdf, .docx, .xlsx, .rs, .py, .js, .ts, .go, .java, .toml, .yaml, .json, .html, .css, .sh, .sql</p>
+                        <input type="file" id="file-input" multiple style="display:none"
+                            accept=".md,.markdown,.txt,.log,.rs,.py,.js,.ts,.go,.java,.c,.cpp,.h,.hpp,.toml,.yaml,.yml,.json,.html,.htm,.css,.sh,.bash,.zsh,.sql,.xml,.csv,.ini,.cfg,.conf,.env,.pdf,.docx,.xlsx,.xls,.xlsm,.odt">
+                    </div>
+                    <div id="upload-progress" class="upload-progress" style="display:none"></div>
+
+                    <h3 style="margin-top:1.25rem;margin-bottom:0.5rem;font-size:0.85rem;font-weight:600;letter-spacing:0.02em;opacity:0.7">Index Folder</h3>
+                    <div class="folder-index-form" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+                        <input type="text" id="folder-path" placeholder="/path/to/folder" class="search-input" style="flex:1;min-width:200px">
+                        <label style="display:flex;align-items:center;gap:0.25rem;font-size:0.8rem;white-space:nowrap">
+                            <input type="checkbox" id="folder-recursive" checked> Recursive
+                        </label>
+                        <button id="index-folder-btn" class="btn btn-primary">Index</button>
+                    </div>
+                    <div id="folder-progress" class="upload-progress" style="display:none"></div>
+                </div>
+
+                <div class="knowledge-panel">
+                    <h2>Search</h2>
+                    <div class="search-bar">
+                        <input type="text" id="knowledge-search" placeholder="Search your knowledge base..." class="search-input">
+                        <button id="search-btn" class="btn btn-primary">Search</button>
+                    </div>
+                    <div id="search-results" class="search-results"></div>
+                </div>
+            </div>
+
+            <div class="knowledge-panel">
+                <h2>Indexed Sources</h2>
+                <div id="sources-list" class="sources-list">
+                    <p class="empty-state">Loading sources...</p>
+                </div>
+            </div>
+        </div>
+    </main>"##;
+
+    let html = page_html("Knowledge", "knowledge", body, &["knowledge.js"]);
+    Html(html)
+}
+
+// ─── Business ──────────────────────────────────────────────────
+
+async fn business_page() -> Html<String> {
+    let body = r##"<main class="content">
+            <div class="content-inner">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">Business</h1>
+                        <span class="badge badge-info" id="biz-count">0</span>
+                    </div>
+                    <div class="actions">
+                        <button class="btn btn-secondary btn-sm" id="btn-biz-refresh">Refresh</button>
+                    </div>
+                </div>
+
+                <div class="stats-grid" style="grid-template-columns:repeat(4,1fr)">
+                    <div class="stat-card">
+                        <div class="stat-label">Active</div>
+                        <div class="stat-value" id="stat-biz-active">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Total Revenue</div>
+                        <div class="stat-value" id="stat-biz-revenue">0.00</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Profit</div>
+                        <div class="stat-value" id="stat-biz-profit">0.00</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Products</div>
+                        <div class="stat-value" id="stat-biz-products">0</div>
+                    </div>
+                </div>
+
+                <section class="section">
+                    <h2>Launch Business</h2>
+                    <form id="biz-create-form" class="form form--full">
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="biz-name">Name</label>
+                                <input id="biz-name" class="input" type="text" maxlength="120" placeholder="My AI Business">
+                            </div>
+                            <div class="form-group">
+                                <label for="biz-autonomy">Autonomy</label>
+                                <select id="biz-autonomy" class="input">
+                                    <option value="semi">Semi-autonomous</option>
+                                    <option value="budget">Budget-limited</option>
+                                    <option value="full">Full autonomous</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="biz-budget">Budget (optional)</label>
+                                <input id="biz-budget" class="input" type="number" step="0.01" min="0" placeholder="100.00">
+                            </div>
+                            <div class="form-group">
+                                <label for="biz-currency">Currency</label>
+                                <input id="biz-currency" class="input" type="text" maxlength="3" value="EUR" placeholder="EUR">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="biz-description">Description</label>
+                            <textarea id="biz-description" class="input" rows="2" placeholder="What this business does..."></textarea>
+                        </div>
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="biz-deliver-to">Deliver To</label>
+                                <select id="biz-deliver-to" class="input"></select>
+                            </div>
+                            <div class="form-group" style="display:flex;align-items:flex-end">
+                                <button type="submit" class="btn btn-primary">Launch</button>
+                            </div>
+                        </div>
+                    </form>
+                </section>
+
+                <section class="section">
+                    <h2>Businesses</h2>
+                    <div id="biz-list" class="card-grid">
+                        <p class="empty-state">No businesses yet. Launch one above.</p>
+                    </div>
+                </section>
+
+                <!-- Detail Panel -->
+                <section class="section" id="biz-detail-panel" style="display:none">
+                    <div class="page-header">
+                        <h2 id="biz-detail-name">Business Detail</h2>
+                        <div class="actions">
+                            <button class="btn btn-secondary btn-sm" id="btn-biz-pause">Pause</button>
+                            <button class="btn btn-secondary btn-sm" id="btn-biz-resume" style="display:none">Resume</button>
+                            <button class="btn btn-danger btn-sm" id="btn-biz-close">Close</button>
+                        </div>
+                    </div>
+                    <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+                        <div class="stat-card">
+                            <div class="stat-label">Revenue</div>
+                            <div class="stat-value" id="biz-d-revenue">0.00</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Expenses</div>
+                            <div class="stat-value" id="biz-d-expenses">0.00</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Profit</div>
+                            <div class="stat-value" id="biz-d-profit">0.00</div>
+                        </div>
+                    </div>
+                    <div id="biz-detail-info" class="detail-info"></div>
+
+                    <h3>Strategies</h3>
+                    <div id="biz-strategies-list" class="items-list">
+                        <p class="empty-state">No strategies yet.</p>
+                    </div>
+
+                    <h3>Products</h3>
+                    <div id="biz-products-list" class="items-list">
+                        <p class="empty-state">No products yet.</p>
+                    </div>
+
+                    <h3>Recent Transactions</h3>
+                    <div id="biz-transactions-list" class="items-list">
+                        <p class="empty-state">No transactions yet.</p>
+                    </div>
+                </section>
+            </div>
+        </main>"##;
+
+    let html = page_html("Business", "business", body, &["business.js"]);
+    Html(html)
+}
+
+// ─── Auth Pages (standalone, no sidebar) ───────────────────────
+
+/// Standalone page wrapper without sidebar (for login, setup).
+fn standalone_page(title: &str, body: &str) -> String {
+    format!(
+        r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{title} — Homun</title>
+    <link rel="icon" href="/static/img/favicon/favicon.ico" sizes="any">
+    <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        body {{ display: flex; justify-content: center; align-items: center; min-height: 100vh; background: var(--bg-primary); }}
+        .auth-card {{ background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; width: 100%; max-width: 400px; box-shadow: 0 4px 24px rgba(0,0,0,0.2); }}
+        .auth-card h1 {{ font-size: 1.5rem; margin: 0 0 0.5rem; text-align: center; }}
+        .auth-card p {{ color: var(--text-secondary); font-size: 0.875rem; text-align: center; margin: 0 0 1.5rem; }}
+        .auth-card label {{ display: block; font-size: 0.8125rem; font-weight: 500; margin-bottom: 0.375rem; color: var(--text-secondary); }}
+        .auth-card input[type="text"], .auth-card input[type="password"] {{ width: 100%; padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); color: var(--text-primary); font-size: 0.875rem; box-sizing: border-box; margin-bottom: 1rem; }}
+        .auth-card input:focus {{ outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(99,102,241,0.2); }}
+        .auth-card button {{ width: 100%; padding: 0.75rem; border: none; border-radius: 8px; background: var(--accent); color: white; font-size: 0.875rem; font-weight: 600; cursor: pointer; transition: opacity 0.15s; }}
+        .auth-card button:hover {{ opacity: 0.9; }}
+        .auth-card button:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+        .auth-error {{ color: var(--danger, #ef4444); font-size: 0.8125rem; text-align: center; min-height: 1.25rem; margin-bottom: 0.5rem; }}
+        .auth-logo {{ text-align: center; margin-bottom: 1.5rem; }}
+        .auth-logo svg {{ width: 48px; height: 48px; color: var(--accent); }}
+    </style>
+</head>
+<body>
+    {body}
+</body>
+</html>"##
+    )
+}
+
+/// GET /login — standalone login page
+pub async fn login_page() -> Html<String> {
+    let body = r##"
+    <div class="auth-card">
+        <div class="auth-logo">
+            <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="24" cy="24" r="20"/>
+                <circle cx="24" cy="18" r="6"/>
+                <path d="M12 40c0-6.627 5.373-12 12-12s12 5.373 12 12"/>
+            </svg>
+        </div>
+        <h1>Homun</h1>
+        <p>Sign in to access your assistant</p>
+        <div class="auth-error" id="error-msg"></div>
+        <form id="login-form" onsubmit="return handleLogin(event)">
+            <label for="username">Username</label>
+            <input type="text" id="username" name="username" required autocomplete="username" autofocus>
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required autocomplete="current-password">
+            <button type="submit" id="login-btn">Sign In</button>
+        </form>
+    </div>
+    <script>
+    async function handleLogin(e) {
+        e.preventDefault();
+        const btn = document.getElementById('login-btn');
+        const err = document.getElementById('error-msg');
+        btn.disabled = true;
+        err.textContent = '';
+        try {
+            const res = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: document.getElementById('username').value,
+                    password: document.getElementById('password').value
+                })
+            });
+            const data = await res.json();
+            if (data.success && data.redirect) {
+                window.location.href = data.redirect;
+            } else {
+                err.textContent = data.error || 'Login failed';
+            }
+        } catch (ex) {
+            err.textContent = 'Network error';
+        }
+        btn.disabled = false;
+        return false;
+    }
+    </script>
+    "##;
+
+    Html(standalone_page("Login", body))
+}
+
+/// GET /setup-wizard — first-run admin account creation
+pub async fn setup_wizard_page() -> Html<String> {
+    let body = r##"
+    <div class="auth-card">
+        <div class="auth-logo">
+            <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="24" cy="24" r="20"/>
+                <circle cx="24" cy="18" r="6"/>
+                <path d="M12 40c0-6.627 5.373-12 12-12s12 5.373 12 12"/>
+            </svg>
+        </div>
+        <h1>Welcome to Homun</h1>
+        <p>Create your admin account to get started</p>
+        <div class="auth-error" id="error-msg"></div>
+        <form id="setup-form" onsubmit="return handleSetup(event)">
+            <label for="username">Username</label>
+            <input type="text" id="username" name="username" required autocomplete="username" autofocus>
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required autocomplete="new-password" minlength="6">
+            <label for="confirm">Confirm Password</label>
+            <input type="password" id="confirm" name="confirm" required autocomplete="new-password" minlength="6">
+            <button type="submit" id="setup-btn">Create Account</button>
+        </form>
+    </div>
+    <script>
+    async function handleSetup(e) {
+        e.preventDefault();
+        const btn = document.getElementById('setup-btn');
+        const err = document.getElementById('error-msg');
+        const pw = document.getElementById('password').value;
+        const confirm = document.getElementById('confirm').value;
+        btn.disabled = true;
+        err.textContent = '';
+
+        if (pw !== confirm) {
+            err.textContent = 'Passwords do not match';
+            btn.disabled = false;
+            return false;
+        }
+        if (pw.length < 6) {
+            err.textContent = 'Password must be at least 6 characters';
+            btn.disabled = false;
+            return false;
+        }
+
+        try {
+            const res = await fetch('/api/auth/setup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: document.getElementById('username').value,
+                    password: pw
+                })
+            });
+            const data = await res.json();
+            if (data.success && data.redirect) {
+                window.location.href = data.redirect;
+            } else {
+                err.textContent = data.error || 'Setup failed';
+            }
+        } catch (ex) {
+            err.textContent = 'Network error';
+        }
+        btn.disabled = false;
+        return false;
+    }
+    </script>
+    "##;
+
+    Html(standalone_page("Setup", body))
 }

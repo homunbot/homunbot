@@ -12,6 +12,7 @@
 //! 2. **Cloud direct**: `api_base = "https://ollama.com"`, api_key from ollama.com/settings/keys
 
 use anyhow::{Context as _, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures::StreamExt as _;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -50,13 +51,11 @@ impl OllamaProvider {
 
     /// Strip `ollama/` prefix from model name.
     fn resolve_model(&self, model: &str) -> String {
-        model.strip_prefix("ollama/").unwrap_or(model).to_string()
-    }
-
-    /// Cloud models (`:cloud` suffix) have reasoning enabled by default,
-    /// causing 30-120s latency. Send `think: false` to disable it.
-    fn should_disable_think(&self, model: &str) -> bool {
-        model.contains(":cloud")
+        model
+            .strip_prefix("ollama/")
+            .or_else(|| model.strip_prefix("ollama_cloud/"))
+            .unwrap_or(model)
+            .to_string()
     }
 
     /// Build an HTTP request with optional Bearer auth.
@@ -78,7 +77,7 @@ impl OllamaProvider {
     /// Key differences from OpenAI format:
     /// - Tool call arguments are JSON objects, not strings
     /// - No `tool_call_id` field (Ollama uses positional matching)
-    fn convert_messages(messages: &[ChatMessage]) -> Vec<OllamaMessage> {
+    fn convert_messages(messages: &[ChatMessage]) -> Result<Vec<OllamaMessage>> {
         messages
             .iter()
             .map(|msg| {
@@ -105,11 +104,47 @@ impl OllamaProvider {
                     }
                 });
 
-                OllamaMessage {
-                    role: msg.role.clone(),
-                    content: msg.content.clone().unwrap_or_default(),
-                    tool_calls,
+                let mut content_parts = Vec::new();
+                let mut images = Vec::new();
+                if let Some(parts) = &msg.content_parts {
+                    for part in parts {
+                        match part {
+                            ChatContentPart::Text { text } => {
+                                if !text.trim().is_empty() {
+                                    content_parts.push(text.clone());
+                                }
+                            }
+                            ChatContentPart::Image { path, .. } => {
+                                let bytes = std::fs::read(path).with_context(|| {
+                                    format!("Failed to read image attachment for Ollama: {path}")
+                                })?;
+                                images.push(BASE64.encode(bytes));
+                            }
+                            ChatContentPart::File { name, .. } => {
+                                content_parts.push(format!("Attached file: {name}"));
+                            }
+                        }
+                    }
                 }
+
+                if content_parts.is_empty() {
+                    if let Some(content) = msg.rendered_text() {
+                        if !content.trim().is_empty() {
+                            content_parts.push(content);
+                        }
+                    }
+                }
+
+                Ok(OllamaMessage {
+                    role: msg.role.clone(),
+                    content: content_parts.join("\n"),
+                    images: if images.is_empty() {
+                        None
+                    } else {
+                        Some(images)
+                    },
+                    tool_calls,
+                })
             })
             .collect()
     }
@@ -158,18 +193,12 @@ impl Provider for OllamaProvider {
         let model = self.resolve_model(&request.model);
         let url = format!("{}/api/chat", self.api_base);
 
-        let think = if self.should_disable_think(&model) {
-            Some(false)
-        } else {
-            None
-        };
-
         let body = OllamaRequest {
             model,
-            messages: Self::convert_messages(&request.messages),
+            messages: Self::convert_messages(&request.messages)?,
             tools: request.tools,
             stream: Some(false),
-            think,
+            think: request.think,
             options: Some(OllamaOptions {
                 temperature: Some(request.temperature),
                 num_predict: Some(request.max_tokens),
@@ -221,18 +250,12 @@ impl Provider for OllamaProvider {
         let model = self.resolve_model(&request.model);
         let url = format!("{}/api/chat", self.api_base);
 
-        let think = if self.should_disable_think(&model) {
-            Some(false)
-        } else {
-            None
-        };
-
         let body = OllamaRequest {
             model,
-            messages: Self::convert_messages(&request.messages),
+            messages: Self::convert_messages(&request.messages)?,
             tools: request.tools,
             stream: Some(true),
-            think,
+            think: request.think,
             options: Some(OllamaOptions {
                 temperature: Some(request.temperature),
                 num_predict: Some(request.max_tokens),
@@ -276,6 +299,11 @@ impl Provider for OllamaProvider {
                 let Ok(sc) = serde_json::from_str::<OllamaStreamChunk>(&line) else {
                     continue;
                 };
+
+                // Skip thinking-only chunks (thinking field set, no content)
+                if sc.message.thinking.is_some() && sc.message.content.is_empty() {
+                    continue;
+                }
 
                 // Text delta → forward to client
                 if !sc.message.content.is_empty() {
@@ -326,11 +354,14 @@ impl Provider for OllamaProvider {
             }
         }
 
+        // Strip any <think> tags that leaked into content
+        let clean_content = Self::strip_think_tags(&full_content);
+
         Ok(ChatResponse {
-            content: if full_content.is_empty() {
+            content: if clean_content.is_empty() {
                 None
             } else {
-                Some(full_content)
+                Some(clean_content)
             },
             tool_calls,
             finish_reason,
@@ -356,10 +387,22 @@ impl OllamaProvider {
             .map(|(i, tc)| Self::normalize_tool_call(tc, i))
             .collect();
 
-        let content = if resp.message.content.is_empty() {
+        // Log thinking content for debugging
+        if let Some(ref thinking) = resp.message.thinking {
+            tracing::debug!(
+                thinking_len = thinking.len(),
+                "Ollama response included thinking content"
+            );
+        }
+
+        // Strip <think> tags from content — some models embed reasoning there
+        // even when the `think` parameter separates it into its own field.
+        let raw_content = Self::strip_think_tags(&resp.message.content);
+
+        let content = if raw_content.is_empty() {
             None
         } else {
-            Some(resp.message.content)
+            Some(raw_content)
         };
 
         let finish_reason = if !tool_calls.is_empty() {
@@ -380,6 +423,23 @@ impl OllamaProvider {
             finish_reason,
             usage,
         }
+    }
+
+    /// Strip `<think>...</think>` tags from content.
+    ///
+    /// Some models embed reasoning inside `<think>` tags in the `content` field
+    /// even when the `think` parameter separates it into a dedicated field.
+    /// This ensures thinking never leaks into the agent loop.
+    fn strip_think_tags(text: &str) -> String {
+        use regex::Regex;
+        use std::sync::LazyLock;
+
+        static THINK_RE: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r"(?s)<think[^>]*>.*?</think\s*>").expect("Invalid think regex")
+        });
+
+        let cleaned = THINK_RE.replace_all(text, "");
+        cleaned.trim().to_string()
     }
 }
 
@@ -412,6 +472,8 @@ struct OllamaMessage {
     role: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    images: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<OllamaToolCallOut>>,
 }
@@ -450,6 +512,9 @@ struct OllamaResponse {
 struct OllamaResponseMessage {
     #[serde(default)]
     content: String,
+    /// Thinking/reasoning content (Ollama `think: true` — DeepSeek-R1, QwQ, etc.)
+    #[serde(default)]
+    thinking: Option<String>,
     #[serde(default)]
     tool_calls: Option<Vec<OllamaToolCall>>,
 }
@@ -497,17 +562,12 @@ mod tests {
     fn test_resolve_model_strip_prefix() {
         let provider = OllamaProvider::new("", None);
         assert_eq!(provider.resolve_model("ollama/llama3:8b"), "llama3:8b");
+        assert_eq!(
+            provider.resolve_model("ollama_cloud/qwen3.5:397b-cloud"),
+            "qwen3.5:397b-cloud"
+        );
         assert_eq!(provider.resolve_model("glm-5:cloud"), "glm-5:cloud");
         assert_eq!(provider.resolve_model("ollama/glm-5:cloud"), "glm-5:cloud");
-    }
-
-    #[test]
-    fn test_should_disable_think() {
-        let provider = OllamaProvider::new("", None);
-        assert!(provider.should_disable_think("glm-5:cloud"));
-        assert!(provider.should_disable_think("qwen3:cloud"));
-        assert!(!provider.should_disable_think("llama3:8b"));
-        assert!(!provider.should_disable_think("qwen2.5:latest"));
     }
 
     #[test]
@@ -616,12 +676,13 @@ mod tests {
             ChatMessage::user("Hello"),
             ChatMessage::assistant("Hi!"),
         ];
-        let converted = OllamaProvider::convert_messages(&messages);
+        let converted = OllamaProvider::convert_messages(&messages).unwrap();
         assert_eq!(converted.len(), 3);
         assert_eq!(converted[0].role, "system");
         assert_eq!(converted[0].content, "You are helpful.");
         assert_eq!(converted[1].role, "user");
         assert_eq!(converted[2].role, "assistant");
+        assert!(converted[0].images.is_none());
         assert!(converted[0].tool_calls.is_none());
     }
 
@@ -630,6 +691,7 @@ mod tests {
         let msg = ChatMessage {
             role: "assistant".to_string(),
             content: None,
+            content_parts: None,
             tool_calls: Some(vec![ToolCallSerialized {
                 id: "call_1".to_string(),
                 call_type: "function".to_string(),
@@ -641,7 +703,7 @@ mod tests {
             tool_call_id: None,
             name: None,
         };
-        let converted = OllamaProvider::convert_messages(&[msg]);
+        let converted = OllamaProvider::convert_messages(&[msg]).unwrap();
         let tcs = converted[0].tool_calls.as_ref().unwrap();
         assert_eq!(tcs.len(), 1);
         assert_eq!(tcs[0].function.name, "shell");
@@ -651,10 +713,33 @@ mod tests {
     #[test]
     fn test_convert_messages_tool_result() {
         let msg = ChatMessage::tool_result("call_1", "shell", "file1.txt\nfile2.txt");
-        let converted = OllamaProvider::convert_messages(&[msg]);
+        let converted = OllamaProvider::convert_messages(&[msg]).unwrap();
         assert_eq!(converted[0].role, "tool");
         assert_eq!(converted[0].content, "file1.txt\nfile2.txt");
         assert!(converted[0].tool_calls.is_none());
+    }
+
+    #[test]
+    fn test_convert_messages_with_image_parts() {
+        let image_path =
+            std::env::temp_dir().join(format!("homun-ollama-image-{}.png", std::process::id()));
+        std::fs::write(&image_path, b"fake-png-bytes").unwrap();
+        let msg = ChatMessage::user_parts(vec![
+            ChatContentPart::Text {
+                text: "Describe this image".to_string(),
+            },
+            ChatContentPart::Image {
+                path: image_path.display().to_string(),
+                media_type: "image/png".to_string(),
+            },
+        ]);
+
+        let converted = OllamaProvider::convert_messages(&[msg]).unwrap();
+        assert_eq!(converted[0].content, "Describe this image");
+        assert_eq!(converted[0].images.as_ref().unwrap().len(), 1);
+        assert!(converted[0].images.as_ref().unwrap()[0].starts_with("ZmFrZS1wbmct"));
+
+        let _ = std::fs::remove_file(image_path);
     }
 
     #[test]
@@ -704,6 +789,7 @@ mod tests {
         let resp = OllamaResponse {
             message: OllamaResponseMessage {
                 content: "Hello!".to_string(),
+                thinking: None,
                 tool_calls: None,
             },
             done: true,
@@ -727,6 +813,7 @@ mod tests {
         let resp = OllamaResponse {
             message: OllamaResponseMessage {
                 content: String::new(),
+                thinking: None,
                 tool_calls: Some(vec![OllamaToolCall {
                     function: OllamaFunction {
                         name: "shell".to_string(),
@@ -751,5 +838,97 @@ mod tests {
     fn test_provider_name() {
         let provider = OllamaProvider::new("", None);
         assert_eq!(provider.name(), "ollama");
+    }
+
+    #[test]
+    fn test_parse_response_with_thinking() {
+        // Ollama returns a `thinking` field inside the message when think: true
+        let json = r#"{
+            "model": "deepseek-r1",
+            "message": {
+                "role": "assistant",
+                "content": "The answer is 42.",
+                "thinking": "Let me reason about this step by step..."
+            },
+            "done": true,
+            "done_reason": "stop",
+            "prompt_eval_count": 100,
+            "eval_count": 50
+        }"#;
+        let resp: OllamaResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.message.content, "The answer is 42.");
+        assert_eq!(
+            resp.message.thinking.as_deref(),
+            Some("Let me reason about this step by step...")
+        );
+        assert!(resp.message.tool_calls.is_none());
+    }
+
+    #[test]
+    fn test_parse_response_thinking_with_tool_calls() {
+        // thinking + tool calls in the same response
+        let json = r#"{
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "thinking": "I need to run a command to check this.",
+                "tool_calls": [{
+                    "function": {
+                        "name": "shell",
+                        "arguments": {"command": "ls -la"}
+                    }
+                }]
+            },
+            "done": true,
+            "done_reason": "stop"
+        }"#;
+        let resp: OllamaResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.message.thinking.is_some());
+        let tcs = resp.message.tool_calls.unwrap();
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(tcs[0].function.name, "shell");
+    }
+
+    #[test]
+    fn test_build_chat_response_strips_think_tags() {
+        let tag = "think";
+        let provider = OllamaProvider::new("", None);
+        let resp = OllamaResponse {
+            message: OllamaResponseMessage {
+                content: format!("<{tag}>Long reasoning here...</{tag}>\nActual answer."),
+                thinking: None,
+                tool_calls: None,
+            },
+            done: true,
+            done_reason: Some("stop".to_string()),
+            prompt_eval_count: None,
+            eval_count: None,
+            total_duration: None,
+        };
+        let chat_resp = provider.build_chat_response(resp);
+        assert_eq!(chat_resp.content.as_deref(), Some("Actual answer."));
+    }
+
+    #[test]
+    fn test_strip_think_tags() {
+        let tag = "think";
+        assert_eq!(
+            OllamaProvider::strip_think_tags(&format!("<{tag}>reasoning</{tag}> answer")),
+            "answer"
+        );
+        assert_eq!(
+            OllamaProvider::strip_think_tags("no tags here"),
+            "no tags here"
+        );
+        assert_eq!(
+            OllamaProvider::strip_think_tags(&format!(
+                "<{tag}>block1</{tag}> middle <{tag}>block2</{tag}> end"
+            )),
+            "middle  end"
+        );
+        assert_eq!(
+            OllamaProvider::strip_think_tags(&format!("<{tag}>only thinking</{tag}>")),
+            ""
+        );
     }
 }

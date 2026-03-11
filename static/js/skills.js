@@ -113,8 +113,9 @@
             sandboxBadgeEl.classList.add('badge-success');
         }
 
-        var dockerText = status.docker_available ? 'available' : 'unavailable';
-        sandboxTextEl.textContent = (status.message || 'Sandbox status updated.') + ' Docker: ' + dockerText + '.';
+        var availabilityText = status.availability_summary
+            || ('Docker: ' + (status.docker_available ? 'available' : 'unavailable') + '.');
+        sandboxTextEl.textContent = ((status.message || 'Sandbox status updated.') + ' ' + availabilityText).trim();
     }
 
     function loadSandboxStatus() {
@@ -711,6 +712,8 @@
                 modalFooter.appendChild(el('span', 'skill-modal-scripts', 'Instruction-only skill (no scripts)'));
             }
 
+            addScanButton(detail.name, modalFooter);
+
             var removeBtn = el('button', 'btn btn-sm btn-danger', 'Remove');
             removeBtn.addEventListener('click', function(e) {
                 e.stopPropagation();
@@ -799,6 +802,218 @@
                 if (name) openInstalledDetail(name);
             });
         });
+    }
+
+    // --- Skill Creator ---
+
+    var creatorPanel = document.getElementById('skill-creator-panel');
+    var creatorToggleBtn = document.getElementById('create-skill-toggle-btn');
+    var creatorSubmitBtn = document.getElementById('creator-submit-btn');
+    var creatorCancelBtn = document.getElementById('creator-cancel-btn');
+    var creatorSpinner = document.getElementById('creator-spinner');
+    var creatorResult = document.getElementById('creator-result');
+    var creatorPrompt = document.getElementById('creator-prompt');
+
+    function toggleCreatorPanel() {
+        if (!creatorPanel) return;
+        var visible = creatorPanel.style.display !== 'none';
+        creatorPanel.style.display = visible ? 'none' : 'block';
+        if (!visible && creatorPrompt) creatorPrompt.focus();
+    }
+
+    if (creatorToggleBtn) creatorToggleBtn.addEventListener('click', toggleCreatorPanel);
+    if (creatorCancelBtn) creatorCancelBtn.addEventListener('click', function() {
+        if (creatorPanel) creatorPanel.style.display = 'none';
+    });
+
+    async function submitCreateSkill() {
+        var prompt = (document.getElementById('creator-prompt').value || '').trim();
+        if (!prompt) {
+            showToast('Please describe what the skill should do', 'error');
+            return;
+        }
+
+        var name = (document.getElementById('creator-name').value || '').trim() || undefined;
+        var language = document.getElementById('creator-language').value || undefined;
+        var overwrite = document.getElementById('creator-overwrite').checked;
+
+        if (creatorSubmitBtn) { creatorSubmitBtn.disabled = true; creatorSubmitBtn.textContent = 'Creating...'; }
+        if (creatorSpinner) creatorSpinner.style.display = 'inline-block';
+        if (creatorResult) creatorResult.style.display = 'none';
+
+        try {
+            var res = await fetch('/api/v1/skills/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt: prompt, name: name, language: language, overwrite: overwrite }),
+            });
+            var data = await res.json();
+
+            if (data.ok) {
+                showToast('Skill created: ' + data.name, 'success');
+                installedNames.add(data.name);
+                renderCreatorResult(data);
+                refreshInstalled();
+            } else {
+                showToast('Creation failed: ' + data.message, 'error');
+                if (creatorResult) {
+                    creatorResult.textContent = '';
+                    var errCard = el('div', 'creator-result-card');
+                    var errP = el('p');
+                    errP.style.color = 'var(--err)';
+                    errP.textContent = data.message;
+                    errCard.appendChild(errP);
+                    creatorResult.appendChild(errCard);
+                    creatorResult.style.display = 'block';
+                }
+            }
+        } catch (err) {
+            showToast('Creation failed: ' + err.message, 'error');
+        } finally {
+            if (creatorSubmitBtn) { creatorSubmitBtn.disabled = false; creatorSubmitBtn.textContent = 'Create Skill'; }
+            if (creatorSpinner) creatorSpinner.style.display = 'none';
+        }
+    }
+
+    if (creatorSubmitBtn) creatorSubmitBtn.addEventListener('click', submitCreateSkill);
+
+    function renderCreatorResult(data) {
+        if (!creatorResult) return;
+        creatorResult.textContent = '';
+
+        var card = el('div', 'creator-result-card');
+
+        // Header: name + badges
+        var header = el('div', 'creator-result-header');
+        header.appendChild(el('div', 'skill-name', data.name));
+        header.appendChild(el('span', 'badge badge-neutral', data.language));
+        header.appendChild(el('span',
+            data.smoke_test_passed ? 'badge badge-success' : 'badge badge-warning',
+            data.smoke_test_passed ? 'smoke test passed' : 'smoke test skipped'));
+        card.appendChild(header);
+
+        // Path
+        var metaDiv = el('div', 'creator-result-meta');
+        var pathCode = el('code');
+        pathCode.style.fontSize = '11px';
+        pathCode.style.color = 'var(--t3)';
+        pathCode.textContent = data.path;
+        metaDiv.appendChild(pathCode);
+        card.appendChild(metaDiv);
+
+        // Reused skills
+        if (data.reused_skills && data.reused_skills.length > 0) {
+            var reusedMeta = el('div', 'creator-result-meta');
+            reusedMeta.appendChild(el('span', 'badge badge-neutral', 'reused: ' + data.reused_skills.join(', ')));
+            card.appendChild(reusedMeta);
+        }
+
+        // Validation notes
+        if (data.validation_notes && data.validation_notes.length > 0) {
+            var notesDiv = el('div', 'creator-result-notes');
+            notesDiv.appendChild(el('strong', null, 'Notes:'));
+            var notesList = document.createElement('ul');
+            data.validation_notes.forEach(function(n) {
+                notesList.appendChild(el('li', null, n));
+            });
+            notesDiv.appendChild(notesList);
+            card.appendChild(notesDiv);
+        }
+
+        // Security report
+        if (data.security_report) {
+            card.appendChild(buildSecurityReportEl(data.security_report));
+        }
+
+        creatorResult.appendChild(card);
+        creatorResult.style.display = 'block';
+    }
+
+    // --- Security Report Renderer (shared: creator result + modal scan) ---
+
+    function riskBadgeClass(score) {
+        if (score < 20) return 'risk-badge--low';
+        if (score < 65) return 'risk-badge--medium';
+        return 'risk-badge--high';
+    }
+
+    function riskLabel(score, blocked) {
+        if (blocked) return 'BLOCKED (' + score + '/100)';
+        if (score === 0) return 'Clean (0/100)';
+        return 'Risk ' + score + '/100';
+    }
+
+    function buildSecurityReportEl(report) {
+        var container = el('div', 'security-report');
+
+        // Header
+        var headerDiv = el('div', 'security-report-header');
+        var shieldSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        shieldSvg.setAttribute('viewBox', '0 0 16 16');
+        shieldSvg.setAttribute('fill', 'none');
+        shieldSvg.setAttribute('stroke', 'currentColor');
+        shieldSvg.setAttribute('stroke-width', '1.5');
+        shieldSvg.style.width = '14px';
+        shieldSvg.style.height = '14px';
+        var shieldPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        shieldPath.setAttribute('d', 'M8 1L14.5 4.5V8c0 3.5-2.5 6-6.5 7-4-1-6.5-3.5-6.5-7V4.5z');
+        shieldSvg.appendChild(shieldPath);
+        headerDiv.appendChild(shieldSvg);
+        headerDiv.appendChild(el('strong', null, 'Security Scan'));
+        headerDiv.appendChild(el('span', 'badge ' + riskBadgeClass(report.risk_score), riskLabel(report.risk_score, report.blocked)));
+        container.appendChild(headerDiv);
+
+        // Summary
+        container.appendChild(el('div', 'security-report-summary', report.summary));
+
+        // Warnings list
+        if (report.warnings && report.warnings.length > 0) {
+            var list = document.createElement('ul');
+            list.className = 'security-warnings-list';
+            report.warnings.forEach(function(w) {
+                var row = el('li', 'security-warning-row');
+                row.appendChild(el('span', 'security-warning-severity security-warning-severity--' + w.severity, w.severity));
+                row.appendChild(el('span', 'security-warning-desc', w.description));
+                if (w.file) {
+                    var loc = w.file;
+                    if (w.line) loc += ':' + w.line;
+                    row.appendChild(el('span', 'security-warning-location', loc));
+                }
+                list.appendChild(row);
+            });
+            container.appendChild(list);
+        }
+
+        return container;
+    }
+
+    // --- Security Scan in Modal ---
+
+    function addScanButton(name, footerEl) {
+        var scanBtn = el('button', 'btn btn-sm btn-secondary', 'Security Scan');
+        scanBtn.addEventListener('click', async function(e) {
+            e.stopPropagation();
+            scanBtn.textContent = 'Scanning...';
+            scanBtn.disabled = true;
+            try {
+                var res = await fetch('/api/v1/skills/' + encodeURIComponent(name) + '/scan', { method: 'POST' });
+                var data = await res.json();
+                if (data.ok && data.report) {
+                    var existing = modalContent.querySelector('.security-report');
+                    if (existing) existing.remove();
+                    modalContent.appendChild(buildSecurityReportEl(data.report));
+                    showToast('Scan complete: risk ' + data.report.risk_score + '/100', 'success');
+                } else {
+                    showToast('Scan failed: ' + (data.message || 'Unknown error'), 'error');
+                }
+            } catch (err) {
+                showToast('Scan failed: ' + err.message, 'error');
+            } finally {
+                scanBtn.textContent = 'Security Scan';
+                scanBtn.disabled = false;
+            }
+        });
+        footerEl.appendChild(scanBtn);
     }
 
     // --- Init ---

@@ -13,6 +13,7 @@ use async_trait::async_trait;
 
 use crate::utils::retry::{RetryConfig, RetryDecision, RetryableError};
 
+use super::health::ProviderHealthTracker;
 use super::traits::{ChatRequest, ChatResponse, Provider, StreamChunk};
 
 /// A provider entry in the failover chain.
@@ -33,6 +34,8 @@ pub struct ReliableProvider {
     retry_config: RetryConfig,
     /// Index of the last provider that succeeded (sticky preference).
     last_good: AtomicUsize,
+    /// Optional health tracker for circuit breaker logic.
+    health: Option<Arc<ProviderHealthTracker>>,
 }
 
 impl ReliableProvider {
@@ -54,7 +57,14 @@ impl ReliableProvider {
             providers,
             retry_config,
             last_good: AtomicUsize::new(0),
+            health: None,
         }
+    }
+
+    /// Attach a health tracker for circuit breaker support.
+    pub fn with_health(mut self, tracker: Arc<ProviderHealthTracker>) -> Self {
+        self.health = Some(tracker);
+        self
     }
 
     /// Classify an error to decide: retry same provider or failover to next.
@@ -80,6 +90,11 @@ impl ReliableProvider {
             || err_str.contains("not support tool")
             || err_str.contains("no endpoints found")
             || err_str.contains("unsupported")
+            || err_str.contains("request body too large")
+            || err_str.contains("payload too large")
+            || err_str.contains("content too large")
+            || err_str.contains("entity too large")
+            || err_str.contains("http 413")
         {
             return FailoverDecision::NextProvider;
         }
@@ -113,6 +128,16 @@ impl Provider for ReliableProvider {
             let idx = (start_idx + offset) % count;
             let entry = &self.providers[idx];
 
+            // Circuit breaker: skip Down providers (unless it's the last one)
+            if offset + 1 < count {
+                if let Some(ref h) = self.health {
+                    if !h.is_available(&entry.name) {
+                        tracing::debug!(provider = %entry.name, "Skipping Down provider");
+                        continue;
+                    }
+                }
+            }
+
             // Build request with this provider's model
             let mut req = request.clone();
             req.model = entry.model.clone();
@@ -133,8 +158,12 @@ impl Provider for ReliableProvider {
                     req.model = entry.model.clone();
                 }
 
+                let t0 = std::time::Instant::now();
                 match entry.provider.chat(req).await {
                     Ok(response) => {
+                        if let Some(ref h) = self.health {
+                            h.record_success(&entry.name, t0.elapsed());
+                        }
                         if attempt > 0 || offset > 0 {
                             tracing::info!(
                                 provider = %entry.name,
@@ -148,6 +177,9 @@ impl Provider for ReliableProvider {
                         return Ok(response);
                     }
                     Err(e) => {
+                        if let Some(ref h) = self.health {
+                            h.record_error(&entry.name, t0.elapsed(), &e.to_string());
+                        }
                         let decision = Self::classify_error(&e);
 
                         tracing::warn!(
@@ -205,6 +237,16 @@ impl Provider for ReliableProvider {
             let idx = (start_idx + offset) % count;
             let entry = &self.providers[idx];
 
+            // Circuit breaker: skip Down providers (unless last one)
+            if offset + 1 < count {
+                if let Some(ref h) = self.health {
+                    if !h.is_available(&entry.name) {
+                        tracing::debug!(provider = %entry.name, "Skipping Down provider (stream)");
+                        continue;
+                    }
+                }
+            }
+
             let mut req = request.clone();
             req.model = entry.model.clone();
 
@@ -231,8 +273,12 @@ impl Provider for ReliableProvider {
                     req.model = entry.model.clone();
                 }
 
+                let t0 = std::time::Instant::now();
                 match entry.provider.chat_stream(req, tx.clone()).await {
                     Ok(response) => {
+                        if let Some(ref h) = self.health {
+                            h.record_success(&entry.name, t0.elapsed());
+                        }
                         if attempt > 0 || offset > 0 {
                             tracing::info!(
                                 provider = %entry.name,
@@ -244,6 +290,9 @@ impl Provider for ReliableProvider {
                         return Ok(response);
                     }
                     Err(e) => {
+                        if let Some(ref h) = self.health {
+                            h.record_error(&entry.name, t0.elapsed(), &e.to_string());
+                        }
                         let decision = Self::classify_error(&e);
                         tracing::warn!(
                             provider = %entry.name,
@@ -349,6 +398,12 @@ mod tests {
 
         // Generic "bad request" should not be retried
         let err = anyhow::anyhow!("Bad Request: invalid parameters");
+        assert_eq!(
+            ReliableProvider::classify_error(&err),
+            FailoverDecision::NextProvider
+        );
+
+        let err = anyhow::anyhow!("Ollama error: http: request body too large");
         assert_eq!(
             ReliableProvider::classify_error(&err),
             FailoverDecision::NextProvider

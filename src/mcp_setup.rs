@@ -124,6 +124,7 @@ pub fn apply_mcp_preset_setup(
         args,
         url: None,
         env: merged_env,
+        capabilities: Vec::new(),
         enabled: true,
     };
     config
@@ -144,7 +145,7 @@ pub async fn test_mcp_server_connection(
     server: &McpServerConfig,
     sandbox: Option<ExecutionSandboxConfig>,
 ) -> McpConnectionTestResult {
-    use crate::tools::sandbox_exec::resolve_sandbox_backend;
+    use crate::tools::sandbox::resolve::resolve_sandbox_backend;
     use crate::tools::McpManager;
 
     let mut servers = HashMap::new();
@@ -215,6 +216,7 @@ mod tests {
             args: vec!["hello".to_string()],
             url: None,
             env: HashMap::new(),
+            capabilities: Vec::new(),
             enabled: true,
         }
     }

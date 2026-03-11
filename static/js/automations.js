@@ -300,11 +300,27 @@ async function loadAutomationTargets() {
     automationTargets.sort((a, b) => a.label.localeCompare(b.label));
 }
 
+function editorWfStepHtml(idx, step) {
+    const name = escapeHtml((step && step.name) || '');
+    const instruction = escapeHtml((step && step.instruction) || '');
+    const approval = step && step.approval_required ? 'checked' : '';
+    return `<div class="wf-step-row">
+        <div class="wf-step-header">
+            <span class="wf-step-number">Step ${idx}</span>
+            <input class="input wf-step-name" type="text" placeholder="Step name" value="${name}">
+            <button type="button" class="btn btn-danger btn-sm" data-action="remove-editor-wf-step">Remove</button>
+        </div>
+        <textarea class="input wf-step-instruction" rows="2" placeholder="Instruction for this step">${instruction}</textarea>
+        <label class="wf-step-approval"><input type="checkbox" class="wf-step-approval-check" ${approval}> Require approval</label>
+    </div>`;
+}
+
 function rowEditorHtml(item) {
     const ui = scheduleToUi(item.schedule);
     const editorOpenClass = openEditorId === item.id ? ' automation-inline-editor--open' : '';
     const dependencies = parseJsonArray(item.dependencies_json).map(formatDependency).filter(Boolean);
     const validationErrors = parseJsonArray(item.validation_errors).filter(Boolean);
+    const existingSteps = parseJsonArray(item.workflow_steps_json);
 
     return `
         <div class="automation-inline-editor${editorOpenClass}" data-editor-for="${escapeHtml(item.id)}">
@@ -383,6 +399,21 @@ function rowEditorHtml(item) {
                     <input type="checkbox" data-field="enabled" ${item.enabled ? 'checked' : ''}>
                     Enabled
                 </label>
+            </div>
+
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" data-field="is_workflow" ${existingSteps.length ? 'checked' : ''}>
+                    Execute as multi-step workflow
+                </label>
+            </div>
+
+            <div class="form-group" data-editor-wf-steps="${escapeHtml(item.id)}" style="${existingSteps.length ? '' : 'display:none;'}">
+                <label>Workflow Steps</label>
+                <div class="automation-editor-wf-list" data-wf-list="${escapeHtml(item.id)}">
+                    ${existingSteps.map((s, i) => editorWfStepHtml(i + 1, s)).join('')}
+                </div>
+                <button type="button" class="btn btn-secondary btn-sm" data-action="add-editor-wf-step" data-id="${escapeHtml(item.id)}">+ Add Step</button>
             </div>
 
             <div class="form-group">
@@ -577,6 +608,17 @@ async function onCreateAutomation(event) {
         payload.trigger_value = triggerValue;
     }
 
+    // Workflow steps
+    const wfToggle = document.getElementById('automation-workflow-toggle');
+    if (wfToggle && wfToggle.checked) {
+        const steps = collectAutomationWfSteps();
+        if (steps.length === 0) {
+            showToast('Add at least one workflow step.', 'error');
+            return;
+        }
+        payload.workflow_steps = steps;
+    }
+
     await apiRequest('/v1/automations', {
         method: 'POST',
         body: JSON.stringify(payload),
@@ -590,6 +632,13 @@ async function onCreateAutomation(event) {
     document.getElementById('automation-interval-hours').value = '6';
     onCreateScheduleModeChange();
     onCreateTriggerModeChange();
+    // Reset workflow toggle
+    const wfToggleReset = document.getElementById('automation-workflow-toggle');
+    if (wfToggleReset) wfToggleReset.checked = false;
+    const wfStepsReset = document.getElementById('automation-workflow-steps');
+    if (wfStepsReset) wfStepsReset.style.display = 'none';
+    const wfListReset = document.getElementById('automation-wf-step-list');
+    if (wfListReset) wfListReset.replaceChildren();
 
     await loadAutomations();
 }
@@ -645,6 +694,30 @@ async function saveInlineEdit(id) {
         payload.trigger_value = triggerValue;
     } else {
         payload.clear_trigger_value = true;
+    }
+
+    // Workflow steps
+    const isWf = read('is_workflow');
+    if (isWf && isWf.checked) {
+        const wfList = block.querySelector(`[data-wf-list="${CSS.escape(id)}"]`);
+        if (wfList) {
+            const steps = [];
+            Array.from(wfList.children).forEach(row => {
+                const sName = (row.querySelector('.wf-step-name') || {}).value || '';
+                const sInstr = (row.querySelector('.wf-step-instruction') || {}).value || '';
+                const sAppr = (row.querySelector('.wf-step-approval-check') || {}).checked || false;
+                if (sName.trim() || sInstr.trim()) {
+                    steps.push({ name: sName.trim(), instruction: sInstr.trim(), approval_required: sAppr });
+                }
+            });
+            if (steps.length === 0) {
+                showToast('Add at least one workflow step.', 'error');
+                return;
+            }
+            payload.workflow_steps = steps;
+        }
+    } else {
+        payload.clear_workflow_steps = true;
     }
 
     await apiRequest(`/v1/automations/${encodeURIComponent(id)}`, {
@@ -721,6 +794,30 @@ async function onAutomationAction(event) {
             return;
         }
 
+        if (action === 'add-editor-wf-step') {
+            const block = getEditorContainer(id);
+            if (!block) return;
+            const wfList = block.querySelector(`[data-wf-list="${CSS.escape(id)}"]`);
+            if (!wfList) return;
+            const idx = wfList.children.length + 1;
+            wfList.insertAdjacentHTML('beforeend', editorWfStepHtml(idx, null));
+            return;
+        }
+
+        if (action === 'remove-editor-wf-step') {
+            const row = target.closest('.wf-step-row');
+            if (row) {
+                const wfList = row.parentElement;
+                row.remove();
+                // Renumber
+                Array.from(wfList.children).forEach((r, i) => {
+                    const num = r.querySelector('.wf-step-number');
+                    if (num) num.textContent = 'Step ' + (i + 1);
+                });
+            }
+            return;
+        }
+
         if (action === 'delete') {
             if (!window.confirm('Delete this automation?')) {
                 return;
@@ -763,6 +860,75 @@ function onCreateTriggerModeChange() {
     valueGroup.style.display = trigger === 'contains' ? '' : 'none';
 }
 
+// --- Workflow step builder for automation form ---
+
+function addAutomationWfStep() {
+    const list = document.getElementById('automation-wf-step-list');
+    if (!list) return;
+    const idx = list.children.length + 1;
+    const row = document.createElement('div');
+    row.className = 'wf-step-row';
+    const header = document.createElement('div');
+    header.className = 'wf-step-header';
+    const num = document.createElement('span');
+    num.className = 'wf-step-number';
+    num.textContent = 'Step ' + idx;
+    const nameInput = document.createElement('input');
+    nameInput.className = 'input wf-step-name';
+    nameInput.type = 'text';
+    nameInput.placeholder = 'Step name';
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'btn btn-danger btn-sm';
+    removeBtn.textContent = 'Remove';
+    removeBtn.addEventListener('click', () => {
+        row.remove();
+        renumberAutomationWfSteps();
+    });
+    header.appendChild(num);
+    header.appendChild(nameInput);
+    header.appendChild(removeBtn);
+    const textarea = document.createElement('textarea');
+    textarea.className = 'input wf-step-instruction';
+    textarea.rows = 2;
+    textarea.placeholder = 'Instruction for this step';
+    const approvalLabel = document.createElement('label');
+    approvalLabel.className = 'wf-step-approval';
+    const approvalCheck = document.createElement('input');
+    approvalCheck.type = 'checkbox';
+    approvalCheck.className = 'wf-step-approval-check';
+    approvalLabel.appendChild(approvalCheck);
+    approvalLabel.appendChild(document.createTextNode(' Require approval'));
+    row.appendChild(header);
+    row.appendChild(textarea);
+    row.appendChild(approvalLabel);
+    list.appendChild(row);
+}
+
+function renumberAutomationWfSteps() {
+    const list = document.getElementById('automation-wf-step-list');
+    if (!list) return;
+    Array.from(list.children).forEach((row, i) => {
+        const num = row.querySelector('.wf-step-number');
+        if (num) num.textContent = 'Step ' + (i + 1);
+    });
+}
+
+function collectAutomationWfSteps() {
+    const list = document.getElementById('automation-wf-step-list');
+    if (!list) return [];
+    const steps = [];
+    Array.from(list.children).forEach((row) => {
+        const name = (row.querySelector('.wf-step-name') || {}).value || '';
+        const instruction = (row.querySelector('.wf-step-instruction') || {}).value || '';
+        const approval = (row.querySelector('.wf-step-approval-check') || {}).checked || false;
+        if (name.trim() || instruction.trim()) {
+            steps.push({ name: name.trim(), instruction: instruction.trim(), approval_required: approval });
+        }
+    });
+    return steps;
+}
+
 async function initializeAutomationsPage() {
     const createForm = document.getElementById('automation-create-form');
     const listEl = document.getElementById('automations-list');
@@ -800,6 +966,18 @@ async function initializeAutomationsPage() {
         if (target.matches('[data-field="trigger"]')) {
             onTriggerToggle(block, target.value, id);
         }
+        if (target.matches('[data-field="is_workflow"]')) {
+            const wfGroup = block.querySelector(`[data-editor-wf-steps="${CSS.escape(id)}"]`);
+            if (wfGroup) {
+                wfGroup.style.display = target.checked ? '' : 'none';
+                if (target.checked) {
+                    const wfList = block.querySelector(`[data-wf-list="${CSS.escape(id)}"]`);
+                    if (wfList && wfList.children.length === 0) {
+                        wfList.insertAdjacentHTML('beforeend', editorWfStepHtml(1, null));
+                    }
+                }
+            }
+        }
     });
 
     refreshBtn.addEventListener('click', async () => {
@@ -819,6 +997,20 @@ async function initializeAutomationsPage() {
     triggerEl.addEventListener('change', onCreateTriggerModeChange);
     onCreateScheduleModeChange();
     onCreateTriggerModeChange();
+
+    // Workflow toggle
+    const wfToggle = document.getElementById('automation-workflow-toggle');
+    const wfStepsContainer = document.getElementById('automation-workflow-steps');
+    const wfAddBtn = document.getElementById('automation-add-wf-step');
+    if (wfToggle && wfStepsContainer && wfAddBtn) {
+        wfToggle.addEventListener('change', () => {
+            wfStepsContainer.style.display = wfToggle.checked ? '' : 'none';
+            if (wfToggle.checked && document.getElementById('automation-wf-step-list').children.length === 0) {
+                addAutomationWfStep();
+            }
+        });
+        wfAddBtn.addEventListener('click', () => addAutomationWfStep());
+    }
 
     try {
         await loadAutomations();

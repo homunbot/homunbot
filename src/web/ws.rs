@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{State, WebSocketUpgrade};
+use axum::extract::{Query, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
@@ -12,6 +12,11 @@ use tokio::sync::mpsc;
 use crate::bus::{InboundMessage, MessageMetadata};
 
 use super::server::AppState;
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct WsChatQuery {
+    conversation_id: Option<String>,
+}
 
 /// A stream event delivered to an individual WebSocket connection.
 /// Carries either a text delta (normal streaming) or a tool-call event.
@@ -27,17 +32,33 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/ws/chat", get(ws_handler))
 }
 
-async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+async fn persist_run_snapshot(state: &AppState, run: &super::run_state::WebChatRunSnapshot) {
+    if let Some(db) = state.db.as_ref() {
+        if let Err(error) = db.upsert_web_chat_run(run).await {
+            tracing::error!(run_id = %run.run_id, %error, "Failed to persist web chat run");
+        }
+    }
 }
 
-async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<WsChatQuery>,
+) -> impl IntoResponse {
+    let conversation_id = query
+        .conversation_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("default")
+        .to_string();
+    ws.on_upgrade(move |socket| handle_socket(socket, state, conversation_id))
+}
+
+async fn handle_socket(socket: WebSocket, state: Arc<AppState>, conversation_id: String) {
     let (mut sender, mut receiver) = socket.split();
 
-    // Stable session — all Web UI tabs share one conversation in the DB.
-    // This ensures messages accumulate for memory consolidation to trigger.
-    // (WebSocket routing still works: each connection gets its own response_tx/stream_tx.)
-    let chat_id = "default".to_string();
+    let chat_id = conversation_id.clone();
+    let session_key = format!("web:{conversation_id}");
 
     // Channel for sending full responses back to this WebSocket
     let (response_tx, mut response_rx) = mpsc::channel::<String>(32);
@@ -62,6 +83,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let welcome = serde_json::json!({
         "type": "connected",
         "session_id": &chat_id,
+        "conversation_id": &conversation_id,
     });
     let _ = sender.send(Message::Text(welcome.to_string().into())).await;
 
@@ -100,6 +122,19 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 "type": evt,
                                 "message": event.delta,
                             })
+                        } else if evt == "plan" {
+                            serde_json::json!({
+                                "type": evt,
+                                "name": event.delta,
+                            })
+                        } else if evt == "workflow_progress" {
+                            // delta contains JSON string of progress data
+                            let progress: serde_json::Value = serde_json::from_str(&event.delta)
+                                .unwrap_or_else(|_| serde_json::json!({}));
+                            serde_json::json!({
+                                "type": "workflow_progress",
+                                "progress": progress,
+                            })
                         } else {
                             serde_json::json!({
                                 "type": evt,
@@ -136,11 +171,50 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
                     if let Some(content) = parsed.get("content").and_then(|v| v.as_str()) {
                         let content = content.trim();
-                        if content.is_empty() {
+                        let attachments = parsed
+                            .get("attachments")
+                            .cloned()
+                            .and_then(|value| {
+                                serde_json::from_value::<
+                                        Vec<super::chat_attachments::ChatAttachment>,
+                                    >(value)
+                                    .ok()
+                            })
+                            .unwrap_or_default();
+                        let mcp_servers = parsed
+                            .get("mcp_servers")
+                            .cloned()
+                            .and_then(|value| {
+                                serde_json::from_value::<
+                                    Vec<super::chat_attachments::ChatMcpServerRef>,
+                                >(value)
+                                .ok()
+                            })
+                            .unwrap_or_default();
+
+                        if content.is_empty() && attachments.is_empty() && mcp_servers.is_empty() {
                             continue;
                         }
 
-                        let run = match state.web_runs.start_run("web:default", content) {
+                        let stored_content = super::chat_attachments::encode_inline_context(
+                            content,
+                            &attachments,
+                            &mcp_servers,
+                        )
+                        .unwrap_or_else(|| content.to_string());
+                        let user_message_label = if !content.is_empty() {
+                            content.to_string()
+                        } else if let Some(attachment) = attachments.first() {
+                            attachment.name.clone()
+                        } else {
+                            mcp_servers
+                                .first()
+                                .map(|server| server.name.clone())
+                                .unwrap_or_default()
+                        };
+
+                        let run = match state.web_runs.start_run(&session_key, &user_message_label)
+                        {
                             Ok(run) => run,
                             Err(message) => {
                                 let _ = client_stream_tx
@@ -153,15 +227,19 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 continue;
                             }
                         };
+                        persist_run_snapshot(&state, &run).await;
+
+                        let thinking_override = parsed.get("thinking").and_then(|v| v.as_bool());
 
                         let inbound = InboundMessage {
                             channel: "web".to_string(),
                             sender_id: chat_id.clone(),
                             chat_id: chat_id.clone(),
-                            content: content.to_string(),
+                            content: stored_content,
                             timestamp: Utc::now(),
                             metadata: Some(MessageMetadata {
                                 web_run_id: Some(run.run_id),
+                                thinking_override,
                                 ..MessageMetadata::default()
                             }),
                         };
@@ -169,12 +247,18 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         // Only send if agent is available
                         if let Some(ref tx) = state.inbound_tx {
                             if let Err(e) = tx.send(inbound).await {
-                                state.web_runs.clear_session("web:default");
+                                state.web_runs.clear_session(&session_key);
+                                if let Some(db) = state.db.as_ref() {
+                                    let _ = db.delete_web_chat_runs(&session_key).await;
+                                }
                                 tracing::error!(error = %e, "Failed to send WebSocket message to agent");
                                 break;
                             }
                         } else {
-                            state.web_runs.clear_session("web:default");
+                            state.web_runs.clear_session(&session_key);
+                            if let Some(db) = state.db.as_ref() {
+                                let _ = db.delete_web_chat_runs(&session_key).await;
+                            }
                             tracing::warn!("No agent available. Configure a provider first.");
                             break;
                         }

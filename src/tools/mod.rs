@@ -1,5 +1,8 @@
 pub mod approval;
 pub mod automation;
+#[cfg(feature = "mcp")]
+pub mod browser;
+pub mod business;
 pub mod cron;
 #[cfg(feature = "channel-email")]
 pub mod email_inbox;
@@ -8,13 +11,16 @@ pub mod file;
 pub mod mcp;
 pub mod message;
 pub mod registry;
-pub mod sandbox_exec;
+pub mod sandbox;
 pub mod shell;
 pub mod skill_create;
 pub mod spawn;
 pub mod vault;
 pub mod web;
+pub mod workflow;
 
+#[cfg(feature = "local-embeddings")]
+pub mod knowledge;
 #[cfg(feature = "local-embeddings")]
 pub mod remember;
 
@@ -23,12 +29,15 @@ pub use approval::{
     ApprovalManager, ApprovalResponse, PendingApproval,
 };
 pub use automation::CreateAutomationTool;
+#[cfg(feature = "mcp")]
+pub use browser::{BrowserSession, BrowserTool};
+pub use business::BusinessTool;
 pub use cron::CronTool;
 #[cfg(feature = "channel-email")]
 pub use email_inbox::ReadEmailInboxTool;
 pub use file::{EditFileTool, ListDirTool, ReadFileTool, WriteFileTool};
 #[cfg(feature = "mcp")]
-pub use mcp::{McpManager, McpServerInfo};
+pub use mcp::{McpManager, McpPeer, McpServerInfo};
 pub use message::MessageTool;
 pub use registry::{Tool, ToolContext, ToolRegistry, ToolResult};
 pub use shell::ShellTool;
@@ -36,9 +45,9 @@ pub use skill_create::CreateSkillTool;
 pub use spawn::SpawnTool;
 pub use vault::VaultTool;
 pub use web::{WebFetchTool, WebSearchTool};
+pub use workflow::WorkflowTool;
 
 #[cfg(feature = "local-embeddings")]
+pub use knowledge::KnowledgeTool;
+#[cfg(feature = "local-embeddings")]
 pub use remember::RememberTool;
-
-#[cfg(feature = "browser")]
-pub use crate::browser::BrowserTool;

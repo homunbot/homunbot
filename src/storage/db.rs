@@ -165,6 +165,66 @@ impl Database {
         )
         .await?;
 
+        // Migration 009 — persisted web chat runs for restart restore
+        Self::apply_migration(
+            pool,
+            "009_web_chat_runs",
+            include_str!("../../migrations/009_web_chat_runs.sql"),
+        )
+        .await?;
+
+        // Migration 010 — effective model for persisted web chat runs
+        Self::apply_migration(
+            pool,
+            "010_web_chat_run_model",
+            include_str!("../../migrations/010_web_chat_run_model.sql"),
+        )
+        .await?;
+
+        // Migration 011 — RAG knowledge base (sources + chunks + FTS5)
+        Self::apply_migration(
+            pool,
+            "011_rag_knowledge",
+            include_str!("../../migrations/011_rag_knowledge.sql"),
+        )
+        .await?;
+        Self::apply_migration(
+            pool,
+            "012_rag_sensitive_chunks",
+            include_str!("../../migrations/012_rag_sensitive_chunks.sql"),
+        )
+        .await?;
+        Self::apply_migration(
+            pool,
+            "013_workflows",
+            include_str!("../../migrations/013_workflows.sql"),
+        )
+        .await?;
+        Self::apply_migration(
+            pool,
+            "014_automation_workflow",
+            include_str!("../../migrations/014_automation_workflow.sql"),
+        )
+        .await?;
+        Self::apply_migration(
+            pool,
+            "015_business",
+            include_str!("../../migrations/015_business.sql"),
+        )
+        .await?;
+        Self::apply_migration(
+            pool,
+            "016_skill_audit",
+            include_str!("../../migrations/016_skill_audit.sql"),
+        )
+        .await?;
+        Self::apply_migration(
+            pool,
+            "017_web_auth",
+            include_str!("../../migrations/017_web_auth.sql"),
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -249,6 +309,33 @@ impl Database {
         Ok(())
     }
 
+    /// Update the JSON metadata blob for a session.
+    pub async fn set_session_metadata(&self, key: &str, metadata: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE sessions
+             SET metadata = ?, updated_at = datetime('now')
+             WHERE key = ?",
+        )
+        .bind(metadata)
+        .bind(key)
+        .execute(&self.pool)
+        .await
+        .context("Failed to update session metadata")?;
+
+        Ok(())
+    }
+
+    /// Delete a session and all related rows via cascade.
+    pub async fn delete_session(&self, key: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM sessions WHERE key = ?")
+            .bind(key)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete session")?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Load session metadata
     pub async fn load_session(&self, key: &str) -> Result<Option<SessionRow>> {
         let row = sqlx::query_as::<_, SessionRow>(
@@ -261,6 +348,95 @@ impl Database {
         .context("Failed to load session")?;
 
         Ok(row)
+    }
+
+    /// Persist or update a web chat run snapshot for restart-safe restore.
+    pub async fn upsert_web_chat_run(
+        &self,
+        run: &crate::web::run_state::WebChatRunSnapshot,
+    ) -> Result<()> {
+        let events_json = serde_json::to_string(&run.events)
+            .context("Failed to serialize web chat run events")?;
+
+        sqlx::query(
+            "INSERT INTO web_chat_runs (
+                run_id, session_key, status, user_message, assistant_response,
+                effective_model, events_json, error, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(run_id) DO UPDATE SET
+                status = excluded.status,
+                user_message = excluded.user_message,
+                assistant_response = excluded.assistant_response,
+                effective_model = excluded.effective_model,
+                events_json = excluded.events_json,
+                error = excluded.error,
+                updated_at = excluded.updated_at",
+        )
+        .bind(&run.run_id)
+        .bind(&run.session_key)
+        .bind(&run.status)
+        .bind(&run.user_message)
+        .bind(&run.assistant_response)
+        .bind(run.effective_model.as_deref())
+        .bind(events_json)
+        .bind(run.error.as_deref())
+        .bind(&run.created_at)
+        .bind(&run.updated_at)
+        .execute(&self.pool)
+        .await
+        .context("Failed to upsert web chat run")?;
+
+        Ok(())
+    }
+
+    /// Load the latest non-completed web chat run that should be restorable in the UI.
+    pub async fn load_restorable_web_chat_run(
+        &self,
+        session_key: &str,
+    ) -> Result<Option<crate::web::run_state::WebChatRunSnapshot>> {
+        let row = sqlx::query_as::<_, WebChatRunRow>(
+            "SELECT
+                run_id, session_key, status, user_message, assistant_response,
+                effective_model, events_json, error, created_at, updated_at
+             FROM web_chat_runs
+             WHERE session_key = ?
+               AND status IN ('running', 'stopping', 'interrupted', 'failed')
+             ORDER BY updated_at DESC
+             LIMIT 1",
+        )
+        .bind(session_key)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to load restorable web chat run")?;
+
+        row.map(TryInto::try_into).transpose()
+    }
+
+    /// Delete persisted web chat runs for a session.
+    pub async fn delete_web_chat_runs(&self, session_key: &str) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM web_chat_runs WHERE session_key = ?")
+            .bind(session_key)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete web chat runs")?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Mark runs left open by a previous process as interrupted.
+    pub async fn mark_incomplete_web_chat_runs_interrupted(&self) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE web_chat_runs
+             SET status = 'interrupted',
+                 error = COALESCE(error, 'Run interrupted after process restart'),
+                 updated_at = datetime('now')
+             WHERE status IN ('running', 'stopping')",
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to interrupt stale web chat runs")?;
+
+        Ok(result.rows_affected())
     }
 
     // --- Message operations ---
@@ -286,6 +462,12 @@ impl Database {
         .execute(&self.pool)
         .await
         .context("Failed to insert message")?;
+
+        sqlx::query("UPDATE sessions SET updated_at = datetime('now') WHERE key = ?")
+            .bind(session_key)
+            .execute(&self.pool)
+            .await
+            .context("Failed to touch session after message insert")?;
 
         Ok(())
     }
@@ -340,6 +522,72 @@ impl Database {
         .context("Failed to reset session")?;
 
         Ok(())
+    }
+
+    /// List sessions by key prefix with lightweight message statistics.
+    pub async fn list_sessions_by_prefix(
+        &self,
+        prefix_like: &str,
+        limit: u32,
+    ) -> Result<Vec<SessionListRow>> {
+        let rows = sqlx::query_as::<_, SessionListRow>(
+            "SELECT
+                s.key,
+                s.created_at,
+                s.updated_at,
+                s.metadata,
+                (
+                    SELECT COUNT(*)
+                    FROM messages m
+                    WHERE m.session_key = s.key
+                      AND m.role IN ('user', 'assistant')
+                ) AS message_count,
+                (
+                    SELECT m.content
+                    FROM messages m
+                    WHERE m.session_key = s.key
+                      AND m.role = 'user'
+                    ORDER BY m.id ASC
+                    LIMIT 1
+                ) AS first_user_message,
+                (
+                    SELECT m.content
+                    FROM messages m
+                    WHERE m.session_key = s.key
+                      AND m.role IN ('user', 'assistant')
+                    ORDER BY m.id DESC
+                    LIMIT 1
+                ) AS last_message_preview,
+                (
+                    SELECT m.timestamp
+                    FROM messages m
+                    WHERE m.session_key = s.key
+                      AND m.role IN ('user', 'assistant')
+                    ORDER BY m.id DESC
+                    LIMIT 1
+                ) AS last_message_at
+             FROM sessions s
+             WHERE s.key LIKE ?
+             ORDER BY COALESCE(
+                 (
+                     SELECT m.timestamp
+                     FROM messages m
+                     WHERE m.session_key = s.key
+                       AND m.role IN ('user', 'assistant')
+                     ORDER BY m.id DESC
+                     LIMIT 1
+                 ),
+                 s.updated_at
+             ) DESC
+             LIMIT ?",
+        )
+        .bind(prefix_like)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to list sessions by prefix")?;
+
+        Ok(rows)
     }
 
     /// Load the oldest messages that would be pruned during compaction
@@ -609,6 +857,225 @@ impl Database {
         Ok(())
     }
 
+    // ─── RAG Knowledge Base ──────────────────────────────────────
+
+    pub async fn insert_rag_source(
+        &self,
+        file_path: &str,
+        file_name: &str,
+        file_hash: &str,
+        doc_type: &str,
+        file_size: i64,
+        source_channel: Option<&str>,
+    ) -> Result<i64> {
+        let result = sqlx::query(
+            "INSERT INTO rag_sources (file_path, file_name, file_hash, doc_type, file_size, source_channel)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(file_path)
+        .bind(file_name)
+        .bind(file_hash)
+        .bind(doc_type)
+        .bind(file_size)
+        .bind(source_channel)
+        .execute(&self.pool)
+        .await
+        .context("Failed to insert RAG source")?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    pub async fn find_rag_source_by_hash(&self, file_hash: &str) -> Result<Option<RagSourceRow>> {
+        let row = sqlx::query_as::<_, RagSourceRow>(
+            "SELECT id, file_path, file_name, file_hash, doc_type, file_size,
+                    chunk_count, status, error_message, source_channel, created_at, updated_at
+             FROM rag_sources WHERE file_hash = ?",
+        )
+        .bind(file_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to find RAG source by hash")?;
+
+        Ok(row)
+    }
+
+    pub async fn find_rag_source_by_path(&self, file_path: &str) -> Result<Option<RagSourceRow>> {
+        let row = sqlx::query_as::<_, RagSourceRow>(
+            "SELECT id, file_path, file_name, file_hash, doc_type, file_size,
+                    chunk_count, status, error_message, source_channel, created_at, updated_at
+             FROM rag_sources WHERE file_path = ?",
+        )
+        .bind(file_path)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to find RAG source by path")?;
+
+        Ok(row)
+    }
+
+    pub async fn update_rag_source_status(
+        &self,
+        id: i64,
+        status: &str,
+        error_message: Option<&str>,
+        chunk_count: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE rag_sources SET status = ?, error_message = ?, chunk_count = ?,
+                    updated_at = datetime('now') WHERE id = ?",
+        )
+        .bind(status)
+        .bind(error_message)
+        .bind(chunk_count)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .context("Failed to update RAG source status")?;
+
+        Ok(())
+    }
+
+    pub async fn delete_rag_source(&self, id: i64) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM rag_sources WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete RAG source")?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn list_rag_sources(&self) -> Result<Vec<RagSourceRow>> {
+        let rows = sqlx::query_as::<_, RagSourceRow>(
+            "SELECT id, file_path, file_name, file_hash, doc_type, file_size,
+                    chunk_count, status, error_message, source_channel, created_at, updated_at
+             FROM rag_sources ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to list RAG sources")?;
+
+        Ok(rows)
+    }
+
+    pub async fn insert_rag_chunk(
+        &self,
+        source_id: i64,
+        chunk_index: i64,
+        heading: &str,
+        content: &str,
+        token_count: i64,
+        sensitive: bool,
+    ) -> Result<i64> {
+        let result = sqlx::query(
+            "INSERT INTO rag_chunks (source_id, chunk_index, heading, content, token_count, sensitive)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(source_id)
+        .bind(chunk_index)
+        .bind(heading)
+        .bind(content)
+        .bind(token_count)
+        .bind(sensitive)
+        .execute(&self.pool)
+        .await
+        .context("Failed to insert RAG chunk")?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    pub async fn update_rag_chunk_heading(&self, chunk_id: i64, heading: &str) -> Result<()> {
+        sqlx::query("UPDATE rag_chunks SET heading = ? WHERE id = ?")
+            .bind(heading)
+            .bind(chunk_id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to update RAG chunk heading")?;
+        Ok(())
+    }
+
+    pub async fn load_rag_chunks_by_ids(&self, ids: &[i64]) -> Result<Vec<RagChunkRow>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
+        let query = format!(
+            "SELECT id, source_id, chunk_index, heading, content, token_count, sensitive, created_at
+             FROM rag_chunks WHERE id IN ({})
+             ORDER BY created_at DESC",
+            placeholders.join(",")
+        );
+
+        let mut q = sqlx::query_as::<_, RagChunkRow>(&query);
+        for id in ids {
+            q = q.bind(id);
+        }
+
+        let rows = q
+            .fetch_all(&self.pool)
+            .await
+            .context("Failed to load RAG chunks by IDs")?;
+
+        Ok(rows)
+    }
+
+    pub async fn rag_fts5_search(&self, query: &str, limit: usize) -> Result<Vec<(i64, f64)>> {
+        let rows: Vec<(i64, f64)> = sqlx::query_as(
+            "SELECT rowid, rank
+             FROM rag_fts
+             WHERE rag_fts MATCH ?
+             ORDER BY rank
+             LIMIT ?",
+        )
+        .bind(query)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .context("RAG FTS5 search failed")?;
+
+        Ok(rows)
+    }
+
+    pub async fn count_rag_chunks(&self) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rag_chunks")
+            .fetch_one(&self.pool)
+            .await
+            .context("Failed to count RAG chunks")?;
+        Ok(count)
+    }
+
+    pub async fn count_rag_sources(&self) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rag_sources")
+            .fetch_one(&self.pool)
+            .await
+            .context("Failed to count RAG sources")?;
+        Ok(count)
+    }
+
+    pub async fn load_rag_chunks_by_source(&self, source_id: i64) -> Result<Vec<RagChunkRow>> {
+        let rows = sqlx::query_as::<_, RagChunkRow>(
+            "SELECT id, source_id, chunk_index, heading, content, token_count, sensitive, created_at
+             FROM rag_chunks WHERE source_id = ? ORDER BY chunk_index",
+        )
+        .bind(source_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to load RAG chunks by source")?;
+
+        Ok(rows)
+    }
+
+    pub async fn delete_rag_chunks_by_source(&self, source_id: i64) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM rag_chunks WHERE source_id = ?")
+            .bind(source_id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete RAG chunks by source")?;
+
+        Ok(result.rows_affected())
+    }
+
     /// Toggle a cron job's enabled state
     pub async fn toggle_cron_job(&self, id: &str, enabled: bool) -> Result<bool> {
         let result = sqlx::query("UPDATE cron_jobs SET enabled = ? WHERE id = ?")
@@ -624,6 +1091,7 @@ impl Database {
     // --- Automation operations ---
 
     /// Insert a new automation definition.
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_automation(
         &self,
         id: &str,
@@ -655,6 +1123,7 @@ impl Database {
     }
 
     /// Insert a new automation definition with compiled plan metadata.
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_automation_with_plan(
         &self,
         id: &str,
@@ -703,7 +1172,8 @@ impl Database {
             "SELECT id, name, prompt, schedule, enabled, status, deliver_to,
                     trigger_kind, trigger_value,
                     last_run, last_result, created_at, updated_at,
-                    plan_json, dependencies_json, plan_version, validation_errors
+                    plan_json, dependencies_json, plan_version, validation_errors,
+                    workflow_steps_json
              FROM automations
              ORDER BY created_at DESC",
         )
@@ -720,7 +1190,8 @@ impl Database {
             "SELECT id, name, prompt, schedule, enabled, status, deliver_to,
                     trigger_kind, trigger_value,
                     last_run, last_result, created_at, updated_at,
-                    plan_json, dependencies_json, plan_version, validation_errors
+                    plan_json, dependencies_json, plan_version, validation_errors,
+                    workflow_steps_json
              FROM automations
              WHERE id = ?",
         )
@@ -761,12 +1232,17 @@ impl Database {
             Some(v) => v,
             None => current.validation_errors,
         };
+        let workflow_steps_json = match update.workflow_steps_json {
+            Some(v) => v,
+            None => current.workflow_steps_json,
+        };
 
         let result = sqlx::query(
             "UPDATE automations
              SET name = ?, prompt = ?, schedule = ?, enabled = ?, status = ?,
                  deliver_to = ?, trigger_kind = ?, trigger_value = ?, last_result = ?,
                  plan_json = ?, dependencies_json = ?, plan_version = ?, validation_errors = ?,
+                 workflow_steps_json = ?,
                  last_run = CASE WHEN ? THEN datetime('now') ELSE last_run END,
                  updated_at = datetime('now')
              WHERE id = ?",
@@ -784,6 +1260,7 @@ impl Database {
         .bind(dependencies_json)
         .bind(plan_version)
         .bind(validation_errors)
+        .bind(workflow_steps_json)
         .bind(update.touch_last_run)
         .bind(id)
         .execute(&self.pool)
@@ -1081,7 +1558,7 @@ impl Database {
     /// Load a user by their internal ID.
     pub async fn load_user(&self, id: &str) -> Result<Option<UserRow>> {
         let row = sqlx::query_as::<_, UserRow>(
-            "SELECT id, username, roles, created_at, updated_at, metadata
+            "SELECT id, username, roles, password_hash, created_at, updated_at, metadata
              FROM users WHERE id = ?",
         )
         .bind(id)
@@ -1095,7 +1572,7 @@ impl Database {
     /// Load a user by their username.
     pub async fn load_user_by_username(&self, username: &str) -> Result<Option<UserRow>> {
         let row = sqlx::query_as::<_, UserRow>(
-            "SELECT id, username, roles, created_at, updated_at, metadata
+            "SELECT id, username, roles, password_hash, created_at, updated_at, metadata
              FROM users WHERE username = ?",
         )
         .bind(username)
@@ -1109,7 +1586,7 @@ impl Database {
     /// Load all users.
     pub async fn load_all_users(&self) -> Result<Vec<UserRow>> {
         let rows = sqlx::query_as::<_, UserRow>(
-            "SELECT id, username, roles, created_at, updated_at, metadata
+            "SELECT id, username, roles, password_hash, created_at, updated_at, metadata
              FROM users ORDER BY created_at ASC",
         )
         .fetch_all(&self.pool)
@@ -1177,7 +1654,7 @@ impl Database {
         platform_id: &str,
     ) -> Result<Option<UserRow>> {
         let row = sqlx::query_as::<_, UserRow>(
-            "SELECT u.id, u.username, u.roles, u.created_at, u.updated_at, u.metadata
+            "SELECT u.id, u.username, u.roles, u.password_hash, u.created_at, u.updated_at, u.metadata
              FROM users u
              JOIN user_identities i ON u.id = i.user_id
              WHERE i.channel = ? AND i.platform_id = ?",
@@ -1230,11 +1707,18 @@ impl Database {
     // --- Webhook tokens ---
 
     /// Create a new webhook token for a user.
-    pub async fn create_webhook_token(&self, token: &str, user_id: &str, name: &str) -> Result<()> {
-        sqlx::query("INSERT INTO webhook_tokens (token, user_id, name) VALUES (?, ?, ?)")
+    pub async fn create_webhook_token(
+        &self,
+        token: &str,
+        user_id: &str,
+        name: &str,
+        scope: &str,
+    ) -> Result<()> {
+        sqlx::query("INSERT INTO webhook_tokens (token, user_id, name, scope) VALUES (?, ?, ?, ?)")
             .bind(token)
             .bind(user_id)
             .bind(name)
+            .bind(scope)
             .execute(&self.pool)
             .await
             .context("Failed to create webhook token")?;
@@ -1245,7 +1729,7 @@ impl Database {
     /// Look up a webhook token and return the associated user.
     pub async fn lookup_user_by_webhook_token(&self, token: &str) -> Result<Option<UserRow>> {
         let row = sqlx::query_as::<_, UserRow>(
-            "SELECT u.id, u.username, u.roles, u.created_at, u.updated_at, u.metadata
+            "SELECT u.id, u.username, u.roles, u.password_hash, u.created_at, u.updated_at, u.metadata
              FROM users u
              JOIN webhook_tokens wt ON u.id = wt.user_id
              WHERE wt.token = ? AND wt.enabled = 1",
@@ -1272,7 +1756,7 @@ impl Database {
     /// Load all webhook tokens for a user.
     pub async fn load_webhook_tokens(&self, user_id: &str) -> Result<Vec<WebhookTokenRow>> {
         let rows = sqlx::query_as::<_, WebhookTokenRow>(
-            "SELECT token, user_id, name, enabled, last_used, created_at
+            "SELECT token, user_id, name, enabled, scope, last_used, created_at
              FROM webhook_tokens WHERE user_id = ?
              ORDER BY created_at DESC",
         )
@@ -1305,6 +1789,58 @@ impl Database {
             .context("Failed to toggle webhook token")?;
 
         Ok(result.rows_affected() > 0)
+    }
+
+    /// Load a single webhook token by its value.
+    pub async fn load_webhook_token(&self, token: &str) -> Result<Option<WebhookTokenRow>> {
+        let row = sqlx::query_as::<_, WebhookTokenRow>(
+            "SELECT token, user_id, name, enabled, scope, last_used, created_at
+             FROM webhook_tokens WHERE token = ?",
+        )
+        .bind(token)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to load webhook token")?;
+
+        Ok(row)
+    }
+
+    // --- User password ---
+
+    /// Set the password hash for a user.
+    pub async fn set_user_password_hash(&self, user_id: &str, hash: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?",
+        )
+        .bind(hash)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await
+        .context("Failed to set user password hash")?;
+
+        Ok(())
+    }
+
+    /// Count total users in the database (for first-run detection).
+    pub async fn count_users(&self) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&self.pool)
+            .await
+            .context("Failed to count users")?;
+
+        Ok(count)
+    }
+
+    /// Count users that have a password set (for web auth first-run detection).
+    /// Returns 0 when no user has ever set up web credentials.
+    pub async fn count_users_with_password(&self) -> Result<i64> {
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE password_hash IS NOT NULL")
+                .fetch_one(&self.pool)
+                .await
+                .context("Failed to count users with password")?;
+
+        Ok(count)
     }
 
     // --- Token usage ---
@@ -1502,6 +2038,58 @@ impl Database {
         .context("Failed to load email_pending by id")?;
         Ok(row)
     }
+
+    // ── SKL-6: Skill Audit Logging ──────────────────────────────────
+
+    /// Insert a skill activation audit record.
+    ///
+    /// activation_type: "tool_call" or "slash_command"
+    pub async fn insert_skill_audit(
+        &self,
+        skill_name: &str,
+        channel: &str,
+        query: &str,
+        activation_type: &str,
+    ) -> Result<i64> {
+        let row = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO skill_audit (skill_name, channel, query, activation_type)
+             VALUES (?, ?, ?, ?)
+             RETURNING id",
+        )
+        .bind(skill_name)
+        .bind(channel)
+        .bind(query)
+        .bind(activation_type)
+        .fetch_one(&self.pool)
+        .await
+        .context("Failed to insert skill audit")?;
+        Ok(row)
+    }
+
+    /// List recent skill audit entries.
+    pub async fn list_skill_audits(&self, limit: i64) -> Result<Vec<SkillAuditRow>> {
+        let rows = sqlx::query_as::<_, SkillAuditRow>(
+            "SELECT id, timestamp, skill_name, channel, query, activation_type, success
+             FROM skill_audit ORDER BY id DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to list skill audits")?;
+        Ok(rows)
+    }
+}
+
+/// Skill audit log row.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct SkillAuditRow {
+    pub id: i64,
+    pub timestamp: String,
+    pub skill_name: String,
+    pub channel: String,
+    pub query: Option<String>,
+    pub activation_type: String,
+    pub success: i64,
 }
 
 /// Result of memory cleanup operation.
@@ -1523,6 +2111,18 @@ pub struct SessionRow {
 }
 
 #[derive(Debug, sqlx::FromRow)]
+pub struct SessionListRow {
+    pub key: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub metadata: String,
+    pub message_count: i64,
+    pub first_user_message: Option<String>,
+    pub last_message_preview: Option<String>,
+    pub last_message_at: Option<String>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
 pub struct MessageRow {
     pub id: i64,
     pub session_key: String,
@@ -1541,6 +2141,41 @@ pub struct MemoryRow {
     pub created_at: String,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct WebChatRunRow {
+    run_id: String,
+    session_key: String,
+    status: String,
+    user_message: String,
+    assistant_response: String,
+    effective_model: Option<String>,
+    events_json: String,
+    error: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+impl TryFrom<WebChatRunRow> for crate::web::run_state::WebChatRunSnapshot {
+    type Error = anyhow::Error;
+
+    fn try_from(row: WebChatRunRow) -> Result<Self, Self::Error> {
+        let events = serde_json::from_str(&row.events_json)
+            .context("Failed to deserialize web chat run events")?;
+        Ok(Self {
+            run_id: row.run_id,
+            session_key: row.session_key,
+            status: row.status,
+            user_message: row.user_message,
+            effective_model: row.effective_model,
+            assistant_response: row.assistant_response,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            events,
+            error: row.error,
+        })
+    }
+}
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct MemoryChunkRow {
     pub id: i64,
@@ -1549,6 +2184,36 @@ pub struct MemoryChunkRow {
     pub heading: String,
     pub content: String,
     pub memory_type: String,
+    pub created_at: String,
+}
+
+// ─── RAG Knowledge Base Row Types ────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct RagSourceRow {
+    pub id: i64,
+    pub file_path: String,
+    pub file_name: String,
+    pub file_hash: String,
+    pub doc_type: String,
+    pub file_size: i64,
+    pub chunk_count: i64,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub source_channel: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct RagChunkRow {
+    pub id: i64,
+    pub source_id: i64,
+    pub chunk_index: i64,
+    pub heading: String,
+    pub content: String,
+    pub token_count: i64,
+    pub sensitive: bool,
     pub created_at: String,
 }
 
@@ -1583,6 +2248,7 @@ pub struct AutomationRow {
     pub dependencies_json: String,
     pub plan_version: i64,
     pub validation_errors: Option<String>,
+    pub workflow_steps_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1605,6 +2271,8 @@ pub struct AutomationUpdate {
     pub plan_version: Option<i64>,
     /// Use `Some(None)` to clear validation errors.
     pub validation_errors: Option<Option<String>>,
+    /// Use `Some(None)` to clear workflow steps.
+    pub workflow_steps_json: Option<Option<String>>,
     pub touch_last_run: bool,
 }
 
@@ -1627,6 +2295,7 @@ pub struct UserRow {
     pub id: String,
     pub username: String,
     pub roles: String, // JSON array
+    pub password_hash: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub metadata: String, // JSON object
@@ -1648,6 +2317,7 @@ pub struct WebhookTokenRow {
     pub user_id: String,
     pub name: String,
     pub enabled: bool,
+    pub scope: String,
     pub last_used: Option<String>,
     pub created_at: String,
 }
@@ -1817,6 +2487,66 @@ END;
         db.upsert_session("cli:default", 5).await.unwrap();
         let session = db.load_session("cli:default").await.unwrap().unwrap();
         assert_eq!(session.last_consolidated, 5);
+    }
+
+    #[tokio::test]
+    async fn test_web_chat_runs_persist_and_interrupt() {
+        let (db, _dir) = test_db().await;
+        db.upsert_session("web:test", 0).await.unwrap();
+
+        let run = crate::web::run_state::WebChatRunSnapshot {
+            run_id: "run_test_1".to_string(),
+            session_key: "web:test".to_string(),
+            status: "running".to_string(),
+            user_message: "ciao".to_string(),
+            effective_model: Some("openai/gpt-4o".to_string()),
+            assistant_response: "parziale".to_string(),
+            created_at: "2026-03-06T10:00:00Z".to_string(),
+            updated_at: "2026-03-06T10:00:05Z".to_string(),
+            events: vec![crate::web::run_state::WebChatRunEvent {
+                event_type: "tool_start".to_string(),
+                name: "browser".to_string(),
+                tool_call: None,
+            }],
+            error: None,
+        };
+
+        db.upsert_web_chat_run(&run).await.unwrap();
+
+        let restored = db
+            .load_restorable_web_chat_run("web:test")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.run_id, run.run_id);
+        assert_eq!(restored.status, "running");
+        assert_eq!(restored.assistant_response, "parziale");
+        assert_eq!(restored.events.len(), 1);
+
+        let interrupted = db
+            .mark_incomplete_web_chat_runs_interrupted()
+            .await
+            .unwrap();
+        assert_eq!(interrupted, 1);
+
+        let restored = db
+            .load_restorable_web_chat_run("web:test")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.status, "interrupted");
+        assert_eq!(
+            restored.error.as_deref(),
+            Some("Run interrupted after process restart")
+        );
+
+        let deleted = db.delete_web_chat_runs("web:test").await.unwrap();
+        assert_eq!(deleted, 1);
+        assert!(db
+            .load_restorable_web_chat_run("web:test")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

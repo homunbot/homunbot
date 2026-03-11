@@ -55,7 +55,8 @@ impl SessionManager {
             .into_iter()
             .map(|r| ChatMessage {
                 role: r.role,
-                content: Some(r.content),
+                content: Some(crate::web::chat_attachments::content_for_model(&r.content)),
+                content_parts: None,
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,

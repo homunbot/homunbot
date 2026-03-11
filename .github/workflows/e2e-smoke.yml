@@ -1,0 +1,75 @@
+name: E2E Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Web UI base URL
+        required: true
+        default: https://ui.homun.bot
+      script:
+        description: Script to run
+        required: true
+        default: ./scripts/e2e_chat_suite.sh
+        type: choice
+        options:
+          - ./scripts/e2e_chat_suite.sh
+          - ./scripts/e2e_webui_smoke.sh
+          - ./scripts/e2e_chat_send_stop.sh
+          - ./scripts/e2e_chat_multi_session.sh
+          - ./scripts/e2e_chat_restore_run.sh
+          - ./scripts/e2e_chat_attachment_smoke.sh
+          - ./scripts/e2e_chat_mcp_picker_smoke.sh
+          - ./scripts/e2e_browser_tool_flow.sh
+          - ./scripts/e2e_browser_smoke.sh
+      verbose:
+        description: Print full Playwright CLI output
+        required: true
+        default: false
+        type: boolean
+
+env:
+  HOMUN_E2E_BASE_URL: ${{ inputs.base_url }}
+  HOMUN_E2E_USERNAME: ${{ secrets.HOMUN_E2E_USERNAME }}
+  HOMUN_E2E_PASSWORD: ${{ secrets.HOMUN_E2E_PASSWORD }}
+
+jobs:
+  smoke:
+    name: Run E2E Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate credentials
+        shell: bash
+        run: |
+          test -n "$HOMUN_E2E_USERNAME" || { echo "Missing secret HOMUN_E2E_USERNAME"; exit 1; }
+          test -n "$HOMUN_E2E_PASSWORD" || { echo "Missing secret HOMUN_E2E_PASSWORD"; exit 1; }
+
+      - name: Install Playwright browser
+        shell: bash
+        run: ./scripts/playwright_cli.sh install-browser
+
+      - name: Run selected smoke script
+        shell: bash
+        env:
+          HOMUN_E2E_VERBOSE: ${{ inputs.verbose && '1' || '0' }}
+        run: ${{ inputs.script }}
+
+      - name: Upload smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-smoke-artifacts
+          path: output/playwright/
+          if-no-files-found: ignore
+          retention-days: 7

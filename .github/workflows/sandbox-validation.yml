@@ -1,0 +1,170 @@
+name: Sandbox Validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/tools/sandbox/**'
+      - 'src/config/schema.rs'
+      - 'docker/sandbox-runtime/**'
+      - 'scripts/build_sandbox_runtime_image.sh'
+      - 'tests/sandbox_*'
+      - '.github/workflows/sandbox-validation.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/tools/sandbox/**'
+      - 'src/config/schema.rs'
+      - 'docker/sandbox-runtime/**'
+      - 'scripts/build_sandbox_runtime_image.sh'
+      - 'tests/sandbox_*'
+      - '.github/workflows/sandbox-validation.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ===========================================================================
+  # Linux Native (Bubblewrap) Validation
+  # ===========================================================================
+  linux-native:
+    name: Linux Native (bwrap)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Enable unprivileged user namespaces
+        run: sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+
+      - name: Install bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      - name: Verify bwrap
+        run: |
+          bwrap --version
+          bwrap --die-with-parent --ro-bind / / --proc /proc --dev /dev /bin/true && echo "bwrap functional" || echo "bwrap NOT functional (user namespaces may be restricted)"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-sandbox-native-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            linux-sandbox-native-
+
+      - name: Run Linux native sandbox tests
+        run: cargo test --test sandbox_linux_native -- --nocapture
+
+  # ===========================================================================
+  # Runtime Image Build Validation
+  # ===========================================================================
+  runtime-image:
+    name: Runtime Image Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-sandbox-runtime-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            linux-sandbox-runtime-
+
+      - name: Build canonical runtime image
+        run: ./scripts/build_sandbox_runtime_image.sh
+
+      - name: Run runtime image validation tests
+        run: cargo test --test sandbox_runtime_image -- --nocapture
+
+  # ===========================================================================
+  # Cross-Platform E2E
+  # ===========================================================================
+  e2e-linux:
+    name: E2E (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Enable unprivileged user namespaces
+        run: sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+
+      - name: Install bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-sandbox-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            linux-sandbox-e2e-
+
+      - name: Run E2E sandbox tests
+        run: cargo test --test sandbox_e2e -- --nocapture
+
+  e2e-windows:
+    name: E2E (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-sandbox-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            windows-sandbox-e2e-
+
+      - name: Run E2E sandbox tests
+        run: cargo test --test sandbox_e2e -- --nocapture
+
+  e2e-macos:
+    name: E2E (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: macos-sandbox-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            macos-sandbox-e2e-
+
+      - name: Run E2E sandbox tests
+        run: cargo test --test sandbox_e2e -- --nocapture

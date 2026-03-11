@@ -42,6 +42,14 @@ pub struct MessageMetadata {
     /// Web UI run identifier for background/resume tracking.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub web_run_id: Option<String>,
+    /// Path to a downloaded file attachment (e.g. from Telegram document).
+    /// The gateway routes this to `RagEngine::ingest_file()` for indexing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachment_path: Option<String>,
+    /// Per-message thinking toggle override from the web UI.
+    /// `None` = use model default, `Some(true)` = force on, `Some(false)` = force off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_override: Option<bool>,
 }
 
 /// Message from a channel to the agent

@@ -2,6 +2,23 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChatContentPart {
+    Text {
+        text: String,
+    },
+    Image {
+        path: String,
+        media_type: String,
+    },
+    File {
+        path: String,
+        media_type: String,
+        name: String,
+    },
+}
+
 /// A single tool call request from the LLM
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallRequest {
@@ -43,6 +60,8 @@ pub struct ChatMessage {
     pub role: String,
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_parts: Option<Vec<ChatContentPart>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCallSerialized>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
@@ -55,6 +74,7 @@ impl ChatMessage {
         Self {
             role: "system".to_string(),
             content: Some(content.to_string()),
+            content_parts: None,
             tool_calls: None,
             tool_call_id: None,
             name: None,
@@ -65,6 +85,18 @@ impl ChatMessage {
         Self {
             role: "user".to_string(),
             content: Some(content.to_string()),
+            content_parts: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
+    pub fn user_parts(parts: Vec<ChatContentPart>) -> Self {
+        Self {
+            role: "user".to_string(),
+            content: None,
+            content_parts: Some(parts),
             tool_calls: None,
             tool_call_id: None,
             name: None,
@@ -75,6 +107,7 @@ impl ChatMessage {
         Self {
             role: "assistant".to_string(),
             content: Some(content.to_string()),
+            content_parts: None,
             tool_calls: None,
             tool_call_id: None,
             name: None,
@@ -85,9 +118,51 @@ impl ChatMessage {
         Self {
             role: "tool".to_string(),
             content: Some(content.to_string()),
+            content_parts: None,
             tool_calls: None,
             tool_call_id: Some(tool_call_id.to_string()),
             name: Some(name.to_string()),
+        }
+    }
+
+    pub fn estimated_text_len(&self) -> usize {
+        let inline = self.content.as_ref().map(|c| c.len()).unwrap_or_default();
+        let parts = self
+            .content_parts
+            .as_ref()
+            .map(|parts| {
+                parts
+                    .iter()
+                    .map(|part| match part {
+                        ChatContentPart::Text { text } => text.len(),
+                        ChatContentPart::Image { .. } | ChatContentPart::File { .. } => 0,
+                    })
+                    .sum::<usize>()
+            })
+            .unwrap_or_default();
+        inline.max(parts)
+    }
+
+    pub fn rendered_text(&self) -> Option<String> {
+        if let Some(content) = &self.content {
+            return Some(content.clone());
+        }
+
+        let text = self
+            .content_parts
+            .as_ref()?
+            .iter()
+            .filter_map(|part| match part {
+                ChatContentPart::Text { text } => Some(text.as_str()),
+                ChatContentPart::Image { .. } | ChatContentPart::File { .. } => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if text.trim().is_empty() {
+            None
+        } else {
+            Some(text)
         }
     }
 }
@@ -130,6 +205,9 @@ pub struct ChatRequest {
     pub model: String,
     pub max_tokens: u32,
     pub temperature: f32,
+    /// Thinking/reasoning toggle: `Some(true)` = enable, `Some(false)` = disable,
+    /// `None` = provider default.
+    pub think: Option<bool>,
 }
 
 /// A streaming chunk from the LLM

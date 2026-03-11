@@ -3,11 +3,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::bus::StreamMessage;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebChatRunEvent {
     pub event_type: String,
     pub name: String,
@@ -15,12 +15,14 @@ pub struct WebChatRunEvent {
     pub tool_call: Option<crate::provider::ToolCallData>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebChatRunSnapshot {
     pub run_id: String,
     pub session_key: String,
     pub status: String,
     pub user_message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_model: Option<String>,
     pub assistant_response: String,
     pub created_at: String,
     pub updated_at: String,
@@ -67,6 +69,7 @@ impl WebRunStore {
             session_key: session_key.to_string(),
             status: "running".to_string(),
             user_message: user_message.to_string(),
+            effective_model: None,
             assistant_response: String::new(),
             created_at: now.clone(),
             updated_at: now,
@@ -88,17 +91,20 @@ impl WebRunStore {
         inner.runs.get(run_id).cloned()
     }
 
-    pub fn append_stream_message(&self, session_key: &str, msg: &StreamMessage) {
+    pub fn append_stream_message(
+        &self,
+        session_key: &str,
+        msg: &StreamMessage,
+    ) -> Option<WebChatRunSnapshot> {
         let mut inner = self.inner.lock().expect("web run store lock poisoned");
-        let Some(run_id) = inner.active_by_session.get(session_key).cloned() else {
-            return;
-        };
-        let Some(run) = inner.runs.get_mut(&run_id) else {
-            return;
-        };
+        let run_id = inner.active_by_session.get(session_key).cloned()?;
+        let run = inner.runs.get_mut(&run_id)?;
 
         run.updated_at = Utc::now().to_rfc3339();
         if let Some(event_type) = &msg.event_type {
+            if event_type == "model" && !msg.delta.trim().is_empty() {
+                run.effective_model = Some(msg.delta.clone());
+            }
             run.events.push(WebChatRunEvent {
                 event_type: event_type.clone(),
                 name: msg.delta.clone(),
@@ -107,6 +113,7 @@ impl WebRunStore {
         } else if !msg.delta.is_empty() {
             run.assistant_response.push_str(&msg.delta);
         }
+        Some(run.clone())
     }
 
     pub fn complete_run(
@@ -123,17 +130,13 @@ impl WebRunStore {
         Some(run.clone())
     }
 
-    pub fn request_stop(&self, session_key: &str) -> bool {
+    pub fn request_stop(&self, session_key: &str) -> Option<WebChatRunSnapshot> {
         let mut inner = self.inner.lock().expect("web run store lock poisoned");
-        let Some(run_id) = inner.active_by_session.get(session_key).cloned() else {
-            return false;
-        };
-        let Some(run) = inner.runs.get_mut(&run_id) else {
-            return false;
-        };
+        let run_id = inner.active_by_session.get(session_key).cloned()?;
+        let run = inner.runs.get_mut(&run_id)?;
         run.status = "stopping".to_string();
         run.updated_at = Utc::now().to_rfc3339();
-        true
+        Some(run.clone())
     }
 
     pub fn clear_session(&self, session_key: &str) {

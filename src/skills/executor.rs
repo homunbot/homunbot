@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 
 use crate::config::ExecutionSandboxConfig;
-use crate::tools::sandbox_exec::build_process_command;
+use crate::tools::sandbox::build_process_command;
 
 /// Execute a skill script from the skill's `scripts/` directory.
 ///
@@ -53,6 +54,30 @@ async fn execute_skill_script_inner(
     sandbox: &ExecutionSandboxConfig,
     sanitize_env: bool,
 ) -> Result<ScriptOutput> {
+    execute_skill_script_with_env(
+        skill_dir,
+        script_name,
+        args,
+        timeout_secs,
+        sandbox,
+        sanitize_env,
+        &HashMap::new(),
+    )
+    .await
+}
+
+/// Execute a skill script with explicit env vars and sandbox configuration.
+///
+/// SKL-5: extra_env allows injecting skill-specific env vars resolved from config.
+pub async fn execute_skill_script_with_env(
+    skill_dir: &Path,
+    script_name: &str,
+    args: &[&str],
+    timeout_secs: u64,
+    sandbox: &ExecutionSandboxConfig,
+    sanitize_env: bool,
+    extra_env: &HashMap<String, String>,
+) -> Result<ScriptOutput> {
     let scripts_dir = skill_dir.join("scripts");
     let script_path = scripts_dir.join(script_name);
 
@@ -87,7 +112,7 @@ async fn execute_skill_script_inner(
         interpreter,
         &command_args,
         skill_dir,
-        &std::collections::HashMap::new(),
+        extra_env,
         sanitize_env,
         sandbox,
     )
@@ -97,8 +122,25 @@ async fn execute_skill_script_inner(
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
-    // Set timeout
-    let output = tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output())
+    // Spawn child, apply Windows Job Object limits if applicable, then wait
+    let child = cmd
+        .spawn()
+        .with_context(|| format!("Failed to execute script '{}'", script_name))?;
+
+    #[cfg(target_os = "windows")]
+    let _job_guard = {
+        use crate::tools::sandbox::{resolve_sandbox_backend, ResolvedSandboxBackend};
+        match resolve_sandbox_backend(sandbox) {
+            Ok(ResolvedSandboxBackend::WindowsNative) => child.id().and_then(|pid| {
+                crate::tools::sandbox::enforce_job_limits(pid, sandbox)
+                    .map_err(|e| tracing::warn!("Job Object enforcement failed: {e}"))
+                    .ok()
+            }),
+            _ => None,
+        }
+    };
+
+    let output = tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output())
         .await
         .with_context(|| format!("Script '{}' timed out after {}s", script_name, timeout_secs))?
         .with_context(|| format!("Failed to execute script '{}'", script_name))?;

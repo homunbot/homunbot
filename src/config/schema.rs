@@ -14,11 +14,14 @@ pub struct Config {
     pub tools: ToolsConfig,
     pub storage: StorageConfig,
     pub memory: MemoryConfig,
+    pub knowledge: KnowledgeConfig,
     pub mcp: McpConfig,
     pub permissions: PermissionsConfig,
     pub security: SecurityConfig,
     pub browser: BrowserConfig,
     pub ui: UiConfig,
+    pub business: BusinessConfig,
+    pub skills: SkillsConfig,
 }
 
 impl Config {
@@ -26,7 +29,11 @@ impl Config {
     pub fn load() -> Result<Self> {
         let path = Self::default_path();
         if path.exists() {
-            Self::load_from(&path)
+            let mut config = Self::load_from(&path)?;
+            if config.maybe_migrate_legacy_browser_defaults() {
+                config.save_to(&path)?;
+            }
+            Ok(config)
         } else {
             tracing::warn!(
                 "Config file not found at {}, using defaults",
@@ -51,17 +58,29 @@ impl Config {
         self.save_to(&path)
     }
 
-    /// Save config to a specific path
+    /// Save config to a specific path.
+    ///
+    /// Strips auto-injected virtual MCP servers (e.g. the browser MCP server
+    /// generated from `[browser]` config) so they are not persisted to disk.
     pub fn save_to(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).with_context(|| {
                 format!("Failed to create config directory {}", parent.display())
             })?;
         }
-        let content = toml::to_string_pretty(self).context("Failed to serialize config")?;
+        // Clone to strip virtual servers before serialising.
+        // The browser MCP server is auto-injected from [browser] config at startup
+        // and must not be persisted to disk.
+        let mut snapshot = self.clone();
+        snapshot.mcp.servers.remove("playwright");
+        let content = toml::to_string_pretty(&snapshot).context("Failed to serialize config")?;
         std::fs::write(path, content)
             .with_context(|| format!("Failed to write config to {}", path.display()))?;
         Ok(())
+    }
+
+    fn maybe_migrate_legacy_browser_defaults(&mut self) -> bool {
+        self.browser.maybe_auto_enable_for_legacy_config()
     }
 
     /// Default config file path: ~/.homun/config.toml
@@ -122,7 +141,14 @@ impl Config {
             return true;
         }
 
-        // 3. Auto-detect: Ollama models often have unreliable native tool calling
+        // 3. Per-model capability override
+        if let Some(overrides) = self.agent.model_overrides.get(model) {
+            if let Some(tool_calls) = overrides.tool_calls {
+                return !tool_calls;
+            }
+        }
+
+        // 4. Auto-detect: Ollama models often have unreliable native tool calling
         // Models with :cloud suffix or certain patterns may work better with XML
         if provider_name == "ollama" {
             // For Ollama cloud models, default to XML dispatch
@@ -319,6 +345,15 @@ pub struct AgentConfig {
     pub xml_fallback_delay_ms: u64,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ModelCapabilities {
+    pub multimodal: bool,
+    pub image_input: bool,
+    pub tool_calls: bool,
+    pub thinking: bool,
+}
+
 /// Per-model parameter overrides.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -327,6 +362,14 @@ pub struct ModelOverrides {
     pub temperature: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multimodal: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_input: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<bool>,
 }
 
 impl Default for AgentConfig {
@@ -362,6 +405,32 @@ impl AgentConfig {
             .get(model)
             .and_then(|o| o.max_tokens)
             .unwrap_or(self.max_tokens)
+    }
+
+    pub fn effective_model_capabilities(
+        &self,
+        provider_name: &str,
+        model: &str,
+    ) -> ModelCapabilities {
+        let mut capabilities =
+            crate::provider::capabilities::detect_model_capabilities(provider_name, model);
+
+        if let Some(overrides) = self.model_overrides.get(model) {
+            if let Some(multimodal) = overrides.multimodal {
+                capabilities.multimodal = multimodal;
+            }
+            if let Some(image_input) = overrides.image_input {
+                capabilities.image_input = image_input;
+            }
+            if let Some(tool_calls) = overrides.tool_calls {
+                capabilities.tool_calls = tool_calls;
+            }
+            if let Some(thinking) = overrides.thinking {
+                capabilities.thinking = thinking;
+            }
+        }
+
+        capabilities
     }
 }
 
@@ -653,8 +722,21 @@ pub struct WebConfig {
     pub enabled: bool,
     pub host: String,
     pub port: u16,
+    /// Custom domain for the web UI (default: "ui.homun.bot").
+    /// Used in self-signed cert SANs and /etc/hosts setup.
+    pub domain: String,
     /// Optional auth token for remote access. Empty = no auth (localhost only).
     pub auth_token: String,
+    /// API rate limit: max requests per minute per IP (default: 60).
+    pub rate_limit_per_minute: u32,
+    /// Auth rate limit: max login attempts per minute per IP (default: 5).
+    pub auth_rate_limit_per_minute: u32,
+    /// Path to TLS certificate PEM file. Empty = no TLS.
+    pub tls_cert: String,
+    /// Path to TLS private key PEM file. Empty = no TLS.
+    pub tls_key: String,
+    /// Auto-generate self-signed cert if no cert/key provided (default: true).
+    pub auto_tls: bool,
 }
 
 impl Default for WebConfig {
@@ -662,8 +744,14 @@ impl Default for WebConfig {
         Self {
             enabled: true,
             host: "127.0.0.1".to_string(),
-            port: 18080,
+            port: 18443,
+            domain: "ui.homun.bot".to_string(),
             auth_token: String::new(),
+            rate_limit_per_minute: 60,
+            auth_rate_limit_per_minute: 5,
+            tls_cert: String::new(),
+            tls_key: String::new(),
+            auto_tls: true,
         }
     }
 }
@@ -1013,11 +1101,32 @@ impl Default for ExecConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ToolsConfig {
     pub web_search: WebSearchConfig,
     pub exec: ExecConfig,
+    /// Default timeout for tool execution in seconds. 0 = no timeout.
+    #[serde(default = "default_tool_timeout")]
+    pub default_timeout_secs: u64,
+    /// Per-tool timeout overrides: tool_name → seconds.
+    #[serde(default)]
+    pub timeouts: std::collections::HashMap<String, u64>,
+}
+
+fn default_tool_timeout() -> u64 {
+    120
+}
+
+impl Default for ToolsConfig {
+    fn default() -> Self {
+        Self {
+            web_search: WebSearchConfig::default(),
+            exec: ExecConfig::default(),
+            default_timeout_secs: default_tool_timeout(),
+            timeouts: std::collections::HashMap::new(),
+        }
+    }
 }
 
 // --- MCP Config ---
@@ -1047,6 +1156,9 @@ pub struct McpServerConfig {
     /// Environment variables to pass to the process
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Explicit attachment-analysis capabilities exposed by this server.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
     /// Whether this server is enabled
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -1060,6 +1172,7 @@ impl Default for McpServerConfig {
             args: Vec::new(),
             url: None,
             env: HashMap::new(),
+            capabilities: Vec::new(),
             enabled: true,
         }
     }
@@ -1122,6 +1235,41 @@ impl Default for MemoryConfig {
             daily_archive_months: 3,         // Archive daily files after 3 months
             auto_cleanup: false,             // Don't auto-cleanup by default
             embedding_provider: "local".to_string(),
+        }
+    }
+}
+
+// --- Knowledge (RAG) Config ---
+
+/// Knowledge base (RAG) configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KnowledgeConfig {
+    /// Enable RAG knowledge base
+    pub enabled: bool,
+    /// Maximum tokens per chunk
+    pub chunk_max_tokens: usize,
+    /// Overlap tokens between chunks
+    pub chunk_overlap_tokens: usize,
+    /// Number of RAG results to inject per query
+    pub results_per_query: usize,
+    /// Directories to watch for auto-ingestion (e.g., ["~/Documents/notes"])
+    #[serde(default)]
+    pub watch_dirs: Vec<String>,
+    /// MCP server names to sync resources from (references keys in [mcp.servers])
+    #[serde(default)]
+    pub cloud_sources: Vec<String>,
+}
+
+impl Default for KnowledgeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            chunk_max_tokens: 512,
+            chunk_overlap_tokens: 50,
+            results_per_query: 3,
+            watch_dirs: Vec::new(),
+            cloud_sources: Vec::new(),
         }
     }
 }
@@ -1516,19 +1664,11 @@ impl Default for ExfiltrationConfig {
 /// Root security configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct SecurityConfig {
     pub exfiltration: ExfiltrationConfig,
     /// Process sandbox configuration for shell/MCP/skills execution.
     pub execution_sandbox: ExecutionSandboxConfig,
-}
-
-impl Default for SecurityConfig {
-    fn default() -> Self {
-        Self {
-            exfiltration: ExfiltrationConfig::default(),
-            execution_sandbox: ExecutionSandboxConfig::default(),
-        }
-    }
 }
 
 /// Sandbox configuration for process execution.
@@ -1541,8 +1681,12 @@ pub struct ExecutionSandboxConfig {
     pub backend: String,
     /// When true, fail execution if requested backend is unavailable.
     pub strict: bool,
-    /// Docker image used when backend resolves to docker.
+    /// Configured runtime image reference used by Docker and the runtime image lifecycle checks.
     pub docker_image: String,
+    /// Runtime image policy: infer, pinned, versioned_tag, or floating.
+    pub runtime_image_policy: String,
+    /// Expected image version override used when runtime_image_policy is explicit.
+    pub runtime_image_expected_version: String,
     /// Docker network mode (recommended: "none").
     pub docker_network: String,
     /// Memory limit (MB) for docker sandbox.
@@ -1562,6 +1706,8 @@ impl Default for ExecutionSandboxConfig {
             backend: "auto".to_string(),
             strict: false,
             docker_image: "node:22-alpine".to_string(),
+            runtime_image_policy: "infer".to_string(),
+            runtime_image_expected_version: String::new(),
             docker_network: "none".to_string(),
             docker_memory_mb: 512,
             docker_cpus: 1.0,
@@ -1581,6 +1727,8 @@ pub struct UiConfig {
     pub theme: String,
     /// Preferred UI/assistant language: "system", "en", "it"
     pub language: String,
+    /// Accent color: "moss", "terracotta", "plum", "stone"
+    pub accent: String,
 }
 
 impl Default for UiConfig {
@@ -1588,6 +1736,7 @@ impl Default for UiConfig {
         Self {
             theme: "system".to_string(),
             language: "system".to_string(),
+            accent: "moss".to_string(),
         }
     }
 }
@@ -1598,22 +1747,33 @@ impl Default for UiConfig {
 pub struct BrowserConfig {
     /// Enable browser automation
     pub enabled: bool,
+    /// Internal one-shot migration marker for legacy browser defaults.
+    pub migration_version: u8,
+    /// Legacy field kept for TOML compat — always "playwright" now (MCP-based).
+    #[serde(default = "default_backend")]
+    pub backend: String,
     /// Run browser in headless mode
     pub headless: bool,
     /// Browser type: "chromium", "firefox", "webkit"
     pub browser_type: String,
     /// Path to browser executable (optional, uses system default if not set)
     pub executable_path: String,
-    /// Timeout for browser actions in seconds
-    pub action_timeout_secs: u64,
-    /// Timeout for navigation in seconds
-    pub navigation_timeout_secs: u64,
-    /// Maximum number of elements in snapshot
-    pub snapshot_limit: usize,
     /// Default profile to use (if not specified in action)
     pub default_profile: String,
     /// Named browser profiles for isolation
     pub profiles: HashMap<String, BrowserProfile>,
+}
+
+fn default_backend() -> String {
+    "playwright".to_string()
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowserRuntimeStatus {
+    pub enabled: bool,
+    pub available: bool,
+    pub executable_path: Option<String>,
+    pub reason: Option<String>,
 }
 
 /// A browser profile with isolated cookies, storage, and cache.
@@ -1667,12 +1827,11 @@ impl Default for BrowserConfig {
 
         Self {
             enabled: false,
+            migration_version: 0,
+            backend: "playwright".to_string(),
             headless: true,
             browser_type: "chromium".to_string(),
             executable_path: String::new(),
-            action_timeout_secs: 30,
-            navigation_timeout_secs: 30,
-            snapshot_limit: 100,
             default_profile: "default".to_string(),
             profiles,
         }
@@ -1680,9 +1839,60 @@ impl Default for BrowserConfig {
 }
 
 impl BrowserConfig {
-    /// Get the screenshot directory path
-    pub fn screenshot_path(&self) -> std::path::PathBuf {
-        Config::data_dir().join("screenshots")
+    pub fn maybe_auto_enable_for_legacy_config(&mut self) -> bool {
+        if self.migration_version >= 1 || self.enabled {
+            return false;
+        }
+
+        if !self.looks_like_legacy_default() || !self.mcp_prerequisites_available() {
+            return false;
+        }
+
+        self.enabled = true;
+        self.backend = "playwright".to_string();
+        self.migration_version = 1;
+        true
+    }
+
+    fn looks_like_legacy_default(&self) -> bool {
+        self.executable_path.trim().is_empty()
+            && self.browser_type.eq_ignore_ascii_case("chromium")
+            && self.default_profile == "default"
+            && self.profiles.len() <= 1
+    }
+
+    pub fn runtime_status(&self) -> BrowserRuntimeStatus {
+        let executable_path = self
+            .resolved_executable()
+            .map(|path| path.display().to_string());
+
+        if !self.enabled {
+            return BrowserRuntimeStatus {
+                enabled: false,
+                available: false,
+                executable_path,
+                reason: Some("Browser automation is disabled in configuration.".to_string()),
+            };
+        }
+
+        if !self.mcp_prerequisites_available() {
+            return BrowserRuntimeStatus {
+                enabled: true,
+                available: false,
+                executable_path,
+                reason: Some(
+                    "npx is not available on this machine. Install Node.js to use browser automation via @playwright/mcp."
+                        .to_string(),
+                ),
+            };
+        }
+
+        BrowserRuntimeStatus {
+            enabled: true,
+            available: true,
+            executable_path,
+            reason: None,
+        }
     }
 
     /// Get the browser user data directory path (for login persistence)
@@ -1744,7 +1954,12 @@ impl BrowserConfig {
     /// Get the resolved executable path (or try to find Chrome)
     pub fn resolved_executable(&self) -> Option<std::path::PathBuf> {
         if !self.executable_path.is_empty() {
-            Some(std::path::PathBuf::from(&self.executable_path))
+            let custom = std::path::PathBuf::from(&self.executable_path);
+            if custom.exists() {
+                Some(custom)
+            } else {
+                None
+            }
         } else {
             // Try common Chrome/Chromium paths
             let candidates = if cfg!(target_os = "macos") {
@@ -1768,6 +1983,88 @@ impl BrowserConfig {
                 .map(std::path::PathBuf::from)
         }
     }
+
+    /// Check if `npx` is available (needed to run `npx @playwright/mcp`).
+    pub fn mcp_prerequisites_available(&self) -> bool {
+        std::env::var_os("PATH").is_some_and(|paths| {
+            std::env::split_paths(&paths).any(|dir| {
+                let candidate = if cfg!(windows) {
+                    dir.join("npx.cmd")
+                } else {
+                    dir.join("npx")
+                };
+                candidate.exists()
+            })
+        })
+    }
+}
+
+/// Business Autopilot configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BusinessConfig {
+    /// Enable the business tool
+    pub enabled: bool,
+    /// Default autonomy level: "semi", "budget", "full"
+    pub default_autonomy: String,
+    /// Default currency
+    pub default_currency: String,
+    /// Default OODA review interval (cron-style schedule)
+    pub default_ooda_interval: String,
+    /// Fiscal country (ISO 3166-1 alpha-2)
+    pub fiscal_country: String,
+    /// VAT number (P.IVA for IT)
+    pub vat_number: Option<String>,
+    /// Fiscal regime: "standard", "forfettario", "exempt"
+    pub fiscal_regime: String,
+}
+
+impl Default for BusinessConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_autonomy: "semi".to_string(),
+            default_currency: "EUR".to_string(),
+            default_ooda_interval: "every:86400".to_string(),
+            fiscal_country: "IT".to_string(),
+            vat_number: None,
+            fiscal_regime: "standard".to_string(),
+        }
+    }
+}
+
+// ── Skills Configuration ───────────────────────────────────────────
+
+/// Per-skill configuration for env injection and overrides.
+///
+/// Example TOML:
+/// ```toml
+/// [skills.entries.my-skill]
+/// env = { GITHUB_ORG = "myorg", API_URL = "https://api.example.com" }
+/// api_key = "vault://my-skill-api-key"
+/// enabled = true
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SkillsConfig {
+    /// Per-skill configuration entries, keyed by skill name
+    #[serde(default)]
+    pub entries: HashMap<String, SkillEntryConfig>,
+}
+
+/// Configuration for a single skill.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SkillEntryConfig {
+    /// Environment variables to inject into skill script execution
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    /// API key (plain or vault:// reference) — injected as API_KEY env var
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Override to disable a skill regardless of eligibility
+    #[serde(default)]
+    pub enabled: Option<bool>,
 }
 
 #[cfg(test)]
@@ -1780,6 +2077,31 @@ mod tests {
         assert_eq!(config.agent.model, "anthropic/claude-sonnet-4-20250514");
         assert_eq!(config.agent.max_iterations, 20);
         assert_eq!(config.agent.temperature, 0.7);
+        assert_eq!(config.browser.backend, "playwright");
+    }
+
+    #[test]
+    fn test_browser_mcp_prerequisites() {
+        let config = BrowserConfig::default();
+        // Just check the method doesn't panic; actual availability depends on env
+        let _ = config.mcp_prerequisites_available();
+    }
+
+    #[test]
+    fn test_legacy_browser_migration_is_one_shot() {
+        let mut browser = BrowserConfig::default();
+        browser.enabled = false;
+        browser.migration_version = 0;
+
+        if browser.mcp_prerequisites_available() {
+            assert!(browser.maybe_auto_enable_for_legacy_config());
+            assert!(browser.enabled);
+            assert_eq!(browser.migration_version, 1);
+
+            browser.enabled = false;
+            assert!(!browser.maybe_auto_enable_for_legacy_config());
+            assert!(!browser.enabled);
+        }
     }
 
     #[test]
@@ -1845,5 +2167,48 @@ api_key = "sk-or-test"
         let serialized = toml::to_string_pretty(&config).unwrap();
         let deserialized: Config = toml::from_str(&serialized).unwrap();
         assert_eq!(config.agent.model, deserialized.agent.model);
+    }
+
+    #[test]
+    fn test_effective_model_capabilities_apply_overrides() {
+        let mut config = Config::default();
+        config.agent.model_overrides.insert(
+            "ollama/custom-vision".to_string(),
+            ModelOverrides {
+                multimodal: Some(true),
+                image_input: Some(true),
+                tool_calls: Some(false),
+                ..Default::default()
+            },
+        );
+
+        let caps = config
+            .agent
+            .effective_model_capabilities("ollama", "ollama/custom-vision");
+        assert!(caps.multimodal);
+        assert!(caps.image_input);
+        assert!(!caps.tool_calls);
+    }
+
+    #[test]
+    fn test_xml_dispatch_uses_model_tool_call_override() {
+        let mut config = Config::default();
+        config.agent.model_overrides.insert(
+            "ollama/custom-vision".to_string(),
+            ModelOverrides {
+                tool_calls: Some(false),
+                ..Default::default()
+            },
+        );
+        assert!(config.should_use_xml_dispatch("ollama", "ollama/custom-vision"));
+
+        config.agent.model_overrides.insert(
+            "ollama/cloud-native-tools:cloud".to_string(),
+            ModelOverrides {
+                tool_calls: Some(true),
+                ..Default::default()
+            },
+        );
+        assert!(!config.should_use_xml_dispatch("ollama", "ollama/cloud-native-tools:cloud"));
     }
 }

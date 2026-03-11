@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
-use rmcp::model::{CallToolRequestParams, RawContent, ResourceContents};
+use rmcp::model::{CallToolRequestParams, RawContent, ReadResourceRequestParams, ResourceContents};
 use rmcp::service::{RunningService, ServiceExt};
 use rmcp::transport::TokioChildProcess;
 use serde_json::Value;
@@ -13,7 +13,7 @@ use crate::config::{Config, ExecutionSandboxConfig, McpServerConfig};
 use crate::storage::{global_secrets, SecretKey};
 
 use super::registry::{Tool, ToolContext, ToolResult};
-use super::sandbox_exec::build_process_command;
+use super::sandbox::build_process_command;
 
 /// Info about a connected MCP server (for TUI/status display)
 #[derive(Debug, Clone)]
@@ -23,6 +23,12 @@ pub struct McpServerInfo {
     pub server_version: String,
     pub tool_count: usize,
     pub connected: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct McpToolInfo {
+    pub name: String,
+    pub description: String,
 }
 
 /// A single MCP tool exposed as a Homun Tool.
@@ -47,8 +53,12 @@ pub struct McpClientTool {
     runtime_config: Option<Arc<RwLock<Config>>>,
 }
 
-/// Wrapper around the rmcp RunningService peer for shared access
-struct McpPeer {
+/// Wrapper around the rmcp RunningService peer for shared access.
+///
+/// Used by `McpClientTool` for individual MCP tools and by `BrowserTool`
+/// for the unified browser interface (calling Playwright tools through a
+/// single `browser` tool).
+pub struct McpPeer {
     service: RwLock<Option<RunningService<rmcp::service::RoleClient, ()>>>,
 }
 
@@ -59,7 +69,7 @@ impl McpPeer {
         }
     }
 
-    async fn call_tool(&self, name: &str, args: Value) -> Result<String> {
+    pub async fn call_tool(&self, name: &str, args: Value) -> Result<String> {
         let guard = self.service.read().await;
         let service = guard.as_ref().context("MCP server connection closed")?;
 
@@ -121,6 +131,31 @@ impl McpPeer {
         Ok(output)
     }
 
+    /// List all resources available from this MCP server.
+    pub async fn list_resources(&self) -> Result<Vec<rmcp::model::Resource>> {
+        let guard = self.service.read().await;
+        let service = guard.as_ref().context("MCP server connection closed")?;
+        let result = service
+            .list_resources(None)
+            .await
+            .context("MCP list_resources failed")?;
+        Ok(result.resources)
+    }
+
+    /// Read a specific resource by URI.
+    pub async fn read_resource(&self, uri: &str) -> Result<Vec<ResourceContents>> {
+        let guard = self.service.read().await;
+        let service = guard.as_ref().context("MCP server connection closed")?;
+        let result = service
+            .read_resource(ReadResourceRequestParams {
+                uri: uri.to_string(),
+                meta: None,
+            })
+            .await
+            .context("MCP read_resource failed")?;
+        Ok(result.contents)
+    }
+
     async fn shutdown(&self) {
         let mut guard = self.service.write().await;
         if let Some(service) = guard.take() {
@@ -146,30 +181,41 @@ impl Tool for McpClientTool {
     }
 
     async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolResult> {
-        if let Some(config_handle) = &self.runtime_config {
-            let (server_config, sandbox_config) = {
-                let cfg = config_handle.read().await;
-                let Some(server) = cfg.mcp.servers.get(&self.server_name) else {
-                    return Ok(ToolResult::error(format!(
-                        "MCP server '{}' is no longer configured",
-                        self.server_name
-                    )));
-                };
-                (server.clone(), cfg.security.execution_sandbox.clone())
-            };
+        // Resolve vault:// references in tool arguments (e.g. secure form filling)
+        let mut args = args;
+        resolve_vault_args(&mut args);
 
-            match call_tool_once(
-                &self.server_name,
-                &server_config,
-                &sandbox_config,
-                &self.mcp_tool_name,
-                args,
-            )
-            .await
-            {
-                Ok(output) => return Ok(ToolResult::success(output)),
-                Err(e) => {
-                    return Ok(ToolResult::error(format!("MCP tool error: {e}")));
+        // Stateful servers (e.g. browser/playwright) must use the persistent peer
+        // connection — spawning a fresh process per call would lose page state.
+        // The runtime_config (hot-reload) path is only used for stateless servers.
+        let use_persistent = self.server_name == crate::browser::BROWSER_MCP_SERVER_NAME;
+
+        if !use_persistent {
+            if let Some(config_handle) = &self.runtime_config {
+                let (server_config, sandbox_config) = {
+                    let cfg = config_handle.read().await;
+                    let Some(server) = cfg.mcp.servers.get(&self.server_name) else {
+                        return Ok(ToolResult::error(format!(
+                            "MCP server '{}' is no longer configured",
+                            self.server_name
+                        )));
+                    };
+                    (server.clone(), cfg.security.execution_sandbox.clone())
+                };
+
+                match call_tool_once(
+                    &self.server_name,
+                    &server_config,
+                    &sandbox_config,
+                    &self.mcp_tool_name,
+                    args,
+                )
+                .await
+                {
+                    Ok(output) => return Ok(ToolResult::success(output)),
+                    Err(e) => {
+                        return Ok(ToolResult::error(format!("MCP tool error: {e}")));
+                    }
                 }
             }
         }
@@ -258,9 +304,13 @@ impl McpManager {
                     }
 
                     server_infos.push(info);
-                    if runtime_hot_reload {
-                        // In runtime hot-reload mode we reconnect on each tool call,
-                        // so we can immediately release the startup discovery process.
+                    // Stateful servers (e.g. browser) need a persistent connection —
+                    // their peer must survive across tool calls to keep state (page, DOM).
+                    // Stateless servers in hot-reload mode reconnect on each call.
+                    let needs_persistent = name == crate::browser::BROWSER_MCP_SERVER_NAME;
+                    if runtime_hot_reload && !needs_persistent {
+                        // Stateless hot-reload: reconnect on each tool call via call_tool_once(),
+                        // so we can immediately release the startup discovery connection.
                         peer.shutdown().await;
                     } else {
                         peers.push((name.clone(), peer));
@@ -291,6 +341,27 @@ impl McpManager {
         &self.server_infos
     }
 
+    /// Take the persistent browser peer out of the manager.
+    ///
+    /// Returns `Some(Arc<McpPeer>)` if a browser MCP server was connected.
+    /// The peer is removed from the manager — subsequent calls return `None`.
+    /// Used by `BrowserTool` to get direct access to the Playwright connection.
+    pub fn take_browser_peer(&mut self) -> Option<Arc<McpPeer>> {
+        let idx = self
+            .peers
+            .iter()
+            .position(|(n, _)| n == crate::browser::BROWSER_MCP_SERVER_NAME)?;
+        Some(self.peers.remove(idx).1)
+    }
+
+    /// Get a reference to a peer by server name.
+    pub fn get_peer(&self, name: &str) -> Option<Arc<McpPeer>> {
+        self.peers
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, p)| Arc::clone(p))
+    }
+
     /// Shutdown all MCP server connections
     pub async fn shutdown(&self) {
         for (name, peer) in &self.peers {
@@ -312,7 +383,7 @@ async fn connect_server(
     }
 }
 
-async fn call_tool_once(
+pub async fn call_tool_once(
     server_name: &str,
     server_config: &McpServerConfig,
     sandbox_config: &ExecutionSandboxConfig,
@@ -323,6 +394,23 @@ async fn call_tool_once(
     let result = peer.call_tool(tool_name, args).await;
     peer.shutdown().await;
     result
+}
+
+pub async fn list_tools_once(
+    server_name: &str,
+    server_config: &McpServerConfig,
+    sandbox_config: &ExecutionSandboxConfig,
+) -> Result<Vec<McpToolInfo>> {
+    let (peer, tools, _info) = connect_server(server_name, server_config, sandbox_config).await?;
+    let out = tools
+        .into_iter()
+        .map(|tool| McpToolInfo {
+            name: tool.name.to_string(),
+            description: tool.description.unwrap_or_default().to_string(),
+        })
+        .collect();
+    peer.shutdown().await;
+    Ok(out)
 }
 
 /// Connect to an MCP server via stdio transport (child process)
@@ -396,6 +484,41 @@ async fn connect_stdio(
     Ok((McpPeer::new(service), tools, info))
 }
 
+/// Recursively resolve `vault://` references in MCP tool arguments.
+///
+/// Walks the JSON argument tree and replaces any string value starting
+/// with `vault://` with the corresponding secret from the vault.
+/// This enables secure form filling via browser MCP tools and any
+/// other MCP tool that accepts sensitive data.
+fn resolve_vault_args(args: &mut Value) {
+    match args {
+        Value::String(s) if s.starts_with("vault://") => {
+            let key = s.strip_prefix("vault://").unwrap_or_default().trim();
+            if !key.is_empty() {
+                if let Ok(secrets) = global_secrets() {
+                    let secret_key = SecretKey::custom(&format!("vault.{key}"));
+                    if let Ok(Some(value)) = secrets.get(&secret_key) {
+                        *s = value;
+                    } else {
+                        tracing::warn!(vault_key = %key, "Vault secret not found in MCP tool argument");
+                    }
+                }
+            }
+        }
+        Value::Object(map) => {
+            for value in map.values_mut() {
+                resolve_vault_args(value);
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr {
+                resolve_vault_args(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Resolve MCP env value, supporting vault references (`vault://key_name`).
 fn resolve_env_value(server_name: &str, env_key: &str, raw_value: &str) -> Result<String> {
     if !raw_value.starts_with("vault://") {
@@ -462,6 +585,7 @@ mod tests {
                 args: vec![],
                 url: None,
                 env: HashMap::new(),
+                capabilities: Vec::new(),
                 enabled: false,
             },
         );

@@ -118,6 +118,18 @@ impl SubagentManager {
             .map(|(id, desc)| (id.clone(), desc.clone()))
             .collect()
     }
+
+    /// Cancel all running subagent tasks.
+    /// Returns the number of tasks that were cancelled.
+    pub async fn cancel_all(&self) -> usize {
+        let mut running = self.running.lock().await;
+        let count = running.len();
+        if count > 0 {
+            tracing::warn!(count, "Cancelling all running subagents");
+            running.clear();
+        }
+        count
+    }
 }
 
 #[cfg(test)]

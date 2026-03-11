@@ -24,8 +24,8 @@ impl SystemPromptBuilder {
     /// Create a builder with default sections in standard order.
     pub fn with_defaults() -> Self {
         use super::{
-            IdentitySection, MemorySection, RuntimeSection, SafetySection, SkillsSection,
-            ToolsSection, WorkspaceSection,
+            BusinessSection, IdentitySection, MemorySection, RuntimeSection, SafetySection,
+            SkillsSection, ToolsSection, WorkspaceSection,
         };
 
         Self {
@@ -34,6 +34,7 @@ impl SystemPromptBuilder {
                 Box::new(ToolsSection),
                 Box::new(SafetySection),
                 Box::new(SkillsSection),
+                Box::new(BusinessSection),
                 Box::new(MemorySection),
                 Box::new(WorkspaceSection),
                 Box::new(RuntimeSection),
@@ -108,6 +109,7 @@ impl<'a> PromptContext<'a> {
             bootstrap_files: self.bootstrap_files,
             memory_content: self.memory_content,
             relevant_memories: self.relevant_memories,
+            rag_knowledge: self.rag_knowledge,
             mcp_suggestions: self.mcp_suggestions,
             channel: self.channel,
             prompt_mode: mode,
@@ -132,6 +134,7 @@ mod tests {
             bootstrap_files: &[],
             memory_content: "",
             relevant_memories: "",
+            rag_knowledge: "",
             mcp_suggestions: "",
             channel: "test",
             prompt_mode: PromptMode::Full,

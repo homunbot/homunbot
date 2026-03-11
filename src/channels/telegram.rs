@@ -7,13 +7,15 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 use frankenstein::client_reqwest::Bot;
-use frankenstein::methods::{GetUpdatesParams, SendChatActionParams, SendMessageParams};
+use frankenstein::methods::{
+    GetFileParams, GetUpdatesParams, SendChatActionParams, SendMessageParams,
+};
 use frankenstein::types::{AllowedUpdate, ChatAction, ChatId, ChatType};
 use frankenstein::updates::UpdateContent;
 use frankenstein::{AsyncTelegramApi, ParseMode};
 use tokio::sync::mpsc;
 
-use crate::bus::{InboundMessage, OutboundMessage};
+use crate::bus::{InboundMessage, MessageMetadata, OutboundMessage};
 use crate::config::TelegramConfig;
 
 /// Context passed to message handler (avoids too many function arguments).
@@ -23,6 +25,8 @@ struct BotContext {
     mention_required: bool,
     bot_id: u64,
     bot_username: String,
+    /// Bot token — needed to build file download URLs.
+    token: String,
 }
 
 /// Telegram channel — long polling bot via Frankenstein.
@@ -66,6 +70,7 @@ impl TelegramChannel {
             mention_required,
             bot_id,
             bot_username,
+            token: self.config.token.clone(),
         };
 
         // Spawn outbound handler
@@ -92,8 +97,14 @@ impl TelegramChannel {
                     }
                 }
                 Err(e) => {
-                    tracing::error!(error = ?e, "Failed to get updates");
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    let err_str = format!("{e:?}");
+                    if err_str.contains("TimedOut") || err_str.contains("timed out") {
+                        tracing::debug!(error = %e, "Telegram poll timeout (normal)");
+                        // Timeouts during long polling are expected — retry immediately
+                    } else {
+                        tracing::warn!(error = %e, "Telegram poll error, backing off");
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    }
                 }
             }
         }
@@ -117,11 +128,37 @@ impl TelegramChannel {
             return;
         }
 
-        // Extract text content from message
-        let mut text = match msg.text {
-            Some(ref t) if !t.is_empty() => t.clone(),
+        // Extract text content + optional file attachment
+        let mut attachment_path: Option<String> = None;
+
+        // Check for document attachment first
+        if let Some(ref doc) = msg.document {
+            match Self::download_document(api, doc, &ctx.token).await {
+                Ok(path) => {
+                    tracing::info!(
+                        file_name = doc.file_name.as_deref().unwrap_or("unknown"),
+                        path = %path.display(),
+                        "Downloaded Telegram document"
+                    );
+                    attachment_path = Some(path.to_string_lossy().to_string());
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to download Telegram document");
+                }
+            }
+        }
+
+        let mut text = match msg.text.as_deref().or(msg.caption.as_deref()) {
+            Some(t) if !t.is_empty() => t.to_string(),
+            _ if attachment_path.is_some() => {
+                // Document without text — use filename as content
+                msg.document
+                    .as_ref()
+                    .and_then(|d| d.file_name.clone())
+                    .unwrap_or_else(|| "[document]".to_string())
+            }
             _ => {
-                // Skip non-text messages (photos, stickers, etc.)
+                // Skip non-text, non-document messages (photos, stickers, etc.)
                 return;
             }
         };
@@ -167,13 +204,17 @@ impl TelegramChannel {
         Self::send_typing(api, chat_id).await;
 
         // Send to agent via bus
+        let metadata = attachment_path.map(|path| MessageMetadata {
+            attachment_path: Some(path),
+            ..Default::default()
+        });
         let inbound = InboundMessage {
             channel: "telegram".to_string(),
             sender_id,
             chat_id: chat_id.to_string(),
             content: text,
             timestamp: chrono::Utc::now(),
-            metadata: None,
+            metadata,
         };
 
         if let Err(e) = inbound_tx.send(inbound).await {
@@ -185,6 +226,36 @@ impl TelegramChannel {
             )
             .await;
         }
+    }
+
+    /// Download a Telegram document to a temporary file.
+    /// Returns the path to the downloaded file.
+    async fn download_document(
+        api: &Bot,
+        doc: &frankenstein::types::Document,
+        token: &str,
+    ) -> Result<std::path::PathBuf> {
+        // Step 1: get file path from Telegram API
+        let params = GetFileParams::builder().file_id(&doc.file_id).build();
+        let file_info = api.get_file(&params).await?;
+        let file_path = file_info
+            .result
+            .file_path
+            .ok_or_else(|| anyhow::anyhow!("Telegram did not return file_path"))?;
+
+        // Step 2: download the file
+        let url = format!("https://api.telegram.org/file/bot{token}/{file_path}");
+        let response = reqwest::get(&url).await?;
+        let bytes = response.bytes().await?;
+
+        // Step 3: save to temp directory with original filename
+        let file_name = doc.file_name.as_deref().unwrap_or("telegram_document");
+        let dir = std::env::temp_dir().join("homun_telegram");
+        tokio::fs::create_dir_all(&dir).await?;
+        let dest = dir.join(file_name);
+        tokio::fs::write(&dest, &bytes).await?;
+
+        Ok(dest)
     }
 
     /// Send a "typing..." indicator to the chat.

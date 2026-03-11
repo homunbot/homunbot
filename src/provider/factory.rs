@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use crate::config::Config;
 use crate::storage;
 
+use super::health::ProviderHealthTracker;
 use super::traits::Provider;
 use super::{AnthropicProvider, OllamaProvider, OpenAICompatProvider, ReliableProvider};
 
@@ -20,29 +21,61 @@ use super::{AnthropicProvider, OllamaProvider, OpenAICompatProvider, ReliablePro
 /// Each provider gets retry on transient errors (429, 5xx) and automatic
 /// failover to the next provider on non-transient errors (401, 403).
 pub fn create_provider(config: &Config) -> Result<Arc<dyn Provider>> {
-    let primary_model = &config.agent.model;
+    create_provider_for_model_with_fallbacks(config, &config.agent.model, true, None)
+}
+
+/// Create provider with an attached health tracker for circuit breaker support.
+pub fn create_provider_with_health(
+    config: &Config,
+    tracker: Arc<ProviderHealthTracker>,
+) -> Result<Arc<dyn Provider>> {
+    create_provider_for_model_with_fallbacks(config, &config.agent.model, true, Some(tracker))
+}
+
+pub fn create_provider_for_model(
+    config: &Config,
+    primary_model: &str,
+) -> Result<Arc<dyn Provider>> {
+    create_provider_for_model_with_fallbacks(config, primary_model, true, None)
+}
+
+pub fn create_provider_for_model_without_fallbacks(
+    config: &Config,
+    primary_model: &str,
+) -> Result<Arc<dyn Provider>> {
+    create_provider_for_model_with_fallbacks(config, primary_model, false, None)
+}
+
+fn create_provider_for_model_with_fallbacks(
+    config: &Config,
+    primary_model: &str,
+    include_fallbacks: bool,
+    health_tracker: Option<Arc<ProviderHealthTracker>>,
+) -> Result<Arc<dyn Provider>> {
     let (primary_name, primary) = create_single_provider(config, primary_model)
         .context("No provider configured. Add an API key to ~/.homun/config.toml")?;
 
-    let mut chain = vec![(primary_name, primary, primary_model.clone())];
+    let mut chain = vec![(primary_name, primary, primary_model.to_string())];
 
     // Add fallback providers from config
-    for fallback_model in &config.agent.fallback_models {
-        match create_single_provider(config, fallback_model) {
-            Ok((name, provider)) => {
-                tracing::info!(
-                    provider = %name,
-                    model = %fallback_model,
-                    "Registered fallback provider"
-                );
-                chain.push((name, provider, fallback_model.clone()));
-            }
-            Err(e) => {
-                tracing::warn!(
-                    model = %fallback_model,
-                    error = %e,
-                    "Skipping fallback model — provider not configured"
-                );
+    if include_fallbacks {
+        for fallback_model in &config.agent.fallback_models {
+            match create_single_provider(config, fallback_model) {
+                Ok((name, provider)) => {
+                    tracing::info!(
+                        provider = %name,
+                        model = %fallback_model,
+                        "Registered fallback provider"
+                    );
+                    chain.push((name, provider, fallback_model.clone()));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        model = %fallback_model,
+                        error = %e,
+                        "Skipping fallback model — provider not configured"
+                    );
+                }
             }
         }
     }
@@ -50,13 +83,17 @@ pub fn create_provider(config: &Config) -> Result<Arc<dyn Provider>> {
     tracing::info!(
         primary_model = %primary_model,
         chain_length = chain.len(),
+        include_fallbacks,
         "Provider chain ready"
     );
 
-    Ok(Arc::new(ReliableProvider::new(
-        chain,
-        crate::utils::retry::RetryConfig::default(),
-    )))
+    let reliable = ReliableProvider::new(chain, crate::utils::retry::RetryConfig::default());
+    let reliable = if let Some(tracker) = health_tracker {
+        reliable.with_health(tracker)
+    } else {
+        reliable
+    };
+    Ok(Arc::new(reliable))
 }
 
 /// Create a single LLM provider instance for a given model string.
@@ -119,7 +156,7 @@ pub fn create_single_provider(config: &Config, model: &str) -> Result<(String, A
             provider_config.extra_headers.clone(),
         );
         Ok((name, Arc::new(provider)))
-    } else if provider_name == "ollama" {
+    } else if provider_name == "ollama" || provider_name == "ollama_cloud" {
         let provider = OllamaProvider::new(&api_key, provider_config.api_base.as_deref());
         Ok((name, Arc::new(provider)))
     } else {

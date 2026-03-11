@@ -1,18 +1,11 @@
-//! Browser automation module for Homun.
+//! Browser automation via Playwright MCP Server.
 //!
-//! Provides browser control capabilities using chromiumoxide (CDP).
-//! The LLM can navigate pages, interact with elements, and extract content.
-//!
-//! # Architecture
-//!
-//! - `manager`: Browser lifecycle management (singleton)
-//! - `snapshot`: Page snapshot generation with element refs
-//! - `actions`: Browser action types
-//! - `tool`: BrowserTool implementation for the Tool trait
+//! The browser is managed as an MCP server (`@playwright/mcp`).
+//! Configuration comes from the `[browser]` section of `config.toml`
+//! and is auto-translated into an MCP server config at startup by
+//! [`mcp_bridge::browser_mcp_server_config`].
 //!
 //! # Usage
-//!
-//! The browser tool is automatically registered when browser is enabled in config:
 //!
 //! ```toml
 //! [browser]
@@ -20,14 +13,23 @@
 //! headless = true
 //! ```
 
-pub mod actions;
-pub mod manager;
-pub mod snapshot;
-pub mod tool;
+pub mod helpers;
+pub mod mcp_bridge;
 
-// Re-export config from schema
-pub use crate::config::BrowserConfig;
-pub use actions::BrowserAction;
-pub use manager::{global_browser_manager, BrowserManager};
-pub use snapshot::{ElementRef, PageSnapshot};
-pub use tool::BrowserTool;
+pub use helpers::{has_browser_tools, is_browser_tool};
+pub use mcp_bridge::{browser_mcp_server_config, BROWSER_MCP_SERVER_NAME};
+
+/// Quick runtime status check from config (no MCP connection needed).
+pub fn browser_runtime_status_for_config(
+    config: &crate::config::BrowserConfig,
+) -> crate::config::BrowserRuntimeStatus {
+    config.runtime_status()
+}
+
+/// Check current browser status from the global config.
+pub fn current_browser_status() -> crate::config::BrowserRuntimeStatus {
+    let config = crate::config::Config::load()
+        .map(|c| c.browser)
+        .unwrap_or_default();
+    browser_runtime_status_for_config(&config)
+}
