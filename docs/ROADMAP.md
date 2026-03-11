@@ -13,7 +13,7 @@
 |---------|--------|
 | LOC Rust | ~41,343 |
 | LOC Frontend | ~8,691 |
-| Test | 506 passing (verificato con `cargo test -q` il 2026-03-10) |
+| Test | 521 passing (verificato con `cargo test -q` il 2026-03-11) |
 | Binary (full) | ~50MB |
 | Provider LLM | 14 |
 | Canali | 7 (CLI, Telegram, Discord*, WhatsApp*, Slack*, Email*, Web) |
@@ -325,10 +325,11 @@ Quando si aggiunge un nuovo canale, implementare sempre:
   - Suite test runtime image (`tests/sandbox_runtime_image.rs`): 6 test Docker (build baseline, node, python, bash, tsx, sandbox exec).
   - Suite test E2E cross-platform (`tests/sandbox_e2e.rs`): 7 test portabili (echo nativo, detection backend, Docker sandbox, env isolation, bwrap, macOS fallback).
   - CI workflow `.github/workflows/sandbox-validation.yml`: 5 job (linux-native, runtime-image, e2e-linux, e2e-windows, e2e-macos).
-- ⚠️ **Parziale / da chiudere**
-  - Backend `linux_native` implementato e con suite test CI, ma non ancora eseguito su runner GitHub (PR pendente).
-  - Backend `windows_native` wired come stub (`bail!`), suite test CI pronta per quando viene implementato con Job Objects.
-  - Build locale della baseline runtime `homun/runtime-core:2026.03` validata via test quando Docker e' disponibile.
+- ✅ **Tutti i backend operativi e validati in CI** (2026-03-11)
+  - Backend `linux_native` (Bubblewrap) validato su GitHub Actions ubuntu-latest con user namespaces abilitati via sysctl.
+  - Backend `windows_native` (Win32 Job Objects) implementato con `CreateJobObjectW`, memory/CPU limits, kill-on-close. Compilato e validato su `windows-latest`.
+  - Build baseline runtime `homun/runtime-core:2026.03` validata via test CI (node, python, bash, tsx).
+  - Docker tests con skip automatico su Windows (no Linux container support su Windows Docker).
   - Resta parity browser-complete della runtime image oltre il core baseline.
 
 ### Milestone Sandbox — Dove siamo
@@ -346,7 +347,6 @@ Quando si aggiunge un nuovo canale, implementare sempre:
 
 - Estendere la runtime image da baseline "core" a parity piu' ampia per skill/MCP browser-heavy.
 - Aggiungere policy di rete piu' granulari (es. allowlist host/domain per runtime isolato).
-- Primo run CI su GitHub Actions per validare le suite su runner reali (Linux bwrap, Windows, macOS).
 - SBX-3 v2: network isolation (AppContainer), filesystem restriction (NTFS ACL) — non bloccanti per MVP.
 
 ### Come funziona lo Skill Creator
@@ -1311,8 +1311,9 @@ Sprint 9+: Future (P3)
   Voice, Extended thinking, Prometheus, distribuzione
 ```
 
-**Completato: Sprint 1-6 + Sprint 8 + SBX-1..6 + CHAT-1..6 + smoke manuali CHAT-7/Browser + core Browser + Design System + Workflow Engine + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4) + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
+**Completato: Sprint 1-6 + Sprint 8 + SBX-1..6 (tutti validati CI cross-platform) + CHAT-1..6 + smoke manuali CHAT-7/Browser + core Browser + Design System + Workflow Engine + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4) + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
 **Rimanente: formalizzazione release-grade di CHAT-7 e Browser E2E, Sprint 7 hardening canali, BIZ-2..5, Mobile App, Sprint 9+**
+**CI: 16/16 check verdi (check&lint, test, 4 feature matrix, 3 E2E, 1 linux-native, 1 runtime-image, 5 build cross-platform)**
 
 ---
 
