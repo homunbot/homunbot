@@ -12,69 +12,41 @@ mod systemd;
 /// Install homun as a user service (auto-start at boot)
 pub fn install() -> Result<()> {
     #[cfg(target_os = "linux")]
-    {
-        systemd::install()?;
-    }
+    return systemd::install();
     #[cfg(target_os = "macos")]
-    {
-        launchd::install()?;
-    }
+    return launchd::install();
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        anyhow::bail!("Service installation not supported on this OS");
-    }
-    Ok(())
+    anyhow::bail!("Service installation not supported on this OS");
 }
 
 /// Uninstall the homun user service
 pub fn uninstall() -> Result<()> {
     #[cfg(target_os = "linux")]
-    {
-        systemd::uninstall()?;
-    }
+    return systemd::uninstall();
     #[cfg(target_os = "macos")]
-    {
-        launchd::uninstall()?;
-    }
+    return launchd::uninstall();
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        anyhow::bail!("Service uninstallation not supported on this OS");
-    }
-    Ok(())
+    anyhow::bail!("Service uninstallation not supported on this OS");
 }
 
 /// Start the homun service
 pub fn start() -> Result<()> {
     #[cfg(target_os = "linux")]
-    {
-        systemd::start()?;
-    }
+    return systemd::start();
     #[cfg(target_os = "macos")]
-    {
-        launchd::start()?;
-    }
+    return launchd::start();
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        anyhow::bail!("Service start not supported on this OS");
-    }
-    Ok(())
+    anyhow::bail!("Service start not supported on this OS");
 }
 
 /// Stop the homun service
 pub fn stop() -> Result<()> {
     #[cfg(target_os = "linux")]
-    {
-        systemd::stop()?;
-    }
+    return systemd::stop();
     #[cfg(target_os = "macos")]
-    {
-        launchd::stop()?;
-    }
+    return launchd::stop();
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        anyhow::bail!("Service stop not supported on this OS");
-    }
-    Ok(())
+    anyhow::bail!("Service stop not supported on this OS");
 }
 
 /// Check if the homun service is installed

@@ -97,12 +97,8 @@ impl WebRunStore {
         msg: &StreamMessage,
     ) -> Option<WebChatRunSnapshot> {
         let mut inner = self.inner.lock().expect("web run store lock poisoned");
-        let Some(run_id) = inner.active_by_session.get(session_key).cloned() else {
-            return None;
-        };
-        let Some(run) = inner.runs.get_mut(&run_id) else {
-            return None;
-        };
+        let run_id = inner.active_by_session.get(session_key).cloned()?;
+        let run = inner.runs.get_mut(&run_id)?;
 
         run.updated_at = Utc::now().to_rfc3339();
         if let Some(event_type) = &msg.event_type {
@@ -136,12 +132,8 @@ impl WebRunStore {
 
     pub fn request_stop(&self, session_key: &str) -> Option<WebChatRunSnapshot> {
         let mut inner = self.inner.lock().expect("web run store lock poisoned");
-        let Some(run_id) = inner.active_by_session.get(session_key).cloned() else {
-            return None;
-        };
-        let Some(run) = inner.runs.get_mut(&run_id) else {
-            return None;
-        };
+        let run_id = inner.active_by_session.get(session_key).cloned()?;
+        let run = inner.runs.get_mut(&run_id)?;
         run.status = "stopping".to_string();
         run.updated_at = Utc::now().to_rfc3339();
         Some(run.clone())

@@ -543,12 +543,7 @@ pub fn check_eligibility(reqs: &SkillRequirements) -> Result<(), String> {
 
     // Check OS platform
     if !reqs.os.is_empty() {
-        let current_os = match std::env::consts::OS {
-            "macos" => "macos",
-            "linux" => "linux",
-            "windows" => "windows",
-            other => other,
-        };
+        let current_os = std::env::consts::OS;
         // Also match "darwin" as alias for "macos"
         let matches = reqs.os.iter().any(|os| {
             let os_lower = os.to_lowercase();

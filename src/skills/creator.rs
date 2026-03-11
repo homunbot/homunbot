@@ -446,7 +446,7 @@ fn build_composition_reference(prompt: &str, related_patterns: &[RelatedSkillPat
     out
 }
 
-async fn validate_script(script_path: &PathBuf, script_language: &str) -> Vec<String> {
+async fn validate_script(script_path: &std::path::Path, script_language: &str) -> Vec<String> {
     match script_language {
         "bash" => {
             run_validation_command("bash", &["-n", script_path.to_string_lossy().as_ref()]).await

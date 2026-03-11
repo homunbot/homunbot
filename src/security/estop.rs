@@ -21,6 +21,7 @@ use crate::utils::retry;
 ///
 /// Populated at gateway startup. All fields are optional because some
 /// features may not be enabled (no browser, no MCP, etc.).
+#[derive(Default)]
 pub struct EStopHandles {
     /// Browser session — call close to kill the browser.
     #[cfg(feature = "mcp")]
@@ -30,18 +31,6 @@ pub struct EStopHandles {
     pub mcp_manager: Option<Arc<crate::tools::mcp::McpManager>>,
     /// Subagent manager — cancel all running background tasks.
     pub subagent_manager: Option<Arc<crate::agent::SubagentManager>>,
-}
-
-impl Default for EStopHandles {
-    fn default() -> Self {
-        Self {
-            #[cfg(feature = "mcp")]
-            browser_session: None,
-            #[cfg(feature = "mcp")]
-            mcp_manager: None,
-            subagent_manager: None,
-        }
-    }
 }
 
 /// Report of what the emergency stop did.

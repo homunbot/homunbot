@@ -1664,19 +1664,11 @@ impl Default for ExfiltrationConfig {
 /// Root security configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct SecurityConfig {
     pub exfiltration: ExfiltrationConfig,
     /// Process sandbox configuration for shell/MCP/skills execution.
     pub execution_sandbox: ExecutionSandboxConfig,
-}
-
-impl Default for SecurityConfig {
-    fn default() -> Self {
-        Self {
-            exfiltration: ExfiltrationConfig::default(),
-            execution_sandbox: ExecutionSandboxConfig::default(),
-        }
-    }
 }
 
 /// Sandbox configuration for process execution.

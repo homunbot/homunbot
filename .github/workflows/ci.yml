@@ -202,7 +202,6 @@ jobs:
       fail-fast: false
       matrix:
         features:
-          - "cli"
           - "web-ui"
           - "gateway"
           - "full"

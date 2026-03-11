@@ -445,7 +445,7 @@ impl OpenSkillsSource {
     fn download_dir_recursive<'a>(
         &'a self,
         repo_path: &'a str,
-        dest: &'a PathBuf,
+        dest: &'a std::path::Path,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let url = format!(

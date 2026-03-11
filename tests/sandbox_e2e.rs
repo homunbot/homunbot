@@ -19,8 +19,20 @@ fn docker_available() -> bool {
 
 #[cfg(target_os = "linux")]
 fn bwrap_available() -> bool {
+    // Check binary exists AND can actually create a sandbox
+    // (user namespaces may be disabled on some CI runners)
     Command::new("bwrap")
-        .arg("--version")
+        .args([
+            "--die-with-parent",
+            "--ro-bind",
+            "/",
+            "/",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "/bin/true",
+        ])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -92,10 +104,13 @@ fn test_docker_sandbox_echo() {
 
     let output = Command::new("docker")
         .args([
-            "run", "--rm",
-            "--network", "none",
+            "run",
+            "--rm",
+            "--network",
+            "none",
             "node:22-alpine",
-            "echo", "docker-sandbox-ok",
+            "echo",
+            "docker-sandbox-ok",
         ])
         .output()
         .expect("docker run echo");
@@ -127,12 +142,19 @@ fn test_bwrap_sandbox_echo() {
     let output = Command::new("bwrap")
         .args([
             "--die-with-parent",
-            "--ro-bind", "/", "/",
-            "--proc", "/proc",
-            "--dev", "/dev",
+            "--ro-bind",
+            "/",
+            "/",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
             "--clearenv",
-            "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
-            "echo", "bwrap-sandbox-ok",
+            "--setenv",
+            "PATH",
+            "/usr/local/bin:/usr/bin:/bin",
+            "echo",
+            "bwrap-sandbox-ok",
         ])
         .output()
         .expect("bwrap echo");
@@ -160,12 +182,20 @@ fn test_bwrap_env_isolation() {
     let output = Command::new("bwrap")
         .args([
             "--die-with-parent",
-            "--ro-bind", "/", "/",
-            "--proc", "/proc",
-            "--dev", "/dev",
+            "--ro-bind",
+            "/",
+            "/",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
             "--clearenv",
-            "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
-            "--setenv", "ALLOWED_VAR", "visible",
+            "--setenv",
+            "PATH",
+            "/usr/local/bin:/usr/bin:/bin",
+            "--setenv",
+            "ALLOWED_VAR",
+            "visible",
             "env",
         ])
         .env("SENSITIVE_TOKEN", "should-not-leak")
@@ -196,8 +226,10 @@ fn test_docker_env_isolation() {
 
     let output = Command::new("docker")
         .args([
-            "run", "--rm",
-            "-e", "ALLOWED_VAR=visible",
+            "run",
+            "--rm",
+            "-e",
+            "ALLOWED_VAR=visible",
             "node:22-alpine",
             "env",
         ])

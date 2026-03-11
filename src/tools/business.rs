@@ -231,7 +231,7 @@ impl BusinessTool {
                 currency,
                 ooda_interval,
                 deliver_to,
-                Some(&created_by.as_deref().unwrap_or("unknown")),
+                Some(created_by.as_deref().unwrap_or("unknown")),
                 None, // fiscal_config set later
             )
             .await?;

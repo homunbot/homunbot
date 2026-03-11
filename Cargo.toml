@@ -50,7 +50,7 @@ providers-openai-compat = ["dep:eventsource-stream", "dep:pin-project-lite"]
 local-embeddings = ["dep:fastembed", "dep:usearch", "dep:lru", "dep:pdf-extract", "dep:calamine", "dep:zip", "dep:quick-xml"]
 browser = ["mcp"]
 mcp = ["dep:rmcp"]
-vault-2fa = ["dep:totp-rs", "dep:rand"]
+vault-2fa = ["dep:totp-rs"]
 
 # === Meta Features ===
 gateway = ["cli", "web-ui", "file-tools", "shell-tool", "web-tools", "cron-tool", "message-tool",
@@ -177,7 +177,7 @@ rmcp = { version = "0.16", features = ["client", "transport-child-process"], opt
 
 # --- Vault 2FA ---
 totp-rs = { version = "5", features = ["qr"], optional = true }
-rand = { version = "0.8", optional = true }
+rand = "0.8"
 
 # --- Email channel ---
 lettre = { version = "0.11", optional = true, default-features = false, features = ["builder", "smtp-transport", "rustls-tls"] }
@@ -201,6 +201,7 @@ tempfile = "3"
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
 ] }

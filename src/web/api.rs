@@ -382,14 +382,13 @@ pub fn router() -> Router<Arc<AppState>> {
     let api_router = api_router.route("/v1/browser/test", axum::routing::post(test_browser));
 
     // --- Emergency Stop ---
-    let api_router = api_router
+
+    api_router
         .route(
             "/v1/emergency-stop",
             axum::routing::post(emergency_stop_handler),
         )
-        .route("/v1/resume", axum::routing::post(resume_handler));
-
-    api_router
+        .route("/v1/resume", axum::routing::post(resume_handler))
 }
 
 // --- Health check ---
@@ -3179,6 +3178,7 @@ async fn load_mcpmarket_fallback(limit: usize) -> Vec<McpMarketItem> {
         .collect()
 }
 
+#[allow(clippy::type_complexity)]
 async fn load_mcpmarket_index(limit: usize) -> HashMap<String, McpLeaderboardEntry> {
     static MCPMARKET_INDEX_CACHE: OnceLock<
         Mutex<Option<(Instant, HashMap<String, McpLeaderboardEntry>)>>,
@@ -4539,11 +4539,8 @@ fn fallback_env_help_for_spec(
         } else {
             "GitHub token used to access repositories, issues, and pull requests.".to_string()
         };
-        out.where_to_get = if language.is_italian() {
-            "GitHub -> Settings -> Developer settings -> Personal access tokens.".to_string()
-        } else {
-            "GitHub -> Settings -> Developer settings -> Personal access tokens.".to_string()
-        };
+        out.where_to_get =
+            "GitHub -> Settings -> Developer settings -> Personal access tokens.".to_string();
         out.retrieval_steps = vec![
             if language.is_italian() {
                 "Apri la pagina GitHub Personal Access Tokens.".to_string()
@@ -4760,12 +4757,10 @@ fn fallback_env_help_for_spec(
                 } else {
                     format!("Open {} and look for: {}", url, clues[0])
                 }
+            } else if language.is_italian() {
+                format!("Cerca nella documentazione questo passaggio: {}", clues[0])
             } else {
-                if language.is_italian() {
-                    format!("Cerca nella documentazione questo passaggio: {}", clues[0])
-                } else {
-                    format!("Look in documentation for: {}", clues[0])
-                }
+                format!("Look in documentation for: {}", clues[0])
             };
             out.retrieval_steps = clues
                 .iter()
@@ -4820,12 +4815,10 @@ fn build_fallback_install_guide(
             } else {
                 format!("Open docs for {}: {}", display_name, docs)
             }
+        } else if language.is_italian() {
+            format!("Rivedi questo server: {} ({})", display_name, req.id)
         } else {
-            if language.is_italian() {
-                format!("Rivedi questo server: {} ({})", display_name, req.id)
-            } else {
-                format!("Review this server: {} ({})", display_name, req.id)
-            }
+            format!("Review this server: {} ({})", display_name, req.id)
         },
         if language.is_italian() {
             "Raccogli le credenziali richieste con la guida qui sotto e salva i segreti nel Vault (vault://...)".to_string()
@@ -5087,9 +5080,7 @@ fn display_name_from_package(pkg: &str) -> String {
         .replace("-server", "")
         .replace("mcp-", "")
         .replace("-mcp", "")
-        .replace('.', " ")
-        .replace('_', " ")
-        .replace('-', " ");
+        .replace(['.', '_', '-'], " ");
     name.split_whitespace()
         .map(|w| {
             let mut chars = w.chars();
@@ -6019,7 +6010,7 @@ async fn configure_channel(
                 && default_acc
                     .trigger_word
                     .as_ref()
-                    .map_or(true, |t| t.is_empty())
+                    .is_none_or(|t| t.is_empty())
             {
                 if let Ok(secrets) = crate::storage::global_secrets() {
                     let key = crate::storage::SecretKey::custom("email.default.trigger_word");
@@ -8924,17 +8915,18 @@ async fn get_execution_sandbox_status(
 
 /// List opinionated execution sandbox presets for the current host.
 async fn get_execution_sandbox_presets() -> Json<Vec<ExecutionSandboxPresetResponse>> {
-    let mut safe_cfg = crate::config::ExecutionSandboxConfig::default();
-    safe_cfg.enabled = true;
-    safe_cfg.backend = "auto".to_string();
-    safe_cfg.strict = false;
-    safe_cfg.docker_image =
-        crate::tools::sandbox::canonical_sandbox_runtime_baseline().to_string();
-    safe_cfg.runtime_image_policy = "versioned_tag".to_string();
-    safe_cfg.runtime_image_expected_version = "2026.03".to_string();
-    safe_cfg.docker_network = "none".to_string();
-    safe_cfg.docker_read_only_rootfs = true;
-    safe_cfg.docker_mount_workspace = true;
+    let safe_cfg = crate::config::ExecutionSandboxConfig {
+        enabled: true,
+        backend: "auto".to_string(),
+        strict: false,
+        docker_image: crate::tools::sandbox::canonical_sandbox_runtime_baseline().to_string(),
+        runtime_image_policy: "versioned_tag".to_string(),
+        runtime_image_expected_version: "2026.03".to_string(),
+        docker_network: "none".to_string(),
+        docker_read_only_rootfs: true,
+        docker_mount_workspace: true,
+        ..Default::default()
+    };
 
     let mut strict_cfg = safe_cfg.clone();
     strict_cfg.strict = true;
@@ -8970,9 +8962,7 @@ async fn get_execution_sandbox_image_status(
     let sandbox = config.security.execution_sandbox.clone();
     drop(config);
 
-    Json(crate::tools::sandbox::get_runtime_image_status(
-        &sandbox,
-    ))
+    Json(crate::tools::sandbox::get_runtime_image_status(&sandbox))
 }
 
 /// Pull the configured sandbox runtime image.
@@ -9018,9 +9008,7 @@ async fn get_execution_sandbox_events(
     Query(query): Query<ExecutionSandboxEventsQuery>,
 ) -> Json<Vec<crate::tools::sandbox::SandboxEvent>> {
     let limit = query.limit.unwrap_or(12).clamp(1, 50);
-    Json(crate::tools::sandbox::list_recent_sandbox_events(
-        limit,
-    ))
+    Json(crate::tools::sandbox::list_recent_sandbox_events(limit))
 }
 
 #[derive(Deserialize)]
@@ -11689,9 +11677,9 @@ async fn ingest_knowledge_directory(
     let recursive = req["recursive"].as_bool().unwrap_or(false);
 
     // Expand tilde
-    let path = if path_str.starts_with("~/") {
+    let path = if let Some(rest) = path_str.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
-            home.join(&path_str[2..])
+            home.join(rest)
         } else {
             std::path::PathBuf::from(path_str)
         }

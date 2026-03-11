@@ -430,8 +430,7 @@ fn extract_source_name(url: &str) -> Option<String> {
     }
     let source = host
         .split('.')
-        .filter(|part| !matches!(*part, "com" | "it" | "org" | "net" | "co"))
-        .next()
+        .find(|part| !matches!(*part, "com" | "it" | "org" | "net" | "co"))
         .unwrap_or(host.as_str())
         .to_string();
     if source.is_empty() {

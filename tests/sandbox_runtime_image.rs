@@ -167,15 +167,22 @@ fn test_docker_sandbox_execution_in_baseline() {
 
     let output = Command::new("docker")
         .args([
-            "run", "--rm",
-            "--network", "none",
+            "run",
+            "--rm",
+            "--network",
+            "none",
             BASELINE_IMAGE,
-            "bash", "-c", "echo sandbox-baseline-ok",
+            "bash",
+            "-c",
+            "echo sandbox-baseline-ok",
         ])
         .output()
         .expect("docker run sandbox test");
 
-    assert!(output.status.success(), "docker sandbox execution should succeed");
+    assert!(
+        output.status.success(),
+        "docker sandbox execution should succeed"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("sandbox-baseline-ok"),

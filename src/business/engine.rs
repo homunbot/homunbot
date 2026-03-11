@@ -31,6 +31,7 @@ impl BusinessEngine {
     }
 
     /// Launch a new business venture.
+    #[allow(clippy::too_many_arguments)]
     pub async fn launch(
         &self,
         name: &str,
@@ -194,6 +195,7 @@ If MCP tools are available (e.g., for marketing, payments, analytics), use them 
     }
 
     /// Record a sale: creates transaction + updates product stats.
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_sale(
         &self,
         business_id: &str,

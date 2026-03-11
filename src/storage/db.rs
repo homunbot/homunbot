@@ -1091,6 +1091,7 @@ impl Database {
     // --- Automation operations ---
 
     /// Insert a new automation definition.
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_automation(
         &self,
         id: &str,
@@ -1122,6 +1123,7 @@ impl Database {
     }
 
     /// Insert a new automation definition with compiled plan metadata.
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_automation_with_plan(
         &self,
         id: &str,

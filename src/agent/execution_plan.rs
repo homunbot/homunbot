@@ -532,8 +532,7 @@ fn infer_source_from_browser_output(output: &str) -> Option<String> {
         .next()?;
     let source = host
         .split('.')
-        .filter(|part| !matches!(*part, "com" | "it" | "org" | "net" | "co"))
-        .next()?;
+        .find(|part| !matches!(*part, "com" | "it" | "org" | "net" | "co"))?;
     if source.is_empty() {
         None
     } else {

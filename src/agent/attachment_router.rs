@@ -422,6 +422,7 @@ async fn analyze_attachment_with_server(
     }
 }
 
+#[cfg(feature = "mcp")]
 fn tool_matches_capabilities(
     tool: &crate::tools::mcp::McpToolInfo,
     required_capabilities: &[&str],

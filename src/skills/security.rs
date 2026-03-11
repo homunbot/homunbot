@@ -124,15 +124,9 @@ impl Severity {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct InstallSecurityOptions {
     pub force: bool,
-}
-
-impl Default for InstallSecurityOptions {
-    fn default() -> Self {
-        Self { force: false }
-    }
 }
 
 /// Scan raw SKILL.md content. This keeps the old call site contract for remote

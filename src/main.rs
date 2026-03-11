@@ -13,6 +13,28 @@ use tracing_subscriber::EnvFilter;
 mod agent;
 #[cfg(feature = "browser")]
 mod browser;
+
+/// Stub module when browser feature is disabled — provides no-op helpers
+/// so that the rest of the codebase can call `crate::browser::is_browser_tool()`
+/// without cfg gates at every call site.
+#[cfg(not(feature = "browser"))]
+mod browser {
+    use std::collections::HashSet;
+
+    pub const BROWSER_MCP_SERVER_NAME: &str = "__browser_disabled__";
+
+    pub fn is_browser_tool(_name: &str) -> bool {
+        false
+    }
+    pub fn has_browser_tools(_names: &HashSet<String>) -> bool {
+        false
+    }
+    pub fn browser_mcp_server_config(
+        _browser: &crate::config::BrowserConfig,
+    ) -> Option<crate::config::McpServerConfig> {
+        None
+    }
+}
 mod bus;
 mod business;
 mod channels;
@@ -1250,12 +1272,11 @@ async fn main() -> Result<()> {
                         .watch_dirs
                         .iter()
                         .filter_map(|d| {
-                            let p = if d.starts_with("~/") {
+                            if d.starts_with("~/") {
                                 dirs::home_dir().map(|h| h.join(&d[2..]))
                             } else {
                                 Some(std::path::PathBuf::from(d))
-                            };
-                            p
+                            }
                         })
                         .collect();
                     if !watch_dirs.is_empty() {
@@ -2419,9 +2440,9 @@ async fn main() -> Result<()> {
 
             match command {
                 KnowledgeCommands::Add { path, recursive } => {
-                    let target = if path.starts_with("~/") {
+                    let target = if let Some(rest) = path.strip_prefix("~/") {
                         if let Some(home) = dirs::home_dir() {
-                            home.join(&path[2..])
+                            home.join(rest)
                         } else {
                             std::path::PathBuf::from(&path)
                         }

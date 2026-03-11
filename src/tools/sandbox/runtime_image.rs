@@ -7,13 +7,12 @@ use tokio::process::Command;
 
 use crate::config::ExecutionSandboxConfig;
 
+use super::events::sandbox_runtime_image_state_path;
 use super::resolve::docker_available;
 use super::types::{
     ParsedRuntimeImageReference, RuntimeImageAssessment, RuntimeImagePolicyResolution,
-    SandboxImageBuildResult, SandboxImagePullResult, SandboxImageStatus,
-    SandboxRuntimeImageState,
+    SandboxImageBuildResult, SandboxImagePullResult, SandboxImageStatus, SandboxRuntimeImageState,
 };
-use super::events::sandbox_runtime_image_state_path;
 
 pub(crate) const DEFAULT_SANDBOX_RUNTIME_IMAGE: &str = "node:22-alpine";
 const CANONICAL_SANDBOX_RUNTIME_BASELINE: &str = "homun/runtime-core:2026.03";
@@ -208,8 +207,8 @@ pub(crate) fn assess_runtime_image_status(
     if policy.effective_policy == "pinned"
         && image.digest.as_deref() != Some(policy.expected_version.as_str())
     {
-            let (drift_status, message) = if image.digest.is_some() {
-                (
+        let (drift_status, message) = if image.digest.is_some() {
+            (
                     "config-version-mismatch".to_string(),
                     format!(
                         "Pinned runtime policy expects '{}', but the configured image reference resolves to digest '{}'.",
@@ -217,21 +216,21 @@ pub(crate) fn assess_runtime_image_status(
                         image.digest.as_deref().unwrap_or_default()
                     ),
                 )
-            } else {
-                (
+        } else {
+            (
                     "not-pinned-reference".to_string(),
                     format!(
                         "Pinned runtime policy expects '{}', but the configured image reference '{}' is not digest-pinned.",
                         policy.expected_version, image.normalized_image
                     ),
                 )
-            };
-            return RuntimeImageAssessment {
-                drift_status,
-                acceptability: "action_required".to_string(),
-                update_recommended: true,
-                message,
-            };
+        };
+        return RuntimeImageAssessment {
+            drift_status,
+            acceptability: "action_required".to_string(),
+            update_recommended: true,
+            message,
+        };
     }
 
     if policy.effective_policy == "versioned_tag"
@@ -404,7 +403,8 @@ pub fn get_runtime_image_status(sandbox: &ExecutionSandboxConfig) -> SandboxImag
             None,
             persisted.as_ref(),
         );
-        let message = decorate_runtime_image_message(assessment.message.clone(), configured_was_empty);
+        let message =
+            decorate_runtime_image_message(assessment.message.clone(), configured_was_empty);
         return build_image_status(
             parsed,
             docker_avail,
@@ -442,7 +442,8 @@ pub fn get_runtime_image_status(sandbox: &ExecutionSandboxConfig) -> SandboxImag
                 image_id.as_ref(),
                 persisted.as_ref(),
             );
-            let message = decorate_runtime_image_message(assessment.message.clone(), configured_was_empty);
+            let message =
+                decorate_runtime_image_message(assessment.message.clone(), configured_was_empty);
             build_image_status(
                 parsed,
                 docker_avail,
@@ -468,7 +469,8 @@ pub fn get_runtime_image_status(sandbox: &ExecutionSandboxConfig) -> SandboxImag
                 None,
                 persisted.as_ref(),
             );
-            let message = decorate_runtime_image_message(assessment.message.clone(), configured_was_empty);
+            let message =
+                decorate_runtime_image_message(assessment.message.clone(), configured_was_empty);
             build_image_status(
                 parsed,
                 docker_avail,
@@ -495,7 +497,8 @@ pub fn get_runtime_image_status(sandbox: &ExecutionSandboxConfig) -> SandboxImag
                 persisted.as_ref(),
             );
             assessment.message = format!("Failed to inspect runtime image: {err}");
-            let message = decorate_runtime_image_message(assessment.message.clone(), configured_was_empty);
+            let message =
+                decorate_runtime_image_message(assessment.message.clone(), configured_was_empty);
             let mut status = build_image_status(
                 parsed,
                 docker_avail,

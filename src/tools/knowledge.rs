@@ -204,10 +204,10 @@ impl Tool for KnowledgeTool {
 
 /// Expand ~ to home directory.
 fn expand_tilde(path: &str) -> std::path::PathBuf {
-    if path.starts_with("~/") {
+    if let Some(rest) = path.strip_prefix("~/") {
         dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(&path[2..])
+            .join(rest)
     } else {
         std::path::PathBuf::from(path)
     }

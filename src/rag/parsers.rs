@@ -205,7 +205,7 @@ fn chunk_spreadsheet(path: &Path, opts: &ChunkOptions) -> Result<Vec<DocChunk>> 
         if let Ok(range) = workbook.worksheet_range(sheet_name) {
             let mut rows_text = Vec::new();
             for row in range.rows() {
-                let cells: Vec<String> = row.iter().map(|c| format_cell(c)).collect();
+                let cells: Vec<String> = row.iter().map(format_cell).collect();
                 let line = cells.join(" | ");
                 if !line.trim().is_empty() && line.trim() != "|" {
                     rows_text.push(line);

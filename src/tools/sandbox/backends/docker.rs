@@ -11,8 +11,7 @@ fn absolute_working_dir(working_dir: &std::path::Path) -> Result<std::path::Path
     if working_dir.is_absolute() {
         return Ok(working_dir.to_path_buf());
     }
-    let cwd =
-        std::env::current_dir().context("Failed to resolve current directory")?;
+    let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
     Ok(cwd.join(working_dir))
 }
 

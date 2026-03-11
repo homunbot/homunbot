@@ -10,8 +10,20 @@
 use std::process::Command;
 
 fn bwrap_available() -> bool {
+    // Check binary exists AND can actually create a sandbox
+    // (user namespaces may be disabled on some CI runners)
     Command::new("bwrap")
-        .arg("--version")
+        .args([
+            "--die-with-parent",
+            "--ro-bind",
+            "/",
+            "/",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "/bin/true",
+        ])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -29,9 +41,13 @@ fn network_namespaces_available() -> bool {
     Command::new("bwrap")
         .args([
             "--die-with-parent",
-            "--ro-bind", "/", "/",
-            "--proc", "/proc",
-            "--dev", "/dev",
+            "--ro-bind",
+            "/",
+            "/",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
             "--unshare-net",
             "/bin/true",
         ])
@@ -44,12 +60,18 @@ fn user_namespaces_available() -> bool {
     Command::new("bwrap")
         .args([
             "--die-with-parent",
-            "--ro-bind", "/", "/",
-            "--proc", "/proc",
-            "--dev", "/dev",
+            "--ro-bind",
+            "/",
+            "/",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
             "--unshare-user",
-            "--uid", "65534",
-            "--gid", "65534",
+            "--uid",
+            "65534",
+            "--gid",
+            "65534",
             "/bin/true",
         ])
         .output()
@@ -63,25 +85,33 @@ fn run_in_bwrap(program: &str, args: &[&str]) -> std::io::Result<std::process::O
         "--die-with-parent",
         "--new-session",
         "--clearenv",
-        "--proc", "/proc",
-        "--dev", "/dev",
-        "--tmpfs", "/tmp",
-        "--ro-bind", "/", "/",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/tmp",
+        "--ro-bind",
+        "/",
+        "/",
         "--unshare-ipc",
         "--unshare-pid",
         "--unshare-uts",
-        "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-        "--setenv", "HOME", "/tmp",
-        "--chdir", "/tmp",
+        "--setenv",
+        "PATH",
+        "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "--setenv",
+        "HOME",
+        "/tmp",
+        "--chdir",
+        "/tmp",
         program,
     ];
     for arg in args {
         bwrap_args.push(arg);
     }
 
-    Command::new("bwrap")
-        .args(&bwrap_args)
-        .output()
+    Command::new("bwrap").args(&bwrap_args).output()
 }
 
 /// Run with network isolation enabled.
@@ -90,26 +120,34 @@ fn run_in_bwrap_no_network(program: &str, args: &[&str]) -> std::io::Result<std:
         "--die-with-parent",
         "--new-session",
         "--clearenv",
-        "--proc", "/proc",
-        "--dev", "/dev",
-        "--tmpfs", "/tmp",
-        "--ro-bind", "/", "/",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/tmp",
+        "--ro-bind",
+        "/",
+        "/",
         "--unshare-ipc",
         "--unshare-pid",
         "--unshare-uts",
         "--unshare-net",
-        "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-        "--setenv", "HOME", "/tmp",
-        "--chdir", "/tmp",
+        "--setenv",
+        "PATH",
+        "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "--setenv",
+        "HOME",
+        "/tmp",
+        "--chdir",
+        "/tmp",
         program,
     ];
     for arg in args {
         bwrap_args.push(arg);
     }
 
-    Command::new("bwrap")
-        .args(&bwrap_args)
-        .output()
+    Command::new("bwrap").args(&bwrap_args).output()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -126,22 +164,57 @@ fn test_bwrap_probe_succeeds() {
     let output = Command::new("bwrap")
         .args([
             "--die-with-parent",
-            "--ro-bind", "/", "/",
-            "--proc", "/proc",
-            "--dev", "/dev",
+            "--ro-bind",
+            "/",
+            "/",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
             "/bin/true",
         ])
         .output()
         .expect("bwrap probe");
 
-    assert!(output.status.success(), "bwrap minimal probe should succeed");
+    assert!(
+        output.status.success(),
+        "bwrap minimal probe should succeed"
+    );
 
     // Report capabilities
     eprintln!("bwrap probe: OK");
-    eprintln!("  user namespaces: {}", if user_namespaces_available() { "available" } else { "unavailable" });
-    eprintln!("  network namespaces: {}", if network_namespaces_available() { "available" } else { "unavailable" });
-    eprintln!("  prlimit: {}", if prlimit_available() { "available" } else { "unavailable" });
-    eprintln!("  cgroups v2: {}", if std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").exists() { "available" } else { "unavailable" });
+    eprintln!(
+        "  user namespaces: {}",
+        if user_namespaces_available() {
+            "available"
+        } else {
+            "unavailable"
+        }
+    );
+    eprintln!(
+        "  network namespaces: {}",
+        if network_namespaces_available() {
+            "available"
+        } else {
+            "unavailable"
+        }
+    );
+    eprintln!(
+        "  prlimit: {}",
+        if prlimit_available() {
+            "available"
+        } else {
+            "unavailable"
+        }
+    );
+    eprintln!(
+        "  cgroups v2: {}",
+        if std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").exists() {
+            "available"
+        } else {
+            "unavailable"
+        }
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -180,11 +253,18 @@ fn test_env_sanitization() {
         .args([
             "--die-with-parent",
             "--clearenv",
-            "--ro-bind", "/", "/",
-            "--proc", "/proc",
-            "--dev", "/dev",
-            "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
-            "--chdir", "/tmp",
+            "--ro-bind",
+            "/",
+            "/",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "--setenv",
+            "PATH",
+            "/usr/local/bin:/usr/bin:/bin",
+            "--chdir",
+            "/tmp",
             "env",
         ])
         .env("SECRET_KEY", "should-not-leak")
@@ -201,10 +281,7 @@ fn test_env_sanitization() {
         "secret value should not appear"
     );
     // PATH should be set via --setenv
-    assert!(
-        stdout.contains("PATH="),
-        "PATH should be present in env"
-    );
+    assert!(stdout.contains("PATH="), "PATH should be present in env");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -270,12 +347,20 @@ fn test_prlimit_memory() {
         .args([
             "--die-with-parent",
             "--clearenv",
-            "--ro-bind", "/", "/",
-            "--proc", "/proc",
-            "--dev", "/dev",
-            "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
-            "--chdir", "/tmp",
-            "bash", "-c",
+            "--ro-bind",
+            "/",
+            "/",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "--setenv",
+            "PATH",
+            "/usr/local/bin:/usr/bin:/bin",
+            "--chdir",
+            "/tmp",
+            "bash",
+            "-c",
             // Try to allocate ~128MB — should fail under 64MB AS limit
             "head -c 134217728 /dev/zero > /dev/null 2>&1; echo PRLIMIT_EXIT=$?",
         ])
@@ -314,13 +399,23 @@ fn test_workspace_mount() {
         .args([
             "--die-with-parent",
             "--clearenv",
-            "--ro-bind", "/", "/",
-            "--bind", &workspace_str, &workspace_str, // rw bind for workspace
-            "--proc", "/proc",
-            "--dev", "/dev",
-            "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
-            "--chdir", &workspace_str,
-            "cat", &file_path,
+            "--ro-bind",
+            "/",
+            "/",
+            "--bind",
+            &workspace_str,
+            &workspace_str, // rw bind for workspace
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "--setenv",
+            "PATH",
+            "/usr/local/bin:/usr/bin:/bin",
+            "--chdir",
+            &workspace_str,
+            "cat",
+            &file_path,
         ])
         .output()
         .expect("run workspace mount test");

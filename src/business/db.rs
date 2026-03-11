@@ -258,7 +258,7 @@ impl Database {
         let fiscal_json = biz
             .fiscal_config
             .as_ref()
-            .map(|f| serde_json::to_string(f))
+            .map(serde_json::to_string)
             .transpose()?;
 
         sqlx::query(
@@ -371,16 +371,8 @@ impl Database {
     // ── Strategy CRUD ────────────────────────────────────────────────
 
     pub async fn insert_strategy(&self, s: &Strategy) -> Result<()> {
-        let metrics_json = s
-            .metrics
-            .as_ref()
-            .map(|m| serde_json::to_string(m))
-            .transpose()?;
-        let results_json = s
-            .results
-            .as_ref()
-            .map(|r| serde_json::to_string(r))
-            .transpose()?;
+        let metrics_json = s.metrics.as_ref().map(serde_json::to_string).transpose()?;
+        let results_json = s.results.as_ref().map(serde_json::to_string).transpose()?;
 
         sqlx::query(
             "INSERT INTO business_strategies (id, business_id, name, hypothesis, approach, status, metrics_json, results_json, created_at)
@@ -437,11 +429,7 @@ impl Database {
     // ── Product CRUD ─────────────────────────────────────────────────
 
     pub async fn insert_product(&self, p: &Product) -> Result<()> {
-        let metadata_json = p
-            .metadata
-            .as_ref()
-            .map(|m| serde_json::to_string(m))
-            .transpose()?;
+        let metadata_json = p.metadata.as_ref().map(serde_json::to_string).transpose()?;
 
         sqlx::query(
             "INSERT INTO products (id, business_id, name, description, product_type, price, currency, status, metadata_json, created_at)

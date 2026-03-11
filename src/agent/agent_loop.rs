@@ -409,6 +409,7 @@ impl AgentLoop {
     }
 
     /// Streaming variant with per-request blocked tools and optional thinking override.
+    #[allow(clippy::too_many_arguments)]
     pub async fn process_message_streaming_with_options(
         &self,
         content: &str,
@@ -431,6 +432,7 @@ impl AgentLoop {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn process_message_inner(
         &self,
         content: &str,
@@ -519,15 +521,13 @@ impl AgentLoop {
             == crate::agent::attachment_router::SelectedProviderMode::Multimodal;
         let provider = if using_primary_model && !disable_fallbacks {
             self.provider.read().await.clone()
+        } else if disable_fallbacks {
+            crate::provider::factory::create_provider_for_model_without_fallbacks(
+                &config,
+                &selected_model,
+            )?
         } else {
-            if disable_fallbacks {
-                crate::provider::factory::create_provider_for_model_without_fallbacks(
-                    &config,
-                    &selected_model,
-                )?
-            } else {
-                crate::provider::factory::create_provider_for_model(&config, &selected_model)?
-            }
+            crate::provider::factory::create_provider_for_model(&config, &selected_model)?
         };
         let provider_name = config
             .resolve_provider(&selected_model)
@@ -1446,11 +1446,14 @@ impl AgentLoop {
                     ));
 
                     // For browser tool: extract action from args for tracking
+                    #[cfg(feature = "mcp")]
                     let browser_action = if crate::browser::is_browser_tool(&tool_call.name) {
                         crate::tools::browser::browser_action_from_args(&tool_call.arguments)
                     } else {
                         None
                     };
+                    #[cfg(not(feature = "mcp"))]
+                    let browser_action: Option<&str> = None;
 
                     // When a new snapshot arrives, replace all older snapshots with
                     // a one-line summary to keep the context window lean.
@@ -1811,9 +1814,7 @@ impl AgentLoop {
         let mut guard = registry.write().await;
 
         // Check if this matches an installed skill
-        if guard.get(skill_name).is_none() {
-            return None; // Not a skill — let normal processing handle it
-        }
+        guard.get(skill_name)?;
 
         let skill = guard.get_mut(skill_name)?;
 
@@ -2594,10 +2595,8 @@ fn veto_tool_call(
     ]
     .iter()
     .any(|needle| text.contains(needle));
-    if explicit_weather_intent {
-        if tool_name == "weather" {
-            return None;
-        }
+    if explicit_weather_intent && tool_name == "weather" {
+        return None;
     }
 
     let mentions_sport = [
@@ -2740,6 +2739,7 @@ mod tests {
     // Snapshot compaction and autocomplete functions moved to tools::browser
     use crate::agent::browser_task_plan::BrowserRoutingDecision;
     use crate::config::ModelCapabilities;
+    #[cfg(feature = "mcp")]
     use crate::tools::browser::{compact_browser_snapshot, extract_autocomplete_suggestions};
     use std::collections::HashSet;
 
@@ -3014,6 +3014,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "mcp")]
     fn compacts_browser_snapshot_with_tree_hierarchy() {
         let output = "Navigated to https://example.com\n\
             [image: base64_data_here]\n\
@@ -3047,6 +3048,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "mcp")]
     fn compacts_large_snapshot_within_budget() {
         let mut output = String::from("Page URL: https://example.com\n");
         for i in 0..200 {

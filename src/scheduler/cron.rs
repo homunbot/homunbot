@@ -415,7 +415,7 @@ fn should_fire_schedule(
                 chrono::NaiveDateTime::parse_from_str(&target, "%Y-%m-%dT%H:%M:%S")
             {
                 let target_utc = target_time.and_utc();
-                now.to_owned() >= target_utc && last_run.is_none()
+                *now >= target_utc && last_run.is_none()
             } else {
                 false
             }

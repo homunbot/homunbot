@@ -156,7 +156,7 @@ pub fn chunk_text(content: &str, doc_type: &str, opts: &ChunkOptions) -> Result<
 
 /// Estimate tokens from text (~4 chars per token).
 fn estimate_tokens(text: &str) -> usize {
-    (text.len() + 3) / 4
+    text.len().div_ceil(4)
 }
 
 // ─── Markdown Chunking ──────────────────────────────────────────
