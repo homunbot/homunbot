@@ -84,7 +84,7 @@ homun/
 ├── Cargo.toml
 ├── CLAUDE.md                   # This file
 ├── README.md
-└── LICENSE                     # MIT
+└── LICENSE                     # PolyForm Noncommercial 1.0.0
 ```
 
 ## Key Design Decisions
