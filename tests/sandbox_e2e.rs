@@ -8,10 +8,19 @@
 use std::process::Command;
 
 fn docker_available() -> bool {
-    Command::new("docker")
+    let has_docker = Command::new("docker")
         .arg("info")
         .arg("--format")
         .arg("{{.ServerVersion}}")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !has_docker {
+        return false;
+    }
+    // Verify Linux containers work (Windows Docker can't run alpine images)
+    Command::new("docker")
+        .args(["run", "--rm", "alpine:3.20", "true"])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
