@@ -303,3 +303,9 @@ The main remaining roadmap items are:
 - Mobile app
 
 For the detailed operational status, see [docs/ROADMAP.md](docs/ROADMAP.md).
+
+## License
+
+This project is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+
+You may use, study, and modify the software for any **noncommercial** purpose. Commercial use is not permitted. See the [LICENSE](LICENSE) file for the full terms.
