@@ -183,7 +183,7 @@ impl SkillRegistry {
                         Err(e) => {
                             tracing::warn!(
                                 path = %path.display(),
-                                error = %e,
+                                error = ?e,
                                 "Failed to load skill"
                             );
                         }
@@ -322,16 +322,32 @@ pub fn parse_skill_md_public(content: &str) -> Result<(SkillMetadata, String)> {
 }
 
 /// Parse a SKILL.md file (internal).
+///
+/// Uses `gray_matter` as primary parser with a manual fallback for long lines
+/// (gray_matter's YAML engine silently returns null on very long values).
 fn parse_skill_md(content: &str) -> Result<(SkillMetadata, String)> {
     let matter = gray_matter::Matter::<gray_matter::engine::YAML>::new();
     let parsed = matter.parse(content);
 
-    let data = parsed.data.context("SKILL.md has no YAML frontmatter")?;
+    let json_value: serde_json::Value = match parsed.data {
+        Some(data) => {
+            let v: serde_json::Value = data.into();
+            if v.is_null() {
+                // gray_matter returned null Pod — fallback to manual extraction
+                extract_frontmatter_manual(content)?
+            } else {
+                v
+            }
+        }
+        None => anyhow::bail!("SKILL.md has no YAML frontmatter"),
+    };
 
-    // Convert gray_matter's Pod to serde_json::Value, then deserialize
-    let json_value: serde_json::Value = data.into();
-    let meta: SkillMetadata =
-        serde_json::from_value(json_value).context("Failed to parse SKILL.md frontmatter")?;
+    let meta: SkillMetadata = serde_json::from_value(json_value.clone()).with_context(|| {
+        format!(
+            "Failed to parse SKILL.md frontmatter: {}",
+            serde_json::to_string(&json_value).unwrap_or_default()
+        )
+    })?;
 
     // Validate required fields
     if meta.name.is_empty() {
@@ -342,6 +358,88 @@ fn parse_skill_md(content: &str) -> Result<(SkillMetadata, String)> {
     }
 
     Ok((meta, parsed.content))
+}
+
+/// Manual YAML frontmatter extraction when gray_matter fails.
+///
+/// Extracts the raw YAML between `---` delimiters and parses key-value pairs
+/// into a JSON object. Handles nested `metadata:` blocks and quoted values.
+fn extract_frontmatter_manual(content: &str) -> Result<serde_json::Value> {
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---") {
+        anyhow::bail!("No frontmatter delimiter found");
+    }
+
+    let after_first = &trimmed[3..].trim_start_matches('\r');
+    let after_first = after_first.strip_prefix('\n').unwrap_or(after_first);
+
+    let end = after_first
+        .find("\n---")
+        .context("No closing frontmatter delimiter")?;
+    let yaml_str = &after_first[..end];
+
+    // Parse YAML manually: top-level key: value pairs + one level of nesting
+    let mut map = serde_json::Map::new();
+    let mut current_nested_key: Option<String> = None;
+    let mut nested_map = serde_json::Map::new();
+
+    for line in yaml_str.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let indent = line.len() - line.trim_start().len();
+
+        if indent >= 2 {
+            // Nested value under current_nested_key
+            if let Some(ref _parent) = current_nested_key {
+                if let Some((k, v)) = line.trim().split_once(':') {
+                    let k = k.trim();
+                    let v = v.trim();
+                    let v = strip_yaml_quotes(v);
+                    nested_map.insert(k.to_string(), serde_json::Value::String(v.to_string()));
+                }
+            }
+        } else {
+            // Flush previous nested block
+            if let Some(parent) = current_nested_key.take() {
+                if !nested_map.is_empty() {
+                    map.insert(parent, serde_json::Value::Object(nested_map.clone()));
+                    nested_map.clear();
+                }
+            }
+
+            if let Some((k, v)) = line.split_once(':') {
+                let k = k.trim();
+                let v = v.trim();
+                if v.is_empty() {
+                    // Start of nested block (e.g., `metadata:`)
+                    current_nested_key = Some(k.to_string());
+                } else {
+                    let v = strip_yaml_quotes(v);
+                    map.insert(k.to_string(), serde_json::Value::String(v.to_string()));
+                }
+            }
+        }
+    }
+
+    // Flush final nested block
+    if let Some(parent) = current_nested_key {
+        if !nested_map.is_empty() {
+            map.insert(parent, serde_json::Value::Object(nested_map));
+        }
+    }
+
+    Ok(serde_json::Value::Object(map))
+}
+
+/// Strip surrounding YAML quotes (single or double).
+fn strip_yaml_quotes(s: &str) -> &str {
+    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
 }
 
 // ── Skill Activation Helpers ─────────────────────────────────────────────
@@ -848,6 +946,24 @@ metadata: {"clawdbot":{"emoji":"🎮","requires":{"bins":["gog"]},"install":[{"i
         let bins = requires.get("bins").expect("bins should exist");
         assert!(bins.is_array());
         assert_eq!(bins.as_array().unwrap()[0], "gog");
+    }
+
+    #[test]
+    fn test_parse_skill_md_ui_critic_long_desc() {
+        // gray_matter fails with null Pod on very long single-line values;
+        // our manual fallback handles it.
+        let content = "---\nname: ui-critic\ndescription: Review UI/UX quality with strict premium criteria: alignment, spacing, hierarchy, usability, and visual consistency. Use when the user asks for UI review or shares screenshots.\nlicense: MIT\nallowed-tools: \"read_file list_dir Bash(rg:*) Bash(sed:*)\"\nmetadata:\n  author: homun\n  version: \"1.0\"\n  category: design\n---\n\n# UI Critic\n";
+        let (meta, _body) = parse_skill_md(content).unwrap();
+        assert_eq!(meta.name, "ui-critic");
+        assert_eq!(meta.license.as_deref(), Some("MIT"));
+        assert_eq!(
+            meta.allowed_tools.as_deref(),
+            Some("read_file list_dir Bash(rg:*) Bash(sed:*)")
+        );
+        let metadata = meta.metadata.expect("metadata should be parsed");
+        assert_eq!(metadata.get("author").and_then(|v| v.as_str()), Some("homun"));
+        assert_eq!(metadata.get("version").and_then(|v| v.as_str()), Some("1.0"));
+        assert_eq!(metadata.get("category").and_then(|v| v.as_str()), Some("design"));
     }
 
     #[tokio::test]

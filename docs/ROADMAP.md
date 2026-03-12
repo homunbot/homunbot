@@ -1074,17 +1074,18 @@ Homun ha gia':
 
 | Feature | File principali | Note |
 |---------|----------------|------|
-| **Approval system** | `tools/approval.rs`, `web/api.rs` (7 endpoint), `web/pages.rs` (/approvals), `static/js/approvals.js` | Tool + API + pagina Web UI dedicata per approvazione azioni semi-autonome |
-| **2FA/TOTP** | `web/api.rs` (7 endpoint: setup/verify/status/disable/backup/validate/recover) | Autenticazione a due fattori per operazioni sensibili (vault, knowledge sensitive) |
-| **Account management** | `web/pages.rs` (/account), `web/api.rs` | Pagina gestione account/identita' utente |
-| **API tokens** | `web/api.rs` | Generazione e gestione token API per accesso programmatico |
-| **Webhook ingress** | `web/api.rs` | Endpoint per ricezione webhook esterni (Stripe, GitHub, etc.) |
+| **Approval system** | `tools/approval.rs`, `web/api/approvals.rs`, `web/pages.rs` (/approvals), `static/js/approvals.js` | Tool + API + pagina Web UI dedicata per approvazione azioni semi-autonome |
+| **2FA/TOTP** | `web/api/vault.rs` (7 endpoint: setup/verify/status/disable/backup/validate/recover) | Autenticazione a due fattori per operazioni sensibili (vault, knowledge sensitive) |
+| **Account management** | `web/pages.rs` (/account), `web/api/account.rs` | Pagina gestione account/identita' utente |
+| **API tokens** | `web/api/account.rs` | Generazione e gestione token API per accesso programmatico |
+| **Webhook ingress** | `web/api/health.rs` | Endpoint per ricezione webhook esterni (Stripe, GitHub, etc.) |
 | **Email multi-account** | `channels/email.rs`, `tools/read_email.rs` | Supporto account multipli + tool `read_email_inbox` per LLM |
 | **Exfiltration guard** | `security/mod.rs` | Filtro anti-esfiltrazione dati sensibili nelle risposte |
 | **TUI (ratatui)** | `tui/app.rs`, `tui/ui.rs`, `tui/event.rs` | Interfaccia terminale interattiva alternativa al CLI |
 | **Canale Web** | `channels/web.rs`, `web/ws.rs` | Chat via WebSocket nella Web UI — settimo canale |
-| **E-Stop** | `security/estop.rs`, `web/api.rs` | Kill switch emergenza per agent loop, network, browser, MCP |
+| **E-Stop** | `security/estop.rs`, `web/api/health.rs` | Kill switch emergenza per agent loop, network, browser, MCP |
 | **Provider health** | `provider/health.rs` | Circuit breaker, EMA latency, auto-skip provider down |
+| **FS-1: Split web/api.rs** | `src/web/api/` (27 file) | Monolite 12,382 LOC → 27 file in submodule directory. mod.rs 81 righe, mcp/ subdirectory (6 file). Zero API changes, 522 test passing. ✅ DONE 2026-03-12 |
 
 ---
 
@@ -1501,6 +1502,16 @@ Sprint 9+: Future (P3)
 **Completato: Sprint 1-8 + SBX-1..6 (tutti validati CI cross-platform) + CHAT-1..6 + smoke manuali CHAT-7/Browser + core Browser + Design System + Workflow Engine + Automations Builder v2 (visual flow + guided inspector + NLP) + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4) + Unified LLM Engine + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
 **Rimanente: formalizzazione release-grade di CHAT-7 e Browser E2E, BIZ-2..5, Mobile App, Sprint 9+**
 **CI: 11/11 check verdi (check&lint, test, 4 feature matrix, 5 build cross-platform + sandbox validation)**
+
+---
+
+## Backlog — Infrastruttura
+
+| # | Task | Note | Priorità |
+|---|------|------|----------|
+| INFRA-1 | **Browser session pool** | Oggi il browser Playwright è un singleton. Due task concorrenti si sovrapporrebbero. Serve un pool di sessioni browser (o tab isolati) con lock/acquire/release. | P2 |
+| INFRA-2 | **Chat parallele** | L'utente dovrebbe poter mandare più richieste concorrenti senza aspettare che la precedente finisca. Serve routing parallelo per sessione. | P2 |
+| INFRA-3 | **Context window management per browser** | I browser snapshot (~50K chars ciascuno) accumulati causano context explosion (400K+). Serve truncation/compaction aggressiva degli snapshot precedenti. | P1 |
 
 ---
 

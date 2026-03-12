@@ -1231,6 +1231,7 @@ impl AgentLoop {
                         &prompt_content,
                         &available_tool_names,
                         &browser_routing,
+                        &tools_used,
                     );
                     if let Some(message) = vetoed {
                         tracing::info!(
@@ -1483,9 +1484,12 @@ impl AgentLoop {
                     #[cfg(not(feature = "mcp"))]
                     let browser_action: Option<&str> = None;
 
-                    // When a new snapshot arrives, replace all older snapshots with
-                    // a one-line summary to keep the context window lean.
-                    if browser_action == Some("snapshot") {
+                    // When a new browser result contains a snapshot (auto-appended
+                    // after click/navigate/type/snapshot), replace all older snapshots
+                    // with a one-line summary to keep the context window lean.
+                    if crate::browser::is_browser_tool(&tool_call.name)
+                        && is_browser_snapshot_tool_result(messages.last().unwrap_or(&ChatMessage::user("")))
+                    {
                         supersede_stale_browser_context(&mut messages);
                     }
 
@@ -1773,6 +1777,11 @@ impl AgentLoop {
         name: &str,
         arguments: &serde_json::Value,
     ) -> Option<ActivatedSkill> {
+        // Skip skill lookup entirely for built-in tools (avoids costly disk rescan)
+        if self.tool_registry.read().await.get(name).is_some() {
+            return None;
+        }
+
         let registry = self.skill_registry.as_ref()?;
         let mut guard = registry.write().await;
 
@@ -2415,21 +2424,49 @@ fn supersede_stale_browser_context(messages: &mut Vec<ChatMessage>) {
         let summary =
             build_snapshot_superseded_summary(messages[idx].content.as_deref().unwrap_or(""));
         messages[idx].content = Some(summary);
+        // Also clear any content_parts (could contain large data)
+        messages[idx].content_parts = None;
     }
 
-    // Remove all follow-up policy messages except the most recent one
+    // Collect indices of stale items to remove (screenshot images + follow-up policies).
+    // Keep only the most recent of each. Remove from end to avoid index shifts.
+    let mut indices_to_remove: Vec<usize> = Vec::new();
+
+    // Stale temporary browser screenshot messages (images)
+    let screenshot_indices: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, msg)| is_temporary_browser_screenshot_message(msg))
+        .map(|(i, _)| i)
+        .collect();
+    if screenshot_indices.len() > 1 {
+        // Delete the screenshot file from disk before removing from context
+        for &idx in &screenshot_indices[..screenshot_indices.len() - 1] {
+            if let Some(path) = temporary_browser_screenshot_path_from_message(&messages[idx]) {
+                let _ = std::fs::remove_file(&path);
+            }
+            indices_to_remove.push(idx);
+        }
+    }
+
+    // Stale follow-up policy messages
     let policy_indices: Vec<usize> = messages
         .iter()
         .enumerate()
         .filter(|(_, msg)| is_browser_follow_up_policy(msg))
         .map(|(i, _)| i)
         .collect();
-
     if policy_indices.len() > 1 {
-        // Remove from end to avoid index shift issues
-        for &idx in policy_indices[..policy_indices.len() - 1].iter().rev() {
-            messages.remove(idx);
+        for &idx in &policy_indices[..policy_indices.len() - 1] {
+            indices_to_remove.push(idx);
         }
+    }
+
+    // Remove collected indices from end to start
+    indices_to_remove.sort_unstable();
+    indices_to_remove.dedup();
+    for &idx in indices_to_remove.iter().rev() {
+        messages.remove(idx);
     }
 }
 
@@ -2600,6 +2637,7 @@ fn veto_tool_call(
     user_prompt: &str,
     available_tool_names: &HashSet<String>,
     browser_routing: &BrowserRoutingDecision,
+    tools_already_used: &[String],
 ) -> Option<String> {
     let text = user_prompt.to_ascii_lowercase();
     let has_web_search = available_tool_names.contains("web_search");
@@ -2725,11 +2763,13 @@ For sports schedules, fixtures, standings, events, or current news, use web_sear
         }
     }
 
+    let web_search_already_tried = tools_already_used.iter().any(|t| t == "web_search");
     if crate::browser::is_browser_tool(tool_name)
         && has_web_search
         && web_research_intent
         && !explicit_browser_intent
         && !browser_routing.browser_required()
+        && !web_search_already_tried
     {
         return Some(
             "Tool vetoed: browser should not be the first step for routine web research when web_search is available. \
@@ -2782,6 +2822,7 @@ mod tests {
             "oggi gioca il Napoli?",
             &tools(&["weather", "web_search", "browser"]),
             &BrowserRoutingDecision::from_prompt("oggi gioca il Napoli?"),
+            &[],
         );
         assert!(veto.is_some());
     }
@@ -2793,6 +2834,7 @@ mod tests {
             "che tempo fa a Napoli oggi?",
             &tools(&["weather", "web_search"]),
             &BrowserRoutingDecision::from_prompt("che tempo fa a Napoli oggi?"),
+            &[],
         );
         assert!(veto.is_none());
     }
@@ -2804,8 +2846,21 @@ mod tests {
             "cerca se oggi gioca il Napoli",
             &tools(&["browser", "web_search", "web_fetch"]),
             &BrowserRoutingDecision::from_prompt("cerca se oggi gioca il Napoli"),
+            &[],
         );
         assert!(veto.is_some());
+    }
+
+    #[test]
+    fn allows_browser_when_web_search_already_tried() {
+        let veto = veto_tool_call(
+            "browser",
+            "cercami le case di cura a tortora marina",
+            &tools(&["browser", "web_search", "web_fetch"]),
+            &BrowserRoutingDecision::from_prompt("cercami le case di cura a tortora marina"),
+            &["web_search".to_string()],
+        );
+        assert!(veto.is_none());
     }
 
     #[test]
@@ -2815,6 +2870,7 @@ mod tests {
             "usa il browser per cercarlo",
             &tools(&["browser", "web_search", "web_fetch"]),
             &BrowserRoutingDecision::from_prompt("usa il browser per cercarlo"),
+            &[],
         );
         assert!(veto.is_none());
     }
@@ -2826,6 +2882,7 @@ mod tests {
             "cerca online il calendario del Napoli",
             &tools(&["shell", "web_search", "browser"]),
             &BrowserRoutingDecision::from_prompt("cerca online il calendario del Napoli"),
+            &[],
         );
         assert!(veto.is_some());
     }
@@ -2839,6 +2896,7 @@ mod tests {
             prompt,
             &tools(&["browser", "web_fetch", "web_search"]),
             &BrowserRoutingDecision::from_prompt(prompt),
+            &[],
         );
         assert!(veto.is_some());
     }
@@ -2852,6 +2910,7 @@ mod tests {
             prompt,
             &tools(&["browser", "web_fetch", "web_search"]),
             &BrowserRoutingDecision::from_prompt(prompt),
+            &[],
         );
         assert!(veto.is_some());
     }

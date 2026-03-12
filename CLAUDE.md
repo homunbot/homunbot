@@ -133,7 +133,10 @@ src/
 ├── web/                             # Web UI (Axum, 19 pages)
 │   ├── server.rs                    # Axum + TLS + session + rust-embed
 │   ├── auth.rs                      # PBKDF2 auth, rate limiting, API keys
-│   ├── api.rs                       # 50+ REST endpoints (v1/)
+│   ├── api/                         # 50+ REST endpoints (v1/)
+│   │   ├── mod.rs                   # Router + re-exports (81 lines)
+│   │   ├── mcp/                     # MCP catalog, OAuth, install, CRUD (6 files)
+│   │   └── {domain}.rs             # 21 domain files (account, chat, skills, etc.)
 │   ├── pages.rs                     # HTML template generation
 │   ├── ws.rs                        # WebSocket chat channel
 │   ├── chat_attachments.rs          # File upload handling
@@ -503,8 +506,8 @@ Quick reference for adding new components without re-reading the whole codebase.
 5. Web UI card in `src/web/pages.rs` (`build_channels_cards_html`)
 
 ### New API Endpoint
-1. Add handler fn in `src/web/api.rs`
-2. Register route in `src/web/server.rs` (router builder)
+1. Add handler fn in the appropriate `src/web/api/{domain}.rs` file (or create a new domain file)
+2. Register route in that file's `pub(super) fn routes()`, which is merged in `src/web/api/mod.rs`
 3. Auth: use `require_auth()` middleware from `src/web/auth.rs`
 
 ### New Web UI Page
@@ -536,7 +539,6 @@ Quick reference for adding new components without re-reading the whole codebase.
 These files exceed the 500-line limit and predate the convention. Do NOT split them unless explicitly asked — they work as-is. New code within them should follow conventions; new features should go in separate files.
 
 **Rust (>1000 lines):**
-- `web/api.rs` (12K) — monolithic API; new endpoints still go here but extract helpers into dedicated files
 - `web/pages.rs` (4.3K) — HTML templates; unavoidable size, templates are self-contained
 - `agent/agent_loop.rs` (3.2K) — core loop; complex but cohesive
 - `main.rs` (2.8K) — CLI entry; clap derive + subcommands

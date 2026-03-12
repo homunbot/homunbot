@@ -1,6 +1,9 @@
 ---
 name: ui-critic
-description: Review UI/UX quality with strict premium criteria: alignment, spacing, hierarchy, usability, and visual consistency. Use when the user asks for UI review or shares screenshots.
+description: >-
+  Review UI/UX quality with strict premium criteria: alignment, spacing,
+  hierarchy, usability, and visual consistency. Use when the user asks for
+  UI review or shares screenshots.
 license: MIT
 allowed-tools: "read_file list_dir Bash(rg:*) Bash(sed:*)"
 metadata:
