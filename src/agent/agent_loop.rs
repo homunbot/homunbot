@@ -2900,6 +2900,23 @@ For sports schedules, fixtures, standings, events, or current news, use web_sear
     }
 
     let web_search_already_tried = tools_already_used.iter().any(|t| t == "web_search");
+
+    // Search-first policy: web_fetch should not be used before web_search
+    // unless the user explicitly gave a URL to read.
+    if tool_name == "web_fetch"
+        && has_web_search
+        && !web_search_already_tried
+        && !has_known_url
+        && !explicit_browser_intent
+    {
+        return Some(
+            "Tool vetoed: use web_search first to find the right source, \
+then use web_fetch on the most relevant result URL. \
+Direct web_fetch is only appropriate when the user explicitly provides a URL."
+                .to_string(),
+        );
+    }
+
     if crate::browser::is_browser_tool(tool_name)
         && has_web_search
         && web_research_intent

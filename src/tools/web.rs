@@ -220,8 +220,14 @@ impl Tool for WebFetchTool {
         let final_url = response.url().to_string();
 
         if !status.is_success() {
+            let hint = if browser_hint_for_status(status) {
+                " [HINT: This site likely requires JavaScript rendering. \
+                 Use the browser tool to navigate and read this page instead.]"
+            } else {
+                ""
+            };
             return Ok(ToolResult::error(format!(
-                "HTTP error: {status} for {final_url}"
+                "HTTP error: {status} for {final_url}{hint}"
             )));
         }
 
@@ -236,6 +242,14 @@ impl Tool for WebFetchTool {
 
         // Strip HTML tags (basic — for a proper solution we'd use a crate like `scraper`)
         let text = strip_html_tags(&body);
+
+        // Detect JS-required pages that returned 200 but have no useful content.
+        if looks_like_js_required(&body, &text) {
+            return Ok(ToolResult::error(format!(
+                "The page at {final_url} requires JavaScript to render its content. \
+                 Use the browser tool to navigate to this URL and read the rendered page."
+            )));
+        }
 
         let truncated = text.len() > MAX_FETCH_CHARS;
         let content = if truncated {
@@ -361,6 +375,40 @@ fn strip_html_tags(html: &str) -> String {
     collapsed.trim().to_string()
 }
 
+/// HTTP status codes where a browser fallback is likely helpful
+/// (Cloudflare challenges, WAF blocks, reverse-proxy errors).
+fn browser_hint_for_status(status: reqwest::StatusCode) -> bool {
+    matches!(
+        status.as_u16(),
+        403 | 503 | 520 | 521 | 522 | 523 | 524 | 525 | 526
+    )
+}
+
+/// Heuristic: page returned HTTP 200 but body is a JS shell with no useful content.
+///
+/// Catches two patterns:
+/// - Substantial HTML with very little extractable text (SPA shells)
+/// - Explicit "enable JavaScript" / noscript markers
+fn looks_like_js_required(html: &str, stripped_text: &str) -> bool {
+    let html_substantial = html.len() > 1000;
+    let text_tiny = stripped_text.trim().len() < 200;
+
+    let js_markers = [
+        "enable javascript",
+        "javascript is required",
+        "please enable javascript",
+        "you need to enable javascript",
+        "noscript",
+        "browser doesn't support javascript",
+        "__next_data__",
+        "window.__initial_state__",
+    ];
+    let lower = html.to_ascii_lowercase();
+    let has_js_marker = js_markers.iter().any(|m| lower.contains(m));
+
+    (html_substantial && text_tiny) || has_js_marker
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,6 +445,48 @@ mod tests {
         assert!(text.contains("Text"));
         assert!(text.contains("More"));
         assert!(!text.contains("color"));
+    }
+
+    #[test]
+    fn test_browser_hint_for_status() {
+        use reqwest::StatusCode;
+        // Should hint browser for Cloudflare / WAF codes
+        assert!(browser_hint_for_status(StatusCode::FORBIDDEN)); // 403
+        assert!(browser_hint_for_status(StatusCode::SERVICE_UNAVAILABLE)); // 503
+        assert!(browser_hint_for_status(StatusCode::from_u16(520).unwrap()));
+        assert!(browser_hint_for_status(StatusCode::from_u16(526).unwrap()));
+        // Should NOT hint for normal client/server errors
+        assert!(!browser_hint_for_status(StatusCode::NOT_FOUND)); // 404
+        assert!(!browser_hint_for_status(StatusCode::INTERNAL_SERVER_ERROR)); // 500
+        assert!(!browser_hint_for_status(StatusCode::BAD_REQUEST)); // 400
+    }
+
+    #[test]
+    fn test_looks_like_js_required_spa_shell() {
+        // Substantial HTML but almost no text after stripping = SPA shell
+        let html = format!(
+            "<html><head><script src='app.js'></script></head><body><div id='root'></div>{}</body></html>",
+            " ".repeat(1500) // pad to make html > 1000 bytes
+        );
+        let text = strip_html_tags(&html);
+        assert!(looks_like_js_required(&html, &text));
+    }
+
+    #[test]
+    fn test_looks_like_js_required_noscript_marker() {
+        let html = "<html><body><noscript>Please enable JavaScript to view this page.</noscript></body></html>";
+        let text = strip_html_tags(html);
+        assert!(looks_like_js_required(html, &text));
+    }
+
+    #[test]
+    fn test_looks_like_js_required_normal_page() {
+        let html = format!(
+            "<html><body><h1>Real Content</h1><p>{}</p></body></html>",
+            "This is a real article with plenty of text content. ".repeat(20)
+        );
+        let text = strip_html_tags(&html);
+        assert!(!looks_like_js_required(&html, &text));
     }
 
     fn test_ctx() -> ToolContext {

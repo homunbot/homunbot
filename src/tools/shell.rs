@@ -739,6 +739,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_safe_python_version() {
+        // Clear global stop flag — may be set by test_shell_command_cancelled_by_stop_request
+        // running in parallel.
+        crate::agent::stop::clear_stop();
         let tool = ShellTool::new(10, false);
         let args = serde_json::json!({"command": "python3 --version"});
         let result = tool.execute(args, &test_ctx()).await.unwrap();

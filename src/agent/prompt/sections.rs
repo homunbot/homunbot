@@ -177,13 +177,15 @@ impl PromptSection for ToolsSection {
             prompt.push_str("\n### Tool Routing Rules\n\n");
             if has_web_search {
                 prompt.push_str(
-                    "For general web research, current events, news, or finding candidate sources, \
-                     prefer the **web_search** tool first.\n",
+                    "- **ALWAYS** use **web_search** first for any web information need. \
+                     Do not call web_fetch on a URL unless (a) the user explicitly provided \
+                     that URL, or (b) you found it via a prior web_search.\n",
                 );
             }
             if has_web_fetch {
                 prompt.push_str(
-                    "- Use **web_fetch** to read content from a specific known URL after you have identified the page to inspect.\n",
+                    "- Use **web_fetch** to read content from a known URL. \
+                     If web_fetch fails with a JavaScript/rendering error, retry with the **browser** tool.\n",
                 );
             }
             if has_browser {
@@ -678,8 +680,9 @@ mod tests {
             ..make_ctx()
         };
         let result = section.build(&ctx).unwrap();
-        assert!(result.contains("prefer the **web_search** tool first"));
-        assert!(result.contains("Use **web_fetch** to read content from a specific known URL"));
+        assert!(result.contains("ALWAYS** use **web_search** first"));
+        assert!(result.contains("web_fetch** to read content from a known URL"));
+        assert!(result.contains("JavaScript/rendering error, retry with the **browser**"));
         assert!(result.contains("Do NOT open the browser for routine static research"));
         assert!(result.contains("travel/booking flows"));
     }
