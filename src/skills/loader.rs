@@ -961,9 +961,18 @@ metadata: {"clawdbot":{"emoji":"🎮","requires":{"bins":["gog"]},"install":[{"i
             Some("read_file list_dir Bash(rg:*) Bash(sed:*)")
         );
         let metadata = meta.metadata.expect("metadata should be parsed");
-        assert_eq!(metadata.get("author").and_then(|v| v.as_str()), Some("homun"));
-        assert_eq!(metadata.get("version").and_then(|v| v.as_str()), Some("1.0"));
-        assert_eq!(metadata.get("category").and_then(|v| v.as_str()), Some("design"));
+        assert_eq!(
+            metadata.get("author").and_then(|v| v.as_str()),
+            Some("homun")
+        );
+        assert_eq!(
+            metadata.get("version").and_then(|v| v.as_str()),
+            Some("1.0")
+        );
+        assert_eq!(
+            metadata.get("category").and_then(|v| v.as_str()),
+            Some("design")
+        );
     }
 
     #[tokio::test]

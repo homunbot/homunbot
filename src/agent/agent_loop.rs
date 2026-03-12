@@ -1276,13 +1276,11 @@ impl AgentLoop {
                             .get("action")
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-                        if let Some(reason) =
-                            crate::browser::action_policy::check_browser_policy(
-                                &config.browser.policy,
-                                action,
-                                &tool_call.arguments,
-                            )
-                        {
+                        if let Some(reason) = crate::browser::action_policy::check_browser_policy(
+                            &config.browser.policy,
+                            action,
+                            &tool_call.arguments,
+                        ) {
                             tracing::info!(
                                 tool = %tool_call.name,
                                 %reason,
@@ -1518,7 +1516,9 @@ impl AgentLoop {
                     // after click/navigate/type/snapshot), replace all older snapshots
                     // with a one-line summary to keep the context window lean.
                     if crate::browser::is_browser_tool(&tool_call.name)
-                        && is_browser_snapshot_tool_result(messages.last().unwrap_or(&ChatMessage::user("")))
+                        && is_browser_snapshot_tool_result(
+                            messages.last().unwrap_or(&ChatMessage::user("")),
+                        )
                     {
                         supersede_stale_browser_context(&mut messages);
                     }
@@ -2598,11 +2598,7 @@ fn auto_compact_context(messages: &mut Vec<ChatMessage>) {
             if should_truncate {
                 let content = messages[i].content.as_ref().unwrap();
                 let original_len = content.len();
-                let tool_name = messages[i]
-                    .name
-                    .as_deref()
-                    .unwrap_or("tool")
-                    .to_string();
+                let tool_name = messages[i].name.as_deref().unwrap_or("tool").to_string();
                 let keep_end = content
                     .char_indices()
                     .nth(TRUNCATE_KEEP)
@@ -3452,10 +3448,7 @@ mod tests {
         assert!(tool_content.len() < 1000);
 
         // User and system messages should be untouched
-        assert_eq!(
-            messages[0].content.as_ref().unwrap(),
-            "System prompt"
-        );
+        assert_eq!(messages[0].content.as_ref().unwrap(), "System prompt");
         assert_eq!(messages[1].content.as_ref().unwrap(), "Hello");
     }
 

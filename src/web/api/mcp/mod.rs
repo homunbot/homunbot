@@ -42,10 +42,7 @@ pub(crate) fn routes() -> Router<Arc<AppState>> {
             "/v1/mcp/servers",
             get(crud::list_mcp_servers).post(crud::upsert_mcp_server),
         )
-        .route(
-            "/v1/mcp/setup",
-            axum::routing::post(crud::setup_mcp_server),
-        )
+        .route("/v1/mcp/setup", axum::routing::post(crud::setup_mcp_server))
         .route(
             "/v1/mcp/servers/{name}/toggle",
             axum::routing::post(crud::toggle_mcp_server),
@@ -82,7 +79,7 @@ pub(crate) struct McpCatalogItemView {
     pub command: String,
     pub args: Vec<String>,
     pub transport: Option<String>, // stdio | http
-    pub url: Option<String>,      // set when transport=http
+    pub url: Option<String>,       // set when transport=http
     pub install_supported: bool,
     pub package_name: Option<String>,
     pub downloads_monthly: Option<u64>,

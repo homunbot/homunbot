@@ -218,9 +218,7 @@ impl BrowserTool {
                     "Browser snapshot: sending diff (small change)"
                 );
                 return crate::browser::diff::format_for_context(
-                    &format!(
-                        "{header}({ref_count} interactive elements) Use ref=\"eN\" as shown."
-                    ),
+                    &format!("{header}({ref_count} interactive elements) Use ref=\"eN\" as shown."),
                     &diff,
                 );
             }
@@ -935,9 +933,7 @@ impl BrowserTool {
             .and_then(|v| v.as_i64())
             .ok_or_else(|| anyhow::anyhow!("'y' parameter required for click_coordinates"))?;
 
-        let code = format!(
-            r#"async (page) => {{ await page.mouse.click({x}, {y}); }}"#
-        );
+        let code = format!(r#"async (page) => {{ await page.mouse.click({x}, {y}); }}"#);
 
         match self
             .call_mcp("browser_run_code", json!({"code": code}))
@@ -1797,9 +1793,7 @@ mod tests {
 
     #[test]
     fn test_format_cursor_section() {
-        let lines = vec![
-            "- clickable <div> \"Sign In\" [cursor:pointer]".to_string(),
-        ];
+        let lines = vec!["- clickable <div> \"Sign In\" [cursor:pointer]".to_string()];
         let section = format_cursor_section(&lines);
         assert!(section.contains("# Hidden interactive elements"));
         assert!(section.contains("Sign In"));
@@ -1850,9 +1844,7 @@ mod tests {
         let hint = classify_browser_error("Target closed");
         assert!(hint.contains("session ended"));
 
-        let hint2 = classify_browser_error(
-            "Target page, context or browser has been closed",
-        );
+        let hint2 = classify_browser_error("Target page, context or browser has been closed");
         assert!(hint2.contains("session ended"));
     }
 
@@ -1914,7 +1906,9 @@ mod tests {
         let err = anyhow::anyhow!("bizarre unknown error");
         let result = browser_error_result("Hover", &err);
         // Contains original error but no hint
-        assert!(result.output.contains("Hover failed: bizarre unknown error"));
+        assert!(result
+            .output
+            .contains("Hover failed: bizarre unknown error"));
         assert!(!result.output.contains("Context:"));
     }
 

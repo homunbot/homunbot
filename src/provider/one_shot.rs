@@ -199,9 +199,14 @@ mod tests {
         );
         // When images are present, content is None and content_parts is used
         assert!(msg.content.is_none());
-        let parts = msg.content_parts.as_ref().expect("should have content_parts");
+        let parts = msg
+            .content_parts
+            .as_ref()
+            .expect("should have content_parts");
         assert_eq!(parts.len(), 2); // text + 1 image
         assert!(matches!(&parts[0], ChatContentPart::Text { text } if text == "describe this"));
-        assert!(matches!(&parts[1], ChatContentPart::Image { path, .. } if path == "/tmp/test.png"));
+        assert!(
+            matches!(&parts[1], ChatContentPart::Image { path, .. } if path == "/tmp/test.png")
+        );
     }
 }

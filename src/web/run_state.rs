@@ -151,15 +151,12 @@ impl WebRunStore {
     /// "interrupted".  Prevents orphaned runs when the agent crashes or
     /// the WebSocket disconnects without a clean completion.
     pub fn expire_stale_runs(&self, max_age_secs: u64) {
-        let cutoff =
-            Utc::now() - chrono::Duration::seconds(max_age_secs as i64);
+        let cutoff = Utc::now() - chrono::Duration::seconds(max_age_secs as i64);
         let mut inner = self.inner.lock().expect("web run store lock poisoned");
         let mut expired = Vec::new();
         for run in inner.runs.values_mut() {
             if matches!(run.status.as_str(), "running" | "stopping") {
-                if let Ok(created) =
-                    chrono::DateTime::parse_from_rfc3339(&run.created_at)
-                {
+                if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&run.created_at) {
                     if created < cutoff {
                         run.status = "interrupted".to_string();
                         run.updated_at = Utc::now().to_rfc3339();

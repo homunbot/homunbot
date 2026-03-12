@@ -55,7 +55,10 @@ pub fn check_browser_policy(
             // In deny-default mode, allowed_urls is the whitelist.
             if policy.default == "deny"
                 && !policy.allowed_urls.is_empty()
-                && !policy.allowed_urls.iter().any(|p| url_matches_pattern(url, p))
+                && !policy
+                    .allowed_urls
+                    .iter()
+                    .any(|p| url_matches_pattern(url, p))
             {
                 return Some(format!(
                     "Policy: navigate to \"{url}\" denied — not in allowed_urls"
@@ -129,7 +132,9 @@ mod tests {
     fn disabled_allows_everything() {
         let p = BrowserPolicyConfig::default(); // enabled = false
         assert!(check_browser_policy(&p, "evaluate", &json!({})).is_none());
-        assert!(check_browser_policy(&p, "navigate", &json!({"url": "https://evil.com"})).is_none());
+        assert!(
+            check_browser_policy(&p, "navigate", &json!({"url": "https://evil.com"})).is_none()
+        );
     }
 
     #[test]
@@ -182,21 +187,43 @@ mod tests {
 
     #[test]
     fn url_pattern_matching() {
-        assert!(url_matches_pattern("https://sub.evil.com/page", "*.evil.com"));
+        assert!(url_matches_pattern(
+            "https://sub.evil.com/page",
+            "*.evil.com"
+        ));
         assert!(url_matches_pattern("https://evil.com/page", "*.evil.com"));
         assert!(!url_matches_pattern("https://notevil.com", "*.evil.com"));
-        assert!(url_matches_pattern("https://example.com/search", "example.com"));
+        assert!(url_matches_pattern(
+            "https://example.com/search",
+            "example.com"
+        ));
         assert!(!url_matches_pattern("https://other.com", "example.com"));
     }
 
     #[test]
     fn category_mapping_exhaustive() {
         let all_actions = [
-            "navigate", "click", "click_coordinates", "type", "fill",
-            "select_option", "press_key", "snapshot", "screenshot",
-            "hover", "scroll", "drag", "evaluate", "tab_list",
-            "tab_new", "tab_select", "tab_close", "block_resources",
-            "unblock_resources", "close", "wait",
+            "navigate",
+            "click",
+            "click_coordinates",
+            "type",
+            "fill",
+            "select_option",
+            "press_key",
+            "snapshot",
+            "screenshot",
+            "hover",
+            "scroll",
+            "drag",
+            "evaluate",
+            "tab_list",
+            "tab_new",
+            "tab_select",
+            "tab_close",
+            "block_resources",
+            "unblock_resources",
+            "close",
+            "wait",
         ];
         for action in &all_actions {
             assert_ne!(action_category(action), "unknown", "unmapped: {action}");

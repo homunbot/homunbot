@@ -545,9 +545,9 @@ fn infer_named_sources(text: &str) -> Vec<String> {
 fn extract_brand_pair(lower: &str) -> Vec<String> {
     let connectors = [" o ", " or ", " e ", " and "];
     let filler: &[&str] = &[
-        "di", "da", "le", "il", "la", "lo", "un", "una", "del", "al", "per", "con", "su",
-        "the", "a", "an", "in", "on", "for", "to", "from", "my", "me", "this", "that",
-        "più", "piu", "meno", "anche", "poi", "tipo", "come", "quale",
+        "di", "da", "le", "il", "la", "lo", "un", "una", "del", "al", "per", "con", "su", "the",
+        "a", "an", "in", "on", "for", "to", "from", "my", "me", "this", "that", "più", "piu",
+        "meno", "anche", "poi", "tipo", "come", "quale",
     ];
     let is_brand = |word: &str| -> bool {
         word.len() >= 3
@@ -751,9 +751,8 @@ mod tests {
 
     #[test]
     fn infer_brand_sources_from_prompt() {
-        let state = ExecutionPlanState::new(
-            "mi trovi delle scarpe di pelle marrone di prada o di gucci",
-        );
+        let state =
+            ExecutionPlanState::new("mi trovi delle scarpe di pelle marrone di prada o di gucci");
         let content = state
             .runtime_message()
             .and_then(|msg| msg.content)

@@ -40,10 +40,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             "/v1/business/{id}/transactions",
             get(list_business_transactions_api),
         )
-        .route(
-            "/v1/business/{id}/revenue",
-            get(get_business_revenue_api),
-        )
+        .route("/v1/business/{id}/revenue", get(get_business_revenue_api))
 }
 
 // --- Types ---

@@ -497,7 +497,9 @@ fn build_step_prompt(workflow: &Workflow, step: &WorkflowStep, tool_names: &[Str
                 lines.push("- web_fetch: read content from a specific URL".to_string());
             }
             if has_browser {
-                lines.push("- browser: interact with websites (navigate, click, type, read)".to_string());
+                lines.push(
+                    "- browser: interact with websites (navigate, click, type, read)".to_string(),
+                );
             }
         }
         lines.push(String::new());

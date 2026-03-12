@@ -526,7 +526,11 @@ pub fn derive_flow(row: &crate::storage::AutomationRow) -> FlowGraph {
     let mut edges = Vec::new();
 
     // 1. Trigger node
-    nodes.push(flow_node("trigger", "trigger", schedule_display_label(&row.schedule)));
+    nodes.push(flow_node(
+        "trigger",
+        "trigger",
+        schedule_display_label(&row.schedule),
+    ));
     let mut last_id = "trigger".to_string();
 
     // 2. Condition node (if not "always") — with labeled edges
@@ -615,7 +619,11 @@ pub fn derive_flow(row: &crate::storage::AutomationRow) -> FlowGraph {
     // 4. Deliver node
     if let Some(ref deliver) = row.deliver_to {
         if !deliver.is_empty() {
-            nodes.push(flow_node("deliver", "deliver", deliver_channel_label(deliver)));
+            nodes.push(flow_node(
+                "deliver",
+                "deliver",
+                deliver_channel_label(deliver),
+            ));
             edges.push(edge(&last_id, "deliver"));
         }
     }

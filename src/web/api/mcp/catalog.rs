@@ -5,9 +5,10 @@ use axum::response::Json;
 use serde::Deserialize;
 
 use super::helpers::{
-    annotate_query_items, apply_market_entry, apply_query_recommendation, display_name_from_package,
-    fetch_official_registry_servers, load_mcpmarket_index, looks_like_mcp_server_package,
-    official_registry_entry_to_view, preset_to_view, sort_mcp_catalog, sort_mcp_catalog_for_query,
+    annotate_query_items, apply_market_entry, apply_query_recommendation,
+    display_name_from_package, fetch_official_registry_servers, load_mcpmarket_index,
+    looks_like_mcp_server_package, official_registry_entry_to_view, preset_to_view,
+    sort_mcp_catalog, sort_mcp_catalog_for_query,
 };
 use super::{McpCatalogItemView, NpmSearchResponse};
 

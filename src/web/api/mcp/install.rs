@@ -584,7 +584,8 @@ fn fallback_env_help_for_spec(
             "OAuth client credentials used for Google APIs.".to_string()
         };
         out.where_to_get =
-            "Google Cloud Console -> APIs & Services -> Credentials -> OAuth client ID.".to_string();
+            "Google Cloud Console -> APIs & Services -> Credentials -> OAuth client ID."
+                .to_string();
         out.retrieval_steps = vec![
             if language.is_italian() {
                 "Crea o seleziona un progetto in Google Cloud.".to_string()

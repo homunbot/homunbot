@@ -272,12 +272,7 @@ pub(super) async fn exchange_google_mcp_oauth_code(
         ));
     }
 
-    let message = if body
-        .refresh_token
-        .as_deref()
-        .unwrap_or_default()
-        .is_empty()
-    {
+    let message = if body.refresh_token.as_deref().unwrap_or_default().is_empty() {
         Some(
             "Token exchange succeeded, but Google did not return a refresh token. Retry consent with prompt=consent and offline access."
                 .to_string(),

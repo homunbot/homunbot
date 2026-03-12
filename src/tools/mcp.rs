@@ -173,9 +173,7 @@ impl McpPeer {
                     output.push_str(&text.text);
                 }
                 RawContent::Image(img) => {
-                    if let Ok(bytes) =
-                        base64::engine::general_purpose::STANDARD.decode(&img.data)
-                    {
+                    if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&img.data) {
                         images.push(McpImageData {
                             mime_type: img.mime_type.clone(),
                             data: bytes,

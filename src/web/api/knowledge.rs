@@ -255,9 +255,7 @@ mod inner {
         if !path.is_dir() {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(
-                    serde_json::json!({"error": format!("Not a directory: {}", path.display())}),
-                ),
+                Json(serde_json::json!({"error": format!("Not a directory: {}", path.display())})),
             )
                 .into_response();
         }

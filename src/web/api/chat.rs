@@ -21,8 +21,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/v1/chat/conversations/{conversation_id}",
-            axum::routing::patch(update_chat_conversation)
-                .delete(delete_chat_conversation),
+            axum::routing::patch(update_chat_conversation).delete(delete_chat_conversation),
         )
         .route(
             "/v1/chat/history",

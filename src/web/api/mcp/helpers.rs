@@ -901,11 +901,10 @@ pub(crate) async fn fetch_official_registry_servers(
     search: Option<&str>,
     limit: usize,
 ) -> Vec<OfficialRegistryServerEntry> {
-    let mut url =
-        match reqwest::Url::parse("https://registry.modelcontextprotocol.io/v0/servers") {
-            Ok(u) => u,
-            Err(_) => return Vec::new(),
-        };
+    let mut url = match reqwest::Url::parse("https://registry.modelcontextprotocol.io/v0/servers") {
+        Ok(u) => u,
+        Err(_) => return Vec::new(),
+    };
 
     let safe_limit = limit.clamp(1, 100);
     url.query_pairs_mut()

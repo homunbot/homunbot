@@ -826,15 +826,44 @@ async fn appearance_page(State(state): State<Arc<AppState>>) -> Html<String> {
                 <div id="appearance-toast"></div>
             </div>
         </main>"##,
-        theme_system = if config.ui.theme == "system" { "selected" } else { "" },
-        theme_light = if config.ui.theme == "light" { "selected" } else { "" },
-        theme_dark = if config.ui.theme == "dark" { "selected" } else { "" },
-        language_system = if config.ui.language == "system" { "selected" } else { "" },
-        language_it = if config.ui.language == "it" { "selected" } else { "" },
-        language_en = if config.ui.language == "en" { "selected" } else { "" },
+        theme_system = if config.ui.theme == "system" {
+            "selected"
+        } else {
+            ""
+        },
+        theme_light = if config.ui.theme == "light" {
+            "selected"
+        } else {
+            ""
+        },
+        theme_dark = if config.ui.theme == "dark" {
+            "selected"
+        } else {
+            ""
+        },
+        language_system = if config.ui.language == "system" {
+            "selected"
+        } else {
+            ""
+        },
+        language_it = if config.ui.language == "it" {
+            "selected"
+        } else {
+            ""
+        },
+        language_en = if config.ui.language == "en" {
+            "selected"
+        } else {
+            ""
+        },
     );
 
-    Html(page_html("Appearance", "appearance", &body, &["appearance.js"]))
+    Html(page_html(
+        "Appearance",
+        "appearance",
+        &body,
+        &["appearance.js"],
+    ))
 }
 
 // ─── Channels ──────────────────────────────────────────────────
@@ -1116,8 +1145,16 @@ async fn browser_page(State(state): State<Arc<AppState>>) -> Html<String> {
             ""
         },
         executable_path = config.browser.executable_path,
-        search_brave = if config.tools.web_search.provider == "brave" { "selected" } else { "" },
-        search_tavily = if config.tools.web_search.provider == "tavily" { "selected" } else { "" },
+        search_brave = if config.tools.web_search.provider == "brave" {
+            "selected"
+        } else {
+            ""
+        },
+        search_tavily = if config.tools.web_search.provider == "tavily" {
+            "selected"
+        } else {
+            ""
+        },
         search_api_key = config.tools.web_search.api_key,
         search_max_results = config.tools.web_search.max_results,
         browser_status = {
@@ -2909,12 +2946,7 @@ async fn sandbox_page(State(state): State<Arc<AppState>>) -> Html<String> {
             },
     );
 
-    Html(page_html(
-        "Sandbox",
-        "sandbox",
-        &body,
-        &["sandbox.js"],
-    ))
+    Html(page_html("Sandbox", "sandbox", &body, &["sandbox.js"]))
 }
 
 // ─── Helpers ────────────────────────────────────────────────────

@@ -227,9 +227,7 @@ impl BrowserTaskPlanState {
             ));
         }
         if self.compare_mode {
-            lines.push(
-                "The user expects a comparison across multiple sources.".to_string(),
-            );
+            lines.push("The user expects a comparison across multiple sources.".to_string());
         }
         if let Some(current_source) = &self.current_source {
             lines.push(format!("Currently on: {}", current_source));
@@ -291,10 +289,28 @@ impl BrowserRoutingDecision {
         let shopping_intent = contains_any(
             &lower,
             &[
-                "scarpe", "shoes", "buy ", "compra", "shop", "shopping", "product",
-                "prodott", "price", "prezzo", "taglia", "size", "collezione",
-                "collection", "store", "negozio", "abbigliamento", "clothing",
-                "borsa", "bag", "orologio", "watch",
+                "scarpe",
+                "shoes",
+                "buy ",
+                "compra",
+                "shop",
+                "shopping",
+                "product",
+                "prodott",
+                "price",
+                "prezzo",
+                "taglia",
+                "size",
+                "collezione",
+                "collection",
+                "store",
+                "negozio",
+                "abbigliamento",
+                "clothing",
+                "borsa",
+                "bag",
+                "orologio",
+                "watch",
             ],
         );
         let has_price_constraint = contains_any(
@@ -420,11 +436,9 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
 /// Boundary = start/end of string, or a non-alphanumeric char.
 fn contains_word(text: &str, word: &str) -> bool {
     for (idx, _) in text.match_indices(word) {
-        let before_ok = idx == 0
-            || !text.as_bytes()[idx - 1].is_ascii_alphanumeric();
+        let before_ok = idx == 0 || !text.as_bytes()[idx - 1].is_ascii_alphanumeric();
         let after = idx + word.len();
-        let after_ok = after >= text.len()
-            || !text.as_bytes()[after].is_ascii_alphanumeric();
+        let after_ok = after >= text.len() || !text.as_bytes()[after].is_ascii_alphanumeric();
         if before_ok && after_ok {
             return true;
         }
@@ -469,9 +483,9 @@ fn extract_required_sources(lower_prompt: &str) -> Vec<String> {
 fn extract_brand_sources(lower: &str) -> Vec<String> {
     let connectors = [" o ", " or ", " e ", " and "];
     let filler: &[&str] = &[
-        "di", "da", "le", "il", "la", "lo", "un", "una", "del", "al", "per", "con", "su",
-        "the", "a", "an", "in", "on", "for", "to", "from", "my", "me", "this", "that",
-        "più", "piu", "meno", "anche", "poi", "tipo", "come", "quale",
+        "di", "da", "le", "il", "la", "lo", "un", "una", "del", "al", "per", "con", "su", "the",
+        "a", "an", "in", "on", "for", "to", "from", "my", "me", "this", "that", "più", "piu",
+        "meno", "anche", "poi", "tipo", "come", "quale",
     ];
     let is_brand = |word: &str| -> bool {
         word.len() >= 3
@@ -489,10 +503,7 @@ fn extract_brand_sources(lower: &str) -> Vec<String> {
                 continue;
             }
             // Find nearest brand word BEFORE connector (skip filler like "di")
-            let before = (0..i)
-                .rev()
-                .map(|j| words[j])
-                .find(|word| is_brand(word));
+            let before = (0..i).rev().map(|j| words[j]).find(|word| is_brand(word));
             // Find nearest brand word AFTER connector (skip filler like "di")
             let after = ((i + 1)..words.len())
                 .map(|j| words[j])
@@ -697,7 +708,9 @@ mod tests {
         let plan = BrowserTaskPlanState::new(
             "trovami scarpe classiche marroni taglia 44 che non costano più di 50 euro",
         );
-        let msg = plan.runtime_message(true).expect("expected runtime message");
+        let msg = plan
+            .runtime_message(true)
+            .expect("expected runtime message");
         let rendered = msg.rendered_text().unwrap();
         assert!(rendered.contains("comparison across multiple sources"));
     }
@@ -714,11 +727,12 @@ mod tests {
 
     #[test]
     fn known_sources_still_work() {
-        let decision = BrowserRoutingDecision::from_prompt(
-            "confronta trenitalia e italo per domani",
-        );
+        let decision =
+            BrowserRoutingDecision::from_prompt("confronta trenitalia e italo per domani");
         assert_eq!(decision.task_class(), BrowserTaskClass::MultiSourceCompare);
-        assert!(decision.required_sources().contains(&"trenitalia".to_string()));
+        assert!(decision
+            .required_sources()
+            .contains(&"trenitalia".to_string()));
         assert!(decision.required_sources().contains(&"italo".to_string()));
     }
 }

@@ -12,16 +12,16 @@ mod logs;
 mod mcp;
 mod memory;
 mod permissions;
-mod sandbox;
 mod providers;
+mod sandbox;
 mod skills;
 mod status;
 mod usage;
 mod vault;
 mod workflows;
 
-pub use health::{health, webhook_ingress};
 pub(crate) use chat::{cleanup_chat_upload_dirs, ChatUploadCleanupStats};
+pub use health::{health, webhook_ingress};
 
 use std::sync::Arc;
 
@@ -78,4 +78,3 @@ struct OkResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
 }
-

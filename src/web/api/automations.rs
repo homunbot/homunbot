@@ -12,7 +12,10 @@ use crate::web::server::AppState;
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/v1/automations", get(list_automations).post(create_automation))
+        .route(
+            "/v1/automations",
+            get(list_automations).post(create_automation),
+        )
         .route("/v1/automations/targets", get(list_automation_targets))
         .route(
             "/v1/automations/generate-flow",
@@ -22,10 +25,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             "/v1/automations/{id}",
             axum::routing::patch(patch_automation).delete(delete_automation),
         )
-        .route(
-            "/v1/automations/{id}/history",
-            get(get_automation_history),
-        )
+        .route("/v1/automations/{id}/history", get(get_automation_history))
         .route(
             "/v1/automations/{id}/run",
             axum::routing::post(run_automation_now),
@@ -909,9 +909,7 @@ Example: "check emails every morning and send summary to Telegram"
     .map_err(|e| {
         let status = if e.to_string().contains("timed out") {
             StatusCode::GATEWAY_TIMEOUT
-        } else if e.to_string().contains("No active model")
-            || e.to_string().contains("provider")
-        {
+        } else if e.to_string().contains("No active model") || e.to_string().contains("provider") {
             StatusCode::SERVICE_UNAVAILABLE
         } else {
             StatusCode::INTERNAL_SERVER_ERROR

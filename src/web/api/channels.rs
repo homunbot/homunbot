@@ -841,9 +841,7 @@ async fn handle_whatsapp_pairing(socket: WebSocket, state: Arc<AppState>) {
                 }
                 let err =
                     serde_json::json!({"type": "error", "message": "Send {\"phone\": \"number\"}"});
-                let _ = ws_sender
-                    .send(Message::Text(err.to_string().into()))
-                    .await;
+                let _ = ws_sender.send(Message::Text(err.to_string().into())).await;
             }
             Some(Ok(Message::Close(_))) | None => return,
             _ => continue,
@@ -862,9 +860,7 @@ async fn handle_whatsapp_pairing(socket: WebSocket, state: Arc<AppState>) {
     if let Some(parent) = db_path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
             let msg = serde_json::json!({"type": "error", "message": format!("Cannot create directory: {e}")});
-            let _ = ws_sender
-                .send(Message::Text(msg.to_string().into()))
-                .await;
+            let _ = ws_sender.send(Message::Text(msg.to_string().into())).await;
             return;
         }
     }
