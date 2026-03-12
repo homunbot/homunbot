@@ -146,6 +146,35 @@ impl WebRunStore {
         }
         inner.runs.retain(|_, run| run.session_key != session_key);
     }
+
+    /// Mark runs that have been "running" or "stopping" for too long as
+    /// "interrupted".  Prevents orphaned runs when the agent crashes or
+    /// the WebSocket disconnects without a clean completion.
+    pub fn expire_stale_runs(&self, max_age_secs: u64) {
+        let cutoff =
+            Utc::now() - chrono::Duration::seconds(max_age_secs as i64);
+        let mut inner = self.inner.lock().expect("web run store lock poisoned");
+        let mut expired = Vec::new();
+        for run in inner.runs.values_mut() {
+            if matches!(run.status.as_str(), "running" | "stopping") {
+                if let Ok(created) =
+                    chrono::DateTime::parse_from_rfc3339(&run.created_at)
+                {
+                    if created < cutoff {
+                        run.status = "interrupted".to_string();
+                        run.updated_at = Utc::now().to_rfc3339();
+                        expired.push(run.session_key.clone());
+                    }
+                }
+            }
+        }
+        for key in &expired {
+            inner.active_by_session.remove(key);
+        }
+        if !expired.is_empty() {
+            tracing::info!(count = expired.len(), "Expired stale web chat runs");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -177,5 +206,21 @@ mod tests {
         let done = store.complete_run("web:default", "hello world").unwrap();
         assert_eq!(done.status, "completed");
         assert!(store.active_snapshot("web:default").is_none());
+    }
+
+    #[test]
+    fn expire_stale_runs_marks_old_as_interrupted() {
+        let store = WebRunStore::default();
+        let run = store.start_run("web:stale", "old message").unwrap();
+        assert_eq!(run.status, "running");
+
+        // With max_age=0 every running run is considered stale
+        store.expire_stale_runs(0);
+
+        // Run should be interrupted and no longer active
+        assert!(store.active_snapshot("web:stale").is_none());
+        let inner = store.inner.lock().unwrap();
+        let expired = inner.runs.values().next().unwrap();
+        assert_eq!(expired.status, "interrupted");
     }
 }

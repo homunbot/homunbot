@@ -163,6 +163,9 @@ pub struct BrowserTool {
     session: Arc<BrowserSession>,
     /// Last compact snapshot for diffing. Updated after every snapshot.
     last_snapshot: RwLock<Option<String>>,
+    /// Exclusive access guard — only one agent session can use the browser at a time.
+    /// Prevents race conditions when multiple channels call execute() concurrently.
+    browser_lock: Arc<tokio::sync::Semaphore>,
 }
 
 impl BrowserTool {
@@ -174,6 +177,7 @@ impl BrowserTool {
             stealth_injected: AtomicBool::new(false),
             session,
             last_snapshot: RwLock::new(None),
+            browser_lock: Arc::new(tokio::sync::Semaphore::new(1)),
         }
     }
 
@@ -1105,6 +1109,28 @@ impl Tool for BrowserTool {
     }
 
     async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolResult> {
+        // Exclusive browser access — only one agent session at a time.
+        let _permit = match tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            self.browser_lock.acquire(),
+        )
+        .await
+        {
+            Ok(Ok(permit)) => permit,
+            Ok(Err(_)) => {
+                return Ok(ToolResult::error(
+                    "Browser semaphore closed unexpectedly.".to_string(),
+                ))
+            }
+            Err(_) => {
+                return Ok(ToolResult::error(
+                    "Browser is currently in use by another session. \
+                     Wait a moment and try again."
+                        .to_string(),
+                ))
+            }
+        };
+
         let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
 
         // Reset consecutive snapshot flag for non-snapshot actions

@@ -323,11 +323,12 @@ impl WebServer {
             });
         }
 
-        // Spawn session + rate limiter cleanup task (every 5 minutes)
+        // Spawn session + rate limiter + stale run cleanup task (every 5 minutes)
         {
             let session_store_clone = session_store.clone();
             let auth_rl = auth_rate_limiter.clone();
             let api_rl = api_rate_limiter.clone();
+            let state_for_cleanup = state.clone();
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(300));
                 loop {
@@ -337,6 +338,8 @@ impl WebServer {
                     }
                     auth_rl.cleanup().await;
                     api_rl.cleanup().await;
+                    // Expire web chat runs stuck in "running" for >10 min (orphaned).
+                    state_for_cleanup.web_runs.expire_stale_runs(600);
                 }
             });
         }

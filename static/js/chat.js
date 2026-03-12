@@ -58,6 +58,7 @@ let conversationSearch = '';
 let showArchived = false;
 let sidebarCollapsed = false;
 let openConversationMenuId = null;
+let conversationPollTimer = null;
 let renamingConversationId = null;
 let renameDraft = '';
 let multiSelectMode = false;
@@ -2895,6 +2896,20 @@ function handleWorkflowProgress(progress) {
     scrollThreadToBottom();
 }
 
+// ─── Conversation list polling ──────────────────────────────
+// Periodically refresh the sidebar so "is-running" indicators update
+// even when the user is viewing a different conversation (INFRA-2).
+function startConversationPolling() {
+    if (conversationPollTimer) return;
+    conversationPollTimer = setInterval(refreshConversationList, 5000);
+}
+function stopConversationPolling() {
+    if (conversationPollTimer) {
+        clearInterval(conversationPollTimer);
+        conversationPollTimer = null;
+    }
+}
+
 async function bootstrapChat() {
     try {
         showArchived = window.localStorage.getItem('homun.chat.showArchived') === '1';
@@ -2902,6 +2917,7 @@ async function bootstrapChat() {
         applySidebarState();
         await ensureConversationSelected();
         connect();
+        startConversationPolling();
     } catch (e) {
         console.error('Failed to bootstrap chat:', e);
         showToast('Failed to load conversations', 'error');
