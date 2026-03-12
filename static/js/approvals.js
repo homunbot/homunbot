@@ -2,11 +2,6 @@
  * Approvals page - Command approval workflow (P0-4)
  */
 
-// ─── State ─────────────────────────────────────────────────────────────
-
-let pendingApprovals = [];
-let auditLog = [];
-
 // ─── API Helpers ─────────────────────────────────────────────────────────
 
 async function apiGet(endpoint) {
@@ -43,8 +38,12 @@ async function loadApprovals() {
         const pendingData = await apiGet(`/v1/approvals?page=${currentPage}&limit=${itemsPerPage}`);
         pendingApprovals = pendingData.pending || [];
         
-        // Update pending count badge
-        document.getElementById('pending-count').textContent = pendingApprovals.length;
+        // Update pending count badge in page header
+        var countEl = document.getElementById('pending-count');
+        if (countEl) {
+            countEl.textContent = pendingApprovals.length + ' pending';
+            countEl.style.display = pendingApprovals.length > 0 ? '' : 'none';
+        }
         
         // Render pending approvals
         renderPendingApprovals();

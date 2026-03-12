@@ -28,6 +28,18 @@ pub fn docker_backend_available() -> bool {
     docker_available()
 }
 
+/// Live check — no cache. Use for API status endpoints where the user may
+/// start Docker Desktop after the gateway is already running.
+pub fn docker_available_live() -> bool {
+    std::process::Command::new("docker")
+        .arg("info")
+        .arg("--format")
+        .arg("{{.ServerVersion}}")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 fn linux_native_backend_available() -> bool {
     linux_native_runtime_support().bubblewrap.available
 }

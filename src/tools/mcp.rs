@@ -437,6 +437,20 @@ async fn connect_stdio(
     let env_map: HashMap<String, String> = env_vars.into_iter().collect();
     let workspace_dir = crate::config::Config::workspace_dir();
     let _ = std::fs::create_dir_all(&workspace_dir);
+
+    // Browser MCP (Playwright) must bypass the sandbox: it needs native access
+    // to launch browser processes, display libs, and user data dirs.
+    // Docker/bubblewrap containers lack these — Playwright would fail to start.
+    let effective_sandbox = if name == crate::browser::BROWSER_MCP_SERVER_NAME {
+        tracing::debug!(
+            server = %name,
+            "Browser MCP server bypasses execution sandbox (needs native browser access)"
+        );
+        ExecutionSandboxConfig::disabled()
+    } else {
+        sandbox_config.clone()
+    };
+
     let process_cmd = build_process_command(
         "mcp",
         cmd,
@@ -444,7 +458,7 @@ async fn connect_stdio(
         &workspace_dir,
         &env_map,
         true,
-        sandbox_config,
+        &effective_sandbox,
     )
     .with_context(|| format!("Failed to prepare MCP command for server '{name}'"))?;
 

@@ -252,11 +252,21 @@ impl AgentLoop {
     pub async fn register_deferred_tools(&self, tools: Vec<Box<dyn crate::tools::Tool>>) {
         let mut registry = self.tool_registry.write().await;
         let count = tools.len();
+        let mut new_names = Vec::new();
         for tool in tools {
+            new_names.push(tool.name().to_string());
             registry.register(tool);
         }
+        drop(registry); // release lock before acquiring context lock
         if count > 0 {
-            tracing::info!(tools = count, "Deferred tools registered into agent");
+            // Sync the registered_tool_names in context so the system prompt
+            // includes routing rules for deferred tools (e.g. browser via MCP).
+            self.context.append_registered_tool_names(&new_names).await;
+            tracing::info!(
+                tools = count,
+                names = ?new_names,
+                "Deferred tools registered into agent"
+            );
         }
     }
 
@@ -330,8 +340,26 @@ impl AgentLoop {
 
     /// Set registered tool names so the system prompt can include routing rules
     /// even in native function calling mode (where ctx.tools is empty).
-    pub fn set_registered_tool_names(&mut self, names: Vec<String>) {
-        self.context.set_registered_tool_names(names);
+    pub async fn set_registered_tool_names(&self, names: Vec<String>) {
+        self.context.set_registered_tool_names(names).await;
+    }
+
+    /// Get the names of all registered tools (for workflow step prompts).
+    pub async fn registered_tool_names(&self) -> Vec<String> {
+        // Also include dynamically registered tool names from registry
+        let registry_names: Vec<String> = self
+            .tool_registry
+            .read()
+            .await
+            .names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        if registry_names.is_empty() {
+            self.context.registered_tool_names_snapshot().await
+        } else {
+            registry_names
+        }
     }
 
     /// Inject available channels info for cross-channel messaging.

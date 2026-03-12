@@ -13,6 +13,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/", get(chat_page))
         .route("/dashboard", get(dashboard))
         .route("/setup", get(setup_page))
+        .route("/appearance", get(appearance_page))
         .route("/channels", get(channels_page))
         .route("/browser", get(browser_page))
         .route("/chat", get(chat_page))
@@ -32,7 +33,13 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/memory", get(memory_page))
         .route("/knowledge", get(knowledge_page))
         .route("/vault", get(vault_page))
-        .route("/permissions", get(permissions_page))
+        .route("/file-access", get(file_access_page))
+        .route("/shell", get(shell_page))
+        .route("/sandbox", get(sandbox_page))
+        .route(
+            "/permissions",
+            get(|| async { axum::response::Redirect::permanent("/file-access") }),
+        )
         .route("/approvals", get(approvals_page))
         .route("/account", get(account_page))
         .route("/logs", get(logs_page))
@@ -41,38 +48,38 @@ pub fn router() -> Router<Arc<AppState>> {
 // ─── Shared layout pieces ───────────────────────────────────────
 
 /// SVG icons used in the sidebar nav
-const ICON_DASHBOARD: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="1" width="7" height="7" rx="1.5"/><rect x="10" y="1" width="7" height="4" rx="1.5"/><rect x="1" y="10" width="7" height="4" rx="1.5" transform="translate(0,3)"/><rect x="10" y="7" width="7" height="7" rx="1.5" transform="translate(0,3)"/></svg>"#;
-const ICON_CHAT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12.5V3.5A1.5 1.5 0 0 1 3.5 2h11A1.5 1.5 0 0 1 16 3.5v7a1.5 1.5 0 0 1-1.5 1.5H6L2 16V12.5z"/><line x1="6" y1="6" x2="12" y2="6"/><line x1="6" y1="9" x2="10" y2="9"/></svg>"#;
-const ICON_AUTOMATIONS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="6.5"/><path d="M9 5.5v4l2.8 1.8"/><path d="M9 1v1.5M9 15.5V17M1 9h1.5M15.5 9H17"/></svg>"#;
-const ICON_SKILLS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1L11.5 6.5 17 7.5 13 11.5 14 17 9 14.5 4 17 5 11.5 1 7.5 6.5 6.5z"/></svg>"#;
-const ICON_MCP: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h4"/><path d="M11 9h4"/><circle cx="9" cy="9" r="2.5"/><path d="M7.2 7.2l-2-2M10.8 10.8l2 2M10.8 7.2l2-2M7.2 10.8l-2 2"/></svg>"#;
-const ICON_SETTINGS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="2.5"/><path d="M14.7 11.1a1.2 1.2 0 0 0 .24 1.32l.04.04a1.44 1.44 0 1 1-2.04 2.04l-.04-.04a1.2 1.2 0 0 0-1.32-.24 1.2 1.2 0 0 0-.72 1.08v.12a1.44 1.44 0 0 1-2.88 0v-.06a1.2 1.2 0 0 0-.78-1.08 1.2 1.2 0 0 0-1.32.24l-.04.04a1.44 1.44 0 1 1-2.04-2.04l.04-.04a1.2 1.2 0 0 0 .24-1.32 1.2 1.2 0 0 0-1.08-.72h-.12a1.44 1.44 0 0 1 0-2.88h.06a1.2 1.2 0 0 0 1.08-.78 1.2 1.2 0 0 0-.24-1.32l-.04-.04a1.44 1.44 0 1 1 2.04-2.04l.04.04a1.2 1.2 0 0 0 1.32.24h.06a1.2 1.2 0 0 0 .72-1.08V2.88a1.44 1.44 0 0 1 2.88 0v.06a1.2 1.2 0 0 0 .72 1.08 1.2 1.2 0 0 0 1.32-.24l.04-.04a1.44 1.44 0 1 1 2.04 2.04l-.04.04a1.2 1.2 0 0 0-.24 1.32v.06a1.2 1.2 0 0 0 1.08.72h.12a1.44 1.44 0 0 1 0 2.88h-.06a1.2 1.2 0 0 0-1.08.72z"/></svg>"#;
-const ICON_LOGS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v12"/><line x1="6" y1="6" x2="12" y2="6"/><line x1="6" y1="9" x2="12" y2="9"/><line x1="6" y1="12" x2="9" y2="12"/></svg>"#;
-const ICON_MEMORY: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v14"/><path d="M3 9h12"/><circle cx="9" cy="9" r="3"/><circle cx="9" cy="9" r="7"/></svg>"#;
-const ICON_VAULT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="14" height="11" rx="1.5"/><path d="M5 5V4a4 4 0 0 1 8 0v1"/><circle cx="9" cy="11" r="1.5"/><path d="M9 12.5V14"/></svg>"#;
-const ICON_PERMISSIONS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="16" height="12" rx="1.5"/><circle cx="9" cy="10" r="2"/><path d="M5 4V3a4 4 0 0 1 8 0v1"/></svg>"#;
-const ICON_APPROVALS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1v4M9 13v4M1 9h4M13 9h4"/><circle cx="9" cy="9" r="3"/><path d="M6 9l2 2 4-4"/></svg>"#;
-const ICON_ACCOUNT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="6" r="3.5"/><path d="M3 17c0-3.5 2.5-6 6-6s6 2.5 6 6"/></svg>"#;
-const ICON_LOGOUT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15H3.5A1.5 1.5 0 0 1 2 13.5v-9A1.5 1.5 0 0 1 3.5 3H6"/><path d="M12 12l4-3-4-3"/><path d="M16 9H7"/></svg>"#;
-const ICON_KNOWLEDGE: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h5l2 2h7v10H2z"/><path d="M6 9h6"/><path d="M6 12h4"/></svg>"#;
-const ICON_WORKFLOWS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="4" r="2"/><circle cx="13" cy="4" r="2"/><circle cx="9" cy="14" r="2"/><path d="M5 6v2a3 3 0 0 0 3 3h1"/><path d="M13 6v2a3 3 0 0 1-3 3h-1"/></svg>"#;
+const ICON_DASHBOARD: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="1" width="7" height="7" rx="1.5"/><rect x="10" y="1" width="7" height="4" rx="1.5"/><rect x="1" y="10" width="7" height="4" rx="1.5" transform="translate(0,3)"/><rect x="10" y="7" width="7" height="7" rx="1.5" transform="translate(0,3)"/></svg>"#;
+const ICON_CHAT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12.5V3.5A1.5 1.5 0 0 1 3.5 2h11A1.5 1.5 0 0 1 16 3.5v7a1.5 1.5 0 0 1-1.5 1.5H6L2 16V12.5z"/><line x1="6" y1="6" x2="12" y2="6"/><line x1="6" y1="9" x2="10" y2="9"/></svg>"#;
+const ICON_AUTOMATIONS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="6.5"/><path d="M9 5.5v4l2.8 1.8"/><path d="M9 1v1.5M9 15.5V17M1 9h1.5M15.5 9H17"/></svg>"#;
+const ICON_SKILLS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1L11.5 6.5 17 7.5 13 11.5 14 17 9 14.5 4 17 5 11.5 1 7.5 6.5 6.5z"/></svg>"#;
+const ICON_MCP: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h4"/><path d="M11 9h4"/><circle cx="9" cy="9" r="2.5"/><path d="M7.2 7.2l-2-2M10.8 10.8l2 2M10.8 7.2l2-2M7.2 10.8l-2 2"/></svg>"#;
+const ICON_SETTINGS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="2.5"/><path d="M14.7 11.1a1.2 1.2 0 0 0 .24 1.32l.04.04a1.44 1.44 0 1 1-2.04 2.04l-.04-.04a1.2 1.2 0 0 0-1.32-.24 1.2 1.2 0 0 0-.72 1.08v.12a1.44 1.44 0 0 1-2.88 0v-.06a1.2 1.2 0 0 0-.78-1.08 1.2 1.2 0 0 0-1.32.24l-.04.04a1.44 1.44 0 1 1-2.04-2.04l.04-.04a1.2 1.2 0 0 0 .24-1.32 1.2 1.2 0 0 0-1.08-.72h-.12a1.44 1.44 0 0 1 0-2.88h.06a1.2 1.2 0 0 0 1.08-.78 1.2 1.2 0 0 0-.24-1.32l-.04-.04a1.44 1.44 0 1 1 2.04-2.04l.04.04a1.2 1.2 0 0 0 1.32.24h.06a1.2 1.2 0 0 0 .72-1.08V2.88a1.44 1.44 0 0 1 2.88 0v.06a1.2 1.2 0 0 0 .72 1.08 1.2 1.2 0 0 0 1.32-.24l.04-.04a1.44 1.44 0 1 1 2.04 2.04l-.04.04a1.2 1.2 0 0 0-.24 1.32v.06a1.2 1.2 0 0 0 1.08.72h.12a1.44 1.44 0 0 1 0 2.88h-.06a1.2 1.2 0 0 0-1.08.72z"/></svg>"#;
+const ICON_LOGS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v12"/><line x1="6" y1="6" x2="12" y2="6"/><line x1="6" y1="9" x2="12" y2="9"/><line x1="6" y1="12" x2="9" y2="12"/></svg>"#;
+const ICON_MEMORY: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v14"/><path d="M3 9h12"/><circle cx="9" cy="9" r="3"/><circle cx="9" cy="9" r="7"/></svg>"#;
+const ICON_VAULT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="14" height="11" rx="1.5"/><path d="M5 5V4a4 4 0 0 1 8 0v1"/><circle cx="9" cy="11" r="1.5"/><path d="M9 12.5V14"/></svg>"#;
+const ICON_PERMISSIONS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="16" height="12" rx="1.5"/><circle cx="9" cy="10" r="2"/><path d="M5 4V3a4 4 0 0 1 8 0v1"/></svg>"#;
+const ICON_APPROVALS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1v4M9 13v4M1 9h4M13 9h4"/><circle cx="9" cy="9" r="3"/><path d="M6 9l2 2 4-4"/></svg>"#;
+const ICON_ACCOUNT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="6" r="3.5"/><path d="M3 17c0-3.5 2.5-6 6-6s6 2.5 6 6"/></svg>"#;
+const ICON_LOGOUT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15H3.5A1.5 1.5 0 0 1 2 13.5v-9A1.5 1.5 0 0 1 3.5 3H6"/><path d="M12 12l4-3-4-3"/><path d="M16 9H7"/></svg>"#;
+const ICON_KNOWLEDGE: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h5l2 2h7v10H2z"/><path d="M6 9h6"/><path d="M6 12h4"/></svg>"#;
+const ICON_WORKFLOWS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="4" r="2"/><circle cx="13" cy="4" r="2"/><circle cx="9" cy="14" r="2"/><path d="M5 6v2a3 3 0 0 0 3 3h1"/><path d="M13 6v2a3 3 0 0 1-3 3h-1"/></svg>"#;
 
 /// Channel icons — minimal stroke SVGs for dashboard/settings
-const ICON_WEB: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="7.5"/><path d="M1.5 9h15"/><path d="M9 1.5a11.5 11.5 0 0 1 3 7.5 11.5 11.5 0 0 1-3 7.5"/><path d="M9 1.5a11.5 11.5 0 0 0-3 7.5 11.5 11.5 0 0 0 3 7.5"/></svg>"#;
-const ICON_TELEGRAM: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 2.5L1.5 8l5 2m9-7.5L6.5 10m9-7.5l-3 13-5.5-5.5"/><path d="M6.5 10v4.5l2.5-2.5"/></svg>"#;
-const ICON_DISCORD: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3C5 3 3 3.5 2 5c-1.5 3-.5 7.5 1 9.5.5.5 1.5 1.5 3 1.5s2-1 3-1 1.5 1 3 1 2.5-1 3-1.5c1.5-2 2.5-6.5 1-9.5-1-1.5-3-2-4.5-2"/><circle cx="6.5" cy="10" r="1"/><circle cx="11.5" cy="10" r="1"/></svg>"#;
-const ICON_SLACK: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z"/><path d="M9 6a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/><path d="M15 9a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z"/><path d="M9 15a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/><path d="M6 6v3m0 3v3"/><path d="M12 6v3m0 3v3"/><path d="M6 6h3m3 0h3"/><path d="M6 12h3m3 0h3"/></svg>"#;
-const ICON_PHONE: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="1" width="10" height="16" rx="2"/><line x1="9" y1="14" x2="9" y2="14"/></svg>"#;
-const ICON_EMAIL: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="16" height="12" rx="2"/><path d="M1 5l8 5 8-5"/></svg>"#;
+const ICON_WEB: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="7.5"/><path d="M1.5 9h15"/><path d="M9 1.5a11.5 11.5 0 0 1 3 7.5 11.5 11.5 0 0 1-3 7.5"/><path d="M9 1.5a11.5 11.5 0 0 0-3 7.5 11.5 11.5 0 0 0 3 7.5"/></svg>"#;
+const ICON_TELEGRAM: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 2.5L1.5 8l5 2m9-7.5L6.5 10m9-7.5l-3 13-5.5-5.5"/><path d="M6.5 10v4.5l2.5-2.5"/></svg>"#;
+const ICON_DISCORD: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3C5 3 3 3.5 2 5c-1.5 3-.5 7.5 1 9.5.5.5 1.5 1.5 3 1.5s2-1 3-1 1.5 1 3 1 2.5-1 3-1.5c1.5-2 2.5-6.5 1-9.5-1-1.5-3-2-4.5-2"/><circle cx="6.5" cy="10" r="1"/><circle cx="11.5" cy="10" r="1"/></svg>"#;
+const ICON_SLACK: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z"/><path d="M9 6a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/><path d="M15 9a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z"/><path d="M9 15a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/><path d="M6 6v3m0 3v3"/><path d="M12 6v3m0 3v3"/><path d="M6 6h3m3 0h3"/><path d="M6 12h3m3 0h3"/></svg>"#;
+const ICON_PHONE: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="1" width="10" height="16" rx="2"/><line x1="9" y1="14" x2="9" y2="14"/></svg>"#;
+const ICON_EMAIL: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="16" height="12" rx="2"/><path d="M1 5l8 5 8-5"/></svg>"#;
 
 /// Logo icon — serves the SVG logotype via <img> tag.
 const LOGO_ICON: &str = r#"<div class="logo-icon" title="HOMUN"></div>"#;
 
 /// Tools icon — wrench/gear for the Tools flyout trigger.
-const ICON_TOOLS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 1.5a4.5 4.5 0 0 0-3.6 7.2L2 14.1 3.9 16l5.4-5.4A4.5 4.5 0 1 0 11 1.5z"/></svg>"#;
+const ICON_TOOLS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 1.5a4.5 4.5 0 0 0-3.6 7.2L2 14.1 3.9 16l5.4-5.4A4.5 4.5 0 1 0 11 1.5z"/></svg>"#;
 
 /// Emergency stop icon — octagon with square stop symbol.
-const ICON_ESTOP: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="6,1 12,1 17,6 17,12 12,17 6,17 1,12 1,6"/><rect x="6.5" y="6.5" width="5" height="5" rx="0.8"/></svg>"#;
+const ICON_ESTOP: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6,1 12,1 17,6 17,12 12,17 6,17 1,12 1,6"/><rect x="6.5" y="6.5" width="5" height="5" rx="0.8"/></svg>"#;
 
 /// Pages that belong to the "Tools" sub-navigation group.
 const TOOLS_PAGES: &[&str] = &[
@@ -88,9 +95,12 @@ const TOOLS_PAGES: &[&str] = &[
 /// Pages that belong to the "Settings" sub-navigation group.
 const SETTINGS_PAGES: &[&str] = &[
     "settings",
+    "appearance",
     "channels",
     "browser",
-    "permissions",
+    "file-access",
+    "shell",
+    "sandbox",
     "approvals",
     "logs",
 ];
@@ -162,9 +172,12 @@ fn sidebar(active: &str) -> String {
             <div class="sidebar-subnav{settings_open}" id="settings-subnav">
                 <div class="sidebar-subnav-header">Settings</div>
                 <a href="/setup" class="sidebar-subnav-link{setup_a}">Model &amp; Providers</a>
+                <a href="/appearance" class="sidebar-subnav-link{appearance_a}">Appearance</a>
                 <a href="/channels" class="sidebar-subnav-link{channels_a}">Channels</a>
                 <a href="/browser" class="sidebar-subnav-link{browser_a}">Browser</a>
-                <a href="/permissions" class="sidebar-subnav-link{perms_a}">Permissions</a>
+                <a href="/file-access" class="sidebar-subnav-link{file_access_a}">File Access</a>
+                <a href="/shell" class="sidebar-subnav-link{shell_a}">Shell</a>
+                <a href="/sandbox" class="sidebar-subnav-link{sandbox_a}">Sandbox</a>
                 <a href="/approvals" class="sidebar-subnav-link{approvals_a}">Approvals</a>
                 <a href="/logs" class="sidebar-subnav-link{logs_a}">Logs</a>
             </div>
@@ -196,9 +209,12 @@ fn sidebar(active: &str) -> String {
         // Settings subnav
         settings_open = settings_open,
         setup_a = a("settings"),
+        appearance_a = a("appearance"),
         channels_a = a("channels"),
         browser_a = a("browser"),
-        perms_a = a("permissions"),
+        file_access_a = a("file-access"),
+        shell_a = a("shell"),
+        sandbox_a = a("sandbox"),
         approvals_a = a("approvals"),
         logs_a = a("logs"),
     )
@@ -719,8 +735,59 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     </form>
                 </section>
 
+            </div>
+        </main>
+
+        "##,
+        active_model_display = active_model_display,
+        active_provider_display = active_provider_display,
+        active_banner_hidden = if config.agent.model.is_empty() {
+            "style=\"display:none\""
+        } else {
+            ""
+        },
+        no_model_hidden = if config.agent.model.is_empty() {
+            ""
+        } else {
+            "style=\"display:none\""
+        },
+        vision_model = config.agent.vision_model,
+        max_tokens = config.agent.max_tokens,
+        temperature = config.agent.temperature,
+        max_iterations = config.agent.max_iterations,
+        xml_fallback_delay_ms = config.agent.xml_fallback_delay_ms,
+        fallback_models_json = serde_json::to_string(&config.agent.fallback_models)
+            .unwrap_or_else(|_| "[]".to_string()),
+        conversation_retention_days = config.memory.conversation_retention_days,
+        history_retention_days = config.memory.history_retention_days,
+        daily_archive_months = config.memory.daily_archive_months,
+        auto_cleanup_checked = if config.memory.auto_cleanup {
+            "checked"
+        } else {
+            ""
+        },
+        providers_html = providers_html,
+        catalog_modal_html = catalog_modal_html,
+    );
+
+    Html(page_html("Settings", "settings", &body, &["setup.js"]))
+}
+
+// ─── Appearance ────────────────────────────────────────────────
+
+async fn appearance_page(State(state): State<Arc<AppState>>) -> Html<String> {
+    let config = state.config.read().await;
+
+    let body = format!(
+        r##"<main class="content">
+            <div class="content-inner">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">Appearance</h1>
+                    </div>
+                </div>
+
                 <section class="section" id="section-theme">
-                    <h2>Appearance</h2>
                     <form class="form" id="appearance-form">
                         <div class="form-row--2">
                             <div class="form-group">
@@ -759,72 +826,19 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                         <button type="submit" class="btn btn-primary">Save Appearance</button>
                     </form>
                 </section>
-            </div>
-        </main>
 
-        "##,
-        active_model_display = active_model_display,
-        active_provider_display = active_provider_display,
-        active_banner_hidden = if config.agent.model.is_empty() {
-            "style=\"display:none\""
-        } else {
-            ""
-        },
-        no_model_hidden = if config.agent.model.is_empty() {
-            ""
-        } else {
-            "style=\"display:none\""
-        },
-        vision_model = config.agent.vision_model,
-        max_tokens = config.agent.max_tokens,
-        temperature = config.agent.temperature,
-        max_iterations = config.agent.max_iterations,
-        xml_fallback_delay_ms = config.agent.xml_fallback_delay_ms,
-        fallback_models_json = serde_json::to_string(&config.agent.fallback_models)
-            .unwrap_or_else(|_| "[]".to_string()),
-        conversation_retention_days = config.memory.conversation_retention_days,
-        history_retention_days = config.memory.history_retention_days,
-        daily_archive_months = config.memory.daily_archive_months,
-        auto_cleanup_checked = if config.memory.auto_cleanup {
-            "checked"
-        } else {
-            ""
-        },
-        theme_system = if config.ui.theme == "system" {
-            "selected"
-        } else {
-            ""
-        },
-        theme_light = if config.ui.theme == "light" {
-            "selected"
-        } else {
-            ""
-        },
-        theme_dark = if config.ui.theme == "dark" {
-            "selected"
-        } else {
-            ""
-        },
-        language_system = if config.ui.language == "system" {
-            "selected"
-        } else {
-            ""
-        },
-        language_it = if config.ui.language == "it" {
-            "selected"
-        } else {
-            ""
-        },
-        language_en = if config.ui.language == "en" {
-            "selected"
-        } else {
-            ""
-        },
-        providers_html = providers_html,
-        catalog_modal_html = catalog_modal_html,
+                <div id="appearance-toast"></div>
+            </div>
+        </main>"##,
+        theme_system = if config.ui.theme == "system" { "selected" } else { "" },
+        theme_light = if config.ui.theme == "light" { "selected" } else { "" },
+        theme_dark = if config.ui.theme == "dark" { "selected" } else { "" },
+        language_system = if config.ui.language == "system" { "selected" } else { "" },
+        language_it = if config.ui.language == "it" { "selected" } else { "" },
+        language_en = if config.ui.language == "en" { "selected" } else { "" },
     );
 
-    Html(page_html("Settings", "settings", &body, &["setup.js"]))
+    Html(page_html("Appearance", "appearance", &body, &["appearance.js"]))
 }
 
 // ─── Channels ──────────────────────────────────────────────────
@@ -1064,6 +1078,35 @@ async fn browser_page(State(state): State<Arc<AppState>>) -> Html<String> {
                         <div id="browser-result" class="form-hint" style="margin-top:10px;"></div>
                     </form>
                 </section>
+
+                <section class="section" id="section-web-search">
+                    <h2>Web Search</h2>
+                    <form class="form" id="web-search-form">
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label>Search Provider</label>
+                                <select id="search-provider" name="provider" class="input">
+                                    <option value="brave" {search_brave}>Brave Search</option>
+                                    <option value="tavily" {search_tavily}>Tavily</option>
+                                </select>
+                                <div class="form-hint">Search engine used by the web_search tool.</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Max Results</label>
+                                <input type="number" id="search-max-results" name="max_results" value="{search_max_results}" min="1" max="20" class="input">
+                                <div class="form-hint">Number of search results returned per query.</div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>API Key</label>
+                            <input type="password" id="search-api-key" name="api_key" value="{search_api_key}" class="input" placeholder="Enter your search API key">
+                            <div class="form-hint">Brave: <a href="https://api-dashboard.search.brave.com/app/keys" target="_blank">api-dashboard.search.brave.com</a> · Tavily: <a href="https://tavily.com" target="_blank">tavily.com</a></div>
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-primary">Save Search Config</button>
+                        </div>
+                    </form>
+                </section>
             </div>
         </main>"##,
         browser_enabled_checked = if config.browser.enabled {
@@ -1077,6 +1120,10 @@ async fn browser_page(State(state): State<Arc<AppState>>) -> Html<String> {
             ""
         },
         executable_path = config.browser.executable_path,
+        search_brave = if config.tools.web_search.provider == "brave" { "selected" } else { "" },
+        search_tavily = if config.tools.web_search.provider == "tavily" { "selected" } else { "" },
+        search_api_key = config.tools.web_search.api_key,
+        search_max_results = config.tools.web_search.max_results,
         browser_status = {
             let status = config.browser.runtime_status();
             let enabled = if status.enabled {
@@ -1130,10 +1177,10 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <span class="chat-sidebar-title">Conversations</span>
                             <div class="chat-sidebar-actions">
                                 <button class="btn-icon" id="btn-chat-search" title="Search">
-                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="7.5" r="5.5"/><path d="M12 12l4.5 4.5"/></svg>
+                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="7.5" r="5.5"/><path d="M12 12l4.5 4.5"/></svg>
                                 </button>
                                 <button class="btn-icon" id="btn-new-chat" title="New conversation">
-                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="3" x2="9" y2="15"/><line x1="3" y1="9" x2="15" y2="9"/></svg>
+                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="3" x2="9" y2="15"/><line x1="3" y1="9" x2="15" y2="9"/></svg>
                                 </button>
                             </div>
                         </div>
@@ -1142,13 +1189,13 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <span class="chat-bulk-count" id="chat-bulk-count">0 selected</span>
                             <div class="chat-bulk-buttons">
                                 <button class="btn-icon" id="btn-bulk-archive" title="Archive selected">
-                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="14" height="3" rx="1"/><path d="M3 6v8a1 1 0 001 1h10a1 1 0 001-1V6"/><path d="M7 10h4"/></svg>
+                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="14" height="3" rx="1"/><path d="M3 6v8a1 1 0 001 1h10a1 1 0 001-1V6"/><path d="M7 10h4"/></svg>
                                 </button>
                                 <button class="btn-icon is-danger" id="btn-bulk-delete" title="Delete selected">
-                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h12"/><path d="M7 5V3h4v2"/><path d="M5 5v10a1 1 0 001 1h6a1 1 0 001-1V5"/></svg>
+                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h12"/><path d="M7 5V3h4v2"/><path d="M5 5v10a1 1 0 001 1h6a1 1 0 001-1V5"/></svg>
                                 </button>
                                 <button class="btn-icon" id="btn-bulk-cancel" title="Cancel selection">
-                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="5" x2="13" y2="13"/><line x1="13" y1="5" x2="5" y2="13"/></svg>
+                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="5" x2="13" y2="13"/><line x1="13" y1="5" x2="5" y2="13"/></svg>
                                 </button>
                             </div>
                         </div>
@@ -1167,40 +1214,17 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             </div>
                             <div class="chat-actions">
                                 <button class="btn btn-ghost btn-sm" id="btn-new-chat-topbar" title="New conversation">
-                                <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="3" x2="9" y2="15"/><line x1="3" y1="9" x2="15" y2="9"/></svg>
+                                <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="3" x2="9" y2="15"/><line x1="3" y1="9" x2="15" y2="9"/></svg>
                                 </button>
                                 <button class="btn btn-ghost btn-sm" id="btn-clear-chat" title="Clear screen">
-                                <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 4 9 9 14 4"/><polyline points="4 14 9 9 14 14"/></svg>
+                                <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 4 9 9 14 4"/><polyline points="4 14 9 9 14 14"/></svg>
                                 </button>
                                 <button class="btn btn-ghost btn-sm chat-sidebar-toggle-btn" id="btn-chat-sidebar" title="Toggle sidebar" aria-label="Toggle sidebar">
-                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="14" height="12" rx="1.5"/><line x1="7" y1="3" x2="7" y2="15"/><line x1="10.5" y1="6" x2="13" y2="6"/><line x1="10.5" y1="9" x2="13" y2="9"/><line x1="10.5" y1="12" x2="13" y2="12"/></svg>
+                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="14" height="12" rx="1.5"/><line x1="7" y1="3" x2="7" y2="15"/><line x1="10.5" y1="6" x2="13" y2="6"/><line x1="10.5" y1="9" x2="13" y2="9"/><line x1="10.5" y1="12" x2="13" y2="12"/></svg>
                                 </button>
                             </div>
                         </div>
                         <div class="chat-thread-wrap">
-                            <section class="chat-plan-panel collapsed" id="chat-plan-panel" hidden>
-                                <button type="button" class="chat-plan-header" id="chat-plan-toggle" aria-expanded="false">
-                                    <span class="chat-plan-header-copy">
-                                        <span class="chat-plan-kicker">Task plan</span>
-                                        <span class="chat-plan-objective" id="chat-plan-objective"></span>
-                                    </span>
-                                    <span class="chat-plan-toggle-icon">›</span>
-                                </button>
-                                <div class="chat-plan-grid">
-                                    <div class="chat-plan-column" id="chat-plan-done-wrap" hidden>
-                                        <div class="chat-plan-label">Done</div>
-                                        <ul class="chat-plan-list" id="chat-plan-done"></ul>
-                                    </div>
-                                    <div class="chat-plan-column" id="chat-plan-remaining-wrap" hidden>
-                                        <div class="chat-plan-label">Remaining</div>
-                                        <ul class="chat-plan-list" id="chat-plan-remaining"></ul>
-                                    </div>
-                                </div>
-                                <div class="chat-plan-column chat-plan-constraints" id="chat-plan-constraints-wrap" hidden>
-                                    <div class="chat-plan-label">Constraints</div>
-                                    <ul class="chat-plan-list" id="chat-plan-constraints"></ul>
-                                </div>
-                            </section>
                             <div class="chat-empty-state" id="chat-empty-state">
                                 <div class="chat-empty-kicker">Homun is ready</div>
                                 <h2>Ask, search, inspect tools, or connect services.</h2>
@@ -1209,6 +1233,16 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <div class="chat-messages" id="messages"></div>
                         </div>
                         <div class="chat-composer-dock">
+                            <section class="chat-plan-panel collapsed" id="chat-plan-panel" hidden>
+                                <button type="button" class="chat-plan-header" id="chat-plan-toggle" aria-expanded="false">
+                                    <span class="chat-plan-header-copy">
+                                        <span class="chat-plan-status-icon">&#9776;</span>
+                                        <span class="chat-plan-summary" id="chat-plan-summary"></span>
+                                    </span>
+                                    <span class="chat-plan-toggle-icon">›</span>
+                                </button>
+                                <ol class="chat-plan-tasklist" id="chat-plan-tasklist"></ol>
+                            </section>
                             <div class="chat-composer-shell" id="chat-config" data-model="{current_model}" data-vision-model="{current_vision_model}">
                                 <form class="chat-input" id="chat-form">
                                     <textarea id="chat-text" placeholder="Reply to Homun…" autocomplete="off" class="input chat-textarea" rows="1" autofocus></textarea>
@@ -1216,7 +1250,11 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
                                     <div class="chat-input-bottom">
                                         <div class="chat-composer-footer">
                                             <div class="chat-model-selector">
-                                                <select id="chat-model-select" class="input input-sm" aria-label="Model">
+                                                <div class="chat-model-pill" id="chat-model-pill">
+                                                    <span class="chat-model-pill-name" id="chat-model-pill-name">{current_model}</span>
+                                                    <svg class="chat-model-pill-arrow" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7l4 4 4-4"/></svg>
+                                                </div>
+                                                <select id="chat-model-select" class="chat-model-select-hidden" aria-label="Model">
                                                     <option value="{current_model}">{current_model}</option>
                                                 </select>
                                             </div>
@@ -1271,7 +1309,7 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
             <div class="chat-search-modal-backdrop"></div>
             <div class="chat-search-modal-content">
                 <div class="chat-search-modal-header">
-                    <svg class="chat-search-modal-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="7.5" r="5.5"/><path d="M12 12l4.5 4.5"/></svg>
+                    <svg class="chat-search-modal-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="7.5" r="5.5"/><path d="M12 12l4.5 4.5"/></svg>
                     <input type="text" id="chat-search-input" class="chat-search-modal-input" placeholder="Search conversations…" autocomplete="off">
                     <button class="chat-search-modal-close" id="btn-chat-search-close">&times;</button>
                 </div>
@@ -1296,115 +1334,21 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
 
 async fn automations_page() -> Html<String> {
     let body = r#"<main class="content">
-            <div class="content-inner">
+            <div class="content-inner" id="automations-list-view">
                 <div class="page-header">
                     <div class="page-title-group">
                         <h1 class="page-title">Automations</h1>
                         <span class="badge badge-info" id="automations-count">0</span>
                     </div>
                     <div class="actions">
+                        <button class="btn btn-primary btn-sm" id="btn-create-automation">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"><path d="M8 3v10M3 8h10"/></svg>Create Automation
+                        </button>
                         <button class="btn btn-secondary btn-sm" id="btn-automations-refresh">Refresh</button>
                     </div>
                 </div>
 
                 <section class="section">
-                    <h2>Create Automation</h2>
-                    <form id="automation-create-form" class="form form--full">
-                        <div class="form-row--2">
-                            <div class="form-group">
-                                <label for="automation-name">Name</label>
-                                <input id="automation-name" class="input" type="text" maxlength="120" placeholder="Email digest">
-                                <div class="form-hint">Short label shown in the command center.</div>
-                            </div>
-                            <div class="form-group">
-                                <label for="automation-deliver-to">Deliver To</label>
-                                <select id="automation-deliver-to" class="input"></select>
-                                <div class="form-hint">Choose one of the configured channels.</div>
-                            </div>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="automation-prompt">Prompt</label>
-                            <textarea id="automation-prompt" class="input automation-textarea" rows="4" placeholder="Vai su Gmail, leggi le email non lette e fammi un riassunto."></textarea>
-                            <div class="form-hint">Detailed instructions that the agent executes at run time.</div>
-                        </div>
-
-                        <div class="form-row--2">
-                            <div class="form-group">
-                                <label for="automation-schedule-mode">Schedule Type</label>
-                                <select id="automation-schedule-mode" class="input">
-                                    <option value="daily">Every day</option>
-                                    <option value="weekdays">Weekdays (Mon-Fri)</option>
-                                    <option value="weekly">Every week</option>
-                                    <option value="interval">Every N hours</option>
-                                    <option value="custom">Advanced (cron/every)</option>
-                                </select>
-                            </div>
-                            <div class="form-group" id="automation-time-group">
-                                <label for="automation-time">Time</label>
-                                <input id="automation-time" class="input" type="time" value="09:00">
-                                <div class="form-hint">Local time.</div>
-                            </div>
-                            <div class="form-group" id="automation-weekday-group" style="display:none;">
-                                <label for="automation-weekday">Day of week</label>
-                                <select id="automation-weekday" class="input">
-                                    <option value="1">Monday</option>
-                                    <option value="2">Tuesday</option>
-                                    <option value="3">Wednesday</option>
-                                    <option value="4">Thursday</option>
-                                    <option value="5">Friday</option>
-                                    <option value="6">Saturday</option>
-                                    <option value="7">Sunday</option>
-                                </select>
-                            </div>
-                            <div class="form-group" id="automation-interval-group" style="display:none;">
-                                <label for="automation-interval-hours">Every (hours)</label>
-                                <input id="automation-interval-hours" class="input" type="number" min="1" step="1" value="6">
-                                <div class="form-hint">Example: every 6 hours.</div>
-                            </div>
-                            <div class="form-group" id="automation-custom-group" style="display:none;">
-                                <label for="automation-custom-schedule">Custom schedule</label>
-                                <input id="automation-custom-schedule" class="input" type="text" placeholder="cron:0 9 * * * or every:3600">
-                                <div class="form-hint">Advanced format only.</div>
-                            </div>
-                        </div>
-
-                        <div class="form-row--2">
-                            <div class="form-group">
-                                <label for="automation-trigger">Trigger</label>
-                                <select id="automation-trigger" class="input">
-                                    <option value="always">Always notify</option>
-                                    <option value="on_change">Notify on change</option>
-                                    <option value="contains">Notify when output contains text</option>
-                                </select>
-                            </div>
-                            <div class="form-group" id="automation-trigger-value-group" style="display:none;">
-                                <label for="automation-trigger-value">Trigger Value</label>
-                                <input id="automation-trigger-value" class="input" type="text" placeholder="e.g. prezzo sceso">
-                                <div class="form-hint">Used only with trigger=contains.</div>
-                            </div>
-                        </div>
-
-                        <div class="form-group">
-                            <label class="toggle-label">
-                                <input type="checkbox" id="automation-workflow-toggle">
-                                Execute as multi-step workflow
-                            </label>
-                            <div class="form-hint">When enabled, the automation runs as a workflow with distinct steps instead of a single prompt.</div>
-                        </div>
-                        <div id="automation-workflow-steps" style="display:none;">
-                            <div id="automation-wf-step-list"></div>
-                            <button type="button" class="btn btn-secondary btn-sm" id="automation-add-wf-step">+ Add Step</button>
-                        </div>
-
-                        <div class="actions">
-                            <button class="btn btn-primary" type="submit">Create Automation</button>
-                        </div>
-                    </form>
-                </section>
-
-                <section class="section">
-                    <h2>Automation List</h2>
                     <div id="automations-list" class="item-list">
                         <div class="empty-state">
                             <p>Loading automations...</p>
@@ -1421,13 +1365,83 @@ async fn automations_page() -> Html<String> {
                     </div>
                 </section>
             </div>
+
+            <!-- N8N Style Builder View -->
+            <div id="automations-builder-view" style="display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: var(--surface); z-index: 50; flex-direction: column;">
+                <div class="builder-header" style="height: 60px; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 20px; justify-content: space-between; background: var(--surface);">
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <button class="btn btn-secondary btn-sm" id="btn-builder-back">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"><path d="M10 12L6 8l4-4"/></svg>Back
+                        </button>
+                        <input type="text" id="builder-automation-name" class="input" placeholder="My New Automation" style="width: 300px; border: 1px solid transparent; background: transparent; font-size: 16px; font-weight: 600; padding: 4px 8px;">
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span id="builder-status" style="font-size: 12px; color: var(--t4);"></span>
+                        <button class="btn btn-primary" id="btn-builder-save">Save Automation</button>
+                    </div>
+                </div>
+                
+                <div class="builder-body" style="flex: 1; display: flex; overflow: hidden; position: relative;">
+                    <!-- Node Palette (populated by JS from NODE_KINDS) -->
+                    <div class="builder-palette" style="width: 240px; border-right: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column;">
+                        <div style="padding: 15px; border-bottom: 1px solid var(--border);">
+                            <h3 style="font-size: 11px; text-transform: uppercase; color: var(--t3); letter-spacing: 0.05em; margin: 0;">Add Node</h3>
+                        </div>
+                        <div id="builder-palette-items" style="padding: 10px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 4px;">
+                            <!-- Generated by Builder.buildPalette() -->
+                        </div>
+                    </div>
+
+                    <!-- Canvas + Prompt bar wrapper -->
+                    <div style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+                        <!-- Interactive Canvas -->
+                        <div id="builder-canvas" style="flex: 1; position: relative; overflow: hidden; background-color: var(--bg-subtle); outline: none;" tabindex="0">
+                            <svg width="100%" height="100%" style="position: absolute; top: 0; left: 0; pointer-events: none;">
+                                <defs>
+                                    <pattern id="builder-grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                                        <circle cx="2" cy="2" r="0.8" fill="var(--accent-border)" opacity="0.4" />
+                                    </pattern>
+                                </defs>
+                                <rect width="100%" height="100%" fill="url(#builder-grid)" />
+                                <g id="builder-canvas-edges"></g>
+                            </svg>
+                            <div id="builder-canvas-nodes" style="position: absolute; top: 0; left: 0; width: 0; height: 0; overflow: visible;"></div>
+                        </div>
+
+                        <!-- Prompt bar for natural language automation creation -->
+                        <div class="builder-prompt-bar" id="builder-prompt-bar">
+                            <div class="builder-prompt-inner">
+                                <textarea id="builder-prompt-input" class="input" rows="1" placeholder="Describe your automation in natural language... (e.g. Every morning check Gmail, summarize, send to Telegram)"></textarea>
+                                <button class="btn btn-primary btn-sm" id="btn-builder-generate">
+                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;vertical-align:-2px"><path d="M14 2L2 8.5l4.5 1.8L9 14.5z"/></svg>
+                                    Generate
+                                </button>
+                            </div>
+                            <div id="builder-prompt-status" class="builder-prompt-status"></div>
+                        </div>
+                    </div>
+
+                    <!-- Inspector Panel -->
+                    <div id="builder-inspector" style="width: 320px; border-left: 1px solid var(--border); background: var(--surface); display: none; flex-direction: column; z-index: 10;">
+                        <div style="padding: 15px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+                            <h3 id="inspector-title" style="font-size: 13px; font-weight: 600; color: var(--t1); margin: 0;">Properties</h3>
+                            <button class="btn-icon" id="btn-inspector-close" style="background:none; border:none; color:var(--t4); cursor:pointer;">
+                                <svg viewBox="0 0 16 16" width="14" height="14" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg>
+                            </button>
+                        </div>
+                        <div id="inspector-body" style="padding: 15px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 15px;">
+                            <!-- Dynamically populated -->
+                        </div>
+                    </div>
+                </div>
+            </div>
         </main>"#;
 
     Html(page_html(
         "Automations",
         "automations",
         body,
-        &["automations.js"],
+        &["flow-renderer.js", "automations.js"],
     ))
 }
 
@@ -1442,31 +1456,16 @@ async fn workflows_page() -> Html<String> {
                         <span class="badge badge-info" id="workflows-count">0</span>
                     </div>
                     <div class="actions">
+                        <button class="btn btn-primary btn-sm" id="wf-create-toggle">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"><path d="M8 3v10M3 8h10"/></svg>Create Workflow
+                        </button>
                         <button class="btn btn-secondary btn-sm" id="btn-workflows-refresh">Refresh</button>
                     </div>
                 </div>
 
-                <div class="stats-grid" style="grid-template-columns:repeat(4,1fr)">
-                    <div class="stat-card">
-                        <div class="stat-label">Total</div>
-                        <div class="stat-value" id="stat-total">0</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Running</div>
-                        <div class="stat-value" id="stat-running">0</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Completed</div>
-                        <div class="stat-value" id="stat-completed">0</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Failed</div>
-                        <div class="stat-value" id="stat-failed">0</div>
-                    </div>
-                </div>
-
-                <section class="section">
-                    <h2>Create Workflow</h2>
+                <section class="section wf-creator-panel" id="wf-creator-panel" style="display:none">
+                    <h2>New Workflow</h2>
+                    <p class="form-hint" style="margin-bottom:16px">Define an objective and break it into steps. Each step is executed sequentially by the agent.</p>
                     <form id="workflow-create-form" class="form form--full">
                         <div class="form-row--2">
                             <div class="form-group">
@@ -1492,14 +1491,33 @@ async fn workflows_page() -> Html<String> {
                             <button type="button" class="btn btn-secondary btn-sm" id="wf-add-step" style="margin-top:0.5rem;">+ Add Step</button>
                         </div>
 
-                        <div class="actions">
+                        <div class="form-actions">
                             <button class="btn btn-primary" type="submit">Create Workflow</button>
+                            <button type="button" class="btn btn-secondary" id="wf-create-cancel">Cancel</button>
                         </div>
                     </form>
                 </section>
 
+                <div class="stats-grid" style="grid-template-columns:repeat(4,1fr)">
+                    <div class="stat-card">
+                        <div class="stat-label">Total</div>
+                        <div class="stat-value" id="stat-total">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Running</div>
+                        <div class="stat-value" id="stat-running">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Completed</div>
+                        <div class="stat-value" id="stat-completed">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Failed</div>
+                        <div class="stat-value" id="stat-failed">0</div>
+                    </div>
+                </div>
+
                 <section class="section">
-                    <h2>Workflow List</h2>
                     <div id="workflows-list" class="item-list">
                         <div class="empty-state">
                             <p>Loading workflows...</p>
@@ -1526,7 +1544,7 @@ async fn skills_page() -> Html<String> {
 
     let installed_html: String = if installed.is_empty() {
         r#"<div class="empty-state" id="installed-empty">
-                <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2L15 8.5 22 9.5 17 14.5 18 22 12 19 6 22 7 14.5 2 9.5 9 8.5z"/></svg>
+                <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L15 8.5 22 9.5 17 14.5 18 22 12 19 6 22 7 14.5 2 9.5 9 8.5z"/></svg>
                 <p>No skills installed yet.</p>
                 <p>Search ClawHub or enter <code>owner/repo</code> to install.</p>
             </div>"#
@@ -1622,7 +1640,7 @@ async fn skills_page() -> Html<String> {
                         {source_chips_html}
                     </div>
                     <button type="button" class="btn btn-primary btn-sm" id="create-skill-toggle-btn">
-                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"><path d="M8 3v10M3 8h10"/></svg>Create Skill
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"><path d="M8 3v10M3 8h10"/></svg>Create Skill
                     </button>
                 </div>
 
@@ -1674,7 +1692,7 @@ async fn skills_page() -> Html<String> {
                 </section>
 
                 <div class="skills-search">
-                    <svg class="skills-search-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7.5" cy="7.5" r="5.5"/><path d="M12 12l4.5 4.5"/></svg>
+                    <svg class="skills-search-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7.5" cy="7.5" r="5.5"/><path d="M12 12l4.5 4.5"/></svg>
                     <input type="text" id="skill-search-input" class="input skills-search-input" placeholder="Search ClawHub, GitHub &amp; Open Skills, or enter owner/repo to install..." autocomplete="off">
                     <div class="skills-search-spinner" id="search-spinner" style="display:none"></div>
                 </div>
@@ -1771,7 +1789,7 @@ async fn mcp_page(State(state): State<Arc<AppState>>) -> Html<String> {
 
                 <section class="section">
                     <div class="skills-search mcp-search-shell">
-                        <svg class="skills-search-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7.5" cy="7.5" r="5.5"/><path d="M12 12l4.5 4.5"/></svg>
+                        <svg class="skills-search-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7.5" cy="7.5" r="5.5"/><path d="M12 12l4.5 4.5"/></svg>
                         <input type="text" id="mcp-suggest-input" class="input skills-search-input" placeholder="Search MCP servers or describe what you need..." autocomplete="off">
                         <div class="skills-search-spinner" id="mcp-search-spinner" style="display:none"></div>
                     </div>
@@ -2230,7 +2248,7 @@ async fn vault_page() -> Html<String> {
                 </div>
 
                 <div class="vault-notice">
-                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" style="width:20px;height:20px;flex-shrink:0">
+                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" style="width:20px;height:20px;flex-shrink:0">
                         <rect x="2" y="5" width="14" height="11" rx="1.5"/>
                         <path d="M5 5V4a4 4 0 0 1 8 0v1"/>
                         <circle cx="9" cy="11" r="1.5"/>
@@ -2399,9 +2417,9 @@ async fn vault_page() -> Html<String> {
     Html(page_html("Vault", "vault", body, &["vault.js"]))
 }
 
-// ─── Permissions ─────────────────────────────────────────────────
+// ─── File Access ─────────────────────────────────────────────────
 
-async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
+async fn file_access_page(State(state): State<Arc<AppState>>) -> Html<String> {
     let config = state.config.read().await;
     let mode = match config.permissions.mode {
         crate::config::PermissionMode::Open => "open",
@@ -2415,13 +2433,13 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
             <div class="content-inner">
                 <div class="page-header">
                     <div class="page-title-group">
-                        <h1 class="page-title">Permissions</h1>
+                        <h1 class="page-title">File Access</h1>
                         <span class="badge badge-info">{acl_count} ACL rules</span>
                     </div>
                 </div>
 
                 <div class="permissions-notice">
-                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" style="width:20px;height:20px;flex-shrink:0">
+                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" style="width:20px;height:20px;flex-shrink:0">
                         <rect x="1" y="4" width="16" height="12" rx="1.5"/>
                         <circle cx="9" cy="10" r="2"/>
                         <path d="M5 4V3a4 4 0 0 1 8 0v1"/>
@@ -2484,219 +2502,13 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
                 <section class="section">
                     <h2>ACL Rules</h2>
                     <p class="form-hint">Rules are evaluated in order. First match wins. Built-in rules protect sensitive paths.</p>
-                    
+
                     <div class="acl-actions">
                         <button class="btn btn-primary btn-sm" id="btn-add-acl">Add Rule</button>
                     </div>
 
                     <div class="acl-list" id="acl-list">
                         <div class="acl-loading">Loading ACL rules...</div>
-                    </div>
-                </section>
-
-                <section class="section">
-                    <h2>Shell Permissions</h2>
-                    <p class="form-hint">OS-specific command restrictions for the shell tool.</p>
-                    
-                    <div class="shell-tabs">
-                        <button class="shell-tab active" data-os="macos">macOS</button>
-                        <button class="shell-tab" data-os="linux">Linux</button>
-                        <button class="shell-tab" data-os="windows">Windows</button>
-                    </div>
-
-                    <div class="shell-profile-content" id="shell-profile-content">
-                        <div class="form-group">
-                            <label>Shell</label>
-                            <select id="shell-select" class="input">
-                                <option value="">Default (sh)</option>
-                                <option value="bash">bash</option>
-                                <option value="zsh">zsh</option>
-                                <option value="powershell">PowerShell</option>
-                                <option value="cmd">cmd</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="allow-risky">
-                                <span>Allow Risky Commands</span>
-                            </label>
-                            <div class="form-hint">Package removal, process killing, etc.</div>
-                        </div>
-                        <div class="form-group">
-                            <label>Blocked Commands (one per line)</label>
-                            <textarea id="blocked-commands" class="input" rows="3" placeholder="launchctl load&#10;defaults delete"></textarea>
-                        </div>
-                        <div class="form-group">
-                            <label>Allowed Commands Whitelist (optional, one per line)</label>
-                            <textarea id="allowed-commands" class="input" rows="3" placeholder="git&#10;npm&#10;cargo"></textarea>
-                            <div class="form-hint">If non-empty, only these commands are allowed.</div>
-                        </div>
-                    </div>
-                </section>
-
-                <section class="section">
-                    <h2>Execution Sandbox</h2>
-                    <p class="form-hint">Shared process sandbox for shell, MCP stdio, and skill scripts.</p>
-                    <div class="sandbox-guide-panel">
-                        <div class="sandbox-guide-summary">
-                            <div class="permission-mode-header" style="margin-bottom: 0.8rem;">
-                                <span class="permission-mode-name">Recommended for this machine</span>
-                                <span class="badge badge-info" id="sandbox-guide-recommendation-badge">Loading...</span>
-                            </div>
-                            <div class="sandbox-guide-title" id="sandbox-guide-title">Checking sandbox runtime...</div>
-                            <p class="sandbox-guide-copy" id="sandbox-guide-copy">Inspecting Docker availability and fallback behavior.</p>
-                            <div class="sandbox-guide-facts" id="sandbox-guide-facts">
-                                <span class="sandbox-guide-fact">Loading runtime facts...</span>
-                            </div>
-                            <div class="form-actions">
-                                <button type="button" class="btn btn-primary btn-sm" id="btn-apply-sandbox-recommended">Apply Recommended Preset</button>
-                                <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-sandbox-status">Refresh Runtime Status</button>
-                            </div>
-                        </div>
-                        <div class="sandbox-profile-grid">
-                            <button type="button" class="sandbox-profile-card" data-sandbox-profile="safe">
-                                <div class="sandbox-profile-header">
-                                    <span class="sandbox-profile-title">Safe</span>
-                                    <span class="badge badge-neutral" id="sandbox-profile-safe-badge">Fallback allowed</span>
-                                </div>
-                                <p class="sandbox-profile-desc" id="sandbox-profile-safe-desc">Prefers isolation, but keeps working if Docker is unavailable.</p>
-                            </button>
-                            <button type="button" class="sandbox-profile-card" data-sandbox-profile="strict">
-                                <div class="sandbox-profile-header">
-                                    <span class="sandbox-profile-title">Strict</span>
-                                    <span class="badge badge-warning" id="sandbox-profile-strict-badge">Blocks on failure</span>
-                                </div>
-                                <p class="sandbox-profile-desc" id="sandbox-profile-strict-desc">Best isolation when Docker is installed and expected to be available.</p>
-                            </button>
-                            <button type="button" class="sandbox-profile-card" data-sandbox-profile="disabled">
-                                <div class="sandbox-profile-header">
-                                    <span class="sandbox-profile-title">Disabled</span>
-                                    <span class="badge badge-neutral">Native execution</span>
-                                </div>
-                                <p class="sandbox-profile-desc">No wrapper at all. Useful only for debugging or trusted local-only setups.</p>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="permission-mode-header" style="margin-bottom: 0.8rem;">
-                        <span class="permission-mode-name">Current</span>
-                        <span class="badge {sandbox_badge_class}" id="sandbox-current-badge">{sandbox_badge_text}</span>
-                    </div>
-                    <div class="permission-mode-header" style="margin-bottom: 0.8rem;">
-                        <span class="permission-mode-name">Runtime</span>
-                        <span class="badge badge-neutral" id="sandbox-runtime-backend">checking...</span>
-                    </div>
-                    <p class="form-hint" id="sandbox-runtime-status">Checking sandbox backend availability...</p>
-                    <div class="sandbox-runtime-grid">
-                        <div class="sandbox-runtime-card">
-                            <div class="permission-mode-header" style="margin-bottom: 0.8rem;">
-                                <span class="permission-mode-name">Runtime Image</span>
-                                <span class="badge badge-neutral" id="sandbox-image-status-badge">checking...</span>
-                            </div>
-                            <p class="form-hint" id="sandbox-image-status-text">Inspecting configured Docker image...</p>
-                            <div class="sandbox-guide-facts" id="sandbox-image-status-facts">
-                                <span class="sandbox-guide-fact">Loading runtime image facts...</span>
-                            </div>
-                            <div class="form-actions">
-                                <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-sandbox-image">Refresh Image Status</button>
-                                <button type="button" class="btn btn-secondary btn-sm" id="btn-build-sandbox-image">Build Runtime Baseline</button>
-                                <button type="button" class="btn btn-primary btn-sm" id="btn-pull-sandbox-image">Pull Runtime Image</button>
-                            </div>
-                        </div>
-                        <div class="sandbox-runtime-card">
-                            <div class="permission-mode-header" style="margin-bottom: 0.8rem;">
-                                <span class="permission-mode-name">Recent Sandbox Events</span>
-                                <span class="badge badge-neutral" id="sandbox-events-count-badge">0 events</span>
-                            </div>
-                            <p class="form-hint">Latest wrapper decisions across shell, MCP and skills.</p>
-                            <div class="sandbox-events-list" id="sandbox-events-list">
-                                <div class="sandbox-events-empty">Loading sandbox events...</div>
-                            </div>
-                            <div class="form-actions">
-                                <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-sandbox-events">Refresh Events</button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="shell-profile-content">
-                        <div class="form-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="sandbox-enabled" {sandbox_enabled_checked}>
-                                <span>Enable sandbox wrapper</span>
-                            </label>
-                            <div class="form-hint">When enabled, process execution can be wrapped by selected backend.</div>
-                        </div>
-                        <div class="form-group">
-                            <label>Backend</label>
-                            <select id="sandbox-backend" class="input">
-                                <option value="auto">auto</option>
-                                <option value="docker">docker</option>
-                                <option value="linux_native">linux_native</option>
-                                <option value="windows_native">windows_native</option>
-                                <option value="none">none</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="sandbox-strict" {sandbox_strict_checked}>
-                                <span>Strict mode</span>
-                            </label>
-                            <div class="form-hint">Fail execution if backend is unavailable instead of falling back.</div>
-                        </div>
-                        <div id="sandbox-docker-fields">
-                            <div class="form-group">
-                                <label>Docker image</label>
-                                <input type="text" id="sandbox-docker-image" class="input" value="{sandbox_docker_image}">
-                                <div class="form-hint">Use a digest to pin the runtime. Core repo baseline: <code>homun/runtime-core:2026.03</code>. Versioned tags are reviewable; <code>latest</code> stays floating.</div>
-                            </div>
-                            <div class="form-group">
-                                <label>Runtime image policy</label>
-                                <select id="sandbox-runtime-image-policy" class="input">
-                                    <option value="infer" {sandbox_runtime_policy_infer}>infer</option>
-                                    <option value="pinned" {sandbox_runtime_policy_pinned}>pinned</option>
-                                    <option value="versioned_tag" {sandbox_runtime_policy_versioned_tag}>versioned_tag</option>
-                                    <option value="floating" {sandbox_runtime_policy_floating}>floating</option>
-                                </select>
-                                <div class="form-hint">`infer` follows the image reference. Explicit policies let you require pinned or versioned refs even before pulling.</div>
-                            </div>
-                            <div class="form-group">
-                                <label>Expected runtime version</label>
-                                <input type="text" id="sandbox-runtime-image-expected-version" class="input" value="{sandbox_runtime_image_expected_version}">
-                                <div class="form-hint">Optional override for the expected tag or digest when the policy is explicit.</div>
-                            </div>
-                            <div class="form-group">
-                                <label>Docker network</label>
-                                <select id="sandbox-docker-network" class="input">
-                                    <option value="none">none</option>
-                                    <option value="bridge">bridge</option>
-                                    <option value="host">host</option>
-                                </select>
-                                <div class="form-hint">Recommended: <code>none</code>.</div>
-                            </div>
-                            <div class="form-group">
-                                <label>Memory limit (MB)</label>
-                                <input type="number" min="0" step="64" id="sandbox-docker-memory" class="input" value="{sandbox_docker_memory}">
-                            </div>
-                            <div class="form-group">
-                                <label>CPU limit</label>
-                                <input type="number" min="0" step="0.1" id="sandbox-docker-cpus" class="input" value="{sandbox_docker_cpus}">
-                            </div>
-                            <div class="form-group">
-                                <label class="checkbox-label">
-                                    <input type="checkbox" id="sandbox-docker-readonly" {sandbox_docker_readonly_checked}>
-                                    <span>Read-only root filesystem</span>
-                                </label>
-                            </div>
-                            <div class="form-group">
-                                <label class="checkbox-label">
-                                    <input type="checkbox" id="sandbox-docker-mount-workspace" {sandbox_docker_mount_workspace_checked}>
-                                    <span>Mount Homun workspace to /workspace</span>
-                                </label>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <button class="btn btn-primary btn-sm" id="btn-save-sandbox">Save Sandbox Settings</button>
-                            <button type="button" class="btn btn-secondary btn-sm" id="btn-apply-sandbox-macos">Apply macOS Safe Preset</button>
-                            <button type="button" class="btn btn-secondary btn-sm" id="btn-apply-sandbox-macos-strict">Apply macOS Strict Preset</button>
-                        </div>
                     </div>
                 </section>
 
@@ -2724,7 +2536,7 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     <div id="test-result" class="test-result" style="display:none"></div>
                 </section>
 
-                <div id="permissions-toast" class="skill-toast" style="display:none"></div>
+                <div id="file-access-toast" class="skill-toast" style="display:none"></div>
             </div>
         </main>
 
@@ -2840,6 +2652,230 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
         } else {
             ""
         },
+    );
+
+    Html(page_html(
+        "File Access",
+        "file-access",
+        &body,
+        &["file-access.js"],
+    ))
+}
+
+// ─── Shell ───────────────────────────────────────────────────────
+
+async fn shell_page(State(_state): State<Arc<AppState>>) -> Html<String> {
+    let body = r#"<main class="content">
+            <div class="content-inner">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">Shell</h1>
+                    </div>
+                </div>
+
+                <div class="permissions-notice">
+                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" style="width:20px;height:20px;flex-shrink:0">
+                        <path d="M3 15V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v12"/>
+                        <line x1="6" y1="6" x2="12" y2="6"/>
+                        <line x1="6" y1="9" x2="12" y2="9"/>
+                        <line x1="6" y1="12" x2="9" y2="12"/>
+                    </svg>
+                    <div>
+                        <strong>Shell Permissions</strong><br>
+                        OS-specific command restrictions for the shell tool. Changes take effect immediately.
+                    </div>
+                </div>
+
+                <section class="section">
+                    <div class="shell-tabs">
+                        <button class="shell-tab active" data-os="macos">macOS</button>
+                        <button class="shell-tab" data-os="linux">Linux</button>
+                        <button class="shell-tab" data-os="windows">Windows</button>
+                    </div>
+
+                    <div class="shell-profile-content" id="shell-profile-content">
+                        <div class="form-group">
+                            <label>Shell</label>
+                            <select id="shell-select" class="input">
+                                <option value="">Default (sh)</option>
+                                <option value="bash">bash</option>
+                                <option value="zsh">zsh</option>
+                                <option value="powershell">PowerShell</option>
+                                <option value="cmd">cmd</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="allow-risky">
+                                <span>Allow Risky Commands</span>
+                            </label>
+                            <div class="form-hint">Package removal, process killing, etc.</div>
+                        </div>
+                        <div class="form-group">
+                            <label>Blocked Commands (one per line)</label>
+                            <textarea id="blocked-commands" class="input" rows="3" placeholder="launchctl load&#10;defaults delete"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>Allowed Commands Whitelist (optional, one per line)</label>
+                            <textarea id="allowed-commands" class="input" rows="3" placeholder="git&#10;npm&#10;cargo"></textarea>
+                            <div class="form-hint">If non-empty, only these commands are allowed.</div>
+                        </div>
+                    </div>
+                </section>
+
+                <div id="shell-toast" class="skill-toast" style="display:none"></div>
+            </div>
+        </main>"#;
+
+    Html(page_html("Shell", "shell", body, &["shell.js"]))
+}
+
+// ─── Sandbox ─────────────────────────────────────────────────────
+
+async fn sandbox_page(State(state): State<Arc<AppState>>) -> Html<String> {
+    let config = state.config.read().await;
+
+    let body = format!(
+        r#"<main class="content">
+            <div class="content-inner">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">Execution Sandbox</h1>
+                        <span class="badge {sandbox_badge_class}" id="sandbox-current-badge">{sandbox_badge_text}</span>
+                    </div>
+                </div>
+
+                <section class="section" id="sandbox-docker-status-section">
+                    <h2>Docker Status</h2>
+                    <div class="sandbox-docker-status" id="sandbox-docker-status">
+                        <div class="sandbox-docker-status-icon" id="sandbox-docker-status-icon">⏳</div>
+                        <div class="sandbox-docker-status-info">
+                            <div class="sandbox-docker-status-text" id="sandbox-docker-status-text">Checking Docker availability...</div>
+                            <div class="sandbox-docker-status-detail" id="sandbox-docker-status-detail"></div>
+                        </div>
+                        <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-docker-status">Refresh</button>
+                    </div>
+                </section>
+
+                <section class="section" id="sandbox-recommendation-section" style="display:none">
+                    <div class="sandbox-recommendation" id="sandbox-recommendation">
+                        <div class="sandbox-recommendation-text" id="sandbox-recommendation-text"></div>
+                        <button type="button" class="btn btn-primary btn-sm" id="btn-apply-sandbox-recommended">Apply Recommended</button>
+                    </div>
+                </section>
+
+                <section class="section">
+                    <h2>Profile</h2>
+                    <div class="sandbox-profile-grid">
+                        <button type="button" class="sandbox-profile-card" data-sandbox-profile="safe">
+                            <div class="sandbox-profile-header">
+                                <span class="sandbox-profile-title">Safe</span>
+                                <span class="badge badge-neutral" id="sandbox-profile-safe-badge">Fallback allowed</span>
+                            </div>
+                            <p class="sandbox-profile-desc" id="sandbox-profile-safe-desc">Prefers isolation, but keeps working if Docker is unavailable.</p>
+                        </button>
+                        <button type="button" class="sandbox-profile-card" data-sandbox-profile="strict">
+                            <div class="sandbox-profile-header">
+                                <span class="sandbox-profile-title">Strict</span>
+                                <span class="badge badge-warning" id="sandbox-profile-strict-badge">Blocks on failure</span>
+                            </div>
+                            <p class="sandbox-profile-desc" id="sandbox-profile-strict-desc">Requires Docker. Blocks execution if sandbox backend is unavailable.</p>
+                        </button>
+                        <button type="button" class="sandbox-profile-card" data-sandbox-profile="disabled">
+                            <div class="sandbox-profile-header">
+                                <span class="sandbox-profile-title">Disabled</span>
+                                <span class="badge badge-neutral">Native execution</span>
+                            </div>
+                            <p class="sandbox-profile-desc">No sandbox wrapper. Processes run natively on the host.</p>
+                        </button>
+                    </div>
+                </section>
+
+                <section class="section" id="sandbox-image-section">
+                    <h2>Runtime Image</h2>
+                    <div class="sandbox-image-status" id="sandbox-image-status">
+                        <div class="sandbox-image-info">
+                            <code id="sandbox-image-name">{sandbox_docker_image}</code>
+                            <span class="badge badge-neutral" id="sandbox-image-status-badge">checking...</span>
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-primary btn-sm" id="btn-pull-sandbox-image">Pull Image</button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="section">
+                    <details class="sandbox-advanced" id="sandbox-advanced">
+                        <summary>Advanced Settings</summary>
+                        <div class="shell-profile-content">
+                            <div class="form-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="sandbox-enabled" {sandbox_enabled_checked}>
+                                    <span>Enable sandbox wrapper</span>
+                                </label>
+                                <div class="form-hint">When enabled, process execution is wrapped by the selected backend.</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Backend</label>
+                                <select id="sandbox-backend" class="input">
+                                    <option value="auto">auto</option>
+                                    <option value="docker">docker</option>
+                                    <option value="linux_native">linux_native</option>
+                                    <option value="windows_native">windows_native</option>
+                                    <option value="none">none</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="sandbox-strict" {sandbox_strict_checked}>
+                                    <span>Strict mode</span>
+                                </label>
+                                <div class="form-hint">Fail execution if backend is unavailable instead of falling back.</div>
+                            </div>
+                            <div id="sandbox-docker-fields">
+                                <div class="form-group">
+                                    <label>Docker image</label>
+                                    <input type="text" id="sandbox-docker-image" class="input" value="{sandbox_docker_image}">
+                                </div>
+                                <div class="form-group">
+                                    <label>Docker network</label>
+                                    <select id="sandbox-docker-network" class="input">
+                                        <option value="none">none</option>
+                                        <option value="bridge">bridge</option>
+                                        <option value="host">host</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Memory limit (MB)</label>
+                                    <input type="number" min="0" step="64" id="sandbox-docker-memory" class="input" value="{sandbox_docker_memory}">
+                                </div>
+                                <div class="form-group">
+                                    <label>CPU limit</label>
+                                    <input type="number" min="0" step="0.1" id="sandbox-docker-cpus" class="input" value="{sandbox_docker_cpus}">
+                                </div>
+                                <div class="form-group">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="sandbox-docker-readonly" {sandbox_docker_readonly_checked}>
+                                        <span>Read-only root filesystem</span>
+                                    </label>
+                                </div>
+                                <div class="form-group">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="sandbox-docker-mount-workspace" {sandbox_docker_mount_workspace_checked}>
+                                        <span>Mount workspace to /workspace</span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <button class="btn btn-primary btn-sm" id="btn-save-sandbox">Save Settings</button>
+                            </div>
+                        </div>
+                    </details>
+                </section>
+
+                <div id="sandbox-toast" class="skill-toast" style="display:none"></div>
+            </div>
+        </main>"#,
         sandbox_badge_class = if config.security.execution_sandbox.enabled {
             "badge-success"
         } else {
@@ -2861,34 +2897,6 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
             ""
         },
         sandbox_docker_image = config.security.execution_sandbox.docker_image,
-        sandbox_runtime_policy_infer =
-            if config.security.execution_sandbox.runtime_image_policy == "infer" {
-                "selected"
-            } else {
-                ""
-            },
-        sandbox_runtime_policy_pinned =
-            if config.security.execution_sandbox.runtime_image_policy == "pinned" {
-                "selected"
-            } else {
-                ""
-            },
-        sandbox_runtime_policy_versioned_tag =
-            if config.security.execution_sandbox.runtime_image_policy == "versioned_tag" {
-                "selected"
-            } else {
-                ""
-            },
-        sandbox_runtime_policy_floating =
-            if config.security.execution_sandbox.runtime_image_policy == "floating" {
-                "selected"
-            } else {
-                ""
-            },
-        sandbox_runtime_image_expected_version = config
-            .security
-            .execution_sandbox
-            .runtime_image_expected_version,
         sandbox_docker_memory = config.security.execution_sandbox.docker_memory_mb,
         sandbox_docker_cpus = config.security.execution_sandbox.docker_cpus,
         sandbox_docker_readonly_checked =
@@ -2906,10 +2914,10 @@ async fn permissions_page(State(state): State<Arc<AppState>>) -> Html<String> {
     );
 
     Html(page_html(
-        "Permissions",
-        "permissions",
+        "Sandbox",
+        "sandbox",
         &body,
-        &["permissions.js"],
+        &["sandbox.js"],
     ))
 }
 
@@ -3548,7 +3556,7 @@ async fn account_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     </div>
                     <div class="account-owner-card" id="owner-card">
                         <div class="owner-avatar">
-                            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" style="width:32px;height:32px">
+                            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" style="width:32px;height:32px">
                                 <circle cx="9" cy="6" r="3.5"/>
                                 <path d="M3 17c0-3.5 2.5-6 6-6s6 2.5 6 6"/>
                             </svg>
@@ -3847,7 +3855,6 @@ async fn approvals_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     <section class="card">
                         <div class="card-header">
                             <h2>Pending Approvals</h2>
-                            <span class="badge" id="pending-approvals-count">0</span>
                         </div>
                         <div class="card-body">
                             <div id="pending-approvals-list" class="scrollable-list">
@@ -3920,7 +3927,7 @@ async fn knowledge_page(State(_state): State<Arc<AppState>>) -> Html<String> {
                     <h2>Upload Files</h2>
                     <div class="upload-zone" id="upload-zone">
                         <div class="upload-icon">
-                            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
                                 <polyline points="14 2 14 8 20 8"/>
                                 <line x1="12" y1="18" x2="12" y2="12"/>
@@ -4115,6 +4122,14 @@ fn standalone_page(title: &str, body: &str) -> String {
     <link rel="icon" href="/static/img/favicon/favicon.ico" sizes="any">
     <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/static/css/style.css">
+    <script>
+    (function() {{
+        var theme = localStorage.getItem('homun-theme') || 'system';
+        if (theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {{
+            document.documentElement.classList.add('dark');
+        }}
+    }})();
+    </script>
     <style>
         body {{ display: flex; justify-content: center; align-items: center; min-height: 100vh; background: var(--bg-primary); }}
         .auth-card {{ background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; width: 100%; max-width: 400px; box-shadow: 0 4px 24px rgba(0,0,0,0.2); }}
@@ -4128,7 +4143,10 @@ fn standalone_page(title: &str, body: &str) -> String {
         .auth-card button:disabled {{ opacity: 0.5; cursor: not-allowed; }}
         .auth-error {{ color: var(--danger, #ef4444); font-size: 0.8125rem; text-align: center; min-height: 1.25rem; margin-bottom: 0.5rem; }}
         .auth-logo {{ text-align: center; margin-bottom: 1.5rem; }}
-        .auth-logo svg {{ width: 48px; height: 48px; color: var(--accent); }}
+        .auth-logo img {{ height: 40px; width: auto; }}
+        .auth-logo-dark {{ display: none; }}
+        .dark .auth-logo-light {{ display: none; }}
+        .dark .auth-logo-dark {{ display: inline; }}
     </style>
 </head>
 <body>
@@ -4143,13 +4161,9 @@ pub async fn login_page() -> Html<String> {
     let body = r##"
     <div class="auth-card">
         <div class="auth-logo">
-            <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="24" cy="24" r="20"/>
-                <circle cx="24" cy="18" r="6"/>
-                <path d="M12 40c0-6.627 5.373-12 12-12s12 5.373 12 12"/>
-            </svg>
+            <img src="/static/img/homun.png" alt="Homun" class="auth-logo-light">
+            <img src="/static/img/homun_white.png" alt="Homun" class="auth-logo-dark">
         </div>
-        <h1>Homun</h1>
         <p>Sign in to access your assistant</p>
         <div class="auth-error" id="error-msg"></div>
         <form id="login-form" onsubmit="return handleLogin(event)">
@@ -4199,13 +4213,9 @@ pub async fn setup_wizard_page() -> Html<String> {
     let body = r##"
     <div class="auth-card">
         <div class="auth-logo">
-            <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="24" cy="24" r="20"/>
-                <circle cx="24" cy="18" r="6"/>
-                <path d="M12 40c0-6.627 5.373-12 12-12s12 5.373 12 12"/>
-            </svg>
+            <img src="/static/img/homun.png" alt="Homun" class="auth-logo-light">
+            <img src="/static/img/homun_white.png" alt="Homun" class="auth-logo-dark">
         </div>
-        <h1>Welcome to Homun</h1>
         <p>Create your admin account to get started</p>
         <div class="auth-error" id="error-msg"></div>
         <form id="setup-form" onsubmit="return handleSetup(event)">

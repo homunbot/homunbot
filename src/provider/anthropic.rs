@@ -74,7 +74,8 @@ struct AnthropicRequest {
 struct ThinkingConfig {
     #[serde(rename = "type")]
     config_type: String,
-    budget_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    budget_tokens: Option<u32>,
 }
 
 #[derive(Serialize, Clone)]
@@ -363,9 +364,18 @@ impl Provider for AnthropicProvider {
             (
                 Some(ThinkingConfig {
                     config_type: "enabled".to_string(),
-                    budget_tokens: budget,
+                    budget_tokens: Some(budget),
                 }),
                 None, // temperature must be omitted with thinking
+            )
+        } else if request.think == Some(false) {
+            // Explicitly disable thinking (required for models that default to thinking)
+            (
+                Some(ThinkingConfig {
+                    config_type: "disabled".to_string(),
+                    budget_tokens: None,
+                }),
+                Some(request.temperature),
             )
         } else {
             (None, Some(request.temperature))

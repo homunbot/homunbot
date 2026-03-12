@@ -160,6 +160,22 @@ impl ToolRegistry {
     pub fn names(&self) -> Vec<&str> {
         self.tools.keys().map(|s| s.as_str()).collect()
     }
+
+    /// List all tools as (name, description) pairs
+    pub fn names_with_descriptions(&self) -> Vec<(&str, &str)> {
+        self.tools
+            .values()
+            .map(|t| (t.name(), t.description()))
+            .collect()
+    }
+
+    /// List all tools as (name, description, parameters JSON Schema) tuples
+    pub fn tool_info(&self) -> Vec<(&str, &str, Value)> {
+        self.tools
+            .values()
+            .map(|t| (t.name(), t.description(), t.parameters()))
+            .collect()
+    }
 }
 
 impl Default for ToolRegistry {

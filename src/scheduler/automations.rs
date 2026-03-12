@@ -415,6 +415,270 @@ fn validate_dependencies(
     errors
 }
 
+// ═══════════════════════════════════════════════════════════════
+// VISUAL FLOW GRAPH
+// ═══════════════════════════════════════════════════════════════
+
+/// A node in the visual flow graph.
+///
+/// Supported kinds:
+/// - `trigger` — schedule trigger (cron, interval)
+/// - `tool`, `skill`, `mcp` — external capability
+/// - `llm` — LLM inference step
+/// - `condition` — conditional branch (diamond shape)
+/// - `transform` — data transformation
+/// - `deliver` — output delivery
+/// - `parallel` — fork/join gateway (diamond shape, splits into parallel branches)
+/// - `subprocess` — references another workflow (expandable)
+/// - `loop` — repeating block
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlowNode {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub meta: String,
+    /// For `subprocess` nodes: the workflow ID being referenced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_ref: Option<String>,
+    /// For `loop` nodes: max iterations or condition description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_spec: Option<String>,
+}
+
+/// A directed edge between two flow nodes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlowEdge {
+    pub from: String,
+    pub to: String,
+    /// Optional label for condition branches (e.g. "yes"/"no", "match"/"else").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// Complete visual flow representation for an automation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlowGraph {
+    pub nodes: Vec<FlowNode>,
+    pub edges: Vec<FlowEdge>,
+}
+
+/// Helper: create a simple flow node.
+fn flow_node(id: impl Into<String>, kind: impl Into<String>, label: impl Into<String>) -> FlowNode {
+    FlowNode {
+        id: id.into(),
+        kind: kind.into(),
+        label: label.into(),
+        meta: String::new(),
+        workflow_ref: None,
+        loop_spec: None,
+    }
+}
+
+/// Helper: create a flow node with meta text.
+fn flow_node_meta(
+    id: impl Into<String>,
+    kind: impl Into<String>,
+    label: impl Into<String>,
+    meta: impl Into<String>,
+) -> FlowNode {
+    FlowNode {
+        id: id.into(),
+        kind: kind.into(),
+        label: label.into(),
+        meta: meta.into(),
+        workflow_ref: None,
+        loop_spec: None,
+    }
+}
+
+/// Helper: create a plain edge.
+fn edge(from: impl Into<String>, to: impl Into<String>) -> FlowEdge {
+    FlowEdge {
+        from: from.into(),
+        to: to.into(),
+        label: None,
+    }
+}
+
+/// Helper: create a labeled edge (for condition branches).
+fn edge_labeled(
+    from: impl Into<String>,
+    to: impl Into<String>,
+    label: impl Into<String>,
+) -> FlowEdge {
+    FlowEdge {
+        from: from.into(),
+        to: to.into(),
+        label: Some(label.into()),
+    }
+}
+
+/// Derive a visual flow graph from an AutomationRow's existing fields.
+///
+/// Generates a DAG: trigger → [condition] → [parallel deps | steps | llm] → deliver.
+/// Detects patterns:
+/// - Multiple dependencies → parallel gateway fork/join
+/// - Workflow steps with `approval_required` → condition gate before that step
+/// - Trigger conditions → labeled branch edges (match / else)
+pub fn derive_flow(row: &crate::storage::AutomationRow) -> FlowGraph {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+
+    // 1. Trigger node
+    nodes.push(flow_node("trigger", "trigger", schedule_display_label(&row.schedule)));
+    let mut last_id = "trigger".to_string();
+
+    // 2. Condition node (if not "always") — with labeled edges
+    if row.trigger_kind != "always" {
+        let cond_id = "cond".to_string();
+        nodes.push(flow_node_meta(
+            &cond_id,
+            "condition",
+            condition_label(&row.trigger_kind),
+            row.trigger_value.clone().unwrap_or_default(),
+        ));
+        edges.push(edge(&last_id, &cond_id));
+        last_id = cond_id;
+    }
+
+    // 3. Task nodes — from workflow steps or single LLM task
+    if let Some(ref steps_json) = row.workflow_steps_json {
+        if let Ok(steps) = serde_json::from_str::<Vec<WorkflowStepMini>>(steps_json) {
+            for (i, step) in steps.iter().enumerate() {
+                let step_id = format!("step_{i}");
+
+                // If step requires approval, insert a condition gate before it
+                if step.approval_required {
+                    let gate_id = format!("gate_{i}");
+                    nodes.push(flow_node(&gate_id, "condition", "Approval?"));
+                    edges.push(edge(&last_id, &gate_id));
+                    edges.push(edge_labeled(&gate_id, &step_id, "approved"));
+                    last_id = gate_id.clone();
+                }
+
+                nodes.push(flow_node(&step_id, "llm", truncate_label(&step.name, 28)));
+                edges.push(edge(&last_id, &step_id));
+                last_id = step_id;
+            }
+        }
+    }
+
+    // If no workflow steps were added, handle single-prompt automation
+    let has_step_nodes = nodes.iter().any(|n| n.id.starts_with("step_"));
+    if !has_step_nodes {
+        let deps: Vec<AutomationDependency> =
+            serde_json::from_str(&row.dependencies_json).unwrap_or_default();
+
+        if deps.len() > 1 {
+            // Multiple dependencies → parallel fork/join pattern
+            let fork_id = "fork".to_string();
+            nodes.push(flow_node(&fork_id, "parallel", "Fork"));
+            edges.push(edge(&last_id, &fork_id));
+
+            let join_id = "join".to_string();
+            for (i, dep) in deps.iter().enumerate() {
+                let dep_id = format!("dep_{i}");
+                let kind = match dep.kind.as_str() {
+                    "skill" => "skill",
+                    "mcp" => "mcp",
+                    _ => "tool",
+                };
+                nodes.push(flow_node(&dep_id, kind, &dep.name));
+                edges.push(edge(&fork_id, &dep_id));
+                edges.push(edge(&dep_id, &join_id));
+            }
+
+            nodes.push(flow_node(&join_id, "parallel", "Join"));
+            last_id = join_id;
+        } else {
+            // 0 or 1 dependency → sequential
+            for (i, dep) in deps.iter().enumerate() {
+                let dep_id = format!("dep_{i}");
+                let kind = match dep.kind.as_str() {
+                    "skill" => "skill",
+                    "mcp" => "mcp",
+                    _ => "tool",
+                };
+                nodes.push(flow_node(&dep_id, kind, &dep.name));
+                edges.push(edge(&last_id, &dep_id));
+                last_id = dep_id;
+            }
+        }
+
+        let task_id = "task".to_string();
+        nodes.push(flow_node(&task_id, "llm", truncate_label(&row.prompt, 28)));
+        edges.push(edge(&last_id, &task_id));
+        last_id = task_id;
+    }
+
+    // 4. Deliver node
+    if let Some(ref deliver) = row.deliver_to {
+        if !deliver.is_empty() {
+            nodes.push(flow_node("deliver", "deliver", deliver_channel_label(deliver)));
+            edges.push(edge(&last_id, "deliver"));
+        }
+    }
+
+    FlowGraph { nodes, edges }
+}
+
+/// Minimal step struct just for flow derivation.
+#[derive(Debug, Deserialize)]
+struct WorkflowStepMini {
+    name: String,
+    #[serde(default)]
+    approval_required: bool,
+}
+
+fn schedule_display_label(schedule: &str) -> String {
+    if let Some(expr) = schedule.strip_prefix("cron:") {
+        format!("Cron {}", expr.trim())
+    } else if let Some(secs) = schedule.strip_prefix("every:") {
+        let s: u64 = secs.parse().unwrap_or(0);
+        if s >= 3600 {
+            format!("Every {}h", s / 3600)
+        } else if s >= 60 {
+            format!("Every {}m", s / 60)
+        } else {
+            format!("Every {s}s")
+        }
+    } else {
+        "Schedule".into()
+    }
+}
+
+fn condition_label(trigger_kind: &str) -> String {
+    match trigger_kind {
+        "new_content" => "New Content?".into(),
+        "value_changed" => "Changed?".into(),
+        "threshold" => "Threshold".into(),
+        other => other.to_string(),
+    }
+}
+
+fn deliver_channel_label(channel: &str) -> String {
+    match channel {
+        "telegram" => "Telegram".into(),
+        "discord" => "Discord".into(),
+        "slack" => "Slack".into(),
+        "whatsapp" => "WhatsApp".into(),
+        "web" => "Web UI".into(),
+        ch if ch.starts_with("email:") => "Email".into(),
+        "email" => "Email".into(),
+        other => other.to_string(),
+    }
+}
+
+fn truncate_label(s: &str, max: usize) -> String {
+    let trimmed = s.trim();
+    if trimmed.len() <= max {
+        trimmed.to_string()
+    } else {
+        format!("{}…", &trimmed[..max.saturating_sub(1)])
+    }
+}
+
 fn load_installed_skill_names() -> HashSet<String> {
     let Some(home) = dirs::home_dir() else {
         return HashSet::new();

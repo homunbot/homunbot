@@ -45,6 +45,7 @@ pub fn router() -> Router<Arc<AppState>> {
             "/v1/skills/catalog/refresh",
             axum::routing::post(catalog_refresh),
         )
+        .route("/v1/tools", get(list_tools))
         .route("/v1/providers", get(list_providers))
         .route(
             "/v1/providers/configure",
@@ -175,6 +176,10 @@ pub fn router() -> Router<Arc<AppState>> {
             get(chat_history).delete(clear_chat_history),
         )
         .route(
+            "/v1/chat/truncate",
+            axum::routing::post(truncate_chat_history),
+        )
+        .route(
             "/v1/chat/uploads",
             axum::routing::post(upload_chat_attachment),
         )
@@ -290,6 +295,10 @@ pub fn router() -> Router<Arc<AppState>> {
             get(list_automations).post(create_automation),
         )
         .route("/v1/automations/targets", get(list_automation_targets))
+        .route(
+            "/v1/automations/generate-flow",
+            axum::routing::post(generate_automation_flow),
+        )
         .route(
             "/v1/automations/{id}",
             axum::routing::patch(patch_automation).delete(delete_automation),
@@ -1511,6 +1520,62 @@ async fn resume_handler(State(_state): State<Arc<AppState>>) -> Json<serde_json:
     Json(serde_json::json!({ "status": "resumed", "network": "online" }))
 }
 
+/// List all registered tools and their availability status.
+async fn list_tools(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let mut tools = Vec::new();
+
+    // Built-in tools from registry (include descriptions + param schema for UI)
+    if let Some(ref registry) = state.tool_registry {
+        let guard = registry.read().await;
+        for (name, description, parameters) in guard.tool_info() {
+            tools.push(serde_json::json!({
+                "name": name,
+                "description": description,
+                "parameters": parameters,
+                "source": "builtin",
+                "available": true,
+            }));
+        }
+    }
+
+    // Check what's missing and why
+    let config = state.config.read().await;
+    let mut missing = Vec::new();
+
+    if config.tools.web_search.api_key.is_empty() {
+        missing.push(serde_json::json!({
+            "name": "web_search",
+            "reason": "No Brave Search API key configured. Set [tools.web_search] api_key in config or get a free key at https://brave.com/search/api/",
+        }));
+    }
+    if !config.browser.enabled {
+        missing.push(serde_json::json!({
+            "name": "browser",
+            "reason": "Browser disabled in config. Set [browser] enabled = true",
+        }));
+    } else {
+        // Browser enabled in config but check if it actually registered
+        let has_browser = tools.iter().any(|t| {
+            t.get("name").and_then(|n| n.as_str()) == Some("browser")
+        });
+        if !has_browser {
+            missing.push(serde_json::json!({
+                "name": "browser",
+                "reason": "Browser enabled in config but MCP bridge not connected. \
+                           Check that @playwright/mcp is installed (npx @playwright/mcp --help). \
+                           Browser tools register ~23s after gateway startup.",
+            }));
+        }
+    }
+
+    Json(serde_json::json!({
+        "ok": true,
+        "tools": tools,
+        "missing": missing,
+        "total": tools.len(),
+    }))
+}
+
 async fn list_providers(State(state): State<Arc<AppState>>) -> Json<Vec<ProviderView>> {
     let config = state.config.read().await;
 
@@ -1900,7 +1965,9 @@ async fn test_provider(
         model: model.clone(),
         max_tokens: 12,
         temperature: 0.0,
-        think: None,
+        // Disable thinking for connection test — reasoning models would consume
+        // the entire 12-token budget on thinking blocks, returning no text.
+        think: Some(false),
     };
 
     let result =
@@ -4892,14 +4959,6 @@ async fn try_generate_install_guide_with_llm(
     docs: Option<&McpInstallGuideDocsContext>,
     language: GuideLanguage,
 ) -> anyhow::Result<McpInstallGuideResponse> {
-    let model = config.agent.model.trim().to_string();
-    if model.is_empty() {
-        anyhow::bail!("no active model configured");
-    }
-
-    let (_, provider) = crate::provider::create_single_provider(config, &model)
-        .map_err(|e| anyhow::anyhow!("provider unavailable: {e}"))?;
-
     let req_json = serde_json::to_string_pretty(req)?;
     let docs_block = docs
         .map(|d| {
@@ -4921,27 +4980,20 @@ async fn try_generate_install_guide_with_llm(
         docs_block
     );
 
-    let response = tokio::time::timeout(
-        Duration::from_secs(20),
-        provider.chat(crate::provider::ChatRequest {
-            messages: vec![
-                crate::provider::ChatMessage::system(&system_prompt),
-                crate::provider::ChatMessage::user(&user_prompt),
-            ],
-            tools: vec![],
-            model,
+    let response = crate::provider::llm_one_shot(
+        config,
+        crate::provider::OneShotRequest {
+            system_prompt,
+            user_message: user_prompt,
             max_tokens: 700,
             temperature: 0.2,
-            think: None,
-        }),
+            timeout_secs: 20,
+            ..Default::default()
+        },
     )
-    .await
-    .map_err(|_| anyhow::anyhow!("llm timeout"))??;
+    .await?;
 
-    let content = response
-        .content
-        .ok_or_else(|| anyhow::anyhow!("empty llm response"))?;
-    let json_block = extract_json_object_block(&content)
+    let json_block = extract_json_object_block(&response.content)
         .ok_or_else(|| anyhow::anyhow!("could not extract JSON from llm response"))?;
     let parsed: McpInstallGuideLlmParsed =
         serde_json::from_str(json_block).map_err(|e| anyhow::anyhow!("invalid llm JSON: {e}"))?;
@@ -7793,6 +7845,7 @@ struct ChatHistoryQuery {
 
 #[derive(Serialize)]
 struct ChatHistoryMessage {
+    id: i64,
     role: String,
     content: String,
     tools_used: Vec<String>,
@@ -7801,6 +7854,12 @@ struct ChatHistoryMessage {
     attachments: Vec<super::chat_attachments::ChatAttachment>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     mcp_servers: Vec<super::chat_attachments::ChatMcpServerRef>,
+}
+
+#[derive(Deserialize)]
+struct TruncateChatRequest {
+    conversation_id: String,
+    from_message_id: i64,
 }
 
 #[derive(Serialize)]
@@ -8293,6 +8352,7 @@ async fn chat_history(
             let tools: Vec<String> = serde_json::from_str(&r.tools_used).unwrap_or_default();
             let parsed = super::chat_attachments::parse_message_content(&r.content);
             ChatHistoryMessage {
+                id: r.id,
                 role: r.role,
                 content: parsed.text,
                 tools_used: tools,
@@ -8446,6 +8506,30 @@ async fn clear_chat_history(
     Ok(Json(OkResponse {
         ok: true,
         message: Some("Chat history cleared".to_string()),
+    }))
+}
+
+/// Truncate chat history from a specific message ID (for edit/resend).
+async fn truncate_chat_history(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<TruncateChatRequest>,
+) -> Result<Json<OkResponse>, StatusCode> {
+    let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let conversation_id = if req.conversation_id.trim().is_empty() {
+        "default".to_string()
+    } else {
+        req.conversation_id
+    };
+    let session_key = web_session_key(&conversation_id);
+
+    let deleted = db
+        .delete_messages_from(&session_key, req.from_message_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(OkResponse {
+        ok: true,
+        message: Some(format!("Deleted {deleted} messages")),
     }))
 }
 
@@ -8867,7 +8951,8 @@ async fn get_execution_sandbox_status(
     let availability_summary =
         crate::tools::sandbox::sandbox_backend_availability_summary(&capabilities);
     let configured_backend = sandbox.backend.trim().to_ascii_lowercase();
-    let docker_available = crate::tools::sandbox::docker_backend_available();
+    // Live check — not cached. The user may start Docker Desktop after gateway boot.
+    let docker_available = crate::tools::sandbox::docker_available_live();
     let (resolved_backend, valid, mut message) =
         match crate::tools::sandbox::resolve_sandbox_backend(&sandbox) {
             Ok(resolved) => (resolved.as_str().to_string(), true, String::new()),
@@ -8931,7 +9016,7 @@ async fn get_execution_sandbox_presets() -> Json<Vec<ExecutionSandboxPresetRespo
     let mut strict_cfg = safe_cfg.clone();
     strict_cfg.strict = true;
 
-    let docker_available = crate::tools::sandbox::docker_backend_available();
+    let docker_available = crate::tools::sandbox::docker_available_live();
     let host = host_os_label();
 
     Json(vec![
@@ -10204,6 +10289,7 @@ struct CreateAutomationRequest {
     enabled: Option<bool>,
     deliver_to: Option<String>,
     workflow_steps: Option<Vec<serde_json::Value>>,
+    flow_json: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -10448,14 +10534,21 @@ async fn list_automations(
     let now = chrono::Utc::now();
     let items = rows
         .into_iter()
-        .map(|row| AutomationListItem {
-            next_run: crate::scheduler::AutomationSchedule::next_run_from_stored(
+        .map(|mut row| {
+            let next_run = crate::scheduler::AutomationSchedule::next_run_from_stored(
                 &row.schedule,
                 row.last_run.as_deref(),
                 now,
             )
-            .map(|dt| dt.to_rfc3339()),
-            row,
+            .map(|dt| dt.to_rfc3339());
+
+            // Derive flow if not stored
+            if row.flow_json.is_none() {
+                let flow = crate::scheduler::derive_flow(&row);
+                row.flow_json = serde_json::to_string(&flow).ok();
+            }
+
+            AutomationListItem { next_run, row }
         })
         .collect::<Vec<_>>();
     Ok(Json(items))
@@ -10529,24 +10622,33 @@ async fn create_automation(
         )
     })?;
 
-    // Save workflow steps if provided
-    if let Some(steps) = req.workflow_steps {
-        if !steps.is_empty() {
-            let steps_json = serde_json::to_string(&steps).map_err(|e| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    format!("Invalid workflow steps: {e}"),
-                )
-            })?;
-            let _ = db
-                .update_automation(
-                    &id,
-                    crate::storage::AutomationUpdate {
-                        workflow_steps_json: Some(Some(steps_json)),
-                        ..Default::default()
-                    },
-                )
-                .await;
+    // Save workflow steps and/or flow_json if provided
+    {
+        let mut extra = crate::storage::AutomationUpdate::default();
+        let mut has_extra = false;
+
+        if let Some(steps) = req.workflow_steps {
+            if !steps.is_empty() {
+                let steps_json = serde_json::to_string(&steps).map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("Invalid workflow steps: {e}"),
+                    )
+                })?;
+                extra.workflow_steps_json = Some(Some(steps_json));
+                has_extra = true;
+            }
+        }
+
+        if let Some(fj) = req.flow_json {
+            if !fj.is_empty() {
+                extra.flow_json = Some(Some(fj));
+                has_extra = true;
+            }
+        }
+
+        if has_extra {
+            let _ = db.update_automation(&id, extra).await;
         }
     }
 
@@ -10955,6 +11057,117 @@ async fn run_automation_now(
             }))
         }
     }
+}
+
+// --- Generate Automation Flow (LLM-based) ---
+
+#[derive(Deserialize)]
+struct GenerateFlowRequest {
+    description: String,
+}
+
+#[derive(Serialize)]
+struct GenerateFlowResponse {
+    name: String,
+    flow: serde_json::Value,
+}
+
+async fn generate_automation_flow(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<GenerateFlowRequest>,
+) -> Result<Json<GenerateFlowResponse>, (StatusCode, String)> {
+    let desc = req.description.trim();
+    if desc.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Description cannot be empty".to_string(),
+        ));
+    }
+
+    let config = state.config.read().await.clone();
+
+    let system_prompt = r#"You are an automation flow designer. Given a user description, output ONLY valid JSON (no markdown, no explanation) describing an automation flow.
+
+Available node kinds: trigger, tool, skill, mcp, llm, condition, parallel, subprocess, loop, transform, deliver.
+
+Output format:
+{
+  "name": "Short automation name",
+  "flow": {
+    "nodes": [
+      {"id": "n1", "kind": "trigger", "label": "Short label", "meta": "optional detail"},
+      ...
+    ],
+    "edges": [
+      {"from": "n1", "to": "n2"},
+      ...
+    ]
+  }
+}
+
+Rules:
+- Always start with exactly one trigger node (kind: "trigger")
+- Always end with exactly one deliver node (kind: "deliver")
+- CRITICAL: "deliver" is the ONLY way to send results to the user. Telegram, Discord, WhatsApp, CLI, and Web are DELIVERY CHANNELS — always use kind "deliver" for them, NEVER "mcp".
+- "mcp" is ONLY for external API services: Gmail (read/send email), GitHub (issues, PRs), Slack (channels), Google Calendar, databases, etc. MCP connects to third-party APIs, NOT to messaging channels.
+- Use "llm" for agent tasks (summarize, analyze, write, reason, draft, etc.)
+- Use "tool" for built-in tools (web_search, shell, file_read, file_write)
+- Use "condition" for if/else branching
+- Use "transform" for data formatting/filtering between steps
+- Use "parallel" to run multiple branches simultaneously (e.g. fetch from 3 sources at once)
+- Use "loop" to repeat steps until a condition is met (e.g. retry, paginate)
+- Use "subprocess" to call another saved automation as a sub-workflow
+- Keep flows simple: 3-6 nodes typically
+- Node IDs should be n1, n2, n3, etc.
+- Wire edges sequentially from trigger to deliver
+
+Example: "check emails every morning and send summary to Telegram"
+→ trigger(daily 8:00) → mcp(gmail read) → llm(summarize) → deliver(telegram)"#;
+
+    let response = crate::provider::llm_one_shot(
+        &config,
+        crate::provider::OneShotRequest {
+            system_prompt: system_prompt.to_string(),
+            user_message: desc.to_string(),
+            max_tokens: 4096,
+            timeout_secs: 60,
+            ..Default::default()
+        },
+    )
+    .await
+    .map_err(|e| {
+        let status = if e.to_string().contains("timed out") {
+            StatusCode::GATEWAY_TIMEOUT
+        } else if e.to_string().contains("No active model")
+            || e.to_string().contains("provider")
+        {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        (status, format!("{e}"))
+    })?;
+
+    let json_str = extract_json_object_block(&response.content).ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Could not extract JSON from LLM response".to_string(),
+    ))?;
+
+    let parsed: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Invalid JSON from LLM: {e}"),
+        )
+    })?;
+
+    let name = parsed
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("New Automation")
+        .to_string();
+    let flow = parsed.get("flow").cloned().unwrap_or(parsed.clone());
+
+    Ok(Json(GenerateFlowResponse { name, flow }))
 }
 
 // --- Token Usage ---

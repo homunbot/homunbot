@@ -56,8 +56,9 @@ pub struct ContextBuilder {
     /// Current model name (for runtime section).
     /// Uses RwLock so agent_loop can update it when model changes via hot-reload.
     model_name: RwLock<String>,
-    /// Names of all registered tools (always set, for routing rules in system prompt)
-    registered_tool_names: Vec<String>,
+    /// Names of all registered tools (always set, for routing rules in system prompt).
+    /// Uses RwLock so deferred MCP tools can be added after startup.
+    registered_tool_names: RwLock<Vec<String>>,
 }
 
 impl ContextBuilder {
@@ -77,7 +78,7 @@ impl ContextBuilder {
             channels_info: String::new(),
             prompt_builder: SystemPromptBuilder::with_defaults(),
             model_name: RwLock::new(config.agent.model.clone()),
-            registered_tool_names: Vec::new(),
+            registered_tool_names: RwLock::new(Vec::new()),
         }
     }
 
@@ -204,8 +205,23 @@ impl ContextBuilder {
     }
 
     /// Set the names of all registered tools (for routing rules in system prompt).
-    pub fn set_registered_tool_names(&mut self, names: Vec<String>) {
-        self.registered_tool_names = names;
+    pub async fn set_registered_tool_names(&self, names: Vec<String>) {
+        *self.registered_tool_names.write().await = names;
+    }
+
+    /// Append additional tool names (called when deferred MCP tools register).
+    pub async fn append_registered_tool_names(&self, names: &[String]) {
+        let mut current = self.registered_tool_names.write().await;
+        for name in names {
+            if !current.contains(name) {
+                current.push(name.clone());
+            }
+        }
+    }
+
+    /// Get a snapshot of the registered tool names.
+    pub async fn registered_tool_names_snapshot(&self) -> Vec<String> {
+        self.registered_tool_names.read().await.clone()
     }
 
     /// Set available channels info for cross-channel messaging.
@@ -289,13 +305,14 @@ impl ContextBuilder {
         let rag_knowledge = self.rag_knowledge.read().await;
         let mcp_suggestions = self.mcp_suggestions.read().await;
         let model_name = self.model_name.read().await;
+        let registered_tool_names = self.registered_tool_names.read().await;
 
         // Build PromptContext
         let ctx = PromptContext {
             workspace_dir: std::path::Path::new(&self.workspace),
             model_name: &model_name,
             tools,
-            registered_tool_names: &self.registered_tool_names,
+            registered_tool_names: &registered_tool_names,
             skills_summary: &skills_summary,
             bootstrap_files: &bootstrap_files,
             memory_content: &self.memory_content,

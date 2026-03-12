@@ -353,7 +353,7 @@ async fn run_workflow_loop(
         }
 
         // Execute the step
-        let result = execute_step(&db, &agent, &workflow, step).await;
+        let result = execute_step(&db, &agent, &event_tx, &workflow, step).await;
 
         match result {
             Ok(output) => {
@@ -436,6 +436,7 @@ async fn run_workflow_loop(
 async fn execute_step(
     db: &Database,
     agent: &AgentLoop,
+    event_tx: &mpsc::Sender<WorkflowEvent>,
     workflow: &Workflow,
     step: &WorkflowStep,
 ) -> Result<String> {
@@ -443,7 +444,21 @@ async fn execute_step(
     db.update_step_status(&step.id, StepStatus::Running, None, None)
         .await?;
 
-    let prompt = build_step_prompt(workflow, step);
+    // Notify UI that step is starting
+    let _ = event_tx
+        .send(WorkflowEvent::StepStarted {
+            workflow_id: workflow.id.clone(),
+            workflow_name: workflow.name.clone(),
+            step_idx: step.idx,
+            total_steps: workflow.steps.len(),
+            step_name: step.name.clone(),
+            deliver_to: workflow.deliver_to.clone(),
+        })
+        .await;
+
+    // Build prompt with tool guidance
+    let tool_names = agent.registered_tool_names().await;
+    let prompt = build_step_prompt(workflow, step, &tool_names);
     let session_key = format!("workflow:{}:step:{}", workflow.id, step.idx);
 
     agent
@@ -452,7 +467,7 @@ async fn execute_step(
 }
 
 /// Build the prompt for a workflow step, including context from previous steps.
-fn build_step_prompt(workflow: &Workflow, step: &WorkflowStep) -> String {
+fn build_step_prompt(workflow: &Workflow, step: &WorkflowStep, tool_names: &[String]) -> String {
     let total = workflow.steps.len();
     let mut lines = Vec::new();
 
@@ -463,6 +478,30 @@ fn build_step_prompt(workflow: &Workflow, step: &WorkflowStep) -> String {
     lines.push(format!("Workflow: {}", workflow.name));
     lines.push(format!("Objective: {}", workflow.objective));
     lines.push(String::new());
+
+    // Tool guidance: tell the model which tools to use proactively
+    if !tool_names.is_empty() {
+        lines.push("IMPORTANT: You MUST use your tools to complete this step. Do NOT just describe what you would do — actually DO it by calling tools.".to_string());
+
+        // Highlight the most relevant tools for research tasks
+        let has_web_search = tool_names.iter().any(|n| n == "web_search");
+        let has_browser = tool_names.iter().any(|n| n.starts_with("browser"));
+        let has_web_fetch = tool_names.iter().any(|n| n == "web_fetch");
+
+        if has_web_search || has_browser || has_web_fetch {
+            lines.push("Available research tools:".to_string());
+            if has_web_search {
+                lines.push("- web_search: search the web for information".to_string());
+            }
+            if has_web_fetch {
+                lines.push("- web_fetch: read content from a specific URL".to_string());
+            }
+            if has_browser {
+                lines.push("- browser: interact with websites (navigate, click, type, read)".to_string());
+            }
+        }
+        lines.push(String::new());
+    }
 
     // Include previous step results
     let completed: Vec<&WorkflowStep> = workflow

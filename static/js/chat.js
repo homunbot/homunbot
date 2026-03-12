@@ -7,13 +7,8 @@ const chatText = document.getElementById('chat-text');
 const wsStatus = document.getElementById('ws-status');
 const chatPlanPanel = document.getElementById('chat-plan-panel');
 const chatPlanToggle = document.getElementById('chat-plan-toggle');
-const chatPlanObjective = document.getElementById('chat-plan-objective');
-const chatPlanDoneWrap = document.getElementById('chat-plan-done-wrap');
-const chatPlanDone = document.getElementById('chat-plan-done');
-const chatPlanRemainingWrap = document.getElementById('chat-plan-remaining-wrap');
-const chatPlanRemaining = document.getElementById('chat-plan-remaining');
-const chatPlanConstraintsWrap = document.getElementById('chat-plan-constraints-wrap');
-const chatPlanConstraints = document.getElementById('chat-plan-constraints');
+const chatPlanSummary = document.getElementById('chat-plan-summary');
+const chatPlanTasklist = document.getElementById('chat-plan-tasklist');
 const btnSend = document.getElementById('btn-send');
 const chatEmptyState = document.getElementById('chat-empty-state');
 const chatShellEl = document.querySelector('.chat-shell');
@@ -88,6 +83,9 @@ const GENERIC_PLAN_CONSTRAINTS = new Set([
 // append incremental deltas as they arrive from the LLM.
 let streamingEl = null;
 let streamingContent = '';
+let streamRenderRafId = null;
+let lastStreamRenderTime = 0;
+const STREAM_RENDER_INTERVAL = 150; // ms — throttle gate for progressive markdown
 
 // Tool call activity indicator element
 let toolIndicatorEl = null;
@@ -608,6 +606,7 @@ async function loadHistory() {
 
         messages.forEach(m => {
             addMessage(m.role, m.content, m.tools_used, {
+                messageId: m.id,
                 attachments: m.attachments || [],
                 mcpServers: m.mcp_servers || [],
             });
@@ -624,26 +623,17 @@ function syncEmptyState() {
     chatEmptyState.style.display = messagesEl.children.length > 0 ? 'none' : '';
 }
 
-function renderPlanList(target, items) {
-    if (!target) return;
-    target.textContent = '';
-    items.slice(0, 6).forEach((item) => {
-        const li = document.createElement('li');
-        li.textContent = item;
-        target.appendChild(li);
-    });
-}
-
 function isUsefulPlanConstraint(item) {
     const text = String(item || '').trim();
     return Boolean(text) && !GENERIC_PLAN_CONSTRAINTS.has(text);
 }
 
+/** Apply or update the execution plan panel as a numbered task list. */
 function applyExecutionPlan(plan) {
     currentPlanState = plan && typeof plan === 'object' ? plan : null;
-    if (!chatPlanPanel || !chatPlanObjective || !chatPlanDoneWrap || !chatPlanRemainingWrap) return;
+    if (!chatPlanPanel || !chatPlanSummary || !chatPlanTasklist) return;
 
-    // Hide if no plan, no objective, or plan has no meaningful content
+    // Hide if no plan or no meaningful content
     const hasExplicitSteps = Array.isArray(currentPlanState?.explicit_steps) && currentPlanState.explicit_steps.length > 0;
     const hasCompletedSteps = Array.isArray(currentPlanState?.completed_steps) && currentPlanState.completed_steps.length > 0;
     const hasBlockers = Array.isArray(currentPlanState?.active_blockers) && currentPlanState.active_blockers.length > 0;
@@ -653,150 +643,57 @@ function applyExecutionPlan(plan) {
         chatPlanPanel.hidden = true;
         chatPlanPanel.classList.add('collapsed');
         if (chatPlanToggle) chatPlanToggle.setAttribute('aria-expanded', 'false');
-        chatPlanObjective.textContent = '';
-        if (chatPlanDone) chatPlanDone.textContent = '';
-        if (chatPlanRemaining) chatPlanRemaining.textContent = '';
-        if (chatPlanConstraints) chatPlanConstraints.textContent = '';
-        chatPlanDoneWrap.hidden = true;
-        chatPlanRemainingWrap.hidden = true;
-        if (chatPlanConstraintsWrap) chatPlanConstraintsWrap.hidden = true;
-        // Reset label in case explicit plan changed it
-        resetPlanLabels();
+        chatPlanSummary.textContent = '';
+        chatPlanTasklist.textContent = '';
         return;
     }
 
-    // If an explicit plan is present, use the dedicated renderer
-    if (Array.isArray(currentPlanState.explicit_steps) && currentPlanState.explicit_steps.length > 0) {
-        renderExplicitPlan(currentPlanState);
-        return;
-    }
-
-    // --- Inferred mode (existing behavior) ---
     chatPlanPanel.hidden = false;
-    if (
-        !planExpanded &&
-        (
-            (Array.isArray(currentPlanState.required_sources) && currentPlanState.required_sources.length > 0) ||
-            currentPlanState.current_source
-        )
-    ) {
-        planExpanded = true;
-    }
     chatPlanPanel.classList.toggle('collapsed', !planExpanded);
     if (chatPlanToggle) chatPlanToggle.setAttribute('aria-expanded', String(planExpanded));
-    chatPlanObjective.textContent = currentPlanState.objective || '';
-    resetPlanLabels();
 
-    const doneItems = Array.isArray(currentPlanState.completed_steps)
-        ? currentPlanState.completed_steps
-        : [];
-    const sourceDoneItems = Array.isArray(currentPlanState.completed_sources)
-        ? currentPlanState.completed_sources.map((item) => `Source completed: ${item}`)
-        : [];
-    const remainingItems = [
-        ...(Array.isArray(currentPlanState.active_blockers) ? currentPlanState.active_blockers : []),
-        ...(currentPlanState.current_source && !(Array.isArray(currentPlanState.completed_sources) ? currentPlanState.completed_sources : []).includes(currentPlanState.current_source)
-            ? [`Current source in progress: ${currentPlanState.current_source}`]
-            : []),
-        ...(Array.isArray(currentPlanState.required_sources)
-            ? currentPlanState.required_sources
-                .filter((item) => !(Array.isArray(currentPlanState.completed_sources) ? currentPlanState.completed_sources : []).includes(item))
-                .map((item) => `Source still required: ${item}`)
-            : []),
-        ...(Array.isArray(currentPlanState.constraints)
-            ? currentPlanState.constraints.filter((item) => !doneItems.includes(item))
-            : []),
-    ].filter((item, index, items) => item && items.indexOf(item) === index);
-    const constraintItems = Array.isArray(currentPlanState.constraints)
-        ? currentPlanState.constraints.filter((item) => (
-            isUsefulPlanConstraint(item) && !remainingItems.includes(item)
-        ))
-        : [];
+    // Build unified task list
+    chatPlanTasklist.textContent = '';
+    let steps = [];
 
-    chatPlanDoneWrap.hidden = doneItems.length === 0;
-    chatPlanRemainingWrap.hidden = remainingItems.length === 0;
-    if (chatPlanConstraintsWrap) chatPlanConstraintsWrap.hidden = !planExpanded || constraintItems.length === 0;
-    renderPlanList(chatPlanDone, [...sourceDoneItems, ...doneItems]);
-    renderPlanList(chatPlanRemaining, remainingItems);
-    renderPlanList(chatPlanConstraints, constraintItems);
-    updatePlanProgressBadge();
-}
-
-/** Render an explicit plan created via plan_task with status icons. */
-function renderExplicitPlan(plan) {
-    chatPlanPanel.hidden = false;
-    // Keep collapsed as pill — user clicks to expand
-    chatPlanPanel.classList.toggle('collapsed', !planExpanded);
-    if (chatPlanToggle) chatPlanToggle.setAttribute('aria-expanded', String(planExpanded));
-    chatPlanObjective.textContent = plan.objective || '';
-
-    // Render steps with status icons in the "Done" column (relabeled to "Plan")
-    const doneLabel = chatPlanDoneWrap.querySelector('.chat-plan-label');
-    if (doneLabel) doneLabel.textContent = 'Plan';
-    chatPlanDoneWrap.hidden = false;
-
-    const stepItems = plan.explicit_steps.map((step) => {
-        const icon = step.status === 'completed' ? '\u2705'
-            : step.status === 'in_progress' ? '\uD83D\uDD04'
-            : '\u2B1C';
-        return `${icon} ${step.description}`;
-    });
-    renderPlanList(chatPlanDone, stepItems);
-
-    // Hide "Remaining" column — step statuses already convey progress
-    chatPlanRemainingWrap.hidden = true;
-    if (chatPlanRemaining) chatPlanRemaining.textContent = '';
-
-    // Show active blockers if any
-    const blockers = Array.isArray(plan.active_blockers) ? plan.active_blockers : [];
-    if (chatPlanConstraintsWrap) {
-        chatPlanConstraintsWrap.hidden = blockers.length === 0;
-        if (blockers.length > 0) {
-            const label = chatPlanConstraintsWrap.querySelector('.chat-plan-label');
-            if (label) label.textContent = 'Blockers';
-            renderPlanList(chatPlanConstraints, blockers);
-        }
-    }
-
-    // Show verification note when all steps completed
-    if (plan.verification && plan.explicit_steps.every((s) => s.status === 'completed')) {
-        if (chatPlanConstraintsWrap) {
-            chatPlanConstraintsWrap.hidden = false;
-            const label = chatPlanConstraintsWrap.querySelector('.chat-plan-label');
-            if (label) label.textContent = 'Verification';
-            renderPlanList(chatPlanConstraints, [plan.verification]);
-        }
-    }
-    updatePlanProgressBadge();
-}
-
-/** Reset column labels to their defaults (after explicit plan cleanup). */
-function resetPlanLabels() {
-    const doneLabel = chatPlanDoneWrap?.querySelector('.chat-plan-label');
-    if (doneLabel) doneLabel.textContent = 'Done';
-    const constraintLabel = chatPlanConstraintsWrap?.querySelector('.chat-plan-label');
-    if (constraintLabel) constraintLabel.textContent = 'Constraints';
-}
-
-/** Update (or create) the compact progress badge inside the plan header. */
-function updatePlanProgressBadge() {
-    if (!chatPlanPanel || !currentPlanState) return;
-    let el = chatPlanPanel.querySelector('.chat-plan-progress');
-    if (!el) {
-        el = document.createElement('span');
-        el.className = 'chat-plan-progress';
-        const hdr = chatPlanPanel.querySelector('.chat-plan-header-copy');
-        if (hdr) hdr.appendChild(el);
-    }
-    if (Array.isArray(currentPlanState.explicit_steps) && currentPlanState.explicit_steps.length) {
-        const total = currentPlanState.explicit_steps.length;
-        const done = currentPlanState.explicit_steps.filter(s => s.status === 'completed').length;
-        el.textContent = done === total ? `\u2705 ${done}/${total}` : `\uD83D\uDD04 ${done}/${total}`;
+    if (hasExplicitSteps) {
+        steps = currentPlanState.explicit_steps;
     } else {
-        const done = (currentPlanState.completed_steps || []).length;
-        const rem = (currentPlanState.constraints || []).length;
-        el.textContent = (done + rem) > 0 ? `(${done}/${done + rem})` : '';
+        // Inferred plan — build steps from completed + remaining
+        const doneItems = Array.isArray(currentPlanState.completed_steps) ? currentPlanState.completed_steps : [];
+        const remainingItems = [
+            ...(Array.isArray(currentPlanState.active_blockers) ? currentPlanState.active_blockers : []),
+            ...(Array.isArray(currentPlanState.required_sources) ? currentPlanState.required_sources.map(s => `Source: ${s}`) : []),
+            ...(Array.isArray(currentPlanState.constraints) ? currentPlanState.constraints.filter(c => isUsefulPlanConstraint(c) && !doneItems.includes(c)) : []),
+        ].filter((v, i, a) => v && a.indexOf(v) === i);
+        steps = [
+            ...doneItems.map(d => ({ status: 'completed', description: d })),
+            ...remainingItems.map(r => ({ status: 'pending', description: r })),
+        ];
     }
+
+    const total = steps.length;
+    const done = steps.filter(s => s.status === 'completed').length;
+    chatPlanSummary.textContent = `${done} su ${total} attività completate`;
+
+    steps.forEach((step) => {
+        const li = document.createElement('li');
+        li.className = `chat-plan-task is-${step.status || 'pending'}`;
+
+        const circle = document.createElement('span');
+        circle.className = 'chat-plan-task-icon';
+        if (step.status === 'completed') {
+            circle.textContent = '\u2713';
+        }
+
+        const label = document.createElement('span');
+        label.className = 'chat-plan-task-label';
+        label.textContent = step.description || '';
+
+        li.appendChild(circle);
+        li.appendChild(label);
+        chatPlanTasklist.appendChild(li);
+    });
 }
 
 function clearExecutionPlan() {
@@ -1496,8 +1393,13 @@ function morphIndicatorToStreaming() {
         // Reuse the same DOM element — just change its class and clear content
         toolIndicatorEl.className = 'chat-msg assistant streaming';
         toolIndicatorEl.textContent = '';
+        // Add body child for progressive markdown rendering
+        const body = document.createElement('div');
+        body.className = 'chat-msg-body';
+        toolIndicatorEl.appendChild(body);
         streamingEl = toolIndicatorEl;
         streamingContent = '';
+        lastStreamRenderTime = 0;
         toolIndicatorEl = null;
         activeTools = [];
     }
@@ -1949,7 +1851,62 @@ function connect() {
     };
 }
 
-// ─── Streaming ─────────────────────────────────────────────────
+// ─── Streaming (progressive markdown rendering) ────────────────
+
+/** Render accumulated streaming content as markdown with fence patching.
+ *  All HTML output is sanitized via DOMPurify.sanitize() to prevent XSS.
+ */
+function renderStreamingMarkdown() {
+    if (!streamingEl || !streamingContent) return;
+    let content = streamingContent;
+
+    // Patch unclosed code fences — count lines starting with 3+ backticks
+    const fenceCount = (content.match(/^`{3,}/gm) || []).length;
+    if (fenceCount % 2 !== 0) content += '\n```';
+
+    // Patch unclosed inline code (simple heuristic: odd single backticks)
+    const inlineCount = (content.match(/(?<!`)`(?!`)/g) || []).length;
+    if (inlineCount % 2 !== 0) content += '`';
+
+    const bodyEl = streamingEl.querySelector('.chat-msg-body') || streamingEl;
+
+    if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+        // Fallback if libs not loaded yet — safe plain text
+        bodyEl.textContent = streamingContent;
+        return;
+    }
+
+    const rawHtml = marked.parse(content);
+    // DOMPurify sanitizes all HTML to prevent XSS (safe: uses DOMPurify.sanitize)
+    const safeHtml = DOMPurify.sanitize(rawHtml);
+    bodyEl.innerHTML = safeHtml;
+}
+
+/** Schedule a throttled markdown render (max once per STREAM_RENDER_INTERVAL). */
+function scheduleStreamRender() {
+    const now = Date.now();
+    if (now - lastStreamRenderTime >= STREAM_RENDER_INTERVAL) {
+        renderStreamingMarkdown();
+        lastStreamRenderTime = now;
+    } else if (!streamRenderRafId) {
+        streamRenderRafId = requestAnimationFrame(() => {
+            streamRenderRafId = null;
+            if (Date.now() - lastStreamRenderTime >= STREAM_RENDER_INTERVAL) {
+                renderStreamingMarkdown();
+                lastStreamRenderTime = Date.now();
+            }
+        });
+    }
+}
+
+/** Cancel any pending streaming render frame. */
+function cancelStreamRender() {
+    if (streamRenderRafId) {
+        cancelAnimationFrame(streamRenderRafId);
+        streamRenderRafId = null;
+    }
+    lastStreamRenderTime = 0;
+}
 
 /** Handle an incremental streaming chunk from the LLM. */
 function handleStreamChunk(delta) {
@@ -1957,25 +1914,30 @@ function handleStreamChunk(delta) {
     purgeOrphanLiveArtifacts();
 
     if (!streamingEl) {
-        // First chunk — create a new assistant message bubble
+        // First chunk — create a new assistant message bubble with body child
         streamingEl = document.createElement('div');
         streamingEl.className = 'chat-msg assistant streaming';
+        const body = document.createElement('div');
+        body.className = 'chat-msg-body';
+        streamingEl.appendChild(body);
         streamingContent = '';
+        lastStreamRenderTime = 0;
         messagesEl.appendChild(streamingEl);
     }
 
-    // During streaming, use textContent for performance
-    // (markdown rendered at finalization)
+    // Accumulate and schedule throttled markdown render
     streamingContent += delta;
-    streamingEl.textContent = streamingContent;
+    scheduleStreamRender();
     scrollThreadToBottom();
 }
 
 function settleLiveArtifacts() {
+    cancelStreamRender();
     purgeOrphanLiveArtifacts();
     if (streamingEl) {
         if (streamingContent.trim()) {
-            renderContent(streamingEl, streamingContent, 'assistant');
+            const bodyEl = streamingEl.querySelector('.chat-msg-body') || streamingEl;
+            renderContent(bodyEl, streamingContent, 'assistant');
             streamingEl.classList.remove('streaming');
         } else {
             streamingEl.remove();
@@ -2005,15 +1967,20 @@ function settleLiveArtifacts() {
  *  Render markdown on the final content for proper formatting.
  */
 function finalizeStream(content) {
+    // Cancel any pending progressive render
+    cancelStreamRender();
+
     // Detect and add screenshots to the browser gallery
-    const screenshotRegex = /\/api\/v1\/browser\/screenshots\/([a-zA-Z0-9_-]+\.png)/g;
+    const screenshotPattern = /\/api\/v1\/browser\/screenshots\/([a-zA-Z0-9_-]+\.png)/g;
     let match;
-    while ((match = screenshotRegex.exec(content)) !== null) {
+    while ((match = screenshotPattern.exec(content)) !== null) {
         addBrowserScreenshot(match[0]);
     }
 
     if (streamingEl) {
-        renderContent(streamingEl, content, 'assistant');
+        // Final render into the body child (or fallback to streamingEl)
+        const bodyEl = streamingEl.querySelector('.chat-msg-body') || streamingEl;
+        renderContent(bodyEl, content, 'assistant');
         streamingEl.classList.remove('streaming');
         streamingEl = null;
         streamingContent = '';
@@ -2033,6 +2000,150 @@ function finalizeStream(content) {
     maybeAutoCompact();
 }
 
+// ─── Message actions (copy, edit/resend) ────────────────────────
+
+const ICON_COPY = '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="9" height="9" rx="1.5"/><path d="M3 12V4a1.5 1.5 0 011.5-1.5H12"/></svg>';
+const ICON_EDIT = '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 3l4 4-9 9H2v-4z"/><path d="M9.5 4.5l4 4"/></svg>';
+const ICON_CHECK = '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9l4 4 6-7"/></svg>';
+
+function createMessageActions(role, msgDiv) {
+    const actions = document.createElement('div');
+    actions.className = 'chat-msg-actions';
+
+    // Copy button (all messages)
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'chat-msg-action-btn';
+    copyBtn.title = 'Copy';
+    copyBtn.innerHTML = ICON_COPY;
+    copyBtn.addEventListener('click', () => copyMessageContent(msgDiv, copyBtn));
+    actions.appendChild(copyBtn);
+
+    // Edit button (user messages only)
+    if (role === 'user') {
+        const editBtn = document.createElement('button');
+        editBtn.className = 'chat-msg-action-btn';
+        editBtn.title = 'Edit & Resend';
+        editBtn.innerHTML = ICON_EDIT;
+        editBtn.addEventListener('click', () => startEditMessage(msgDiv));
+        actions.appendChild(editBtn);
+    }
+
+    return actions;
+}
+
+function copyMessageContent(msgDiv, btn) {
+    const raw = msgDiv.dataset.rawContent || '';
+    if (!raw) return;
+    navigator.clipboard.writeText(raw).then(() => {
+        // Brief visual feedback — swap icon to checkmark
+        btn.classList.add('is-copied');
+        btn.innerHTML = ICON_CHECK;
+        setTimeout(() => {
+            btn.classList.remove('is-copied');
+            btn.innerHTML = ICON_COPY;
+        }, 1500);
+    });
+}
+
+function startEditMessage(msgDiv) {
+    const bodyEl = msgDiv.querySelector('.chat-msg-body');
+    if (!bodyEl || msgDiv.querySelector('.chat-msg-edit-area')) return;
+
+    const originalContent = msgDiv.dataset.rawContent || bodyEl.textContent || '';
+    const originalHTML = bodyEl.innerHTML;
+
+    // Replace body content with inline textarea — looks like editable text
+    const textarea = document.createElement('textarea');
+    textarea.className = 'chat-msg-edit-area';
+    textarea.value = originalContent;
+
+    // Auto-size: grow with content
+    function autoSize() {
+        textarea.style.height = 'auto';
+        textarea.style.height = textarea.scrollHeight + 'px';
+    }
+    textarea.addEventListener('input', autoSize);
+
+    // Ctrl/Cmd+Enter to send
+    textarea.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+            const newContent = textarea.value.trim();
+            if (newContent) resendFromMessage(msgDiv, newContent);
+        }
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            bodyEl.innerHTML = originalHTML; // Security: restoring own prior content
+        }
+    });
+
+    const actionsBar = document.createElement('div');
+    actionsBar.className = 'chat-msg-edit-actions';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn btn-ghost btn-sm';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => {
+        bodyEl.innerHTML = originalHTML; // Security: restoring own prior content
+    });
+
+    const sendBtn = document.createElement('button');
+    sendBtn.className = 'btn btn-primary btn-sm';
+    sendBtn.textContent = 'Resend';
+    sendBtn.addEventListener('click', () => {
+        const newContent = textarea.value.trim();
+        if (!newContent) return;
+        resendFromMessage(msgDiv, newContent);
+    });
+
+    actionsBar.appendChild(cancelBtn);
+    actionsBar.appendChild(sendBtn);
+
+    bodyEl.textContent = '';
+    bodyEl.appendChild(textarea);
+    bodyEl.appendChild(actionsBar);
+
+    // Initial auto-size after DOM insertion
+    requestAnimationFrame(() => {
+        autoSize();
+        textarea.focus();
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    });
+}
+
+function resendFromMessage(msgDiv, newContent) {
+    // Remove all messages after (and including) this message from DOM
+    const allMsgs = Array.from(messagesEl.querySelectorAll('.chat-msg, .chat-thinking, .chat-reasoning'));
+    const idx = allMsgs.indexOf(msgDiv);
+    if (idx >= 0) {
+        for (let i = allMsgs.length - 1; i >= idx; i--) {
+            allMsgs[i].remove();
+        }
+    }
+
+    // Backend truncation — if we have a message ID, call the truncate API
+    const messageId = msgDiv.dataset.messageId;
+    if (messageId && currentConversationId) {
+        fetch(conversationApi('/truncate'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                conversation_id: currentConversationId,
+                from_message_id: parseInt(messageId, 10)
+            })
+        }).catch(() => { /* best effort */ });
+    }
+
+    // Re-add the edited user message and send via WebSocket
+    addMessage('user', newContent);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        const payload = { content: newContent };
+        if (thinkingEnabled !== null) payload.thinking = thinkingEnabled;
+        ws.send(JSON.stringify(payload));
+        setProcessing(true);
+    }
+}
+
 // ─── Message rendering ─────────────────────────────────────────
 
 function addMessage(role, content, toolsUsed, options = {}) {
@@ -2040,6 +2151,11 @@ function addMessage(role, content, toolsUsed, options = {}) {
     div.className = `chat-msg ${role}`;
     if (options.runId) {
         div.dataset.runId = options.runId;
+    }
+    // Store raw content for copy and message ID for edit/resend
+    div.dataset.rawContent = content || '';
+    if (options.messageId) {
+        div.dataset.messageId = options.messageId;
     }
 
     if (options.mcpServers && options.mcpServers.length > 0) {
@@ -2074,6 +2190,9 @@ function addMessage(role, content, toolsUsed, options = {}) {
         badge.textContent = toolsUsed.join(', ');
         div.prepend(badge);
     }
+
+    // Add hover action buttons (copy, edit)
+    div.appendChild(createMessageActions(role, div));
 
     messagesEl.appendChild(div);
     scrollThreadToBottom();
@@ -2463,6 +2582,12 @@ async function loadChatModelDropdown() {
 
         renderActiveModelCapabilities(currentModel);
 
+        // Sync pill label with current model short name
+        const pillName = document.getElementById('chat-model-pill-name');
+        if (pillName) {
+            pillName.textContent = currentModel.split('/').pop() || currentModel;
+        }
+
     } catch (err) {
         console.error('Failed to load models:', err);
     }
@@ -2593,6 +2718,11 @@ if (chatModelSelect) {
                 opt.value = newModel;
                 opt.textContent = formatModelOptionLabel(newModel.split('/').pop() || newModel, newModel);
                 opt.selected = true;
+                // Sync pill label
+                const pillName = document.getElementById('chat-model-pill-name');
+                if (pillName) {
+                    pillName.textContent = newModel.split('/').pop() || newModel;
+                }
                 renderActiveModelCapabilities(newModel);
             } else {
                 showToast('Failed to switch model', 'error');
@@ -2750,6 +2880,11 @@ function handleWorkflowProgress(progress) {
     } else if (status === 'paused') {
         statusEl.textContent = `Waiting for approval \u2014 step ${completed + 1}/${total}: ${progress.current_step || ''}`;
         card.dataset.status = 'paused';
+    } else if (status === 'step_started') {
+        statusEl.textContent = progress.current_step
+            ? `Running step ${completed + 1}/${total}: ${progress.current_step}`
+            : `Starting step ${completed + 1}/${total}`;
+        card.dataset.status = 'running';
     } else {
         statusEl.textContent = progress.current_step
             ? `Step ${completed}/${total} done \u2014 running: ${progress.current_step}`

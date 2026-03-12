@@ -817,6 +817,13 @@ async fn main() -> Result<()> {
                 let browser_tool = crate::tools::BrowserTool::new(browser_peer);
                 _browser_session = Some(browser_tool.session());
                 tool_registry.register(Box::new(browser_tool));
+                tracing::info!("🌐 Browser tool registered successfully");
+            } else {
+                #[cfg(feature = "mcp")]
+                tracing::warn!(
+                    "⚠️ Browser MCP peer not available — browser tool will NOT be registered. \
+                     Check that @playwright/mcp is installed: npx @playwright/mcp --help"
+                );
             }
 
             let session_manager = SessionManager::new(db.clone());
@@ -856,7 +863,7 @@ async fn main() -> Result<()> {
                 db,
             )
             .await;
-            agent.set_registered_tool_names(tool_names);
+            agent.set_registered_tool_names(tool_names).await;
             #[cfg(feature = "mcp")]
             if let Some(session) = _browser_session {
                 agent.set_browser_session(session).await;
@@ -1101,7 +1108,7 @@ async fn main() -> Result<()> {
                 )
                 .await;
                 a.set_message_tx(tool_msg_tx);
-                a.set_registered_tool_names(tool_names);
+                a.set_registered_tool_names(tool_names).await;
 
                 // Initialize memory searcher (vector + FTS5 hybrid search)
                 #[cfg(feature = "local-embeddings")]
@@ -1352,6 +1359,12 @@ async fn main() -> Result<()> {
                         agent_for_mcp.set_browser_session(session.clone()).await;
                         // Also update estop handles so emergency stop can close the browser
                         estop_for_mcp.write().await.browser_session = Some(session);
+                        tracing::info!("🌐 Browser tool registered successfully");
+                    } else {
+                        tracing::warn!(
+                            "⚠️ Browser MCP peer not available — browser tool will NOT be registered. \
+                             Check that @playwright/mcp is installed: npx @playwright/mcp --help"
+                        );
                     }
 
                     tracing::info!(

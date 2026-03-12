@@ -1,6 +1,6 @@
 # Homun — Development Roadmap
 
-> Last updated: 2026-03-12
+> Last updated: 2026-03-12 (File Split & Code Hygiene program)
 > Basato su: Audit completo (`docs/AUDIT-2026-03.md`)
 > Gap analysis: Homun vs OpenClaw vs ZeroClaw
 > Source of truth: questo documento e' la roadmap/status operativa del progetto
@@ -11,15 +11,16 @@
 
 | Metrica | Valore |
 |---------|--------|
-| LOC Rust | ~41,343 |
-| LOC Frontend | ~8,691 |
-| Test | 521 passing (verificato con `cargo test -q` il 2026-03-11) |
+| LOC Rust | ~78,500 |
+| LOC Frontend | ~17,000 |
+| Test | 522 passing (verificato con `cargo test` il 2026-03-12) |
 | Binary (full) | ~50MB |
 | Provider LLM | 14 |
 | Canali | 7 (CLI, Telegram, Discord*, WhatsApp*, Slack*, Email*, Web) |
 | Tool built-in | ~20 (incl. knowledge, workflow, business, browser, approval, read_email) |
 | Pagine Web UI | 19 (/chat, /dashboard, /setup, /channels, /browser, /automations, /workflows, /business, /skills, /mcp, /memory, /knowledge, /vault, /permissions, /approvals, /account, /logs, /login, /setup-wizard) |
 | Feature flags | 12 |
+| Automations Builder | Visual flow canvas (n8n-style) + guided inspector + NLP generation |
 
 *\* = parziale/stub*
 
@@ -138,6 +139,14 @@ Quando si aggiunge un nuovo canale, implementare sempre:
 | | Form creazione: nome + prompt naturale + schedule (cron/intervallo) | | | |
 | | Modifica inline, toggle on/off, pulsante "Esegui ora" | | | |
 | | Storico esecuzioni con risultato di ogni run | | | |
+| 4.7 | **Automations Builder v2 — Visual Flow + Guided Inspector** | `web/pages.rs`, `static/js/automations.js`, `static/css/style.css`, `web/api.rs`, `provider/one_shot.rs`, `tools/registry.rs` | ~2,000 | ✅ DONE |
+| | Canvas SVG n8n-style con nodi, bordi, drag-to-reorder, auto-layout | | | |
+| | 11 tipi nodo: trigger, tool, skill, mcp, llm, condition, parallel, loop, subprocess, transform, deliver | | | |
+| | Inspector guidato per ogni nodo (dropdown, campi condizionali, no testo libero) | | | |
+| | Chat prompt sotto il canvas per generazione flow via linguaggio naturale (LLM) | | | |
+| | Unified LLM engine (`llm_one_shot()`) per chiamate one-shot condivise | | | |
+| | Palette con descrizioni ed esempi per ogni tipo nodo | | | |
+| | API: tool/skill/mcp/targets popolati da endpoint REST, JSON Schema per parametri tool | | | |
 | 4.4 | **Real-time logs (SSE)** | `web/api.rs`, `static/js/logs.js` | ~150 | ✅ DONE |
 | | Endpoint GET /api/v1/logs/stream (SSE) | | | |
 | | Pagina logs con auto-scroll e filtro per livello | | | |
@@ -151,7 +160,7 @@ Quando si aggiunge un nuovo canale, implementare sempre:
 | | Test connessione provider | | | |
 | | Validazione config in real-time | | | |
 
-**Stima totale Sprint 4: ~1,200 LOC**
+**Stima totale Sprint 4: ~3,200 LOC** (1,200 base + ~2,000 Builder v2)
 
 ### Esempi Automations
 
@@ -162,6 +171,90 @@ Quando si aggiunge un nuovo canale, implementare sempre:
 | Volo tracker | "Cerca il volo piu' economico Roma-Londra per il 15 aprile" | `0 8 * * *` |
 | Backup check | "Controlla che il backup sia andato a buon fine, leggi i log" | `0 7 * * *` |
 | News briefing | "Cerca le notizie principali su Rust e AI, riassumi le top 5" | `0 8 * * 1-5` |
+
+### 4.7 Automations Builder v2 — Stato Dettagliato
+
+> Visual flow builder n8n-style con inspector guidato e generazione NLP.
+> Implementato in 3 iterazioni progressive (2026-03-12).
+
+#### Architettura
+
+```
+automations.js (~2,500 LOC)
+    │
+    ├── AutomationBuilder class
+    │   ├── SVG canvas (nodi + bordi + auto-layout)
+    │   ├── Palette (11 kind con descrizioni + tooltip on click)
+    │   ├── Inspector (form guidati per ogni kind)
+    │   └── Chat prompt (generazione flow via LLM)
+    │
+    ├── API cache layer
+    │   ├── getCachedTools()     → GET /v1/tools
+    │   ├── getCachedSkills()    → GET /v1/skills
+    │   ├── getCachedMcpServers()→ GET /v1/mcp
+    │   └── getCachedTargets()   → GET /v1/automations/targets
+    │
+    └── NLP generation
+        └── POST /v1/automations/generate-flow
+            └── llm_one_shot() → JSON {name, flow: {nodes, edges}}
+```
+
+#### Canvas
+
+- SVG con nodi rettangolari color-coded per kind (icona + label + meta)
+- Bordi SVG con path curvi (cubic bezier) e frecce direzionali
+- Drag-to-reorder nodi, click per selezionare + ispezionare
+- Auto-layout verticale con calcolo automatico posizioni
+- Sfondo tema (`--bg-subtle`) con griglia puntinata (`--accent-border`)
+- Toolbar: Add Node (+), Delete, Save, NLP generate
+
+#### 11 Node Kinds
+
+| Kind | Icona | Descrizione | Inspector |
+|------|-------|-------------|-----------|
+| trigger | ⏰ | Avvia l'automazione (daily, interval, cron) | Mode select + campi condizionali (time picker, ore+giorni, 5 campi cron) |
+| tool | 🔧 | Tool built-in (shell, file, web_search) | Dropdown async da API + placeholder JSON da Schema |
+| skill | 📦 | Skill installata (plugin estensibili) | Dropdown async + link install + empty state |
+| mcp | 🔌 | Servizio esterno via MCP (Gmail, GitHub) | Cascade server→tool dropdown + ricerca catalogo inline |
+| llm | 🤖 | Prompt LLM per ragionamento | Textarea prompt + model datalist |
+| transform | 🔄 | Trasforma/filtra dati tra step | Template text |
+| condition | ❓ | Branch if/else | Condizione + label rami |
+| parallel | ⚡ | Rami paralleli simultanei | Numero branches |
+| loop | 🔁 | Ripeti fino a condizione | Condizione + max iterazioni |
+| subprocess | 📋 | Chiama altra automazione | Nome sub-automazione |
+| deliver | 📤 | Invia risultato (Telegram, CLI, etc.) | Dropdown target dinamico da API |
+
+#### Inspector Guidato — Dettaglio
+
+Ogni nodo ha un form specifico con zero campi di testo libero per le selezioni principali:
+
+- **Trigger**: select mode → campi condizionali (daily: time picker `<input type=time>`, interval: ore + checkboxes giorni settimana Lun-Dom, cron: 5 campi individuali con preset helper)
+- **Tool**: `<select>` async popolato da `GET /v1/tools` — mostra nome + descrizione. Dopo selezione, il campo arguments mostra un placeholder JSON generato automaticamente dalla JSON Schema dei parametri del tool
+- **Skill**: `<select>` async popolato da `GET /v1/skills` — se vuoto mostra hint + link a /skills
+- **MCP**: cascade dropdown: primo `<select>` per server (da `GET /v1/mcp`), secondo `<select>` per tool filtrato per prefisso server. Sezione ricerca catalogo inline (`GET /v1/mcp/suggest?q=...`) con risultati + bottone Setup
+- **Deliver**: `<select>` dinamico da `GET /v1/automations/targets` (canali configurati)
+- **LLM**: `<textarea>` prompt + `<input>` model con `<datalist>` suggerimenti
+
+Stale-guard: `_inspectorRenderId` counter previene race condition quando l'utente clicca nodi rapidamente durante fetch async.
+
+#### Unified LLM Engine (`one_shot.rs`)
+
+Tutti i punti del sistema che fanno chiamate LLM non-conversazionali (generate flow, install guide MCP, provider test) ora usano una singola utility:
+
+```rust
+pub async fn llm_one_shot(config: &Config, req: OneShotRequest) -> Result<OneShotResponse>
+```
+
+- Wrappa `ReliableProvider` (retry + failover)
+- Disabilita sempre extended thinking (`think: Some(false)`) per evitare risposte vuote
+- Timeout configurabile (default 30s)
+- Crea un provider fresh per ogni chiamata (no stato condiviso)
+
+#### Bug Fix Critici
+
+- **`input` vs `change` DOM event**: i `<select>` emettono `change`, non `input`. L'inspector ascoltava solo `input`, quindi tutti i dropdown non salvavano. Fix: doppio listener.
+- **Extended thinking vuoto**: `think: None` su Claude Sonnet 4+ causava risposte vuote. Fix: `think: Some(false)` esplicito in `one_shot.rs`.
+- **Generate-flow prompt MCP vs Deliver**: il prompt LLM generava nodi MCP per Telegram (sbagliato). Fix: regola CRITICAL che distingue delivery channels (Telegram/Discord/CLI → `deliver`) da external APIs (Gmail/GitHub → `mcp`).
 
 ---
 
@@ -1173,6 +1266,96 @@ App (Flutter / Dart)
 
 ---
 
+## Programma Trasversale — File Split & Code Hygiene (P2)
+
+> Obiettivo: portare tutti i file sotto il limite 500 righe (convenzione stabilita 2026-03-12).
+> Approccio: split incrementale, un file per sessione, senza regressions.
+> Regola: estrarre in submodule directory, `mod.rs` come thin re-export + orchestration.
+
+### Tier 1 — Monoliti critici (>2000 LOC)
+
+| # | File | LOC | Strategia split | Stato |
+|---|------|-----|-----------------|-------|
+| FS-1 | `web/api.rs` | 12,382 | Estrarre in `web/api/` submodule: un file per dominio (chat.rs, automations.rs, skills.rs, knowledge.rs, business.rs, workflows.rs, vault.rs, mcp.rs, auth_api.rs, providers.rs, misc.rs). `mod.rs` = route registration only. | TODO |
+| FS-2 | `web/pages.rs` | 4,277 | Estrarre in `web/pages/` submodule: un file per pagina o gruppo di pagine. `mod.rs` = shared helpers + re-exports. | TODO |
+| FS-3 | `agent/agent_loop.rs` | 3,209 | Estrarre helpers: tool_dispatch.rs, response_handler.rs, iteration_logic.rs. Core loop resta in agent_loop.rs (~500). | TODO |
+| FS-4 | `main.rs` | 2,796 | Estrarre subcommand handlers in `cli/` submodule (chat.rs, gateway.rs, skills.rs, cron.rs, config.rs). main.rs = clap setup + dispatch only. | TODO |
+| FS-5 | `storage/db.rs` | 2,748 | Estrarre in `storage/` submodule per dominio: sessions.rs, memory.rs, automations.rs, workflows.rs, business.rs, knowledge.rs. db.rs = pool + migrations. | TODO |
+| FS-6 | `config/schema.rs` | 2,234 | Estrarre in `config/sections/`: agent.rs, providers.rs, channels.rs, tools.rs, security.rs, web.rs, etc. schema.rs = top-level HomunConfig + re-exports. | TODO |
+| FS-7 | `tui/app.rs` | 1,975 | Estrarre event handlers e state management. app.rs = struct + main loop (~500). | TODO |
+
+### Tier 2 — File grandi (1000-2000 LOC)
+
+| # | File | LOC | Strategia split | Stato |
+|---|------|-----|-----------------|-------|
+| FS-8 | `agent/gateway.rs` | 1,560 | Estrarre channel_starter.rs, message_router.rs. gateway.rs = orchestration. | TODO |
+| FS-9 | `skills/loader.rs` | 1,537 | Estrarre parser.rs (YAML frontmatter), validator.rs. loader.rs = scan + registry. | TODO |
+| FS-10 | `tools/browser.rs` | 1,170 | Estrarre in `tools/browser/` submodule: actions.rs (17 actions), stealth.rs, snapshot.rs. mod.rs = BrowserTool dispatch. | TODO |
+| FS-11 | `skills/clawhub.rs` | 1,128 | Estrarre api_client.rs, format_converter.rs. | TODO |
+| FS-12 | `skills/security.rs` | 1,112 | Estrarre scanners.rs, policy.rs. | TODO |
+| FS-13 | `channels/email.rs` | 1,061 | Estrarre imap_client.rs, smtp_client.rs. | TODO |
+| FS-14 | `agent/memory.rs` | 1,059 | Estrarre consolidation.rs, daily_files.rs. | TODO |
+| FS-15 | `web/server.rs` | 1,030 | Estrarre tls_setup.rs, middleware.rs. | TODO |
+| FS-16 | `tools/file.rs` | 983 | Estrarre file_ops.rs (read/write/edit), listing.rs. | TODO |
+| FS-17 | `provider/ollama.rs` | 934 | Estrarre model_manager.rs (pull/list). | TODO |
+| FS-18 | `web/auth.rs` | 933 | Estrarre rate_limiter.rs, api_keys.rs. | TODO |
+| FS-19 | `tui/ui.rs` | 910 | Estrarre widget renderers per panel. | TODO |
+| FS-20 | `scheduler/automations.rs` | 845 | Estrarre trigger_engine.rs, flow_executor.rs. | TODO |
+| FS-21 | `tools/shell.rs` | 844 | Estrarre sandbox_integration.rs. | TODO |
+| FS-22 | `provider/openai_compat.rs` | 833 | Estrarre streaming.rs, tool_conversion.rs. | TODO |
+
+### Tier 3 — File medio-grandi (500-1000 LOC) — Lower priority
+
+| # | File | LOC | Stato |
+|---|------|-----|-------|
+| FS-23 | `agent/prompt/sections.rs` | 716 | TODO |
+| FS-24 | `skills/creator.rs` | 710 | TODO |
+| FS-25 | `scheduler/cron.rs` | 705 | TODO |
+| FS-26 | `tools/sandbox/runtime_image.rs` | 697 | TODO |
+| FS-27 | `agent/execution_plan.rs` | 688 | TODO |
+| FS-28 | `tools/business.rs` | 670 | TODO |
+| FS-29 | `channels/whatsapp.rs` | 667 | TODO |
+| FS-30 | `business/db.rs` | 667 | TODO |
+| FS-31 | `security/exfiltration.rs` | 657 | TODO |
+| FS-32 | `provider/anthropic.rs` | 654 | TODO |
+| FS-33 | `agent/attachment_router.rs` | 638 | TODO |
+| FS-34 | `skills/installer.rs` | 621 | TODO |
+| FS-35 | `tools/mcp.rs` | 611 | TODO |
+| FS-36 | `channels/telegram.rs` | 585 | TODO |
+| FS-37 | `workflows/engine.rs` | 584 | TODO |
+| FS-38 | `storage/secrets.rs` | 579 | TODO |
+| FS-39 | `agent/browser_task_plan.rs` | 547 | TODO |
+| FS-40 | `tools/sandbox/mod.rs` | 544 | TODO |
+| FS-41 | `skills/openskills.rs` | 521 | TODO |
+| FS-42 | `utils/retry.rs` | 520 | TODO |
+| FS-43 | `rag/chunker.rs` | 516 | TODO |
+| FS-44 | `channels/slack.rs` | 504 | TODO |
+
+### JS Frontend (>500 LOC)
+
+| # | File | LOC | Stato |
+|---|------|-----|-------|
+| FS-JS-1 | `chat.js` | 2,911 | TODO |
+| FS-JS-2 | `automations.js` | 2,545 | TODO |
+| FS-JS-3 | `setup.js` | 2,484 | TODO |
+| FS-JS-4 | `mcp.js` | 1,695 | TODO |
+| FS-JS-5 | `skills.js` | 1,023 | TODO |
+| FS-JS-6 | `flow-renderer.js` | 703 | TODO |
+| FS-JS-7 | `memory.js` | 583 | TODO |
+| FS-JS-8 | `workflows.js` | 566 | TODO |
+| FS-JS-9 | `file-access.js` | 553 | TODO |
+| FS-JS-10 | `vault.js` | 550 | TODO |
+| FS-JS-11 | `sandbox.js` | 537 | TODO |
+| FS-JS-12 | `account.js` | 526 | TODO |
+
+### Note
+- Ogni split deve passare `cargo test` senza regressions
+- Split uno alla volta, commit per ognuno
+- Priorita: Tier 1 prima (massimo impatto), Tier 3 e JS quando serve
+- Non bloccare feature nuove per fare split — fai split quando tocchi quel file
+
+---
+
 ## Sprint 9+ — Future (P3)
 
 | Task | Priorita | Note |
@@ -1209,8 +1392,9 @@ Sprint 3: Sicurezza Canali (P1)             ✅ DONE (~295 LOC)
   3.2 Mention gating
   3.3 Typing indicators
     |
-Sprint 4: Web UI + Automations (P1)        ✅ DONE (~1,200 LOC)
+Sprint 4: Web UI + Automations (P1)        ✅ DONE (~3,200 LOC)
   ✅ 4.1-4.6 Automations + logs + usage/costi + setup wizard
+  ✅ 4.7 Automations Builder v2 (visual flow canvas + guided inspector + NLP generation + unified LLM engine)
     |
 Sprint 5: Ecosistema (P1)                  ✅ DONE (~1,350 LOC)
   ✅ 5.1 MCP Setup Guidato (catalogo + guided install + auto-discovery + Google/GitHub OAuth)
@@ -1314,7 +1498,7 @@ Sprint 9+: Future (P3)
   Voice, Extended thinking, Prometheus, distribuzione
 ```
 
-**Completato: Sprint 1-8 + SBX-1..6 (tutti validati CI cross-platform) + CHAT-1..6 + smoke manuali CHAT-7/Browser + core Browser + Design System + Workflow Engine + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4) + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
+**Completato: Sprint 1-8 + SBX-1..6 (tutti validati CI cross-platform) + CHAT-1..6 + smoke manuali CHAT-7/Browser + core Browser + Design System + Workflow Engine + Automations Builder v2 (visual flow + guided inspector + NLP) + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4) + Unified LLM Engine + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
 **Rimanente: formalizzazione release-grade di CHAT-7 e Browser E2E, BIZ-2..5, Mobile App, Sprint 9+**
 **CI: 11/11 check verdi (check&lint, test, 4 feature matrix, 5 build cross-platform + sandbox validation)**
 
@@ -1342,7 +1526,7 @@ Sprint 9+: Future (P3)
 3. **Browser via MCP Playwright** — tool unificato con stealth anti-bot, compact_tree, auto-snapshot
 4. **Exfiltration filter** — OpenClaw non ce l'ha
 5. **Business Autopilot** — agente autonomo per business con OODA loop, budget enforcement, MCP-first
-6. **Web UI ricca** — 17 pagine embedded + design system proprietario con accent picker
+6. **Web UI ricca** — 19 pagine embedded + visual automation builder n8n-style + design system proprietario con accent picker
 7. **Skill ecosystem** — ClawHub + OpenSkills + hot-reload
 8. **Mobile App con pairing cifrato** — vault secret in chiaro via canale sicuro, UX personalizzata oltre Telegram
 9. **Single binary Rust** — ~50MB, no runtime

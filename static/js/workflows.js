@@ -182,7 +182,7 @@ function renderWorkflows() {
         const empty = document.createElement('div');
         empty.className = 'empty-state';
         const p = document.createElement('p');
-        p.textContent = 'No workflows yet. Create one above.';
+        p.textContent = 'No workflows yet. Click "Create Workflow" to get started.';
         empty.appendChild(p);
         list.appendChild(empty);
         return;
@@ -441,6 +441,7 @@ async function onCreateWorkflow(e) {
         document.getElementById('wf-steps-container').textContent = '';
         stepCounter = 0;
         addStepRow();
+        toggleCreatorPanel(false);
         await loadWorkflows();
     } catch (e) {
         showToast('Error: ' + e.message, 'error');
@@ -508,7 +509,26 @@ async function loadDeliveryTargets() {
     }
 }
 
+// ─── Creator panel toggle ────────────────────────────────────────
+function toggleCreatorPanel(show) {
+    var panel = document.getElementById('wf-creator-panel');
+    var btn   = document.getElementById('wf-create-toggle');
+    if (!panel) return;
+    if (typeof show !== 'boolean') show = panel.style.display === 'none';
+    panel.style.display = show ? '' : 'none';
+    if (btn) btn.textContent = show ? 'Cancel' : '+ Create Workflow';
+    if (btn) btn.classList.toggle('btn-primary', !show);
+    if (btn) btn.classList.toggle('btn-ghost', show);
+}
+
 async function initWorkflowsPage() {
+    // Creator panel toggle
+    var createToggle = document.getElementById('wf-create-toggle');
+    if (createToggle) createToggle.addEventListener('click', function() { toggleCreatorPanel(); });
+
+    var cancelBtn = document.getElementById('wf-create-cancel');
+    if (cancelBtn) cancelBtn.addEventListener('click', function() { toggleCreatorPanel(false); });
+
     document.getElementById('wf-add-step').addEventListener('click', () => addStepRow());
     document.getElementById('wf-steps-container').addEventListener('click', (e) => {
         if (e.target.classList.contains('wf-step-remove')) {

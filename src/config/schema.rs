@@ -1708,6 +1708,17 @@ pub struct ExecutionSandboxConfig {
     pub docker_mount_workspace: bool,
 }
 
+impl ExecutionSandboxConfig {
+    /// Return a config with sandbox explicitly disabled (native execution).
+    /// Used for processes that must run natively (e.g. browser MCP).
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for ExecutionSandboxConfig {
     fn default() -> Self {
         Self {

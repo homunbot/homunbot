@@ -324,6 +324,7 @@ function rowEditorHtml(item) {
 
     return `
         <div class="automation-inline-editor${editorOpenClass}" data-editor-for="${escapeHtml(item.id)}">
+            <div class="automation-flow-full" data-flow-full-id="${escapeHtml(item.id)}"></div>
             <div class="form-row--2">
                 <div class="form-group">
                     <label>Name</label>
@@ -497,11 +498,69 @@ function renderAutomations() {
                             <button class="btn btn-danger btn-sm" data-action="delete" data-id="${escapeHtml(item.id)}">Delete</button>
                         </div>
                     </div>
+                    <div class="automation-flow-strip">
+                        <div class="automation-flow-mini" data-flow-mini-id="${escapeHtml(item.id)}"></div>
+                        <button class="automation-flow-expand-btn" data-action="expand-flow" data-id="${escapeHtml(item.id)}" title="Show flow diagram">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                        </button>
+                    </div>
+                    <div class="automation-flow-canvas" data-flow-canvas-id="${escapeHtml(item.id)}" style="display:none;"></div>
                     ${rowEditorHtml(item)}
                 </div>
             `;
         })
         .join('');
+
+    // Render mini flow previews
+    renderMiniFlows();
+}
+
+function renderMiniFlows() {
+    if (typeof window.HomunFlow === 'undefined') return;
+    automations.forEach(function (item) {
+        var flow = parseFlowJson(item.flow_json);
+        if (!flow) return;
+
+        // Mini strip in collapsed card
+        var miniEl = document.querySelector('.automation-flow-mini[data-flow-mini-id="' + item.id + '"]');
+        if (miniEl) window.HomunFlow.renderFlowMini(miniEl, flow);
+
+        // Full flow in expanded canvas (render if already visible)
+        var canvasEl = document.querySelector('.automation-flow-canvas[data-flow-canvas-id="' + item.id + '"]');
+        if (canvasEl && canvasEl.style.display !== 'none') {
+            window.HomunFlow.renderFlow(canvasEl, flow);
+        }
+
+        // Full flow in editor (when open)
+        var fullEl = document.querySelector('.automation-flow-full[data-flow-full-id="' + item.id + '"]');
+        if (fullEl) window.HomunFlow.renderFlow(fullEl, flow);
+    });
+}
+
+function toggleFlowCanvas(automationId) {
+    var canvasEl = document.querySelector('.automation-flow-canvas[data-flow-canvas-id="' + automationId + '"]');
+    var btn = document.querySelector('.automation-flow-expand-btn[data-id="' + automationId + '"]');
+    if (!canvasEl) return;
+
+    var isHidden = canvasEl.style.display === 'none';
+    canvasEl.style.display = isHidden ? 'block' : 'none';
+
+    // Rotate chevron
+    if (btn) btn.classList.toggle('automation-flow-expand-btn--open', isHidden);
+
+    // Render flow on first expand
+    if (isHidden && !canvasEl.firstChild) {
+        var item = automations.find(function (a) { return a.id === automationId; });
+        if (item) {
+            var flow = parseFlowJson(item.flow_json);
+            if (flow) window.HomunFlow.renderFlow(canvasEl, flow);
+        }
+    }
+}
+
+function parseFlowJson(raw) {
+    if (!raw) return null;
+    try { return typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (_) { return null; }
 }
 
 function renderHistoryRows(rows) {
@@ -537,7 +596,12 @@ function renderHistoryRows(rows) {
 }
 
 async function loadAutomations() {
-    automations = await apiRequest('/v1/automations');
+    try {
+        automations = await apiRequest('/v1/automations');
+    } catch (err) {
+        showToast('Failed to load automations: ' + (err.message || err), 'error');
+        automations = [];
+    }
     renderAutomations();
 }
 
@@ -774,6 +838,11 @@ async function onAutomationAction(event) {
             if (selectedAutomationId === id) {
                 await loadHistory(id);
             }
+            return;
+        }
+
+        if (action === 'expand-flow') {
+            toggleFlowCanvas(id);
             return;
         }
 
@@ -1032,3 +1101,1445 @@ async function initializeAutomationsPage() {
 }
 
 document.addEventListener('DOMContentLoaded', initializeAutomationsPage);
+
+// ─── Node Kind Configuration (shared source of truth for Builder) ───────────────────────
+// NOTE: All values in NODE_KINDS are static configuration constants.
+// Dynamic content is always escaped via escapeHtml() before DOM insertion.
+const NODE_KINDS = {
+    trigger: {
+        label: 'Schedule Trigger',
+        accent: '#E8A838',
+        icon: 'M13 10V3L4 14h7v7l9-11h-7z',
+        group: 'triggers',
+        hasIn: false, hasOut: true,
+        description: 'Starts the automation on a schedule (daily, interval, or cron expression)',
+    },
+    tool: {
+        label: 'Tool',
+        accent: '#68B984',
+        icon: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6-7.6 7.6-1.6-1.6a1 1 0 1 0-1.4 1.4l2.3 2.3a1 1 0 0 0 1.4 0l8.3-8.3a1 1 0 0 0 0-1.4l-2.3-2.3a1 1 0 0 0-1.4 0z',
+        group: 'processing',
+        hasIn: true, hasOut: true,
+        description: 'Run a built-in tool (shell commands, file operations, web search, etc.)',
+    },
+    skill: {
+        label: 'Skill',
+        accent: '#E07C4F',
+        icon: 'M13 10V3L4 14h7v7l9-11h-7z',
+        group: 'processing',
+        hasIn: true, hasOut: true,
+        description: 'Execute an installed Agent Skill \u2014 extensible plugins for specialized tasks',
+    },
+    mcp: {
+        label: 'MCP Server',
+        accent: '#9B72CF',
+        icon: 'M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2zm0 4a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm-4 8a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm8 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4z',
+        group: 'processing',
+        hasIn: true, hasOut: true,
+        description: 'Call a tool from an MCP server (Gmail, GitHub, Slack, filesystem, etc.)',
+    },
+    llm: {
+        label: 'LLM / Agent',
+        accent: '#5B9BD5',
+        icon: 'M12 2a9 9 0 0 0-9 9c0 3.1 1.6 5.9 4 7.5V21a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-2.5c2.4-1.6 4-4.4 4-7.5a9 9 0 0 0-9-9z',
+        group: 'processing',
+        hasIn: true, hasOut: true,
+        description: 'Send a prompt to an LLM agent for reasoning, writing, analysis, or decisions',
+    },
+    transform: {
+        label: 'Transform',
+        accent: '#78909C',
+        icon: 'M12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z',
+        group: 'processing',
+        hasIn: true, hasOut: true,
+        description: 'Transform, filter, or reshape data between steps',
+    },
+    condition: {
+        label: 'Condition',
+        accent: '#8BC34A',
+        icon: 'M12 2L2 12l10 10 10-10L12 2z',
+        group: 'control',
+        hasIn: true, hasOut: true,
+        shape: 'diamond',
+        description: 'Branch the flow based on a condition (if/else). Example: "Are there new emails?" \u2192 Yes: summarize them, No: skip to deliver.',
+    },
+    parallel: {
+        label: 'Parallel',
+        accent: '#26A69A',
+        icon: 'M4 6h6v2H4zm0 5h16v2H4zm10-5h6v2h-6zM4 16h6v2H4zm10 0h6v2h-6z',
+        group: 'control',
+        hasIn: true, hasOut: true,
+        shape: 'diamond',
+        description: 'Run multiple branches at the same time, then merge results. Example: check Gmail AND Slack in parallel \u2192 combine into one summary.',
+    },
+    loop: {
+        label: 'Loop',
+        accent: '#AB8F67',
+        icon: 'M17.65 6.35A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.76-4.24L13 11h7V4z',
+        group: 'control',
+        hasIn: true, hasOut: true,
+        description: 'Process items one by one in a loop. Example: for each unread email \u2192 summarize it \u2192 collect all summaries.',
+    },
+    subprocess: {
+        label: 'Sub-workflow',
+        accent: '#5C7AEA',
+        icon: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z',
+        group: 'control',
+        hasIn: true, hasOut: true,
+        description: 'Reuse a saved automation as a step. Example: call your "Email Summarizer" automation inside a larger "Morning Digest" flow.',
+    },
+    deliver: {
+        label: 'Deliver',
+        accent: '#42A5F5',
+        icon: 'M2 21l21-9L2 3v7l15 2-15 2v7z',
+        group: 'output',
+        hasIn: true, hasOut: false,
+        description: 'Send the result to a channel (Telegram, CLI, Discord, Web, etc.)',
+    },
+};
+
+// ─── Lazy API Data Caches ──────────────────────────────────────────────────────
+// Fetched once when first needed by inspector dropdowns, then reused.
+let _cachedTools = null;
+let _cachedSkills = null;
+let _cachedMcpServers = null;
+let _cachedTargets = null;
+
+async function getCachedTools() {
+    if (!_cachedTools) {
+        try {
+            const res = await apiRequest('/v1/tools');
+            _cachedTools = { tools: res.tools || [], missing: res.missing || [] };
+        } catch (_) { _cachedTools = { tools: [], missing: [] }; }
+    }
+    return _cachedTools;
+}
+async function getCachedSkills() {
+    if (!_cachedSkills) {
+        try { _cachedSkills = await apiRequest('/v1/skills'); } catch (_) { _cachedSkills = []; }
+    }
+    return _cachedSkills;
+}
+async function getCachedMcpServers() {
+    if (!_cachedMcpServers) {
+        try { _cachedMcpServers = await apiRequest('/v1/mcp/servers'); } catch (_) { _cachedMcpServers = []; }
+    }
+    return _cachedMcpServers;
+}
+async function getCachedTargets() {
+    if (!_cachedTargets) {
+        try { _cachedTargets = await apiRequest('/v1/automations/targets'); } catch (_) { _cachedTargets = []; }
+    }
+    return _cachedTargets;
+}
+
+const NODE_GROUPS = [
+    { key: 'triggers',   label: 'Triggers' },
+    { key: 'processing', label: 'Processing' },
+    { key: 'control',    label: 'Control Flow' },
+    { key: 'output',     label: 'Output' },
+];
+
+// ─── Automations Builder (n8n Style) ────────────────────────────────────────────────────────
+const Builder = {
+    nodes: [],
+    edges: [],
+    nodeCounter: 0,
+    selectedNodeId: null,
+    draggedKind: null,
+    isDraggingNode: false,
+    draggedNodeId: null,
+    dragOffset: { x: 0, y: 0 },
+
+    // Connection state
+    isConnecting: false,
+    connectionStartNode: null,
+    connectionStartType: null,
+    tempEdgePath: null,
+
+    init() {
+        this.canvas = document.getElementById('builder-canvas');
+        this.nodesContainer = document.getElementById('builder-canvas-nodes');
+        this.edgesContainer = document.getElementById('builder-canvas-edges');
+        this.inspector = document.getElementById('builder-inspector');
+        this.inspectorBody = document.getElementById('inspector-body');
+
+        if (!this.canvas) return;
+
+        this.buildPalette();
+        this.setupCanvas();
+        this.setupInspector();
+        this.setupPromptBar();
+
+        // Buttons
+        document.getElementById('btn-create-automation')?.addEventListener('click', () => {
+            document.getElementById('automations-list-view').style.display = 'none';
+            document.getElementById('automations-builder-view').style.display = 'flex';
+            this.reset();
+        });
+
+        document.getElementById('btn-builder-back')?.addEventListener('click', () => {
+            document.getElementById('automations-builder-view').style.display = 'none';
+            document.getElementById('automations-list-view').style.display = 'block';
+        });
+
+        document.getElementById('btn-builder-save')?.addEventListener('click', () => this.save());
+    },
+
+    // ── Palette ──────────────────────────────────────────────────
+
+    buildPalette() {
+        const container = document.getElementById('builder-palette-items');
+        if (!container) return;
+        container.textContent = '';
+
+        NODE_GROUPS.forEach(group => {
+            const kinds = Object.entries(NODE_KINDS).filter(([, cfg]) => cfg.group === group.key);
+            if (kinds.length === 0) return;
+
+            // Group header
+            const header = document.createElement('div');
+            header.className = 'builder-palette-group-label';
+            header.textContent = group.label;
+            container.appendChild(header);
+
+            // Items — built with safe DOM methods, no innerHTML with user data
+            kinds.forEach(([kind, cfg]) => {
+                const el = document.createElement('div');
+                el.className = 'builder-node-drag';
+                el.draggable = true;
+                el.dataset.kind = kind;
+
+                const iconWrap = document.createElement('div');
+                iconWrap.className = 'builder-palette-icon';
+                iconWrap.style.background = cfg.accent;
+                // SVG icon path is a static constant from NODE_KINDS, safe for innerHTML
+                const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                svg.setAttribute('viewBox', '0 0 24 24');
+                svg.setAttribute('width', '14');
+                svg.setAttribute('height', '14');
+                svg.setAttribute('fill', 'currentColor');
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', cfg.icon);
+                svg.appendChild(path);
+                iconWrap.appendChild(svg);
+
+                const label = document.createElement('span');
+                label.className = 'builder-palette-label';
+                label.textContent = cfg.label;
+
+                el.appendChild(iconWrap);
+                el.appendChild(label);
+
+                // Tooltip description (shown on click, hidden on drag/second-click)
+                if (cfg.description) {
+                    const tip = document.createElement('div');
+                    tip.className = 'palette-tooltip';
+                    tip.textContent = cfg.description;
+                    tip.style.display = 'none';
+                    el.appendChild(tip);
+
+                    el.addEventListener('click', () => {
+                        // Toggle tooltip; close any other open tooltips first
+                        container.querySelectorAll('.palette-tooltip').forEach(t => {
+                            if (t !== tip) t.style.display = 'none';
+                        });
+                        tip.style.display = tip.style.display === 'none' ? 'block' : 'none';
+                    });
+                }
+
+                el.addEventListener('dragstart', e => {
+                    this.draggedKind = kind;
+                    e.dataTransfer.setData('text/plain', kind);
+                    e.dataTransfer.effectAllowed = 'copy';
+                    // Hide tooltip when dragging
+                    const tip = el.querySelector('.palette-tooltip');
+                    if (tip) tip.style.display = 'none';
+                });
+                container.appendChild(el);
+            });
+        });
+    },
+
+    // ── Canvas ───────────────────────────────────────────────────
+
+    setupCanvas() {
+        this.canvas.addEventListener('dragover', e => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        });
+
+        this.canvas.addEventListener('drop', e => {
+            e.preventDefault();
+            const kind = this.draggedKind || e.dataTransfer.getData('text/plain');
+            if (kind && NODE_KINDS[kind]) {
+                const rect = this.canvas.getBoundingClientRect();
+                this.addNode(kind, e.clientX - rect.left, e.clientY - rect.top);
+            }
+            this.draggedKind = null;
+        });
+
+        // Node dragging + connection drawing
+        this.canvas.addEventListener('mousemove', e => {
+            if (this.isDraggingNode && this.draggedNodeId) {
+                const rect = this.canvas.getBoundingClientRect();
+                const node = this.nodes.find(n => n.id === this.draggedNodeId);
+                if (node) {
+                    node.x = e.clientX - rect.left - this.dragOffset.x;
+                    node.y = e.clientY - rect.top - this.dragOffset.y;
+                    this.renderNodes();
+                    this.renderEdges();
+                }
+            }
+            if (this.isConnecting && this.tempEdgePath) {
+                const rect = this.canvas.getBoundingClientRect();
+                const startNode = this.nodes.find(n => n.id === this.connectionStartNode);
+                if (startNode) {
+                    const x1 = startNode.x + 180;
+                    const y1 = startNode.y + 36;
+                    const x2 = e.clientX - rect.left;
+                    const y2 = e.clientY - rect.top;
+                    this.tempEdgePath.setAttribute('d', this.bezierPath(x1, y1, x2, y2));
+                }
+            }
+        });
+
+        this.canvas.addEventListener('mouseup', () => {
+            this.isDraggingNode = false;
+            this.draggedNodeId = null;
+            if (this.isConnecting) {
+                this.isConnecting = false;
+                if (this.tempEdgePath) { this.tempEdgePath.remove(); this.tempEdgePath = null; }
+                this.connectionStartNode = null;
+            }
+        });
+
+        this.canvas.addEventListener('click', e => {
+            if (e.target === this.canvas || e.target.tagName === 'svg') {
+                this.selectedNodeId = null;
+                this.renderNodes();
+                this.hideInspector();
+            }
+        });
+    },
+
+    // ── Inspector ────────────────────────────────────────────────
+
+    setupInspector() {
+        document.getElementById('btn-inspector-close')?.addEventListener('click', () => {
+            this.hideInspector();
+        });
+        // Handle both input (text/textarea) and change (select/checkbox) events
+        const handleFieldChange = (e) => {
+            if (!this.selectedNodeId) return;
+            const node = this.nodes.find(n => n.id === this.selectedNodeId);
+            if (!node) return;
+            if (e.target.dataset.field) {
+                node.data[e.target.dataset.field] = e.target.value;
+                this.renderNodes();
+            }
+        };
+        this.inspectorBody.addEventListener('input', handleFieldChange);
+        this.inspectorBody.addEventListener('change', handleFieldChange);
+    },
+
+    // ── Prompt Bar ───────────────────────────────────────────────
+
+    setupPromptBar() {
+        const input = document.getElementById('builder-prompt-input');
+        const btn = document.getElementById('btn-builder-generate');
+        if (!input || !btn) return;
+
+        btn.addEventListener('click', () => this.generateFromPrompt());
+        input.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                this.generateFromPrompt();
+            }
+        });
+        // Auto-grow textarea
+        input.addEventListener('input', () => {
+            input.style.height = 'auto';
+            input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+        });
+    },
+
+    async generateFromPrompt() {
+        const input = document.getElementById('builder-prompt-input');
+        const status = document.getElementById('builder-prompt-status');
+        const desc = input?.value.trim();
+        if (!desc) return;
+
+        status.textContent = 'Generating flow...';
+        try {
+            const res = await apiRequest('/v1/automations/generate-flow', {
+                method: 'POST',
+                body: JSON.stringify({ description: desc }),
+            });
+            if (res && res.flow) {
+                this.loadFlowData(res.flow, res.name);
+                input.value = '';
+                input.style.height = 'auto';
+                showToast('Flow generated! Review and save.', 'success');
+            }
+        } catch (err) {
+            showToast(err.message || 'Failed to generate flow.', 'error');
+        } finally {
+            status.textContent = '';
+        }
+    },
+
+    loadFlowData(flowData, name) {
+        this.reset();
+        if (name) document.getElementById('builder-automation-name').value = name;
+
+        // Position nodes in a row with spacing
+        const startX = 80;
+        const startY = 120;
+        const spacingX = 220;
+
+        (flowData.nodes || []).forEach((n, i) => {
+            this.nodeCounter++;
+            const cfg = NODE_KINDS[n.kind] || NODE_KINDS.llm;
+            this.nodes.push({
+                id: n.id || ('node_' + this.nodeCounter),
+                kind: n.kind || 'llm',
+                x: startX + i * spacingX,
+                y: startY,
+                title: n.label || cfg.label,
+                data: this.flowNodeToData(n),
+            });
+        });
+
+        this.edges = (flowData.edges || []).map(e => ({
+            id: 'edge_' + e.from + '_' + e.to,
+            from: e.from,
+            to: e.to,
+        }));
+
+        this.render();
+    },
+
+    flowNodeToData(flowNode) {
+        const base = this.defaultDataForKind(flowNode.kind);
+        // Populate data from flow node label/meta
+        switch (flowNode.kind) {
+            case 'trigger':
+                if (flowNode.meta) base.time = flowNode.meta;
+                break;
+            case 'llm':
+                if (flowNode.label) base.prompt = flowNode.label;
+                break;
+            case 'tool':
+                if (flowNode.label) base.tool_name = flowNode.label;
+                break;
+            case 'skill':
+                if (flowNode.label) base.skill_name = flowNode.label;
+                break;
+            case 'mcp':
+                if (flowNode.label) base.server = flowNode.label;
+                if (flowNode.meta) base.tool = flowNode.meta;
+                break;
+            case 'condition':
+                if (flowNode.label) base.expression = flowNode.label;
+                break;
+            case 'deliver':
+                if (flowNode.meta) base.target = flowNode.meta;
+                else if (flowNode.label) base.target = flowNode.label;
+                break;
+            case 'transform':
+                if (flowNode.label) base.template = flowNode.label;
+                break;
+            case 'loop':
+                if (flowNode.meta) base.condition = flowNode.meta;
+                break;
+            case 'subprocess':
+                if (flowNode.label) base.workflow_ref = flowNode.label;
+                break;
+        }
+        return base;
+    },
+
+    // ── Node CRUD ────────────────────────────────────────────────
+
+    reset() {
+        this.nodes = [];
+        this.edges = [];
+        this.nodeCounter = 0;
+        this.selectedNodeId = null;
+        document.getElementById('builder-automation-name').value = '';
+        this.render();
+        this.hideInspector();
+    },
+
+    addNode(kind, x, y) {
+        const cfg = NODE_KINDS[kind];
+        if (!cfg) return;
+        this.nodeCounter++;
+        const node = {
+            id: 'node_' + this.nodeCounter,
+            kind,
+            x, y,
+            title: cfg.label,
+            data: this.defaultDataForKind(kind),
+        };
+        this.nodes.push(node);
+        this.selectNode(node.id);
+        this.render();
+    },
+
+    defaultDataForKind(kind) {
+        switch (kind) {
+            case 'trigger':    return {
+                mode: 'daily', time: '09:00',
+                intervalHours: 6, weekdays: ['mon','tue','wed','thu','fri'],
+                cronMinute: '0', cronHour: '9', cronDom: '*', cronMonth: '*', cronDow: '*',
+            };
+            case 'tool':       return { tool_name: '', arguments: '' };
+            case 'skill':      return { skill_name: '' };
+            case 'mcp':        return { server: '', tool: '' };
+            case 'llm':        return { prompt: '', model: '' };
+            case 'condition':  return { expression: '', true_label: 'Yes', false_label: 'No' };
+            case 'parallel':   return {};
+            case 'loop':       return { max_iterations: 10, condition: '' };
+            case 'subprocess': return { workflow_ref: '' };
+            case 'transform':  return { template: '' };
+            case 'deliver':    return { target: 'cli:default' };
+            default:           return {};
+        }
+    },
+
+    selectNode(id) {
+        this.selectedNodeId = id;
+        this.renderNodes();
+        this.showInspector(id);
+    },
+
+    removeNode(id) {
+        this.nodes = this.nodes.filter(n => n.id !== id);
+        this.edges = this.edges.filter(e => e.from !== id && e.to !== id);
+        if (this.selectedNodeId === id) {
+            this.selectedNodeId = null;
+            this.hideInspector();
+        }
+        this.render();
+    },
+
+    // ── Connections ──────────────────────────────────────────────
+
+    startConnection(nodeId, type, e) {
+        e.stopPropagation();
+        this.isConnecting = true;
+        this.connectionStartNode = nodeId;
+        this.connectionStartType = type;
+        this.tempEdgePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        this.tempEdgePath.setAttribute('class', 'builder-edge-path');
+        this.tempEdgePath.style.pointerEvents = 'none';
+        this.edgesContainer.appendChild(this.tempEdgePath);
+    },
+
+    finishConnection(nodeId, type, e) {
+        e.stopPropagation();
+        if (this.isConnecting && this.connectionStartNode !== nodeId && this.connectionStartType !== type) {
+            const from = this.connectionStartType === 'out' ? this.connectionStartNode : nodeId;
+            const to = this.connectionStartType === 'in' ? this.connectionStartNode : nodeId;
+            if (!this.edges.find(e => e.from === from && e.to === to)) {
+                this.edges.push({ id: 'edge_' + from + '_' + to, from, to });
+                this.renderEdges();
+            }
+        }
+        this.isConnecting = false;
+        if (this.tempEdgePath) { this.tempEdgePath.remove(); this.tempEdgePath = null; }
+    },
+
+    bezierPath(x1, y1, x2, y2) {
+        const cx = (x1 + x2) / 2;
+        return 'M ' + x1 + ' ' + y1 + ' C ' + cx + ' ' + y1 + ' ' + cx + ' ' + y2 + ' ' + x2 + ' ' + y2;
+    },
+
+    // ── Rendering ────────────────────────────────────────────────
+
+    render() {
+        this.renderNodes();
+        this.renderEdges();
+    },
+
+    nodeDescription(node) {
+        const d = node.data;
+        switch (node.kind) {
+            case 'trigger': {
+                if (d.mode === 'cron') return 'cron ' + [d.cronMinute||'0', d.cronHour||'9', d.cronDom||'*', d.cronMonth||'*', d.cronDow||'*'].join(' ');
+                if (d.mode === 'interval') return 'every ' + (d.intervalHours || 6) + 'h';
+                return 'daily at ' + (d.time || '09:00');
+            }
+            case 'tool':       return d.tool_name || 'Select tool...';
+            case 'skill':      return d.skill_name || 'Select skill...';
+            case 'mcp':        return d.server ? (d.server + (d.tool ? ' \u2192 ' + d.tool : '')) : 'Configure MCP...';
+            case 'llm':        return d.prompt ? shorten(d.prompt, 25) : 'Configure prompt...';
+            case 'condition':  return d.expression ? shorten(d.expression, 25) : 'Set condition...';
+            case 'parallel':   return 'Parallel execution';
+            case 'loop':       return d.condition ? shorten(d.condition, 20) : ('Max ' + (d.max_iterations || 10) + ' iterations');
+            case 'subprocess': return d.workflow_ref || 'Select workflow...';
+            case 'transform':  return d.template ? shorten(d.template, 25) : 'Configure transform...';
+            case 'deliver':    return d.target || 'cli:default';
+            default:           return '';
+        }
+    },
+
+    renderNodes() {
+        this.nodesContainer.textContent = '';
+        this.nodes.forEach(node => {
+            const cfg = NODE_KINDS[node.kind] || NODE_KINDS.llm;
+            const el = document.createElement('div');
+            el.className = 'builder-node' + (this.selectedNodeId === node.id ? ' selected' : '');
+            if (cfg.shape) el.classList.add('builder-node--' + cfg.shape);
+            el.style.transform = 'translate(' + node.x + 'px, ' + node.y + 'px)';
+
+            const desc = this.nodeDescription(node);
+
+            // Build node DOM safely
+            const headerDiv = document.createElement('div');
+            headerDiv.className = 'builder-node-header';
+
+            const iconDiv = document.createElement('div');
+            iconDiv.className = 'builder-node-icon';
+            iconDiv.style.background = cfg.accent;
+            const iconSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            iconSvg.setAttribute('viewBox', '0 0 24 24');
+            iconSvg.setAttribute('width', '14');
+            iconSvg.setAttribute('height', '14');
+            iconSvg.setAttribute('fill', 'currentColor');
+            const iconPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            iconPath.setAttribute('d', cfg.icon);
+            iconSvg.appendChild(iconPath);
+            iconDiv.appendChild(iconSvg);
+
+            const titleDiv = document.createElement('div');
+            titleDiv.className = 'builder-node-title';
+            titleDiv.textContent = node.title;
+
+            headerDiv.appendChild(iconDiv);
+            headerDiv.appendChild(titleDiv);
+
+            const bodyDiv = document.createElement('div');
+            bodyDiv.className = 'builder-node-body';
+            bodyDiv.textContent = desc;
+
+            el.appendChild(headerDiv);
+            el.appendChild(bodyDiv);
+
+            // Connection handles
+            if (cfg.hasIn) {
+                const hIn = document.createElement('div');
+                hIn.className = 'builder-handle builder-handle-in';
+                hIn.dataset.type = 'in';
+                hIn.addEventListener('mousedown', e => this.startConnection(node.id, 'in', e));
+                hIn.addEventListener('mouseup', e => this.finishConnection(node.id, 'in', e));
+                el.appendChild(hIn);
+            }
+            if (cfg.hasOut) {
+                const hOut = document.createElement('div');
+                hOut.className = 'builder-handle builder-handle-out';
+                hOut.dataset.type = 'out';
+                hOut.addEventListener('mousedown', e => this.startConnection(node.id, 'out', e));
+                hOut.addEventListener('mouseup', e => this.finishConnection(node.id, 'out', e));
+                el.appendChild(hOut);
+            }
+
+            // Node drag
+            el.addEventListener('mousedown', e => {
+                if (e.target.classList.contains('builder-handle')) return;
+                this.isDraggingNode = true;
+                this.draggedNodeId = node.id;
+                const rect = this.canvas.getBoundingClientRect();
+                this.dragOffset = {
+                    x: e.clientX - rect.left - node.x,
+                    y: e.clientY - rect.top - node.y,
+                };
+                this.selectNode(node.id);
+            });
+
+            this.nodesContainer.appendChild(el);
+        });
+    },
+
+    renderEdges() {
+        this.edgesContainer.textContent = '';
+        this.edges.forEach(edge => {
+            const fromNode = this.nodes.find(n => n.id === edge.from);
+            const toNode = this.nodes.find(n => n.id === edge.to);
+            if (!fromNode || !toNode) return;
+
+            const x1 = fromNode.x + 180;
+            const y1 = fromNode.y + 36;
+            const x2 = toNode.x;
+            const y2 = toNode.y + 36;
+
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttribute('d', this.bezierPath(x1, y1, x2, y2));
+            path.setAttribute('class', 'builder-edge-path');
+            path.addEventListener('dblclick', () => {
+                this.edges = this.edges.filter(e => e.id !== edge.id);
+                this.renderEdges();
+            });
+            this.edgesContainer.appendChild(path);
+        });
+    },
+
+    // ── Inspector ────────────────────────────────────────────────
+
+    showInspector(id) {
+        const node = this.nodes.find(n => n.id === id);
+        if (!node) return;
+
+        this.inspector.style.display = 'flex';
+        document.getElementById('inspector-title').textContent = node.title;
+
+        // Build inspector DOM safely
+        this.inspectorBody.textContent = '';
+
+        // Delete button row
+        const delRow = document.createElement('div');
+        delRow.style.cssText = 'display:flex;justify-content:flex-end';
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn btn-danger btn-sm';
+        delBtn.textContent = 'Delete Node';
+        delBtn.addEventListener('click', () => this.removeNode(id));
+        delRow.appendChild(delBtn);
+        this.inspectorBody.appendChild(delRow);
+
+        // Kind-specific fields
+        this.appendInspectorFields(node);
+    },
+
+    // Unique render ID to prevent stale async fills from populating the wrong inspector
+    _inspectorRenderId: 0,
+
+    appendInspectorFields(node) {
+        const d = node.data;
+        const body = this.inspectorBody;
+        const renderId = ++this._inspectorRenderId;
+
+        // ── Helpers ─────────────────────────────────────────────
+        const addField = (labelText, fieldName, type, opts) => {
+            const group = document.createElement('div');
+            group.className = 'form-group';
+            if (opts.containerAttr) {
+                for (const [k, v] of Object.entries(opts.containerAttr)) group.setAttribute(k, v);
+            }
+
+            const lbl = document.createElement('label');
+            lbl.textContent = labelText;
+            group.appendChild(lbl);
+
+            if (type === 'select') {
+                const sel = document.createElement('select');
+                sel.className = 'input';
+                sel.dataset.field = fieldName;
+                (opts.options || []).forEach(o => {
+                    const opt = document.createElement('option');
+                    opt.value = o.value;
+                    opt.textContent = o.label;
+                    if (d[fieldName] === o.value) opt.selected = true;
+                    sel.appendChild(opt);
+                });
+                group.appendChild(sel);
+                if (opts.ref) opts.ref.el = sel;
+            } else if (type === 'textarea') {
+                const ta = document.createElement('textarea');
+                ta.className = 'input';
+                ta.rows = opts.rows || 3;
+                ta.dataset.field = fieldName;
+                ta.placeholder = opts.placeholder || '';
+                ta.value = d[fieldName] || '';
+                group.appendChild(ta);
+            } else if (type === 'number') {
+                const inp = document.createElement('input');
+                inp.type = 'number';
+                inp.className = 'input';
+                inp.dataset.field = fieldName;
+                inp.value = d[fieldName] || (opts.defaultVal || '');
+                if (opts.min !== undefined) inp.min = opts.min;
+                if (opts.max !== undefined) inp.max = opts.max;
+                group.appendChild(inp);
+            } else if (type === 'time') {
+                const inp = document.createElement('input');
+                inp.type = 'time';
+                inp.className = 'input';
+                inp.dataset.field = fieldName;
+                inp.value = d[fieldName] || (opts.defaultVal || '09:00');
+                group.appendChild(inp);
+            } else {
+                const inp = document.createElement('input');
+                inp.type = 'text';
+                inp.className = 'input';
+                inp.dataset.field = fieldName;
+                inp.value = d[fieldName] || '';
+                inp.placeholder = opts.placeholder || '';
+                if (opts.list) inp.setAttribute('list', opts.list);
+                group.appendChild(inp);
+            }
+
+            body.appendChild(group);
+            return group;
+        };
+
+        const addHint = (text) => {
+            const hint = document.createElement('p');
+            hint.className = 'form-hint';
+            hint.textContent = text;
+            body.appendChild(hint);
+            return hint;
+        };
+
+        const addLink = (text, href) => {
+            const a = document.createElement('a');
+            a.className = 'inspector-link';
+            a.textContent = text;
+            // Navigate to the actual page route (multi-page app, not SPA)
+            a.href = href || '#';
+            body.appendChild(a);
+        };
+
+        // Async-populate a <select> — checks renderId to avoid stale fills
+        const asyncPopulateSelect = (sel, fetchFn, mapFn, emptyMsg) => {
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Loading...';
+            placeholder.disabled = true;
+            sel.appendChild(placeholder);
+
+            fetchFn().then(data => {
+                if (this._inspectorRenderId !== renderId) return; // stale
+                sel.textContent = '';
+                const empty = document.createElement('option');
+                empty.value = '';
+                empty.textContent = emptyMsg || '-- Select --';
+                sel.appendChild(empty);
+                const items = mapFn(data);
+                if (items.length === 0) {
+                    empty.textContent = emptyMsg || 'None available';
+                }
+                items.forEach(item => {
+                    const opt = document.createElement('option');
+                    opt.value = item.value;
+                    opt.textContent = item.label;
+                    if (d[sel.dataset.field] === item.value) opt.selected = true;
+                    sel.appendChild(opt);
+                });
+            });
+        };
+
+        // ── Kind-specific forms ─────────────────────────────────
+
+        // Node description at top of inspector
+        const kindCfg = NODE_KINDS[node.kind];
+        if (kindCfg && kindCfg.description) {
+            addHint(kindCfg.description);
+        }
+
+        switch (node.kind) {
+            // ─── TRIGGER ────────────────────────────────────────
+            case 'trigger': {
+                const modeRef = {};
+                addField('Schedule Mode', 'mode', 'select', { options: [
+                    { value: 'daily', label: 'Every day' },
+                    { value: 'interval', label: 'Interval (every N hours)' },
+                    { value: 'cron', label: 'Cron expression' },
+                ], ref: modeRef });
+
+                // Daily fields
+                const dailyGroup = addField('Time', 'time', 'time', {
+                    defaultVal: '09:00',
+                    containerAttr: { 'data-trigger-mode': 'daily' },
+                });
+
+                // Interval fields
+                const intGroup = document.createElement('div');
+                intGroup.className = 'form-group';
+                intGroup.setAttribute('data-trigger-mode', 'interval');
+                const intLbl = document.createElement('label');
+                intLbl.textContent = 'Every (hours)';
+                intGroup.appendChild(intLbl);
+                const intInp = document.createElement('input');
+                intInp.type = 'number';
+                intInp.className = 'input';
+                intInp.dataset.field = 'intervalHours';
+                intInp.value = d.intervalHours || 6;
+                intInp.min = 1;
+                intInp.max = 168;
+                intGroup.appendChild(intInp);
+                body.appendChild(intGroup);
+
+                // Weekday checkboxes for interval
+                const wdGroup = document.createElement('div');
+                wdGroup.className = 'form-group';
+                wdGroup.setAttribute('data-trigger-mode', 'interval');
+                const wdLbl = document.createElement('label');
+                wdLbl.textContent = 'Active Days';
+                wdGroup.appendChild(wdLbl);
+                const wdRow = document.createElement('div');
+                wdRow.className = 'weekday-row';
+                const days = [
+                    { key: 'mon', label: 'M' }, { key: 'tue', label: 'T' },
+                    { key: 'wed', label: 'W' }, { key: 'thu', label: 'T' },
+                    { key: 'fri', label: 'F' }, { key: 'sat', label: 'S' },
+                    { key: 'sun', label: 'S' },
+                ];
+                const selectedDays = d.weekdays || ['mon','tue','wed','thu','fri'];
+                days.forEach(day => {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'weekday-btn' + (selectedDays.includes(day.key) ? ' active' : '');
+                    btn.textContent = day.label;
+                    btn.title = day.key;
+                    btn.addEventListener('click', () => {
+                        btn.classList.toggle('active');
+                        // Update node data
+                        const active = Array.from(wdRow.querySelectorAll('.weekday-btn.active'))
+                            .map(b => b.title);
+                        node.data.weekdays = active;
+                    });
+                    wdRow.appendChild(btn);
+                });
+                wdGroup.appendChild(wdRow);
+                body.appendChild(wdGroup);
+
+                // Cron fields
+                const cronGroup = document.createElement('div');
+                cronGroup.className = 'form-group';
+                cronGroup.setAttribute('data-trigger-mode', 'cron');
+                const cronLbl = document.createElement('label');
+                cronLbl.textContent = 'Cron Expression';
+                cronGroup.appendChild(cronLbl);
+                const cronRow = document.createElement('div');
+                cronRow.className = 'cron-fields';
+                const cronParts = ['Minute', 'Hour', 'Day', 'Month', 'Weekday'];
+                const cronKeys = ['cronMinute', 'cronHour', 'cronDom', 'cronMonth', 'cronDow'];
+                const cronDefaults = ['0', '9', '*', '*', '*'];
+                cronParts.forEach((part, i) => {
+                    const wrap = document.createElement('div');
+                    wrap.className = 'cron-field';
+                    const fieldLbl = document.createElement('span');
+                    fieldLbl.className = 'cron-field-label';
+                    fieldLbl.textContent = part;
+                    wrap.appendChild(fieldLbl);
+                    const inp = document.createElement('input');
+                    inp.type = 'text';
+                    inp.className = 'input cron-input';
+                    inp.dataset.field = cronKeys[i];
+                    inp.value = d[cronKeys[i]] || cronDefaults[i];
+                    inp.placeholder = cronDefaults[i];
+                    wrap.appendChild(inp);
+                    cronRow.appendChild(wrap);
+                });
+                cronGroup.appendChild(cronRow);
+
+                // Cron presets
+                const presetRow = document.createElement('div');
+                presetRow.className = 'cron-presets';
+                const presets = [
+                    { label: 'Every morning', values: ['0', '9', '*', '*', '*'] },
+                    { label: 'Weekdays 9am', values: ['0', '9', '*', '*', '1-5'] },
+                    { label: 'Every hour', values: ['0', '*', '*', '*', '*'] },
+                    { label: 'Monday 8am', values: ['0', '8', '*', '*', '1'] },
+                ];
+                presets.forEach(p => {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'btn btn-secondary btn-xs';
+                    btn.textContent = p.label;
+                    btn.addEventListener('click', () => {
+                        const inputs = cronRow.querySelectorAll('.cron-input');
+                        p.values.forEach((v, i) => {
+                            inputs[i].value = v;
+                            node.data[cronKeys[i]] = v;
+                        });
+                    });
+                    presetRow.appendChild(btn);
+                });
+                cronGroup.appendChild(presetRow);
+                body.appendChild(cronGroup);
+
+                // Show/hide conditional fields based on mode
+                const updateTriggerVisibility = () => {
+                    const mode = d.mode || 'daily';
+                    body.querySelectorAll('[data-trigger-mode]').forEach(el => {
+                        el.style.display = el.getAttribute('data-trigger-mode') === mode ? '' : 'none';
+                    });
+                };
+                updateTriggerVisibility();
+                if (modeRef.el) {
+                    modeRef.el.addEventListener('change', () => {
+                        d.mode = modeRef.el.value;
+                        updateTriggerVisibility();
+                    });
+                }
+                break;
+            }
+
+            // ─── TOOL ───────────────────────────────────────────
+            case 'tool': {
+                const toolRef = {};
+                addField('Tool', 'tool_name', 'select', { options: [], ref: toolRef });
+
+                // Parameter hint area — updated when tool is selected
+                const paramHint = document.createElement('div');
+                paramHint.className = 'form-hint tool-param-hint';
+                paramHint.style.display = 'none';
+                body.appendChild(paramHint);
+
+                addField('Arguments (JSON)', 'arguments', 'textarea', {
+                    rows: 3, placeholder: '{"query": "..."}'
+                });
+                const argsTextarea = body.querySelector('textarea[data-field="arguments"]');
+
+                if (toolRef.el) {
+                    asyncPopulateSelect(toolRef.el, getCachedTools, data => {
+                        return data.tools.map(t => ({
+                            value: t.name,
+                            label: t.name + (t.description ? ' \u2014 ' + t.description.substring(0, 60) : ''),
+                        }));
+                    }, '-- Select a tool --');
+
+                    // When tool is selected, show parameter hints from schema
+                    toolRef.el.addEventListener('change', () => {
+                        const toolName = toolRef.el.value;
+                        getCachedTools().then(data => {
+                            if (this._inspectorRenderId !== renderId) return;
+                            const tool = data.tools.find(t => t.name === toolName);
+                            if (tool && tool.parameters && tool.parameters.properties) {
+                                const props = tool.parameters.properties;
+                                const required = tool.parameters.required || [];
+                                const lines = Object.entries(props).map(([key, schema]) => {
+                                    const req = required.includes(key) ? ' (required)' : '';
+                                    const desc = schema.description ? ': ' + schema.description : '';
+                                    return key + req + desc;
+                                });
+                                paramHint.textContent = 'Parameters: ' + lines.join(' | ');
+                                paramHint.style.display = 'block';
+
+                                // Build example JSON for placeholder
+                                if (argsTextarea) {
+                                    const example = {};
+                                    for (const [key, schema] of Object.entries(props)) {
+                                        if (schema.enum) example[key] = schema.enum[0];
+                                        else if (schema.type === 'number' || schema.type === 'integer') example[key] = 0;
+                                        else if (schema.type === 'boolean') example[key] = true;
+                                        else example[key] = '...';
+                                    }
+                                    argsTextarea.placeholder = JSON.stringify(example, null, 2);
+                                }
+                            } else {
+                                paramHint.style.display = 'none';
+                            }
+                        });
+                    });
+
+                    // Trigger hint if tool already selected
+                    if (d.tool_name) {
+                        setTimeout(() => toolRef.el.dispatchEvent(new Event('change')), 500);
+                    }
+                }
+
+                // Show missing tools as hints
+                getCachedTools().then(data => {
+                    if (this._inspectorRenderId !== renderId) return;
+                    if (data.missing && data.missing.length > 0) {
+                        const missingHint = document.createElement('div');
+                        missingHint.className = 'form-hint form-hint--warning';
+                        missingHint.textContent = 'Unavailable: ' +
+                            data.missing.map(m => m.name).join(', ');
+                        body.appendChild(missingHint);
+                    }
+                });
+                break;
+            }
+
+            // ─── SKILL ──────────────────────────────────────────
+            case 'skill': {
+                const skillRef = {};
+                addField('Skill', 'skill_name', 'select', { options: [], ref: skillRef });
+                if (skillRef.el) {
+                    asyncPopulateSelect(skillRef.el, getCachedSkills, skills => {
+                        if (!Array.isArray(skills)) return [];
+                        return skills.map(s => ({
+                            value: s.name,
+                            label: s.name + (s.description ? ' \u2014 ' + s.description.substring(0, 50) : ''),
+                        }));
+                    }, '-- Select a skill --');
+                }
+
+                // Empty state hint
+                getCachedSkills().then(skills => {
+                    if (this._inspectorRenderId !== renderId) return;
+                    if (!Array.isArray(skills) || skills.length === 0) {
+                        addHint('No skills installed yet. Visit the Skills page to browse and install.');
+                    }
+                });
+
+                addLink('\u2192 Browse & Install Skills', '/skills');
+                break;
+            }
+
+            // ─── MCP ────────────────────────────────────────────
+            case 'mcp': {
+                const serverRef = {};
+                addField('MCP Server', 'server', 'select', { options: [], ref: serverRef });
+                const mcpToolRef = {};
+                addField('Tool', 'tool', 'select', { options: [], ref: mcpToolRef });
+
+                if (serverRef.el) {
+                    asyncPopulateSelect(serverRef.el, getCachedMcpServers, servers => {
+                        if (!Array.isArray(servers)) return [];
+                        return servers
+                            .filter(s => s.enabled !== false)
+                            .map(s => ({ value: s.name, label: s.name }));
+                    }, '-- Select MCP server --');
+
+                    // Cascade: when server changes, populate tool dropdown from cached tools
+                    serverRef.el.addEventListener('change', () => {
+                        if (this._inspectorRenderId !== renderId) return;
+                        const selectedServer = serverRef.el.value;
+                        node.data.server = selectedServer;
+                        node.data.tool = '';
+                        if (!mcpToolRef.el) return;
+
+                        // Populate tool dropdown with MCP tools prefixed by server name
+                        mcpToolRef.el.textContent = '';
+                        const empty = document.createElement('option');
+                        empty.value = '';
+                        empty.textContent = selectedServer ? 'Loading tools...' : '-- Select server first --';
+                        mcpToolRef.el.appendChild(empty);
+
+                        if (selectedServer) {
+                            getCachedTools().then(data => {
+                                if (this._inspectorRenderId !== renderId) return;
+                                mcpToolRef.el.textContent = '';
+                                const emptyOpt = document.createElement('option');
+                                emptyOpt.value = '';
+                                emptyOpt.textContent = '-- Select tool --';
+                                mcpToolRef.el.appendChild(emptyOpt);
+
+                                const prefix = selectedServer + '__';
+                                const mcpTools = data.tools
+                                    .filter(t => t.name.startsWith(prefix))
+                                    .map(t => ({
+                                        value: t.name.substring(prefix.length),
+                                        label: t.name.substring(prefix.length) +
+                                            (t.description ? ' \u2014 ' + t.description.substring(0, 40) : ''),
+                                    }));
+
+                                if (mcpTools.length === 0) {
+                                    emptyOpt.textContent = 'No tools found for ' + selectedServer;
+                                }
+                                mcpTools.forEach(item => {
+                                    const opt = document.createElement('option');
+                                    opt.value = item.value;
+                                    opt.textContent = item.label;
+                                    if (d.tool === item.value) opt.selected = true;
+                                    mcpToolRef.el.appendChild(opt);
+                                });
+                            });
+                        }
+                    });
+
+                    // If server already selected, trigger cascade
+                    if (d.server) {
+                        setTimeout(() => {
+                            if (serverRef.el) serverRef.el.dispatchEvent(new Event('change'));
+                        }, 500);
+                    }
+                }
+
+                // Search catalog section — always shown so user can discover servers
+                (() => {
+                    const searchWrap = document.createElement('div');
+                    searchWrap.className = 'inspector-search-section';
+
+                    const searchLbl = document.createElement('label');
+                    searchLbl.textContent = 'Find & Install MCP Servers';
+                    searchWrap.appendChild(searchLbl);
+
+                    const searchRow = document.createElement('div');
+                    searchRow.className = 'inspector-search-row';
+                    const searchInp = document.createElement('input');
+                    searchInp.type = 'text';
+                    searchInp.className = 'input';
+                    searchInp.placeholder = 'Search catalog (e.g. gmail, slack, github)...';
+                    searchRow.appendChild(searchInp);
+                    searchWrap.appendChild(searchRow);
+
+                    const resultsList = document.createElement('div');
+                    resultsList.className = 'inspector-search-results';
+                    searchWrap.appendChild(resultsList);
+                    body.appendChild(searchWrap);
+
+                    let searchTimeout = null;
+                    searchInp.addEventListener('input', () => {
+                        clearTimeout(searchTimeout);
+                        const q = searchInp.value.trim();
+                        if (q.length < 2) { resultsList.textContent = ''; return; }
+                        searchTimeout = setTimeout(async () => {
+                            if (this._inspectorRenderId !== renderId) return;
+                            resultsList.textContent = 'Searching...';
+                            try {
+                                const items = await apiRequest('/v1/mcp/suggest?q=' + encodeURIComponent(q));
+                                if (this._inspectorRenderId !== renderId) return;
+                                resultsList.textContent = '';
+                                if (!items || items.length === 0) {
+                                    resultsList.textContent = 'No results found.';
+                                    return;
+                                }
+                                items.slice(0, 5).forEach(item => {
+                                    const row = document.createElement('div');
+                                    row.className = 'search-result-item';
+
+                                    const info = document.createElement('div');
+                                    info.className = 'search-result-info';
+                                    const name = document.createElement('strong');
+                                    name.textContent = item.display_name || item.id;
+                                    info.appendChild(name);
+                                    if (item.description) {
+                                        const desc = document.createElement('span');
+                                        desc.className = 'search-result-desc';
+                                        desc.textContent = ' \u2014 ' + item.description.substring(0, 60);
+                                        info.appendChild(desc);
+                                    }
+                                    row.appendChild(info);
+
+                                    const installBtn = document.createElement('a');
+                                    installBtn.className = 'btn btn-secondary btn-xs';
+                                    installBtn.textContent = 'Setup';
+                                    installBtn.href = '/mcp';
+                                    row.appendChild(installBtn);
+                                    resultsList.appendChild(row);
+                                });
+                            } catch (_) {
+                                resultsList.textContent = 'Search failed.';
+                            }
+                        }, 400);
+                    });
+                })();
+
+                addLink('\u2192 Full MCP Server Setup', '/mcp');
+
+                // Empty state
+                getCachedMcpServers().then(servers => {
+                    if (this._inspectorRenderId !== renderId) return;
+                    if (!Array.isArray(servers) || servers.length === 0) {
+                        addHint('No MCP servers configured yet. Search above or visit the MCP page.');
+                    }
+                });
+                break;
+            }
+
+            // ─── LLM ────────────────────────────────────────────
+            case 'llm':
+                addField('Prompt', 'prompt', 'textarea', {
+                    rows: 5, placeholder: 'What should the agent do?\n\nExample: Summarize the latest news about AI safety'
+                });
+                addField('Model (optional)', 'model', 'text', {
+                    placeholder: 'Leave empty for default model',
+                    list: 'model-suggestions',
+                });
+                // Add datalist for model suggestions (non-blocking)
+                (() => {
+                    const dl = document.createElement('datalist');
+                    dl.id = 'model-suggestions';
+                    const commonModels = [
+                        'anthropic/claude-sonnet-4-20250514',
+                        'anthropic/claude-haiku-4-20250414',
+                        'openai/gpt-4o',
+                        'openai/gpt-4o-mini',
+                        'google/gemini-2.0-flash',
+                    ];
+                    commonModels.forEach(m => {
+                        const opt = document.createElement('option');
+                        opt.value = m;
+                        dl.appendChild(opt);
+                    });
+                    body.appendChild(dl);
+                })();
+                break;
+
+            // ─── CONDITION ──────────────────────────────────────
+            case 'condition':
+                addField('Condition Expression', 'expression', 'textarea', {
+                    rows: 3, placeholder: 'e.g. has_new_emails == true\n     result.count > 0'
+                });
+                addField('True Branch Label', 'true_label', 'text', { placeholder: 'Yes' });
+                addField('False Branch Label', 'false_label', 'text', { placeholder: 'No' });
+                break;
+
+            // ─── PARALLEL ───────────────────────────────────────
+            case 'parallel':
+                addHint('Connect multiple outputs from this node to run branches in parallel.');
+                break;
+
+            // ─── LOOP ───────────────────────────────────────────
+            case 'loop':
+                addField('Max Iterations', 'max_iterations', 'number', { defaultVal: 10, min: 1, max: 100 });
+                addField('Break Condition', 'condition', 'text', { placeholder: 'e.g. no_more_items' });
+                break;
+
+            // ─── SUBPROCESS ─────────────────────────────────────
+            case 'subprocess':
+                addField('Workflow Reference', 'workflow_ref', 'text', { placeholder: 'Automation name or ID' });
+                addHint('Reference another saved automation to run as a sub-step.');
+                break;
+
+            // ─── TRANSFORM ──────────────────────────────────────
+            case 'transform':
+                addField('Template / Code', 'template', 'textarea', {
+                    rows: 5, placeholder: 'Transform template or code...\n\nExample: Extract "subject" and "from" fields from email data'
+                });
+                break;
+
+            // ─── DELIVER ────────────────────────────────────────
+            case 'deliver': {
+                const deliverRef = {};
+                addField('Deliver To', 'target', 'select', { options: [], ref: deliverRef });
+                if (deliverRef.el) {
+                    asyncPopulateSelect(deliverRef.el, getCachedTargets, targets => {
+                        if (!Array.isArray(targets)) return [];
+                        return targets.map(t => ({ value: t.value, label: t.label }));
+                    }, '-- Select channel --');
+                }
+                break;
+            }
+        }
+    },
+
+    hideInspector() {
+        this.inspector.style.display = 'none';
+        this.selectedNodeId = null;
+        this.renderNodes();
+    },
+
+    // ── Save ─────────────────────────────────────────────────────
+
+    nodeToInstruction(node) {
+        const d = node.data;
+        switch (node.kind) {
+            case 'llm':        return d.prompt || 'Execute task';
+            case 'tool':       return 'Use tool: ' + (d.tool_name || 'unknown') + (d.arguments ? ' with args: ' + d.arguments : '');
+            case 'skill':      return 'Run skill: ' + (d.skill_name || 'unknown');
+            case 'mcp':        return 'Call MCP: ' + (d.server || '?') + '/' + (d.tool || '?');
+            case 'condition':  return 'If: ' + (d.expression || '?');
+            case 'transform':  return 'Transform: ' + (d.template || '?');
+            case 'loop':       return 'Loop (max ' + (d.max_iterations || 10) + '): ' + (d.condition || 'until done');
+            case 'subprocess': return 'Run workflow: ' + (d.workflow_ref || '?');
+            case 'parallel':   return 'Execute branches in parallel';
+            default:           return node.title;
+        }
+    },
+
+    nodeMetaString(node) {
+        const d = node.data;
+        switch (node.kind) {
+            case 'trigger': {
+                if (d.mode === 'cron') {
+                    return 'cron ' + [d.cronMinute||'0', d.cronHour||'9', d.cronDom||'*', d.cronMonth||'*', d.cronDow||'*'].join(' ');
+                } else if (d.mode === 'interval') {
+                    return 'every ' + (d.intervalHours || 6) + 'h';
+                }
+                return 'daily ' + (d.time || '09:00');
+            }
+            case 'tool':       return d.tool_name || '';
+            case 'skill':      return d.skill_name || '';
+            case 'mcp':        return d.tool || '';
+            case 'llm':        return d.model || '';
+            case 'condition':  return d.expression || '';
+            case 'deliver':    return d.target || '';
+            case 'loop':       return 'max:' + (d.max_iterations || 10);
+            case 'subprocess': return d.workflow_ref || '';
+            case 'transform':  return '';
+            default:           return '';
+        }
+    },
+
+    async save() {
+        const name = document.getElementById('builder-automation-name').value.trim();
+        if (!name) {
+            showToast('Please enter an automation name.', 'error');
+            return;
+        }
+
+        const triggerNode = this.nodes.find(n => n.kind === 'trigger');
+        const deliverNode = this.nodes.find(n => n.kind === 'deliver');
+        const middleNodes = this.nodes.filter(n => n.kind !== 'trigger' && n.kind !== 'deliver');
+
+        if (!triggerNode || middleNodes.length === 0) {
+            showToast('Need at least a Trigger and one processing node.', 'error');
+            return;
+        }
+
+        const payload = { name, trigger: 'always' };
+
+        // Schedule from trigger — build from guided fields
+        const td = triggerNode.data;
+        if (td.mode === 'cron') {
+            // Build cron from individual fields or fallback to combined field
+            const cronExpr = [
+                td.cronMinute || '0',
+                td.cronHour || '9',
+                td.cronDom || '*',
+                td.cronMonth || '*',
+                td.cronDow || '*',
+            ].join(' ');
+            payload.cron = cronExpr;
+        } else if (td.mode === 'interval') {
+            payload.schedule = 'every ' + (td.intervalHours || '6');
+        } else {
+            payload.schedule = 'daily ' + (td.time || '09:00');
+        }
+
+        // Prompt / workflow_steps from middle nodes
+        if (middleNodes.length === 1 && middleNodes[0].kind === 'llm') {
+            payload.prompt = middleNodes[0].data.prompt || 'Execute task';
+        } else {
+            payload.prompt = 'Multi-step automation';
+            payload.workflow_steps = middleNodes.map((n, i) => ({
+                name: n.title || ('Step ' + (i + 1)),
+                instruction: this.nodeToInstruction(n),
+                approval_required: false,
+            }));
+        }
+
+        // Deliver
+        payload.deliver_to = deliverNode ? (deliverNode.data.target || 'cli:default') : 'cli:default';
+
+        // Full flow graph for visual persistence
+        payload.flow_json = JSON.stringify({
+            nodes: this.nodes.map(n => ({
+                id: n.id,
+                kind: n.kind,
+                label: n.title,
+                meta: this.nodeMetaString(n),
+            })),
+            edges: this.edges.map(e => ({ from: e.from, to: e.to })),
+        });
+
+        try {
+            document.getElementById('builder-status').textContent = 'Saving...';
+            await apiRequest('/v1/automations', {
+                method: 'POST',
+                body: JSON.stringify(payload),
+            });
+            showToast('Automation created successfully!', 'success');
+            document.getElementById('automations-builder-view').style.display = 'none';
+            document.getElementById('automations-list-view').style.display = 'block';
+            await loadAutomations();
+        } catch (err) {
+            showToast(err.message || 'Failed to save.', 'error');
+        } finally {
+            document.getElementById('builder-status').textContent = '';
+        }
+    },
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+    Builder.init();
+});
+

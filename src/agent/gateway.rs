@@ -332,6 +332,7 @@ impl Gateway {
             let web_workflow_engine = self.workflow_engine.clone();
             let web_business_engine = self.business_engine.clone();
             let web_estop_handles = self.estop_handles.clone();
+            let web_tool_registry = self.agent.tool_registry_handle();
             // Share the memory searcher with the web server for hybrid search API
             #[cfg(feature = "local-embeddings")]
             let web_memory_searcher = self.agent.memory_searcher_handle();
@@ -352,6 +353,7 @@ impl Gateway {
                     server.set_business_engine(biz_engine);
                 }
                 server.set_estop_handles(web_estop_handles);
+                server.set_tool_registry(web_tool_registry);
                 #[cfg(feature = "local-embeddings")]
                 if let Some(searcher) = web_memory_searcher {
                     server.set_memory_searcher(searcher);

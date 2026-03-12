@@ -116,6 +116,16 @@ impl PromptSection for ToolsSection {
     fn build(&self, ctx: &PromptContext<'_>) -> Result<String> {
         let mut prompt = String::from("## Tooling\n\n");
 
+        // Native mode (tools passed via API): list available tool names in prompt
+        // so the LLM knows what it can call even if it doesn't parse API tool params.
+        if ctx.tools.is_empty() && !ctx.registered_tool_names.is_empty() {
+            prompt.push_str("You have the following tools available — use them proactively:\n");
+            for name in ctx.registered_tool_names {
+                prompt.push_str(&format!("- {name}\n"));
+            }
+            prompt.push('\n');
+        }
+
         // XML mode: list tools and format instructions in the prompt
         if !ctx.tools.is_empty() {
             prompt.push_str("Tool availability (filtered by policy):\n");
@@ -595,6 +605,31 @@ mod tests {
         let result = section.build(&ctx).unwrap();
         assert!(result.contains("remember"));
         assert!(result.contains("Tool Call Format"));
+    }
+
+    #[test]
+    fn test_tools_section_native_mode_lists_tool_names() {
+        // In native mode, the prompt must list available tool names explicitly
+        // so the LLM knows it can call them even if it doesn't parse API params.
+        let section = ToolsSection;
+        let tool_names = vec![
+            "web_search".to_string(),
+            "shell".to_string(),
+            "remember".to_string(),
+        ];
+        let ctx = PromptContext {
+            tools: &[], // native mode
+            registered_tool_names: &tool_names,
+            ..make_ctx()
+        };
+        let result = section.build(&ctx).unwrap();
+        assert!(
+            result.contains("tools available"),
+            "Must list available tools in native mode"
+        );
+        assert!(result.contains("- web_search"));
+        assert!(result.contains("- shell"));
+        assert!(result.contains("- remember"));
     }
 
     #[test]

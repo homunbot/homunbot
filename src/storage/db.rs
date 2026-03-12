@@ -224,6 +224,12 @@ impl Database {
             include_str!("../../migrations/017_web_auth.sql"),
         )
         .await?;
+        Self::apply_migration(
+            pool,
+            "018_automation_flow",
+            include_str!("../../migrations/018_automation_flow.sql"),
+        )
+        .await?;
 
         Ok(())
     }
@@ -491,6 +497,17 @@ impl Database {
         .context("Failed to load messages")?;
 
         Ok(rows)
+    }
+
+    /// Delete messages from a given ID onwards (for edit/resend truncation).
+    pub async fn delete_messages_from(&self, session_key: &str, from_id: i64) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM messages WHERE session_key = ? AND id >= ?")
+            .bind(session_key)
+            .bind(from_id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to truncate messages")?;
+        Ok(result.rows_affected())
     }
 
     /// Count messages in a session
@@ -1173,7 +1190,7 @@ impl Database {
                     trigger_kind, trigger_value,
                     last_run, last_result, created_at, updated_at,
                     plan_json, dependencies_json, plan_version, validation_errors,
-                    workflow_steps_json
+                    workflow_steps_json, flow_json
              FROM automations
              ORDER BY created_at DESC",
         )
@@ -1191,7 +1208,7 @@ impl Database {
                     trigger_kind, trigger_value,
                     last_run, last_result, created_at, updated_at,
                     plan_json, dependencies_json, plan_version, validation_errors,
-                    workflow_steps_json
+                    workflow_steps_json, flow_json
              FROM automations
              WHERE id = ?",
         )
@@ -1236,13 +1253,17 @@ impl Database {
             Some(v) => v,
             None => current.workflow_steps_json,
         };
+        let flow_json = match update.flow_json {
+            Some(v) => v,
+            None => current.flow_json,
+        };
 
         let result = sqlx::query(
             "UPDATE automations
              SET name = ?, prompt = ?, schedule = ?, enabled = ?, status = ?,
                  deliver_to = ?, trigger_kind = ?, trigger_value = ?, last_result = ?,
                  plan_json = ?, dependencies_json = ?, plan_version = ?, validation_errors = ?,
-                 workflow_steps_json = ?,
+                 workflow_steps_json = ?, flow_json = ?,
                  last_run = CASE WHEN ? THEN datetime('now') ELSE last_run END,
                  updated_at = datetime('now')
              WHERE id = ?",
@@ -1261,6 +1282,7 @@ impl Database {
         .bind(plan_version)
         .bind(validation_errors)
         .bind(workflow_steps_json)
+        .bind(flow_json)
         .bind(update.touch_last_run)
         .bind(id)
         .execute(&self.pool)
@@ -2249,6 +2271,7 @@ pub struct AutomationRow {
     pub plan_version: i64,
     pub validation_errors: Option<String>,
     pub workflow_steps_json: Option<String>,
+    pub flow_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -2273,6 +2296,8 @@ pub struct AutomationUpdate {
     pub validation_errors: Option<Option<String>>,
     /// Use `Some(None)` to clear workflow steps.
     pub workflow_steps_json: Option<Option<String>>,
+    /// Use `Some(None)` to clear flow_json (visual graph).
+    pub flow_json: Option<Option<String>>,
     pub touch_last_run: bool,
 }
 

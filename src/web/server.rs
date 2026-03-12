@@ -64,6 +64,8 @@ pub struct AppState {
     pub auth_rate_limiter: Arc<auth::RateLimiter>,
     /// Rate limiter for general API — 60 req/min per IP (SEC-3).
     pub api_rate_limiter: Arc<auth::RateLimiter>,
+    /// Tool registry — shared with AgentLoop for listing registered tools.
+    pub tool_registry: Option<Arc<tokio::sync::RwLock<crate::tools::ToolRegistry>>>,
 }
 
 impl AppState {
@@ -91,6 +93,7 @@ pub struct WebServer {
     workflow_engine: Option<Arc<WorkflowEngine>>,
     business_engine: Option<Arc<crate::business::engine::BusinessEngine>>,
     estop_handles: Arc<tokio::sync::RwLock<EStopHandles>>,
+    tool_registry: Option<Arc<tokio::sync::RwLock<crate::tools::ToolRegistry>>>,
 }
 
 impl WebServer {
@@ -115,6 +118,7 @@ impl WebServer {
             workflow_engine: None,
             business_engine: None,
             estop_handles: Arc::new(tokio::sync::RwLock::new(EStopHandles::default())),
+            tool_registry: None,
         }
     }
 
@@ -136,6 +140,14 @@ impl WebServer {
     /// Set the provider health tracker for the `/api/v1/providers/health` endpoint.
     pub fn set_health_tracker(&mut self, tracker: Arc<ProviderHealthTracker>) {
         self.health_tracker = Some(tracker);
+    }
+
+    /// Set the tool registry for the /v1/tools endpoint.
+    pub fn set_tool_registry(
+        &mut self,
+        registry: Arc<tokio::sync::RwLock<crate::tools::ToolRegistry>>,
+    ) {
+        self.tool_registry = Some(registry);
     }
 
     /// Set the workflow engine for multi-step orchestration API endpoints.
@@ -178,6 +190,7 @@ impl WebServer {
             workflow_engine: None,
             business_engine: None,
             estop_handles: Arc::new(tokio::sync::RwLock::new(EStopHandles::default())),
+            tool_registry: None,
         }
     }
 
@@ -241,6 +254,7 @@ impl WebServer {
             session_store: session_store.clone(),
             auth_rate_limiter: auth_rate_limiter.clone(),
             api_rate_limiter: api_rate_limiter.clone(),
+            tool_registry: self.tool_registry,
         });
 
         // If we have outbound messages, spawn task to route them to WebSocket sessions

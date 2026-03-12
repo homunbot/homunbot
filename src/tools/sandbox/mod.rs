@@ -25,8 +25,8 @@ pub(crate) use self::backends::{enforce_job_limits, JobObjectGuard};
 pub use self::env::SAFE_ENV_KEYS;
 pub use self::events::list_recent_sandbox_events;
 pub use self::resolve::{
-    current_sandbox_backend_capabilities, docker_backend_available, resolve_sandbox_backend,
-    sandbox_backend_availability_summary,
+    current_sandbox_backend_capabilities, docker_available_live, docker_backend_available,
+    resolve_sandbox_backend, sandbox_backend_availability_summary,
 };
 pub use self::runtime_image::{
     build_runtime_image, canonical_sandbox_runtime_baseline, get_docker_image_status,

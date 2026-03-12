@@ -148,6 +148,14 @@ fn default_max_retries() -> u32 {
 
 #[derive(Debug, Clone)]
 pub enum WorkflowEvent {
+    StepStarted {
+        workflow_id: String,
+        workflow_name: String,
+        step_idx: usize,
+        total_steps: usize,
+        step_name: String,
+        deliver_to: Option<String>,
+    },
     StepCompleted {
         workflow_id: String,
         workflow_name: String,
@@ -186,7 +194,8 @@ pub enum WorkflowEvent {
 impl WorkflowEvent {
     pub fn workflow_id(&self) -> &str {
         match self {
-            Self::StepCompleted { workflow_id, .. }
+            Self::StepStarted { workflow_id, .. }
+            | Self::StepCompleted { workflow_id, .. }
             | Self::ApprovalNeeded { workflow_id, .. }
             | Self::WorkflowCompleted { workflow_id, .. }
             | Self::WorkflowFailed { workflow_id, .. } => workflow_id,
@@ -195,7 +204,8 @@ impl WorkflowEvent {
 
     pub fn workflow_name(&self) -> &str {
         match self {
-            Self::StepCompleted { workflow_name, .. }
+            Self::StepStarted { workflow_name, .. }
+            | Self::StepCompleted { workflow_name, .. }
             | Self::ApprovalNeeded { workflow_name, .. }
             | Self::WorkflowCompleted { workflow_name, .. }
             | Self::WorkflowFailed { workflow_name, .. } => workflow_name,
@@ -204,7 +214,8 @@ impl WorkflowEvent {
 
     pub fn deliver_to(&self) -> Option<&str> {
         match self {
-            Self::StepCompleted { deliver_to, .. }
+            Self::StepStarted { deliver_to, .. }
+            | Self::StepCompleted { deliver_to, .. }
             | Self::ApprovalNeeded { deliver_to, .. }
             | Self::WorkflowCompleted { deliver_to, .. }
             | Self::WorkflowFailed { deliver_to, .. } => deliver_to.as_deref(),
@@ -214,6 +225,14 @@ impl WorkflowEvent {
     /// Format the event as a user-facing notification message.
     pub fn format_notification(&self) -> String {
         match self {
+            Self::StepStarted {
+                step_idx,
+                step_name,
+                total_steps,
+                ..
+            } => {
+                format!("[Workflow] Starting step {step_idx}/{total_steps}: \"{step_name}\"")
+            }
             Self::StepCompleted {
                 step_idx,
                 step_name,
@@ -256,6 +275,21 @@ impl WorkflowEvent {
     /// Structured progress data for the web UI donut chart.
     pub fn to_progress_json(&self) -> serde_json::Value {
         match self {
+            Self::StepStarted {
+                workflow_id,
+                workflow_name,
+                step_idx,
+                total_steps,
+                step_name,
+                ..
+            } => serde_json::json!({
+                "workflow_id": workflow_id,
+                "workflow_name": workflow_name,
+                "status": "step_started",
+                "completed_steps": *step_idx,
+                "total_steps": total_steps,
+                "current_step": step_name,
+            }),
             Self::StepCompleted {
                 workflow_id,
                 workflow_name,
