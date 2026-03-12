@@ -412,6 +412,12 @@ fn infer_blockers(tool_name: &str, output: &str, is_error: bool) -> Vec<String> 
     if lower.contains("tool vetoed:") {
         blockers.push(compact(output, 220));
     }
+    if lower.contains("this appears to be an error page") {
+        blockers.push(
+            "Navigation hit an error page. Try the site's homepage or an alternative URL."
+                .to_string(),
+        );
+    }
     if is_error && blockers.is_empty() {
         blockers.push(format!(
             "Latest {} step failed; inspect the last tool result and adjust the next action instead of repeating blindly.",
@@ -503,6 +509,8 @@ fn compact(value: &str, max_len: usize) -> String {
 
 fn infer_named_sources(text: &str) -> Vec<String> {
     let mut sources = Vec::new();
+
+    // Tier 1: well-known sites (exact match)
     for (source, needles) in [
         ("trenitalia", &["trenitalia"][..]),
         ("italo", &["italo", "italotreno"][..]),
@@ -516,7 +524,62 @@ fn infer_named_sources(text: &str) -> Vec<String> {
             sources.push(source);
         }
     }
-    sources.into_iter().map(str::to_string).collect()
+
+    let mut result: Vec<String> = sources.into_iter().map(|s| s.to_string()).collect();
+
+    // Tier 2: generic brand detection from "X o Y" / "X or Y" patterns
+    if result.is_empty() {
+        for s in extract_brand_pair(text) {
+            if !result.contains(&s) {
+                result.push(s);
+            }
+        }
+    }
+
+    result
+}
+
+/// Extract brand pair from "X o Y" / "X or Y" / "X e Y" patterns.
+///
+/// Skips filler words (articles, prepositions) to handle "di Prada o di Gucci".
+fn extract_brand_pair(lower: &str) -> Vec<String> {
+    let connectors = [" o ", " or ", " e ", " and "];
+    let filler: &[&str] = &[
+        "di", "da", "le", "il", "la", "lo", "un", "una", "del", "al", "per", "con", "su",
+        "the", "a", "an", "in", "on", "for", "to", "from", "my", "me", "this", "that",
+        "più", "piu", "meno", "anche", "poi", "tipo", "come", "quale",
+    ];
+    let is_brand = |word: &str| -> bool {
+        word.len() >= 3
+            && word.chars().all(|c| c.is_alphanumeric() || c == '-')
+            && !filler.contains(&word)
+    };
+
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    let mut brands = Vec::new();
+
+    for conn in &connectors {
+        let conn_word = conn.trim();
+        for (i, &w) in words.iter().enumerate() {
+            if w != conn_word {
+                continue;
+            }
+            let before = (0..i).rev().map(|j| words[j]).find(|w| is_brand(w));
+            let after = ((i + 1)..words.len())
+                .map(|j| words[j])
+                .take(3)
+                .find(|w| is_brand(w));
+            if let (Some(b), Some(a)) = (before, after) {
+                if !brands.contains(&b.to_string()) {
+                    brands.push(b.to_string());
+                }
+                if !brands.contains(&a.to_string()) {
+                    brands.push(a.to_string());
+                }
+            }
+        }
+    }
+    brands
 }
 
 fn infer_source_from_browser_output(output: &str) -> Option<String> {
@@ -684,5 +747,29 @@ mod tests {
         let snap = state.snapshot();
         assert!(snap.explicit_steps.is_empty());
         assert!(snap.verification.is_none());
+    }
+
+    #[test]
+    fn infer_brand_sources_from_prompt() {
+        let state = ExecutionPlanState::new(
+            "mi trovi delle scarpe di pelle marrone di prada o di gucci",
+        );
+        let content = state
+            .runtime_message()
+            .and_then(|msg| msg.content)
+            .expect("content");
+        assert!(content.contains("prada"));
+        assert!(content.contains("gucci"));
+    }
+
+    #[test]
+    fn error_page_creates_blocker() {
+        use super::infer_blockers;
+        let blockers = infer_blockers(
+            "browser",
+            "⚠ This appears to be an error page (404).\nTry the homepage.",
+            false,
+        );
+        assert!(blockers.iter().any(|b| b.contains("error page")));
     }
 }

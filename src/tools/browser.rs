@@ -394,6 +394,11 @@ impl BrowserTool {
             snapshot.push_str(&cursor_section);
         }
 
+        // Detect error pages (404, 403, etc.) and append recovery hint
+        if let Some(error_hint) = detect_error_page(&snapshot) {
+            snapshot.push_str(&error_hint);
+        }
+
         let mut result = format!("Navigated to {url}\n\n");
         result.push_str(&snapshot);
         Ok(ToolResult::success(result))
@@ -1238,6 +1243,66 @@ fn parse_cursor_elements(json_str: &str, snapshot: &str) -> Vec<String> {
     lines
 }
 
+/// Detect if a page snapshot looks like an error page (404, 403, 500, etc.).
+///
+/// Scans the header (first 500 chars) and heading lines for error signals.
+/// Returns a recovery hint string to append to the snapshot, or `None`.
+///
+/// Guards against false positives: "404 results found" is not an error page.
+fn detect_error_page(snapshot: &str) -> Option<String> {
+    let header = &snapshot[..snapshot.len().min(500)];
+    let header_lower = header.to_ascii_lowercase();
+
+    // Check page title / header for error codes
+    let title_error = header_lower.contains("404")
+        || header_lower.contains("page not found")
+        || header_lower.contains("pagina non trovata")
+        || header_lower.contains("not found")
+        || header_lower.contains("403")
+        || header_lower.contains("forbidden")
+        || header_lower.contains("access denied")
+        || header_lower.contains("accesso negato")
+        || header_lower.contains("500")
+        || header_lower.contains("internal server error")
+        || header_lower.contains("temporarily unavailable")
+        || header_lower.contains("under maintenance")
+        || header_lower.contains("manutenzione");
+
+    // Check heading lines deeper in the snapshot
+    let heading_error = snapshot.lines().any(|line| {
+        let trimmed = line.trim_start().trim_start_matches("- ");
+        if !trimmed.starts_with("heading ") {
+            return false;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        lower.contains("404")
+            || lower.contains("not found")
+            || lower.contains("error")
+            || lower.contains("errore")
+            || lower.contains("page not found")
+            || lower.contains("forbidden")
+    });
+
+    if !title_error && !heading_error {
+        return None;
+    }
+
+    // False positive guard: "404 results found" or "found 404 items"
+    if header_lower.contains("404 result")
+        || header_lower.contains("found 404")
+        || header_lower.contains("404 item")
+    {
+        return None;
+    }
+
+    Some(
+        "\n\n⚠ This appears to be an error page (404 / Page not found).\n\
+         The URL may be wrong or the page was removed.\n\
+         Try: navigate to the site's homepage and search/browse from there."
+            .to_string(),
+    )
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -1413,5 +1478,30 @@ mod tests {
         let section = format_cursor_section(&lines);
         assert!(section.contains("# Hidden interactive elements"));
         assert!(section.contains("Sign In"));
+    }
+
+    #[test]
+    fn test_detect_error_page_404_in_title() {
+        let snapshot = "Page URL: https://prada.com/it/scarpe.html\nPage title: 404 - Pagina non trovata\n(2 interactive elements)\n- navigation\n  - link \"Home\" [ref=e1]\n";
+        assert!(detect_error_page(snapshot).is_some());
+    }
+
+    #[test]
+    fn test_detect_error_page_heading() {
+        let snapshot = "(5 interactive elements)\n- main\n  - heading \"Page Not Found\"\n  - button \"Go Home\" [ref=e1]\n";
+        assert!(detect_error_page(snapshot).is_some());
+    }
+
+    #[test]
+    fn test_detect_error_page_normal_page() {
+        let snapshot = "Page URL: https://prada.com/shoes\nPage title: Shoes | Prada\n(12 interactive elements)\n- heading \"Men's Shoes\"\n- button \"Buy\" [ref=e1]\n";
+        assert!(detect_error_page(snapshot).is_none());
+    }
+
+    #[test]
+    fn test_detect_error_page_false_positive_guard() {
+        // "404 results found" should NOT be flagged
+        let snapshot = "Page title: Search Results - 404 results found\n(20 interactive elements)\n- heading \"Search Results\"\n";
+        assert!(detect_error_page(snapshot).is_none());
     }
 }

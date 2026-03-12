@@ -307,7 +307,17 @@ impl BrowserRoutingDecision {
                 "rental",
             ],
         );
+        let shopping_intent = contains_any(
+            &lower,
+            &[
+                "scarpe", "shoes", "buy ", "compra", "shop", "shopping", "product",
+                "prodott", "price", "prezzo", "taglia", "size", "collezione",
+                "collection", "store", "negozio", "abbigliamento", "clothing",
+                "borsa", "bag", "orologio", "watch",
+            ],
+        );
         let interactive_web = booking_intent
+            || shopping_intent
             || !required_sources.is_empty()
             || contains_any(
                 &lower,
@@ -392,6 +402,8 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
 
 fn extract_required_sources(lower_prompt: &str) -> Vec<String> {
     let mut sources = Vec::new();
+
+    // Tier 1: well-known sites (exact match on lowercase)
     for (source, needles) in [
         ("trenitalia", &["trenitalia"][..]),
         ("italo", &["italo", "italotreno"][..]),
@@ -406,7 +418,62 @@ fn extract_required_sources(lower_prompt: &str) -> Vec<String> {
             push_unique(&mut sources, source.to_string());
         }
     }
+
+    // Tier 2: generic brand detection from "X o Y" / "X or Y" patterns
+    if sources.is_empty() {
+        let brand_sources = extract_brand_sources(lower_prompt);
+        for s in brand_sources {
+            push_unique(&mut sources, s);
+        }
+    }
+
     sources
+}
+
+/// Extract brand/site names from patterns like "X o Y", "X or Y", "di X o di Y".
+///
+/// Works on the lowercased prompt. Looks for connectors (o, or, e, and) and
+/// extracts the nearest non-filler word on each side as a brand name.
+fn extract_brand_sources(lower: &str) -> Vec<String> {
+    let connectors = [" o ", " or ", " e ", " and "];
+    let filler: &[&str] = &[
+        "di", "da", "le", "il", "la", "lo", "un", "una", "del", "al", "per", "con", "su",
+        "the", "a", "an", "in", "on", "for", "to", "from", "my", "me", "this", "that",
+        "più", "piu", "meno", "anche", "poi", "tipo", "come", "quale",
+    ];
+    let is_brand = |word: &str| -> bool {
+        word.len() >= 3
+            && word.chars().all(|c| c.is_alphanumeric() || c == '-')
+            && !filler.contains(&word)
+    };
+
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    let mut brands = Vec::new();
+
+    for conn in &connectors {
+        let conn_word = conn.trim();
+        for (i, &w) in words.iter().enumerate() {
+            if w != conn_word {
+                continue;
+            }
+            // Find nearest brand word BEFORE connector (skip filler like "di")
+            let before = (0..i)
+                .rev()
+                .map(|j| words[j])
+                .find(|word| is_brand(word));
+            // Find nearest brand word AFTER connector (skip filler like "di")
+            let after = ((i + 1)..words.len())
+                .map(|j| words[j])
+                .take(3) // look at most 3 words ahead
+                .find(|word| is_brand(word));
+
+            if let (Some(b), Some(a)) = (before, after) {
+                push_unique(&mut brands, b.to_string());
+                push_unique(&mut brands, a.to_string());
+            }
+        }
+    }
+    brands
 }
 
 fn extract_source_name(url: &str) -> Option<String> {
@@ -543,5 +610,52 @@ mod tests {
             "action": "close"
         }));
         assert!(veto.is_some());
+    }
+
+    #[test]
+    fn classifies_shopping_compare_as_multi_source() {
+        let decision = BrowserRoutingDecision::from_prompt(
+            "mi trovi delle scarpe di pelle marrone da uomo taglia 44 di prada o di gucci",
+        );
+        assert_eq!(decision.task_class(), BrowserTaskClass::MultiSourceCompare);
+        assert!(decision.browser_required());
+        assert!(decision.required_sources().contains(&"prada".to_string()));
+        assert!(decision.required_sources().contains(&"gucci".to_string()));
+    }
+
+    #[test]
+    fn generic_brand_extraction_works() {
+        use super::extract_brand_sources;
+        let brands = extract_brand_sources("scarpe prada o gucci taglia 44");
+        assert!(brands.contains(&"prada".to_string()));
+        assert!(brands.contains(&"gucci".to_string()));
+
+        // English
+        let brands = extract_brand_sources("shoes from nike or adidas size 10");
+        assert!(brands.contains(&"nike".to_string()));
+        assert!(brands.contains(&"adidas".to_string()));
+
+        // "e" connector
+        let brands = extract_brand_sources("confronta zara e mango per vestiti");
+        assert!(brands.contains(&"zara".to_string()));
+        assert!(brands.contains(&"mango".to_string()));
+    }
+
+    #[test]
+    fn generic_brand_skips_filler_words() {
+        use super::extract_brand_sources;
+        // "di" and "il" are filler, should not be extracted
+        let brands = extract_brand_sources("il prezzo di un prodotto");
+        assert!(brands.is_empty());
+    }
+
+    #[test]
+    fn known_sources_still_work() {
+        let decision = BrowserRoutingDecision::from_prompt(
+            "confronta trenitalia e italo per domani",
+        );
+        assert_eq!(decision.task_class(), BrowserTaskClass::MultiSourceCompare);
+        assert!(decision.required_sources().contains(&"trenitalia".to_string()));
+        assert!(decision.required_sources().contains(&"italo".to_string()));
     }
 }
