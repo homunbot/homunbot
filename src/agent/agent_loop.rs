@@ -2565,7 +2565,7 @@ fn tool_result_for_model_context(_tool_name: &str, output: &str) -> String {
 ///
 /// This prevents context explosion during long browser sessions or
 /// multi-tool workflows.
-fn auto_compact_context(messages: &mut Vec<ChatMessage>) {
+fn auto_compact_context(messages: &mut [ChatMessage]) {
     const THRESHOLD_CHARS: usize = 150_000;
     const PROTECT_RECENT: usize = 6; // Don't touch last N messages
     const TRUNCATE_MIN_LEN: usize = 500; // Only truncate content > this
@@ -2580,25 +2580,23 @@ fn auto_compact_context(messages: &mut Vec<ChatMessage>) {
     let mut compacted_count = 0usize;
     let mut freed = 0usize;
 
-    for i in 0..safe_end {
-        let role = messages[i].role.clone();
-
+    for msg in messages[..safe_end].iter_mut() {
         // Never compact system or user messages
-        if role == "system" || role == "user" {
+        if msg.role == "system" || msg.role == "user" {
             continue;
         }
 
         // Compact large tool results
-        if role == "tool" {
-            let should_truncate = messages[i]
+        if msg.role == "tool" {
+            let should_truncate = msg
                 .content
                 .as_ref()
                 .map(|c| c.len() > TRUNCATE_MIN_LEN)
                 .unwrap_or(false);
             if should_truncate {
-                let content = messages[i].content.as_ref().unwrap();
+                let content = msg.content.as_ref().unwrap();
                 let original_len = content.len();
-                let tool_name = messages[i].name.as_deref().unwrap_or("tool").to_string();
+                let tool_name = msg.name.as_deref().unwrap_or("tool").to_string();
                 let keep_end = content
                     .char_indices()
                     .nth(TRUNCATE_KEEP)
@@ -2610,20 +2608,20 @@ fn auto_compact_context(messages: &mut Vec<ChatMessage>) {
                      {original_len} chars → {TRUNCATE_KEEP}]",
                 );
                 freed += original_len.saturating_sub(summary.len());
-                messages[i].content = Some(summary);
+                msg.content = Some(summary);
                 compacted_count += 1;
             }
         }
 
         // Compact large assistant messages (e.g. long explanations)
-        if role == "assistant" {
-            let should_truncate = messages[i]
+        if msg.role == "assistant" {
+            let should_truncate = msg
                 .content
                 .as_ref()
                 .map(|c| c.len() > TRUNCATE_MIN_LEN * 2)
                 .unwrap_or(false);
             if should_truncate {
-                let content = messages[i].content.as_ref().unwrap();
+                let content = msg.content.as_ref().unwrap();
                 let original_len = content.len();
                 let keep_end = content
                     .char_indices()
@@ -2633,14 +2631,14 @@ fn auto_compact_context(messages: &mut Vec<ChatMessage>) {
                 let truncated = content[..keep_end].to_string();
                 let summary = format!("{truncated}\n...[compacted from {original_len} chars]");
                 freed += original_len.saturating_sub(summary.len());
-                messages[i].content = Some(summary);
+                msg.content = Some(summary);
                 compacted_count += 1;
             }
         }
 
         // Clear content_parts (images) from old messages
-        if messages[i].content_parts.is_some() {
-            messages[i].content_parts = None;
+        if msg.content_parts.is_some() {
+            msg.content_parts = None;
             compacted_count += 1;
         }
     }
