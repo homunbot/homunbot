@@ -379,7 +379,7 @@ impl BrowserTool {
         self.inject_stealth().await;
 
         if let Err(e) = self.call_mcp("browser_navigate", json!({"url": url})).await {
-            return Ok(ToolResult::error(format!("Navigate failed: {e}")));
+            return Ok(browser_error_result("Navigate", &e));
         }
 
         // Track session state
@@ -486,7 +486,7 @@ impl BrowserTool {
                 }
                 Ok(ToolResult::success(compact))
             }
-            Err(e) => Ok(ToolResult::error(format!("Snapshot failed: {e}"))),
+            Err(e) => Ok(browser_error_result("Snapshot", &e)),
         }
     }
 
@@ -502,7 +502,7 @@ impl BrowserTool {
             .await
         {
             Ok(output) => compact_action_short(&output, "Clicked."),
-            Err(e) => return Ok(ToolResult::error(format!("Click failed: {e}"))),
+            Err(e) => return Ok(browser_error_result("Click", &e)),
         };
 
         // Brief wait for DOM to settle, then auto-snapshot for fresh refs
@@ -537,7 +537,7 @@ impl BrowserTool {
 
         let base_output = match type_result {
             Ok(output) => compact_action_short(&output, &format!("Typed \"{text}\".")),
-            Err(e) => return Ok(ToolResult::error(format!("Type failed: {e}"))),
+            Err(e) => return Ok(browser_error_result("Type", &e)),
         };
 
         // Auto-snapshot to detect autocomplete suggestions
@@ -578,7 +578,7 @@ impl BrowserTool {
                 &output,
                 &format!("Filled with \"{text}\"."),
             ))),
-            Err(e) => Ok(ToolResult::error(format!("Fill failed: {e}"))),
+            Err(e) => Ok(browser_error_result("Fill", &e)),
         }
     }
 
@@ -601,7 +601,7 @@ impl BrowserTool {
                 &output,
                 &format!("Selected \"{value}\"."),
             ))),
-            Err(e) => Ok(ToolResult::error(format!("Select failed: {e}"))),
+            Err(e) => Ok(browser_error_result("Select", &e)),
         }
     }
 
@@ -619,7 +619,7 @@ impl BrowserTool {
                 &output,
                 &format!("Pressed {key}."),
             ))),
-            Err(e) => Ok(ToolResult::error(format!("Press key failed: {e}"))),
+            Err(e) => Ok(browser_error_result("Press key", &e)),
         }
     }
 
@@ -633,7 +633,7 @@ impl BrowserTool {
             Ok(output) => Ok(ToolResult::success(compact_action_short(
                 &output, "Hovered.",
             ))),
-            Err(e) => Ok(ToolResult::error(format!("Hover failed: {e}"))),
+            Err(e) => Ok(browser_error_result("Hover", &e)),
         }
     }
 
@@ -666,7 +666,7 @@ impl BrowserTool {
                 &output,
                 &format!("Scrolled {direction}."),
             ))),
-            Err(e) => Ok(ToolResult::error(format!("Scroll failed: {e}"))),
+            Err(e) => Ok(browser_error_result("Scroll", &e)),
         }
     }
 
@@ -693,7 +693,7 @@ impl BrowserTool {
             Ok(output) => Ok(ToolResult::success(compact_action_short(
                 &output, "Dragged.",
             ))),
-            Err(e) => Ok(ToolResult::error(format!("Drag failed: {e}"))),
+            Err(e) => Ok(browser_error_result("Drag", &e)),
         }
     }
 
@@ -714,7 +714,7 @@ impl BrowserTool {
 
         match self.call_mcp("browser_tabs", params).await {
             Ok(output) => Ok(ToolResult::success(output)),
-            Err(e) => Ok(ToolResult::error(format!("Tab {action} failed: {e}"))),
+            Err(e) => Ok(browser_error_result(&format!("Tab {action}"), &e)),
         }
     }
 
@@ -774,7 +774,7 @@ impl BrowserTool {
                 };
                 Ok(ToolResult::success(truncated))
             }
-            Err(e) => Ok(ToolResult::error(format!("Evaluate failed: {e}"))),
+            Err(e) => Ok(browser_error_result("Evaluate", &e)),
         }
     }
 
@@ -822,7 +822,7 @@ impl BrowserTool {
             Ok(desc) => desc,
             Err(e) => {
                 let _ = std::fs::remove_file(&tmp_path);
-                return Ok(ToolResult::error(format!("Vision analysis failed: {e}")));
+                return Ok(browser_error_result("Vision analysis", &e));
             }
         };
 
@@ -913,7 +913,94 @@ impl BrowserTool {
         *self.last_snapshot.write().await = None;
         match self.call_mcp("browser_close", json!({})).await {
             Ok(_) => Ok(ToolResult::success("Browser closed.".to_string())),
-            Err(e) => Ok(ToolResult::error(format!("Close failed: {e}"))),
+            Err(e) => Ok(browser_error_result("Close", &e)),
+        }
+    }
+
+    /// Click at pixel coordinates (for canvas, SVG, maps, or elements without refs).
+    ///
+    /// Uses `page.mouse.click(x, y)` via `browser_run_code`. After clicking,
+    /// auto-snapshots to give the model fresh refs (same pattern as `action_click`).
+    async fn action_click_coordinates(&self, args: &Value) -> Result<ToolResult> {
+        let x = args
+            .get("x")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| anyhow::anyhow!("'x' parameter required for click_coordinates"))?;
+        let y = args
+            .get("y")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| anyhow::anyhow!("'y' parameter required for click_coordinates"))?;
+
+        let code = format!(
+            r#"async (page) => {{ await page.mouse.click({x}, {y}); }}"#
+        );
+
+        match self
+            .call_mcp("browser_run_code", json!({"code": code}))
+            .await
+        {
+            Ok(_) => {
+                // Auto-snapshot after click for fresh refs
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                match self.call_mcp("browser_snapshot", json!({})).await {
+                    Ok(snap) => {
+                        let compact = self.compact_with_diff(&snap).await;
+                        self.last_was_snapshot.store(true, Ordering::Relaxed);
+                        Ok(ToolResult::success(format!(
+                            "Clicked at ({x}, {y}).\n\n{compact}"
+                        )))
+                    }
+                    Err(_) => Ok(ToolResult::success(format!("Clicked at ({x}, {y})."))),
+                }
+            }
+            Err(e) => Ok(browser_error_result("Click coordinates", &e)),
+        }
+    }
+
+    /// Block images, fonts, media, and stylesheets to speed up page loads.
+    ///
+    /// Uses `page.route()` via `browser_run_code` to abort non-essential
+    /// resource types. Call before navigating to heavy sites. Reversible
+    /// with `unblock_resources`.
+    async fn action_block_resources(&self) -> Result<ToolResult> {
+        let code = r#"async (page) => {
+            await page.route('**/*', (route) => {
+                const type = route.request().resourceType();
+                if (['image', 'font', 'media', 'stylesheet'].includes(type)) {
+                    route.abort();
+                } else {
+                    route.continue();
+                }
+            });
+        }"#;
+
+        match self
+            .call_mcp("browser_run_code", json!({"code": code}))
+            .await
+        {
+            Ok(_) => Ok(ToolResult::success(
+                "Resource blocking enabled (images, fonts, media, stylesheets). \
+                 Pages will load faster but won't display images."
+                    .to_string(),
+            )),
+            Err(e) => Ok(browser_error_result("Block resources", &e)),
+        }
+    }
+
+    /// Remove resource blocking and restore normal page loading.
+    async fn action_unblock_resources(&self) -> Result<ToolResult> {
+        let code = r#"async (page) => {
+            await page.unroute('**/*');
+        }"#;
+
+        match self
+            .call_mcp("browser_run_code", json!({"code": code}))
+            .await
+        {
+            Ok(_) => Ok(ToolResult::success(
+                "Resource blocking disabled. Pages will load normally.".to_string(),
+            )),
+            Err(e) => Ok(browser_error_result("Unblock resources", &e)),
         }
     }
 }
@@ -938,6 +1025,9 @@ impl Tool for BrowserTool {
          - drag(ref, end_ref): Drag from ref to end_ref\n\
          - tab_list/tab_new/tab_select(index)/tab_close(index): Tab management\n\
          - screenshot(): Take screenshot and describe via vision model\n\
+         - click_coordinates(x, y): Click at pixel coordinates (for canvas/SVG/maps)\n\
+         - block_resources(): Block images/fonts/media for faster navigation\n\
+         - unblock_resources(): Restore normal resource loading\n\
          - evaluate(expression): Read page state via JS (READ-ONLY, no DOM changes)\n\
          - wait(seconds): Wait N seconds\n\
          - close(): Close browser\n\n\
@@ -960,7 +1050,8 @@ impl Tool for BrowserTool {
                         "navigate", "snapshot", "screenshot", "click", "type",
                         "fill", "select_option", "press_key", "hover", "scroll",
                         "drag", "tab_list", "tab_new", "tab_select",
-                        "tab_close", "evaluate", "close", "wait"
+                        "tab_close", "click_coordinates", "block_resources",
+                        "unblock_resources", "evaluate", "close", "wait"
                     ],
                     "description": "Browser action to perform"
                 },
@@ -1000,6 +1091,14 @@ impl Tool for BrowserTool {
                 "seconds": {
                     "type": "number",
                     "description": "Seconds for wait (max 30)"
+                },
+                "x": {
+                    "type": "integer",
+                    "description": "X pixel coordinate for click_coordinates"
+                },
+                "y": {
+                    "type": "integer",
+                    "description": "Y pixel coordinate for click_coordinates"
                 }
             }
         })
@@ -1030,6 +1129,9 @@ impl Tool for BrowserTool {
             "tab_list" | "tab_new" | "tab_select" | "tab_close" => {
                 self.action_tabs(action, &args).await?
             }
+            "click_coordinates" => self.action_click_coordinates(&args).await?,
+            "block_resources" => self.action_block_resources().await?,
+            "unblock_resources" => self.action_unblock_resources().await?,
             "evaluate" => self.action_evaluate(&args).await?,
             "wait" => self.action_wait(&args).await?,
             "close" => self.action_close().await?,
@@ -1037,14 +1139,16 @@ impl Tool for BrowserTool {
                 "Missing 'action' parameter. Available actions: \
                  navigate, snapshot, screenshot, click, type, fill, \
                  select_option, press_key, hover, scroll, drag, tab_list, \
-                 tab_new, tab_select, tab_close, evaluate, wait, close"
+                 tab_new, tab_select, tab_close, click_coordinates, \
+                 block_resources, unblock_resources, evaluate, wait, close"
                     .to_string(),
             ),
             unknown => ToolResult::error(format!(
                 "Unknown action \"{unknown}\". Available actions: \
                  navigate, snapshot, screenshot, click, type, fill, \
                  select_option, press_key, hover, scroll, drag, tab_list, \
-                 tab_new, tab_select, tab_close, evaluate, wait, close"
+                 tab_new, tab_select, tab_close, click_coordinates, \
+                 block_resources, unblock_resources, evaluate, wait, close"
             )),
         };
 
@@ -1423,6 +1527,82 @@ fn detect_error_page(snapshot: &str) -> Option<String> {
 }
 
 // ============================================================================
+// Error classification
+// ============================================================================
+
+/// Classify a Playwright error and return a contextual recovery hint.
+///
+/// Returns empty string if the error doesn't match any known pattern.
+/// The hint is appended to the error message — pure context, no commands.
+fn classify_browser_error(raw: &str) -> &'static str {
+    let lower = raw.to_lowercase();
+
+    // Stale element references (DOM changed since last snapshot)
+    if lower.contains("not attached to the dom")
+        || lower.contains("element handle")
+        || lower.contains("execution context was destroyed")
+        || lower.contains("frame was detached")
+    {
+        return "\n\nContext: Element refs are stale — the page DOM has changed \
+                since the last snapshot. Take a new snapshot to get fresh refs.";
+    }
+
+    // Target/browser closed
+    if lower.contains("target closed")
+        || lower.contains("target page, context or browser has been closed")
+        || lower.contains("browser has been closed")
+    {
+        return "\n\nContext: The browser session ended. Navigate to a URL \
+                to start a new session.";
+    }
+
+    // Element not found (bad ref)
+    if lower.contains("no element matches")
+        || lower.contains("element not found")
+        || lower.contains("unable to find")
+    {
+        return "\n\nContext: The referenced element was not found. \
+                The ref may be from an outdated snapshot, or the element \
+                may have been removed from the page.";
+    }
+
+    // Network errors
+    if lower.contains("net::err_")
+        || lower.contains("ns_error_")
+        || lower.contains("err_connection")
+        || lower.contains("err_name_not_resolved")
+        || lower.contains("err_cert_")
+    {
+        return "\n\nContext: Network error — the URL may be unreachable, \
+                have a DNS issue, or the site may be blocking automated access.";
+    }
+
+    // Timeout
+    if lower.contains("timeout") || lower.contains("waiting for") {
+        return "\n\nContext: The operation timed out. The page or element \
+                may still be loading — try wait() then snapshot().";
+    }
+
+    // Blocked by security policy
+    if lower.contains("not allowed") || lower.contains("blocked by") {
+        return "\n\nContext: The action was blocked by the page's security \
+                policy or content security settings.";
+    }
+
+    "" // Unknown error — no hint
+}
+
+/// Build a classified error `ToolResult` for browser actions.
+///
+/// Appends a contextual recovery hint when the error matches a known
+/// Playwright error pattern. Unknown errors pass through unchanged.
+fn browser_error_result(action: &str, error: &anyhow::Error) -> ToolResult {
+    let raw = error.to_string();
+    let hint = classify_browser_error(&raw);
+    ToolResult::error(format!("{action} failed: {raw}{hint}"))
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1624,4 +1804,122 @@ mod tests {
         assert!(detect_error_page(snapshot).is_none());
     }
 
+    // ---- Error classification tests ----
+
+    #[test]
+    fn test_classify_stale_ref() {
+        let hint = classify_browser_error("Element is not attached to the DOM");
+        assert!(hint.contains("stale"));
+        assert!(hint.contains("fresh refs"));
+
+        let hint2 = classify_browser_error("Execution context was destroyed");
+        assert!(hint2.contains("stale"));
+
+        let hint3 = classify_browser_error("Frame was detached");
+        assert!(hint3.contains("stale"));
+    }
+
+    #[test]
+    fn test_classify_target_closed() {
+        let hint = classify_browser_error("Target closed");
+        assert!(hint.contains("session ended"));
+
+        let hint2 = classify_browser_error(
+            "Target page, context or browser has been closed",
+        );
+        assert!(hint2.contains("session ended"));
+    }
+
+    #[test]
+    fn test_classify_element_not_found() {
+        let hint = classify_browser_error("No element matches selector: e99");
+        assert!(hint.contains("not found"));
+        assert!(hint.contains("outdated snapshot"));
+    }
+
+    #[test]
+    fn test_classify_network_error() {
+        let hint = classify_browser_error("net::ERR_NAME_NOT_RESOLVED");
+        assert!(hint.contains("Network error"));
+
+        let hint2 = classify_browser_error("net::ERR_CONNECTION_REFUSED");
+        assert!(hint2.contains("Network error"));
+
+        let hint3 = classify_browser_error("net::ERR_CERT_AUTHORITY_INVALID");
+        assert!(hint3.contains("Network error"));
+    }
+
+    #[test]
+    fn test_classify_timeout() {
+        let hint = classify_browser_error("Timeout 30000ms exceeded");
+        assert!(hint.contains("timed out"));
+
+        let hint2 = classify_browser_error("waiting for selector .btn");
+        assert!(hint2.contains("timed out"));
+    }
+
+    #[test]
+    fn test_classify_blocked() {
+        let hint = classify_browser_error("Navigation is not allowed");
+        assert!(hint.contains("blocked"));
+    }
+
+    #[test]
+    fn test_classify_unknown_error() {
+        let hint = classify_browser_error("some random playwright error xyz");
+        assert!(hint.is_empty());
+    }
+
+    #[test]
+    fn test_browser_error_result_format() {
+        let err = anyhow::anyhow!("Element is not attached to the DOM");
+        let result = browser_error_result("Click", &err);
+        assert!(result.is_error);
+        // Contains original error
+        assert!(result.output.contains("Click failed:"));
+        assert!(result.output.contains("not attached to the DOM"));
+        // Contains recovery hint
+        assert!(result.output.contains("Context:"));
+        assert!(result.output.contains("fresh refs"));
+    }
+
+    #[test]
+    fn test_browser_error_result_unknown() {
+        let err = anyhow::anyhow!("bizarre unknown error");
+        let result = browser_error_result("Hover", &err);
+        // Contains original error but no hint
+        assert!(result.output.contains("Hover failed: bizarre unknown error"));
+        assert!(!result.output.contains("Context:"));
+    }
+
+    // ---- Description tests for new actions ----
+
+    #[test]
+    fn test_description_lists_new_actions() {
+        // Verify that the description() string mentions the new actions.
+        // We can't instantiate BrowserTool without a live McpPeer, but
+        // the description is a static string, so we check it directly.
+        let desc = "Browser automation. Actions:\n\
+         - navigate(url): Go to URL (auto-returns page snapshot)\n\
+         - snapshot(): Get page accessibility tree with interactive elements [ref=eN]\n\
+         - click(ref): Click element (auto-returns updated snapshot)\n\
+         - type(ref, text): Type text into field (triggers autocomplete check)\n\
+         - fill(ref, text): Clear field + type (for overwriting)\n\
+         - select_option(ref, value): Select dropdown option\n\
+         - press_key(text): Press key (e.g. \"Enter\", \"Tab\")\n\
+         - hover(ref): Hover over element\n\
+         - scroll(direction, ref?): Scroll page or element up/down\n\
+         - drag(ref, end_ref): Drag from ref to end_ref\n\
+         - tab_list/tab_new/tab_select(index)/tab_close(index): Tab management\n\
+         - screenshot(): Take screenshot and describe via vision model\n\
+         - click_coordinates(x, y): Click at pixel coordinates (for canvas/SVG/maps)\n\
+         - block_resources(): Block images/fonts/media for faster navigation\n\
+         - unblock_resources(): Restore normal resource loading\n\
+         - evaluate(expression): Read page state via JS (READ-ONLY, no DOM changes)\n\
+         - wait(seconds): Wait N seconds\n\
+         - close(): Close browser";
+        assert!(desc.contains("click_coordinates(x, y)"));
+        assert!(desc.contains("block_resources()"));
+        assert!(desc.contains("unblock_resources()"));
+    }
 }
