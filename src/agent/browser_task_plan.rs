@@ -199,7 +199,7 @@ impl BrowserTaskPlanState {
     pub fn runtime_message(&self, browser_available: bool) -> Option<ChatMessage> {
         if self.routing.browser_required && !browser_available {
             return Some(ChatMessage::user(&format!(
-                "This request requires interactive browser automation ({}) but the browser runtime is unavailable. Do not use web_fetch, web_search, or shell as a surrogate for dynamic booking/comparison sites. Respond immediately with a clear browser-unavailable error.",
+                "Note: this task involves {} but the browser is currently unavailable.",
                 self.routing.reason
             )));
         }
@@ -216,48 +216,38 @@ impl BrowserTaskPlanState {
         let mut lines = vec![format!("Browser task objective: {}", self.objective)];
         if self.routing.browser_required {
             lines.push(format!(
-                "Browser routing: {}. Start with the browser tool, not web_fetch or shell.",
+                "Task type: {} (browser-oriented).",
                 self.routing.reason
             ));
         }
         if !self.required_sources.is_empty() {
             lines.push(format!(
-                "Required browser sources: {}",
+                "Sources mentioned by user: {}",
                 self.required_sources.join(", ")
             ));
         }
         if self.compare_mode {
             lines.push(
-                "This is a compare-style browser task. Do not stop after the first source if another source still needs to be checked."
-                    .to_string(),
+                "The user expects a comparison across multiple sources.".to_string(),
             );
-            if self.required_sources.is_empty() {
-                lines.push(
-                    "No specific brand/site was requested — search at least 2-3 comparison or aggregator sites (e.g. Amazon, Zalando, eBay, Trovaprezzi, Google Shopping) to give a comprehensive overview with prices."
-                        .to_string(),
-                );
-            }
         }
         if let Some(current_source) = &self.current_source {
-            lines.push(format!("Current browser source: {}", current_source));
+            lines.push(format!("Currently on: {}", current_source));
         }
         if !self.visited_sources.is_empty() {
             lines.push(format!(
-                "Visited sources so far: {}",
+                "Visited so far: {}",
                 self.visited_sources.join(", ")
             ));
         }
         if !self.extracted_sources.is_empty() {
             lines.push(format!(
-                "Sources with extracted results: {}",
+                "Results extracted from: {}",
                 self.extracted_sources.join(", ")
             ));
         }
         if self.result_pages_seen > 0 {
-            lines.push(
-                "If the current page already shows candidate results, prefer the browser extract action before further navigation."
-                    .to_string(),
-            );
+            lines.push("Current page shows candidate results.".to_string());
         }
 
         Some(ChatMessage::user(&lines.join("\n")))
@@ -575,17 +565,17 @@ mod tests {
             .runtime_message(true)
             .expect("expected runtime message");
         let rendered = message.rendered_text().unwrap();
-        assert!(rendered.contains("Required browser sources: trenitalia, italo"));
-        assert!(rendered.contains("Visited sources so far: trenitalia"));
-        assert!(rendered.contains("prefer the browser extract action"));
+        assert!(rendered.contains("Sources mentioned by user: trenitalia, italo"));
+        assert!(rendered.contains("Visited so far: trenitalia"));
+        assert!(rendered.contains("Current page shows candidate results"));
 
         plan.note_browser_result(
             Some("extract"),
             "Page URL: https://www.italotreno.it/\nExtracted results:\n1. Napoli Centrale - Milano Centrale | price=EUR 49 | time=16:30",
         );
         let rendered = plan.runtime_message(true).unwrap().rendered_text().unwrap();
-        assert!(rendered.contains("Sources with extracted results: italo"));
-        assert!(rendered.contains("Current browser source: italo"));
+        assert!(rendered.contains("Results extracted from: italo"));
+        assert!(rendered.contains("Currently on: italo"));
     }
 
     #[test]
@@ -596,7 +586,7 @@ mod tests {
             .unwrap()
             .rendered_text()
             .unwrap();
-        assert!(rendered.contains("browser runtime is unavailable"));
+        assert!(rendered.contains("browser is currently unavailable"));
     }
 
     #[test]
@@ -703,14 +693,13 @@ mod tests {
     }
 
     #[test]
-    fn generic_shopping_runtime_message_suggests_aggregators() {
+    fn generic_shopping_runtime_message_shows_comparison_context() {
         let plan = BrowserTaskPlanState::new(
             "trovami scarpe classiche marroni taglia 44 che non costano più di 50 euro",
         );
         let msg = plan.runtime_message(true).expect("expected runtime message");
         let rendered = msg.rendered_text().unwrap();
-        assert!(rendered.contains("compare-style browser task"));
-        assert!(rendered.contains("aggregator sites"));
+        assert!(rendered.contains("comparison across multiple sources"));
     }
 
     #[test]
