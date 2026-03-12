@@ -19,7 +19,6 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/chat", get(chat_page))
         .route("/automations", get(automations_page))
         .route("/workflows", get(workflows_page))
-        .route("/business", get(business_page))
         .route("/skills", get(skills_page))
         .route("/mcp", get(mcp_page))
         .route(
@@ -85,7 +84,6 @@ const ICON_ESTOP: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="current
 const TOOLS_PAGES: &[&str] = &[
     "automations",
     "workflows",
-    "business",
     "skills",
     "mcp",
     "memory",
@@ -162,7 +160,6 @@ fn sidebar(active: &str) -> String {
                 <div class="sidebar-subnav-header">Tools</div>
                 <a href="/automations" class="sidebar-subnav-link{automations_a}">Automations</a>
                 <a href="/workflows" class="sidebar-subnav-link{workflows_a}">Workflows</a>
-                <a href="/business" class="sidebar-subnav-link{business_a}">Business</a>
                 <a href="/skills" class="sidebar-subnav-link{skills_a}">Skills</a>
                 <a href="/mcp" class="sidebar-subnav-link{mcp_a}">MCP Servers</a>
                 <a href="/memory" class="sidebar-subnav-link{memory_a}">Memory</a>
@@ -200,7 +197,6 @@ fn sidebar(active: &str) -> String {
         tools_open = tools_open,
         automations_a = a("automations"),
         workflows_a = a("workflows"),
-        business_a = a("business"),
         skills_a = a("skills"),
         mcp_a = a("mcp"),
         memory_a = a("memory"),
