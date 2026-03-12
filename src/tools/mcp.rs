@@ -9,6 +9,8 @@ use rmcp::transport::TokioChildProcess;
 use serde_json::Value;
 use tokio::sync::RwLock;
 
+use base64::Engine;
+
 use crate::config::{Config, ExecutionSandboxConfig, McpServerConfig};
 use crate::storage::{global_secrets, SecretKey};
 
@@ -51,6 +53,12 @@ pub struct McpClientTool {
     server_name: String,
     /// Optional shared config for runtime hot-reload.
     runtime_config: Option<Arc<RwLock<Config>>>,
+}
+
+/// Image data extracted from an MCP tool response.
+pub struct McpImageData {
+    pub mime_type: String,
+    pub data: Vec<u8>,
 }
 
 /// Wrapper around the rmcp RunningService peer for shared access.
@@ -129,6 +137,60 @@ impl McpPeer {
         }
 
         Ok(output)
+    }
+
+    /// Like `call_tool`, but also captures raw image data from the response.
+    ///
+    /// Used by `BrowserTool::action_screenshot` to extract the PNG bytes
+    /// returned by `browser_take_screenshot`.
+    pub async fn call_tool_with_images(
+        &self,
+        name: &str,
+        args: Value,
+    ) -> Result<(String, Vec<McpImageData>)> {
+        let guard = self.service.read().await;
+        let service = guard.as_ref().context("MCP server connection closed")?;
+
+        let arguments = args.as_object().cloned();
+        let result = service
+            .call_tool(CallToolRequestParams {
+                name: name.to_string().into(),
+                arguments,
+                meta: None,
+                task: None,
+            })
+            .await
+            .context("MCP tool call failed")?;
+
+        let mut output = String::new();
+        let mut images = Vec::new();
+        for content in &result.content {
+            match &content.raw {
+                RawContent::Text(text) => {
+                    if !output.is_empty() {
+                        output.push('\n');
+                    }
+                    output.push_str(&text.text);
+                }
+                RawContent::Image(img) => {
+                    if let Ok(bytes) =
+                        base64::engine::general_purpose::STANDARD.decode(&img.data)
+                    {
+                        images.push(McpImageData {
+                            mime_type: img.mime_type.clone(),
+                            data: bytes,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if result.is_error.unwrap_or(false) {
+            anyhow::bail!("{output}");
+        }
+
+        Ok((output, images))
     }
 
     /// List all resources available from this MCP server.

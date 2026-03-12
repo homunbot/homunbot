@@ -790,6 +790,123 @@ impl BrowserTool {
         Ok(ToolResult::success(format!("Waited {seconds}s.")))
     }
 
+    /// Take a screenshot and describe it using the configured vision model.
+    async fn action_screenshot(&self) -> Result<ToolResult> {
+        let (_text, images) = self
+            .peer
+            .call_tool_with_images("browser_take_screenshot", json!({"type": "png"}))
+            .await
+            .map_err(|e| anyhow::anyhow!("Screenshot failed: {e}"))?;
+
+        let img = match images.first() {
+            Some(img) => img,
+            None => {
+                return Ok(ToolResult::error(
+                    "Screenshot returned no image data.".to_string(),
+                ))
+            }
+        };
+
+        // Save to temp file (providers read image from disk path)
+        let tmp_path = std::env::temp_dir().join(format!(
+            "homun_screenshot_{}.png",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ));
+        std::fs::write(&tmp_path, &img.data)
+            .map_err(|e| anyhow::anyhow!("Failed to write screenshot: {e}"))?;
+
+        let description = match self.describe_screenshot(&tmp_path, &img.mime_type).await {
+            Ok(desc) => desc,
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp_path);
+                return Ok(ToolResult::error(format!("Vision analysis failed: {e}")));
+            }
+        };
+
+        let _ = std::fs::remove_file(&tmp_path);
+        Ok(ToolResult::success(format!(
+            "Screenshot visual description:\n{description}"
+        )))
+    }
+
+    /// Send a screenshot to the vision model and get a textual description.
+    async fn describe_screenshot(
+        &self,
+        image_path: &std::path::Path,
+        media_type: &str,
+    ) -> Result<String> {
+        use crate::config::Config;
+        use crate::provider::one_shot::{llm_one_shot, ImageInput, OneShotRequest};
+
+        let config = Config::load().map_err(|e| anyhow::anyhow!("Config load failed: {e}"))?;
+
+        // Resolve vision-capable model: vision_model → main model → error
+        let vision_model = config.agent.vision_model.trim().to_string();
+        let model = if !vision_model.is_empty() {
+            let provider = config
+                .resolve_provider(&vision_model)
+                .map(|(name, _)| name)
+                .unwrap_or("unknown");
+            let caps = config
+                .agent
+                .effective_model_capabilities(provider, &vision_model);
+            if caps.image_input {
+                vision_model
+            } else {
+                anyhow::bail!(
+                    "Configured vision_model '{}' does not support image input",
+                    vision_model
+                );
+            }
+        } else {
+            let main_model = config.agent.model.trim().to_string();
+            let provider = config
+                .resolve_provider(&main_model)
+                .map(|(name, _)| name)
+                .unwrap_or("unknown");
+            let caps = config
+                .agent
+                .effective_model_capabilities(provider, &main_model);
+            if caps.image_input {
+                main_model
+            } else {
+                anyhow::bail!(
+                    "No vision model configured and main model '{}' does not support images. \
+                     Set agent.vision_model in config.",
+                    main_model
+                );
+            }
+        };
+
+        tracing::info!(model = %model, "Describing browser screenshot via vision model");
+
+        let resp = llm_one_shot(
+            &config,
+            OneShotRequest {
+                system_prompt: "Describe this browser screenshot concisely. \
+                    Focus on: page type (error page, product listing, search results, \
+                    login form, etc.), visible content, and actionable elements. \
+                    If this looks like an error page, say so."
+                    .to_string(),
+                user_message: "What is shown in this screenshot?".to_string(),
+                images: vec![ImageInput {
+                    path: image_path.display().to_string(),
+                    media_type: media_type.to_string(),
+                }],
+                model: Some(model),
+                max_tokens: 1024,
+                timeout_secs: 45,
+                ..Default::default()
+            },
+        )
+        .await?;
+
+        Ok(resp.content)
+    }
+
     /// Execute the `close` action.
     async fn action_close(&self) -> Result<ToolResult> {
         self.session.clear().await;
@@ -820,6 +937,7 @@ impl Tool for BrowserTool {
          - scroll(direction, ref?): Scroll page or element up/down\n\
          - drag(ref, end_ref): Drag from ref to end_ref\n\
          - tab_list/tab_new/tab_select(index)/tab_close(index): Tab management\n\
+         - screenshot(): Take screenshot and describe via vision model\n\
          - evaluate(expression): Read page state via JS (READ-ONLY, no DOM changes)\n\
          - wait(seconds): Wait N seconds\n\
          - close(): Close browser\n\n\
@@ -839,8 +957,8 @@ impl Tool for BrowserTool {
                 "action": {
                     "type": "string",
                     "enum": [
-                        "navigate", "snapshot", "click", "type", "fill",
-                        "select_option", "press_key", "hover", "scroll",
+                        "navigate", "snapshot", "screenshot", "click", "type",
+                        "fill", "select_option", "press_key", "hover", "scroll",
                         "drag", "tab_list", "tab_new", "tab_select",
                         "tab_close", "evaluate", "close", "wait"
                     ],
@@ -900,6 +1018,7 @@ impl Tool for BrowserTool {
         let result = match action {
             "navigate" => self.action_navigate(&args).await?,
             "snapshot" => self.action_snapshot().await?,
+            "screenshot" => self.action_screenshot().await?,
             "click" => self.action_click(&args).await?,
             "type" => self.action_type(&args).await?,
             "fill" => self.action_fill(&args).await?,
@@ -916,16 +1035,16 @@ impl Tool for BrowserTool {
             "close" => self.action_close().await?,
             "" => ToolResult::error(
                 "Missing 'action' parameter. Available actions: \
-                 navigate, snapshot, click, type, fill, select_option, \
-                 press_key, hover, scroll, drag, tab_list, tab_new, \
-                 tab_select, tab_close, evaluate, wait, close"
+                 navigate, snapshot, screenshot, click, type, fill, \
+                 select_option, press_key, hover, scroll, drag, tab_list, \
+                 tab_new, tab_select, tab_close, evaluate, wait, close"
                     .to_string(),
             ),
             unknown => ToolResult::error(format!(
                 "Unknown action \"{unknown}\". Available actions: \
-                 navigate, snapshot, click, type, fill, select_option, \
-                 press_key, hover, scroll, drag, tab_list, tab_new, \
-                 tab_select, tab_close, evaluate, wait, close"
+                 navigate, snapshot, screenshot, click, type, fill, \
+                 select_option, press_key, hover, scroll, drag, tab_list, \
+                 tab_new, tab_select, tab_close, evaluate, wait, close"
             )),
         };
 
@@ -1504,4 +1623,5 @@ mod tests {
         let snapshot = "Page title: Search Results - 404 results found\n(20 interactive elements)\n- heading \"Search Results\"\n";
         assert!(detect_error_page(snapshot).is_none());
     }
+
 }

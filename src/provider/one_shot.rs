@@ -14,7 +14,15 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 
 use crate::config::Config;
-use crate::provider::traits::{ChatMessage, ChatRequest};
+use crate::provider::traits::{ChatContentPart, ChatMessage, ChatRequest};
+
+/// An image to include in a multimodal one-shot request.
+pub struct ImageInput {
+    /// Filesystem path to the image file.
+    pub path: String,
+    /// MIME type (e.g. "image/png").
+    pub media_type: String,
+}
 
 /// Configuration for a one-shot LLM call.
 pub struct OneShotRequest {
@@ -30,6 +38,8 @@ pub struct OneShotRequest {
     pub timeout_secs: u64,
     /// Specific model to use. If `None`, uses `config.agent.model`.
     pub model: Option<String>,
+    /// Optional images for vision-capable models.
+    pub images: Vec<ImageInput>,
 }
 
 impl Default for OneShotRequest {
@@ -41,6 +51,7 @@ impl Default for OneShotRequest {
             temperature: 0.3,
             timeout_secs: 30,
             model: None,
+            images: Vec::new(),
         }
     }
 }
@@ -84,11 +95,10 @@ pub async fn llm_one_shot(config: &Config, req: OneShotRequest) -> Result<OneSho
 
     let started = Instant::now();
 
+    let user_msg = build_user_message(&req.user_message, &req.images);
+
     let chat_req = ChatRequest {
-        messages: vec![
-            ChatMessage::system(&req.system_prompt),
-            ChatMessage::user(&req.user_message),
-        ],
+        messages: vec![ChatMessage::system(&req.system_prompt), user_msg],
         tools: vec![],
         model: model.clone(),
         max_tokens: req.max_tokens,
@@ -144,4 +154,54 @@ pub async fn llm_one_shot(config: &Config, req: OneShotRequest) -> Result<OneSho
         model,
         latency,
     })
+}
+
+/// Build the user message for a one-shot request, handling images if present.
+///
+/// Extracted for testability — the actual LLM call in [`llm_one_shot`] uses
+/// this same logic inline.
+pub fn build_user_message(user_text: &str, images: &[ImageInput]) -> ChatMessage {
+    if images.is_empty() {
+        ChatMessage::user(user_text)
+    } else {
+        let mut parts = vec![ChatContentPart::Text {
+            text: user_text.to_string(),
+        }];
+        for img in images {
+            parts.push(ChatContentPart::Image {
+                path: img.path.clone(),
+                media_type: img.media_type.clone(),
+            });
+        }
+        ChatMessage::user_parts(parts)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_user_message_text_only() {
+        let msg = build_user_message("hello", &[]);
+        assert_eq!(msg.content.as_deref(), Some("hello"));
+        assert!(msg.content_parts.is_none());
+    }
+
+    #[test]
+    fn build_user_message_with_images() {
+        let msg = build_user_message(
+            "describe this",
+            &[ImageInput {
+                path: "/tmp/test.png".to_string(),
+                media_type: "image/png".to_string(),
+            }],
+        );
+        // When images are present, content is None and content_parts is used
+        assert!(msg.content.is_none());
+        let parts = msg.content_parts.as_ref().expect("should have content_parts");
+        assert_eq!(parts.len(), 2); // text + 1 image
+        assert!(matches!(&parts[0], ChatContentPart::Text { text } if text == "describe this"));
+        assert!(matches!(&parts[1], ChatContentPart::Image { path, .. } if path == "/tmp/test.png"));
+    }
 }
