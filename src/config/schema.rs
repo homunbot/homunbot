@@ -1782,6 +1782,45 @@ pub struct BrowserConfig {
     pub default_profile: String,
     /// Named browser profiles for isolation
     pub profiles: HashMap<String, BrowserProfile>,
+    /// Action policy — allow/deny categories and URL patterns
+    #[serde(default)]
+    pub policy: BrowserPolicyConfig,
+}
+
+/// Browser action policy — category-based allow/deny rules.
+///
+/// When `enabled = false` (default), all actions are allowed.
+/// When enabled, actions are matched to categories (navigate, click,
+/// fill, observe, interact, eval, tabs, network) and checked against
+/// `deny` / `allow` lists. Navigate actions also check URL patterns.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BrowserPolicyConfig {
+    /// Enable policy enforcement (default: false).
+    pub enabled: bool,
+    /// Default stance: "allow" or "deny" (default: "allow").
+    pub default: String,
+    /// Categories to allow (meaningful when default = "deny").
+    pub allow: Vec<String>,
+    /// Categories to deny (meaningful when default = "allow").
+    pub deny: Vec<String>,
+    /// URL glob patterns to block for navigate (e.g., "*.evil.com").
+    pub blocked_urls: Vec<String>,
+    /// URL glob patterns to allow for navigate (when default = "deny").
+    pub allowed_urls: Vec<String>,
+}
+
+impl Default for BrowserPolicyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default: "allow".to_string(),
+            allow: Vec::new(),
+            deny: Vec::new(),
+            blocked_urls: Vec::new(),
+            allowed_urls: Vec::new(),
+        }
+    }
 }
 
 fn default_backend() -> String {
@@ -1854,6 +1893,7 @@ impl Default for BrowserConfig {
             executable_path: String::new(),
             default_profile: "default".to_string(),
             profiles,
+            policy: BrowserPolicyConfig::default(),
         }
     }
 }

@@ -1252,7 +1252,7 @@ impl AgentLoop {
                     }
 
                     // Browser veto: consecutive snapshot guard is inside BrowserTool;
-                    // here we only check the browser task planner veto.
+                    // here we check the browser task planner veto + action policy.
                     if crate::browser::is_browser_tool(&tool_call.name) {
                         if let Some(message) =
                             browser_task_plan.veto_browser_action(&tool_call.arguments)
@@ -1266,6 +1266,32 @@ impl AgentLoop {
                                 &tool_call.id,
                                 &tool_call.name,
                                 &message,
+                            ));
+                            continue;
+                        }
+
+                        // Config-driven action policy (allow/deny by category + URL).
+                        let action = tool_call
+                            .arguments
+                            .get("action")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if let Some(reason) =
+                            crate::browser::action_policy::check_browser_policy(
+                                &config.browser.policy,
+                                action,
+                                &tool_call.arguments,
+                            )
+                        {
+                            tracing::info!(
+                                tool = %tool_call.name,
+                                %reason,
+                                "Browser action denied by policy"
+                            );
+                            messages.push(ChatMessage::tool_result(
+                                &tool_call.id,
+                                &tool_call.name,
+                                &reason,
                             ));
                             continue;
                         }
