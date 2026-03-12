@@ -59,6 +59,7 @@ let showArchived = false;
 let sidebarCollapsed = false;
 let openConversationMenuId = null;
 let conversationPollTimer = null;
+let previouslyRunningIds = new Set();
 let renamingConversationId = null;
 let renameDraft = '';
 let multiSelectMode = false;
@@ -437,6 +438,23 @@ async function refreshConversationList() {
         if (!currentConversationId && conversations[0]) {
             currentConversationId = conversations[0].conversation_id;
         }
+
+        // Detect background run completions: conversations that were running
+        // on the previous poll but are no longer running now (INFRA-2).
+        const nowRunning = new Set();
+        for (const c of conversations) {
+            if (c.active_run && (c.active_run.status === 'running' || c.active_run.status === 'stopping')) {
+                nowRunning.add(c.conversation_id);
+            }
+        }
+        for (const id of previouslyRunningIds) {
+            if (!nowRunning.has(id) && id !== currentConversationId) {
+                showToast('Background conversation completed', 'info');
+                break; // One toast per poll cycle is enough
+            }
+        }
+        previouslyRunningIds = nowRunning;
+
         renderConversationList();
         syncConversationHeader();
     } catch (e) {
@@ -1750,9 +1768,10 @@ function connect() {
     if (!currentConversationId) return;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     socketConversationId = currentConversationId;
-    ws = new WebSocket(`${proto}//${location.host}/ws/chat?conversation_id=${encodeURIComponent(currentConversationId)}`);
+    const socket = new WebSocket(`${proto}//${location.host}/ws/chat?conversation_id=${encodeURIComponent(currentConversationId)}`);
+    ws = socket;
 
-    ws.onopen = () => {
+    socket.onopen = () => {
         suppressReconnect = false;
         wsStatus.textContent = 'Live';
         wsStatus.className = 'chat-connection is-live';
@@ -1766,7 +1785,7 @@ function connect() {
         restoreActiveRun();
     };
 
-    ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
         try {
             const data = JSON.parse(event.data);
 
@@ -1834,7 +1853,13 @@ function connect() {
         }
     };
 
-    ws.onclose = () => {
+    socket.onclose = () => {
+        // Only reset UI state if this socket is still the active one.
+        // When the user switches conversations, disconnectSocket() sets ws=null
+        // then connect() sets ws=new_socket. The old socket's async onclose
+        // must NOT clobber the new conversation's processing state.
+        if (ws !== socket) return;
+
         wsStatus.textContent = 'Disconnected';
         wsStatus.className = 'chat-connection is-offline';
         settleLiveArtifacts();
@@ -1847,8 +1872,8 @@ function connect() {
         suppressReconnect = false;
     };
 
-    ws.onerror = () => {
-        ws.close();
+    socket.onerror = () => {
+        socket.close();
     };
 }
 

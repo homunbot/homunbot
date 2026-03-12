@@ -17,9 +17,11 @@ pub mod action_policy;
 pub mod diff;
 pub mod helpers;
 pub mod mcp_bridge;
+pub mod tab_session;
 
 pub use helpers::{has_browser_tools, is_browser_tool};
 pub use mcp_bridge::{browser_mcp_server_config, BROWSER_MCP_SERVER_NAME};
+pub use tab_session::TabSessionManager;
 
 /// Quick runtime status check from config (no MCP connection needed).
 pub fn browser_runtime_status_for_config(

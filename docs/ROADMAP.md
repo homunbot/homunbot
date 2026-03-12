@@ -1,6 +1,6 @@
 # Homun — Development Roadmap
 
-> Last updated: 2026-03-12 (File Split & Code Hygiene program)
+> Last updated: 2026-03-12 (Smart web_fetch routing + search-first policy)
 > Basato su: Audit completo (`docs/AUDIT-2026-03.md`)
 > Gap analysis: Homun vs OpenClaw vs ZeroClaw
 > Source of truth: questo documento e' la roadmap/status operativa del progetto
@@ -13,7 +13,7 @@
 |---------|--------|
 | LOC Rust | ~78,500 |
 | LOC Frontend | ~17,000 |
-| Test | 522 passing (verificato con `cargo test` il 2026-03-12) |
+| Test | 578 passing (verificato con `cargo test` il 2026-03-12) |
 | Binary (full) | ~50MB |
 | Provider LLM | 14 |
 | Canali | 7 (CLI, Telegram, Discord*, WhatsApp*, Slack*, Email*, Web) |
@@ -517,7 +517,7 @@ Skill 'data-scraper' installed. Ready to use.
 
 - ✅ **Fondazioni UX e loop migliorate**
   - Chat shell ridisegnata con composer sticky, model picker minimale, timeline tool/reasoning piu' leggibile.
-  - Prompt/tool routing corretto: per ricerca informativa il sistema preferisce `web_search`/`web_fetch` prima del browser.
+  - Prompt/tool routing corretto: per ricerca informativa il sistema preferisce `web_search`/`web_fetch` prima del browser. Search-first policy con veto system (blocca `web_fetch` senza `web_search` previo).
   - Finalizzazione best-effort quando il loop esaurisce le iterazioni, per evitare `max iterations reached without final response`.
   - Stop end-to-end con cancel propagation reale su provider streaming e tool lunghi.
 - ✅ **Persistenza e multi-chat**
@@ -1086,11 +1086,13 @@ Homun ha gia':
 | **E-Stop** | `security/estop.rs`, `web/api/health.rs` | Kill switch emergenza per agent loop, network, browser, MCP |
 | **Provider health** | `provider/health.rs` | Circuit breaker, EMA latency, auto-skip provider down |
 | **FS-1: Split web/api.rs** | `src/web/api/` (27 file) | Monolite 12,382 LOC → 27 file in submodule directory. mod.rs 81 righe, mcp/ subdirectory (6 file). Zero API changes, 522 test passing. ✅ DONE 2026-03-12 |
+| **WEB-ROUTING: Smart web_fetch + search-first** | `src/tools/web.rs`, `src/agent/agent_loop.rs`, `src/agent/prompt/sections.rs` | Tre livelli di enforcement: (1) `web_fetch` classifica errori 403/503/520-526 con hint browser, rileva pagine JS-required (SPA shell, noscript) e suggerisce fallback browser; (2) Veto system blocca `web_fetch` se `web_search` disponibile ma non ancora usato (bypass solo con URL esplicito utente); (3) Prompt routing rafforzato ("ALWAYS web_search first"). ~52 LOC, 4 nuovi test. ✅ DONE 2026-03-12 |
 
 ---
 
-## BIZ — Business Autopilot (P1)
+## BIZ — Business Autopilot (P3 — Futuro)
 
+> **Stato: DEFERRED** — BIZ-1 (core engine) completato, BIZ-2..5 rimandati a futuro. Pagina Web UI non esposta nel menu/router.
 > Obiettivo: agente AI autonomo che trova nicchie, crea strategie, vende prodotti, traccia revenue, auto-corregge.
 > Filosofia MCP-first: il core traccia contabilita e orchestrazione; integrazioni esterne (Stripe, PayPal, Twitter, email, fatturazione) via MCP server.
 
@@ -1499,9 +1501,10 @@ Sprint 9+: Future (P3)
   Voice, Extended thinking, Prometheus, distribuzione
 ```
 
-**Completato: Sprint 1-8 + SBX-1..6 (tutti validati CI cross-platform) + CHAT-1..6 + smoke manuali CHAT-7/Browser + core Browser + Design System + Workflow Engine + Automations Builder v2 (visual flow + guided inspector + NLP) + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4) + Unified LLM Engine + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
-**Rimanente: formalizzazione release-grade di CHAT-7 e Browser E2E, BIZ-2..5, Mobile App, Sprint 9+**
-**CI: 11/11 check verdi (check&lint, test, 4 feature matrix, 5 build cross-platform + sandbox validation)**
+**Completato: Sprint 1-8 + SBX-1..6 (tutti validati CI cross-platform) + CHAT-1..6 + smoke manuali CHAT-7/Browser + core Browser + Design System + Workflow Engine + Automations Builder v2 (visual flow + guided inspector + NLP) + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4) + Unified LLM Engine + Smart web_fetch routing (search-first + JS detection + browser hints) + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
+**Rimanente: formalizzazione release-grade di CHAT-7 e Browser E2E, Mobile App, Sprint 9+**
+**Deferred: BIZ-2..5 (Business Autopilot avanzato — core engine BIZ-1 done, resto rimandato)**
+**CI: 11/11 check verdi (check&lint, test, 4 feature matrix, 5 build cross-platform + sandbox validation) — 578 test**
 
 ---
 
@@ -1509,9 +1512,9 @@ Sprint 9+: Future (P3)
 
 | # | Task | Note | Priorità |
 |---|------|------|----------|
-| INFRA-1 | **Browser session pool** | Oggi il browser Playwright è un singleton. Due task concorrenti si sovrapporrebbero. Serve un pool di sessioni browser (o tab isolati) con lock/acquire/release. | P2 |
-| INFRA-2 | **Chat parallele** | L'utente dovrebbe poter mandare più richieste concorrenti senza aspettare che la precedente finisca. Serve routing parallelo per sessione. | P2 |
-| INFRA-3 | **Context window management per browser** | I browser snapshot (~50K chars ciascuno) accumulati causano context explosion (400K+). Serve truncation/compaction aggressiva degli snapshot precedenti. | P1 |
+| INFRA-1 | **Browser tab isolation** | ✅ DONE — Ogni conversazione apre il suo tab browser. `TabSessionManager` mappa session_key → tab index. `Semaphore(1)` sostituita da `Mutex<()>` leggero (protegge solo `tab_select + action`). Tab creati automaticamente al primo `execute()`, chiusi al completamento del run. Continuation hints e snapshot diff ora per-sessione. ~150 righe nuovo file `tab_session.rs`, ~80 righe modificate in `browser.rs`, ~15 in `agent_loop.rs`. Tab actions rimossi dalla tool description (gestione automatica). | P2 |
+| INFRA-2 | **Chat parallele** | ✅ DONE — Backend già pronto (gateway `tokio::spawn` per messaggio, `start_run()` blocca solo per-sessione). Fix frontend: `ws.onclose` race condition (closure capture + stale socket guard), sidebar polling già presente, toast notifica su completamento background. ~15 righe JS, zero Rust. | P2 |
+| INFRA-3 | **Context window management per browser** | ✅ DONE — Implementato durante il porting browser: `compact_tree()` (filtro tree a interactive+ancestors), `compact_with_diff()` (diff sotto 40% change), `supersede_stale_browser_context()` (vecchi snapshot → summary 1-riga), `auto_compact_context()` (compressione globale a 150K), consecutive snapshot guard. | P1 |
 
 ---
 

@@ -28,74 +28,57 @@ pub const BROWSER_IDLE_TIMEOUT_SECS: u64 = 300; // 5 minutes
 
 /// Shared browser session state, readable by the agent loop.
 ///
-/// Tracks whether the browser is active, what page it's on, and when
-/// the last action was. The agent loop uses this to:
-/// 1. Inject a continuation hint ("browser is still on X, continue from there")
-/// 2. Auto-close the browser after idle timeout
+/// Wraps [`TabSessionManager`] to provide per-conversation tab isolation.
+/// The agent loop uses this to:
+/// 1. Inject a per-session continuation hint ("browser is still on X")
+/// 2. Close idle tabs after timeout
+/// 3. Clean up a conversation's tab when its agent run completes
 pub struct BrowserSession {
-    last_url: RwLock<Option<String>>,
-    last_action_at: RwLock<Option<Instant>>,
+    pub(crate) tab_manager: Arc<crate::browser::TabSessionManager>,
     peer: Arc<McpPeer>,
+    operation_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl BrowserSession {
-    fn new(peer: Arc<McpPeer>) -> Self {
+    fn new(
+        peer: Arc<McpPeer>,
+        tab_manager: Arc<crate::browser::TabSessionManager>,
+        operation_mutex: Arc<tokio::sync::Mutex<()>>,
+    ) -> Self {
         Self {
-            last_url: RwLock::new(None),
-            last_action_at: RwLock::new(None),
+            tab_manager,
             peer,
+            operation_mutex,
         }
     }
 
-    /// Record that a browser action just happened, optionally with a URL.
-    async fn note_action(&self, url: Option<&str>) {
-        *self.last_action_at.write().await = Some(Instant::now());
-        if let Some(u) = url {
-            *self.last_url.write().await = Some(u.to_string());
-        }
+    /// Returns a continuation hint for a specific conversation session.
+    pub async fn continuation_hint_for(&self, session_key: &str) -> Option<String> {
+        self.tab_manager.continuation_hint_for(session_key).await
     }
 
-    /// Returns a continuation hint if the browser is still active on a page.
-    /// The agent loop injects this as a system/user message so the model
-    /// knows it can continue from the current page instead of restarting.
-    pub async fn continuation_hint(&self) -> Option<String> {
-        let url = self.last_url.read().await;
-        let last_at = self.last_action_at.read().await;
-        match (&*url, &*last_at) {
-            (Some(u), Some(_)) => Some(format!(
-                "Browser is still open on: {u}\n\
-                 You can continue from the current page — call snapshot() to see it.\n\
-                 Do NOT navigate again to the same site unless you need a different page."
-            )),
-            _ => None,
-        }
+    /// Close idle browser tabs across all sessions.
+    pub async fn close_idle_tabs(&self, timeout_secs: u64) {
+        let _guard = self.operation_mutex.lock().await;
+        self.tab_manager
+            .close_idle_tabs(
+                std::time::Duration::from_secs(timeout_secs),
+                &self.peer,
+            )
+            .await;
     }
 
-    /// Close the browser if it has been idle longer than the timeout.
-    /// Returns `true` if the browser was closed.
-    pub async fn close_if_idle(&self, timeout_secs: u64) -> bool {
-        let last_at = self.last_action_at.read().await;
-        let idle = match *last_at {
-            Some(t) => t.elapsed().as_secs() >= timeout_secs,
-            None => false, // never used → nothing to close
-        };
-        drop(last_at);
-
-        if idle {
-            tracing::info!(timeout_secs, "Browser idle timeout reached, auto-closing");
-            let _ = self.peer.call_tool("browser_close", json!({})).await;
-            *self.last_url.write().await = None;
-            *self.last_action_at.write().await = None;
-            true
-        } else {
-            false
-        }
+    /// Close a specific session's browser tab (called after agent run completes).
+    pub async fn close_tab_for(&self, session_key: &str) {
+        let _guard = self.operation_mutex.lock().await;
+        self.tab_manager
+            .close_session(session_key, &self.peer)
+            .await;
     }
 
-    /// Clear session state (called after explicit close).
-    async fn clear(&self) {
-        *self.last_url.write().await = None;
-        *self.last_action_at.write().await = None;
+    /// Check if any session has an active browser tab.
+    pub async fn has_any_active(&self) -> bool {
+        self.tab_manager.has_any_active().await
     }
 }
 
@@ -153,31 +136,38 @@ const CURSOR_INTERACTIVE_JS: &str = r#"async (page) => {
 }"#;
 
 /// Single unified browser tool that wraps Playwright MCP actions.
+///
+/// Each conversation gets its own browser tab via [`TabSessionManager`].
+/// A lightweight [`Mutex`] protects the atomic `tab_select → action` pair,
+/// allowing concurrent browser use across conversations.
 pub struct BrowserTool {
     peer: Arc<McpPeer>,
-    /// Tracks whether the last action was a snapshot (consecutive guard).
-    last_was_snapshot: AtomicBool,
-    /// Whether anti-detection scripts have been injected for this session.
+    /// Whether anti-detection scripts have been injected (global, covers all tabs).
     stealth_injected: AtomicBool,
     /// Shared session state, also held by the agent loop.
     session: Arc<BrowserSession>,
-    /// Last compact snapshot for diffing. Updated after every snapshot.
-    last_snapshot: RwLock<Option<String>>,
-    /// Exclusive access guard — only one agent session can use the browser at a time.
-    /// Prevents race conditions when multiple channels call execute() concurrently.
-    browser_lock: Arc<tokio::sync::Semaphore>,
+    /// Per-conversation tab management.
+    tab_manager: Arc<crate::browser::TabSessionManager>,
+    /// Protects tab_select + action pairs for atomicity.
+    /// Held briefly per MCP call, NOT for the entire execute().
+    operation_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl BrowserTool {
     pub fn new(peer: Arc<McpPeer>) -> Self {
-        let session = Arc::new(BrowserSession::new(Arc::clone(&peer)));
+        let tab_manager = Arc::new(crate::browser::TabSessionManager::new());
+        let operation_mutex = Arc::new(tokio::sync::Mutex::new(()));
+        let session = Arc::new(BrowserSession::new(
+            Arc::clone(&peer),
+            Arc::clone(&tab_manager),
+            Arc::clone(&operation_mutex),
+        ));
         Self {
             peer,
-            last_was_snapshot: AtomicBool::new(false),
             stealth_injected: AtomicBool::new(false),
             session,
-            last_snapshot: RwLock::new(None),
-            browser_lock: Arc::new(tokio::sync::Semaphore::new(1)),
+            tab_manager,
+            operation_mutex,
         }
     }
 
@@ -187,7 +177,36 @@ impl BrowserTool {
     }
 
     /// Call an individual Playwright MCP tool through the persistent peer.
+    /// Used for global operations that don't target a specific tab
+    /// (stealth injection, close, resource blocking).
     async fn call_mcp(&self, tool_name: &str, args: Value) -> Result<String> {
+        self.peer.call_tool(tool_name, args).await
+    }
+
+    /// Call an MCP tool on a specific conversation's tab.
+    ///
+    /// Acquires the operation mutex, selects the tab, executes the action.
+    /// This ensures no other conversation can switch tabs between our
+    /// select and our action.
+    async fn call_mcp_on_tab(
+        &self,
+        tab: &crate::browser::tab_session::TabSession,
+        tool_name: &str,
+        args: Value,
+    ) -> Result<String> {
+        let _guard = self.operation_mutex.lock().await;
+
+        // Select the correct tab before executing the action
+        if let Some(index) = *tab.tab_index.read().await {
+            // Only select if there might be other tabs
+            if self.tab_manager.has_any_active().await {
+                let _ = self
+                    .peer
+                    .call_tool("browser_tabs", json!({"action": "select", "index": index}))
+                    .await;
+            }
+        }
+
         self.peer.call_tool(tool_name, args).await
     }
 
@@ -196,12 +215,17 @@ impl BrowserTool {
     /// If a previous snapshot exists and < 40% changed → return compact diff.
     /// Otherwise → return full compact snapshot.
     /// Always stores the new compact snapshot for the next diff.
-    async fn compact_with_diff(&self, raw_output: &str) -> String {
+    /// Uses the per-conversation `TabSession` for snapshot state.
+    async fn compact_with_diff(
+        &self,
+        raw_output: &str,
+        tab: &crate::browser::tab_session::TabSession,
+    ) -> String {
         let compacted = compact_browser_snapshot(raw_output);
-        let _previous = self.last_snapshot.read().await.clone();
+        let _previous = tab.last_snapshot.read().await.clone();
 
         // Store new snapshot for next diff
-        *self.last_snapshot.write().await = Some(compacted.clone());
+        *tab.last_snapshot.write().await = Some(compacted.clone());
 
         // If we have a previous snapshot, compute diff
         #[cfg(feature = "browser")]
@@ -371,7 +395,11 @@ impl BrowserTool {
     /// After navigation, automatically waits for the page to stabilize and
     /// returns a compacted snapshot. This prevents the model from seeing an
     /// empty/loading page and reflexively reloading.
-    async fn action_navigate(&self, args: &Value) -> Result<ToolResult> {
+    async fn action_navigate(
+        &self,
+        args: &Value,
+        tab: &crate::browser::tab_session::TabSession,
+    ) -> Result<ToolResult> {
         let url = args
             .get("url")
             .and_then(|v| v.as_str())
@@ -381,16 +409,19 @@ impl BrowserTool {
         // runs BEFORE any page JavaScript (anti-bot detection countermeasure).
         self.inject_stealth().await;
 
-        if let Err(e) = self.call_mcp("browser_navigate", json!({"url": url})).await {
+        if let Err(e) = self
+            .call_mcp_on_tab(tab, "browser_navigate", json!({"url": url}))
+            .await
+        {
             return Ok(browser_error_result("Navigate", &e));
         }
 
-        // Track session state
-        self.session.note_action(Some(url)).await;
+        // Track per-tab session state
+        tab.note_action(Some(url)).await;
 
         // Wait for the page to stabilize, then auto-snapshot.
-        let mut snapshot = self.wait_for_stable_snapshot().await;
-        self.last_was_snapshot.store(true, Ordering::Relaxed);
+        let mut snapshot = self.wait_for_stable_snapshot(tab).await;
+        tab.last_was_snapshot.store(true, Ordering::Relaxed);
 
         // Detect hidden interactive elements on pages with sparse ARIA coverage
         if let Some(cursor_section) = self.find_cursor_interactive(&snapshot).await {
@@ -412,7 +443,10 @@ impl BrowserTool {
     /// Heavy SPAs (Trenitalia, Italo) load in phases: skeleton → hydration →
     /// API data. We retry with increasing delays and also check for stability
     /// (element count stopped growing = page finished loading).
-    async fn wait_for_stable_snapshot(&self) -> String {
+    async fn wait_for_stable_snapshot(
+        &self,
+        tab: &crate::browser::tab_session::TabSession,
+    ) -> String {
         const MIN_INTERACTIVE: usize = 5;
         const DELAYS_MS: [u64; 5] = [1500, 2000, 2500, 3000, 3000];
 
@@ -422,14 +456,11 @@ impl BrowserTool {
         let mut prev_count: usize = 0;
 
         for (attempt, delay) in DELAYS_MS.iter().enumerate() {
-            match self.call_mcp("browser_snapshot", json!({})).await {
+            match self.call_mcp_on_tab(tab, "browser_snapshot", json!({})).await {
                 Ok(output) => {
                     let compacted = compact_browser_snapshot(&output);
                     let interactive_count = compacted.matches("[ref=").count();
 
-                    // Page is ready when:
-                    // 1. Enough interactive elements AND count stabilized (not still growing), OR
-                    // 2. Last attempt — return whatever we have
                     let is_stable =
                         interactive_count >= MIN_INTERACTIVE && interactive_count == prev_count;
                     let is_last = attempt == DELAYS_MS.len() - 1;
@@ -442,7 +473,7 @@ impl BrowserTool {
                             is_stable
                         );
                         // Store as baseline for future diffs (navigate = new page)
-                        *self.last_snapshot.write().await = Some(compacted.clone());
+                        *tab.last_snapshot.write().await = Some(compacted.clone());
                         return compacted;
                     }
 
@@ -468,9 +499,12 @@ impl BrowserTool {
     }
 
     /// Execute the `snapshot` action with compaction.
-    async fn action_snapshot(&self) -> Result<ToolResult> {
-        // Consecutive snapshot guard
-        if self.last_was_snapshot.load(Ordering::Relaxed) {
+    async fn action_snapshot(
+        &self,
+        tab: &crate::browser::tab_session::TabSession,
+    ) -> Result<ToolResult> {
+        // Consecutive snapshot guard (per-tab)
+        if tab.last_was_snapshot.load(Ordering::Relaxed) {
             return Ok(ToolResult::error(
                 "Page has not changed since last snapshot. \
                  Use the refs from the previous snapshot result. \
@@ -479,10 +513,10 @@ impl BrowserTool {
             ));
         }
 
-        match self.call_mcp("browser_snapshot", json!({})).await {
+        match self.call_mcp_on_tab(tab, "browser_snapshot", json!({})).await {
             Ok(output) => {
-                self.last_was_snapshot.store(true, Ordering::Relaxed);
-                let mut compact = self.compact_with_diff(&output).await;
+                tab.last_was_snapshot.store(true, Ordering::Relaxed);
+                let mut compact = self.compact_with_diff(&output, tab).await;
                 // Detect hidden interactive elements on sparse pages
                 if let Some(cursor_section) = self.find_cursor_interactive(&compact).await {
                     compact.push_str(&cursor_section);
@@ -498,10 +532,14 @@ impl BrowserTool {
     /// After clicking, auto-snapshots to give the model fresh refs.
     /// This prevents the stale-ref problem where DOM changes after click
     /// (e.g. autocomplete dropdown closing) invalidate previously seen refs.
-    async fn action_click(&self, args: &Value) -> Result<ToolResult> {
+    async fn action_click(
+        &self,
+        args: &Value,
+        tab: &crate::browser::tab_session::TabSession,
+    ) -> Result<ToolResult> {
         let ref_val = Self::normalize_ref(args)?;
         let base_output = match self
-            .call_mcp("browser_click", json!({"ref": ref_val}))
+            .call_mcp_on_tab(tab, "browser_click", json!({"ref": ref_val}))
             .await
         {
             Ok(output) => compact_action_short(&output, "Clicked."),
@@ -510,10 +548,10 @@ impl BrowserTool {
 
         // Brief wait for DOM to settle, then auto-snapshot for fresh refs
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        match self.call_mcp("browser_snapshot", json!({})).await {
+        match self.call_mcp_on_tab(tab, "browser_snapshot", json!({})).await {
             Ok(snap_output) => {
-                let compact = self.compact_with_diff(&snap_output).await;
-                self.last_was_snapshot.store(true, Ordering::Relaxed);
+                let compact = self.compact_with_diff(&snap_output, tab).await;
+                tab.last_was_snapshot.store(true, Ordering::Relaxed);
                 Ok(ToolResult::success(format!("{base_output}\n\n{compact}")))
             }
             Err(_) => {
@@ -524,7 +562,11 @@ impl BrowserTool {
     }
 
     /// Execute the `type` action with auto-snapshot for autocomplete detection.
-    async fn action_type(&self, args: &Value) -> Result<ToolResult> {
+    async fn action_type(
+        &self,
+        args: &Value,
+        tab: &crate::browser::tab_session::TabSession,
+    ) -> Result<ToolResult> {
         let ref_val = Self::normalize_ref(args)?;
         let text = args
             .get("text")
@@ -532,7 +574,8 @@ impl BrowserTool {
             .ok_or_else(|| anyhow::anyhow!("'text' parameter is required for type"))?;
 
         let type_result = self
-            .call_mcp(
+            .call_mcp_on_tab(
+                tab,
                 "browser_type",
                 json!({"ref": ref_val, "text": text, "slowly": true}),
             )
@@ -545,11 +588,13 @@ impl BrowserTool {
 
         // Auto-snapshot to detect autocomplete suggestions
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        if let Ok(snap_output) = self.call_mcp("browser_snapshot", json!({})).await {
+        if let Ok(snap_output) = self
+            .call_mcp_on_tab(tab, "browser_snapshot", json!({}))
+            .await
+        {
             if let Some(suggestions) = extract_autocomplete_suggestions(&snap_output) {
                 tracing::info!("Auto-snapshot after type: autocomplete suggestions found");
-                // Mark as snapshot since we just did one
-                self.last_was_snapshot.store(true, Ordering::Relaxed);
+                tab.last_was_snapshot.store(true, Ordering::Relaxed);
                 return Ok(ToolResult::success(format!("{base_output}{suggestions}")));
             }
         }
@@ -558,7 +603,11 @@ impl BrowserTool {
     }
 
     /// Execute the `fill` action (clear + type, no autocomplete).
-    async fn action_fill(&self, args: &Value) -> Result<ToolResult> {
+    async fn action_fill(
+        &self,
+        args: &Value,
+        tab: &crate::browser::tab_session::TabSession,
+    ) -> Result<ToolResult> {
         let ref_val = Self::normalize_ref(args)?;
         let text = args
             .get("text")
@@ -567,14 +616,14 @@ impl BrowserTool {
 
         // Select all existing text first, then type over it
         let _ = self
-            .call_mcp("browser_click", json!({"ref": ref_val}))
+            .call_mcp_on_tab(tab, "browser_click", json!({"ref": ref_val}))
             .await;
         let _ = self
-            .call_mcp("browser_press_key", json!({"key": "Control+a"}))
+            .call_mcp_on_tab(tab, "browser_press_key", json!({"key": "Control+a"}))
             .await;
 
         match self
-            .call_mcp("browser_type", json!({"ref": ref_val, "text": text}))
+            .call_mcp_on_tab(tab, "browser_type", json!({"ref": ref_val, "text": text}))
             .await
         {
             Ok(output) => Ok(ToolResult::success(compact_action_short(
@@ -586,7 +635,11 @@ impl BrowserTool {
     }
 
     /// Execute the `select_option` action.
-    async fn action_select_option(&self, args: &Value) -> Result<ToolResult> {
+    async fn action_select_option(
+        &self,
+        args: &Value,
+        tab: &crate::browser::tab_session::TabSession,
+    ) -> Result<ToolResult> {
         let ref_val = Self::normalize_ref(args)?;
         let value = args
             .get("value")
@@ -594,7 +647,8 @@ impl BrowserTool {
             .ok_or_else(|| anyhow::anyhow!("'value' parameter is required for select_option"))?;
 
         match self
-            .call_mcp(
+            .call_mcp_on_tab(
+                tab,
                 "browser_select_option",
                 json!({"ref": ref_val, "values": [value]}),
             )
@@ -609,13 +663,17 @@ impl BrowserTool {
     }
 
     /// Execute the `press_key` action.
-    async fn action_press_key(&self, args: &Value) -> Result<ToolResult> {
+    async fn action_press_key(
+        &self,
+        args: &Value,
+        tab: &crate::browser::tab_session::TabSession,
+    ) -> Result<ToolResult> {
         let key = args.get("text").and_then(|v| v.as_str()).ok_or_else(|| {
             anyhow::anyhow!("'text' parameter is required for press_key (e.g. \"Enter\", \"Tab\")")
         })?;
 
         match self
-            .call_mcp("browser_press_key", json!({"key": key}))
+            .call_mcp_on_tab(tab, "browser_press_key", json!({"key": key}))
             .await
         {
             Ok(output) => Ok(ToolResult::success(compact_action_short(
@@ -627,10 +685,14 @@ impl BrowserTool {
     }
 
     /// Execute the `hover` action.
-    async fn action_hover(&self, args: &Value) -> Result<ToolResult> {
+    async fn action_hover(
+        &self,
+        args: &Value,
+        tab: &crate::browser::tab_session::TabSession,
+    ) -> Result<ToolResult> {
         let ref_val = Self::normalize_ref(args)?;
         match self
-            .call_mcp("browser_hover", json!({"ref": ref_val}))
+            .call_mcp_on_tab(tab, "browser_hover", json!({"ref": ref_val}))
             .await
         {
             Ok(output) => Ok(ToolResult::success(compact_action_short(
@@ -641,7 +703,11 @@ impl BrowserTool {
     }
 
     /// Execute the `scroll` action.
-    async fn action_scroll(&self, args: &Value) -> Result<ToolResult> {
+    async fn action_scroll(
+        &self,
+        args: &Value,
+        tab: &crate::browser::tab_session::TabSession,
+    ) -> Result<ToolResult> {
         let direction = args
             .get("direction")
             .and_then(|v| v.as_str())
@@ -664,7 +730,7 @@ impl BrowserTool {
             });
         }
 
-        match self.call_mcp("browser_scroll", params).await {
+        match self.call_mcp_on_tab(tab, "browser_scroll", params).await {
             Ok(output) => Ok(ToolResult::success(compact_action_short(
                 &output,
                 &format!("Scrolled {direction}."),
@@ -674,7 +740,11 @@ impl BrowserTool {
     }
 
     /// Execute the `drag` action.
-    async fn action_drag(&self, args: &Value) -> Result<ToolResult> {
+    async fn action_drag(
+        &self,
+        args: &Value,
+        tab: &crate::browser::tab_session::TabSession,
+    ) -> Result<ToolResult> {
         let start_ref = Self::normalize_ref(args)?;
         let end_ref = args
             .get("end_ref")
@@ -682,7 +752,8 @@ impl BrowserTool {
             .ok_or_else(|| anyhow::anyhow!("'end_ref' parameter is required for drag"))?;
 
         match self
-            .call_mcp(
+            .call_mcp_on_tab(
+                tab,
                 "browser_drag",
                 json!({
                     "startRef": start_ref,
@@ -726,7 +797,11 @@ impl BrowserTool {
     /// Blocks DOM-manipulating patterns (click, focus, scrollTo, remove,
     /// innerHTML, etc.) — these break SPA frameworks. The model should use
     /// click/type/scroll actions instead.
-    async fn action_evaluate(&self, args: &Value) -> Result<ToolResult> {
+    async fn action_evaluate(
+        &self,
+        args: &Value,
+        tab: &crate::browser::tab_session::TabSession,
+    ) -> Result<ToolResult> {
         let expression = args
             .get("expression")
             .and_then(|v| v.as_str())
@@ -763,7 +838,7 @@ impl BrowserTool {
         }
 
         match self
-            .call_mcp("browser_evaluate", json!({"function": expression}))
+            .call_mcp_on_tab(tab, "browser_evaluate", json!({"function": expression}))
             .await
         {
             Ok(output) => {
@@ -794,7 +869,21 @@ impl BrowserTool {
     }
 
     /// Take a screenshot and describe it using the configured vision model.
-    async fn action_screenshot(&self) -> Result<ToolResult> {
+    async fn action_screenshot(
+        &self,
+        tab: &crate::browser::tab_session::TabSession,
+    ) -> Result<ToolResult> {
+        // Select the correct tab before taking the screenshot
+        {
+            let _guard = self.operation_mutex.lock().await;
+            if let Some(index) = *tab.tab_index.read().await {
+                let _ = self
+                    .peer
+                    .call_tool("browser_tabs", json!({"action": "select", "index": index}))
+                    .await;
+            }
+        }
+
         let (_text, images) = self
             .peer
             .call_tool_with_images("browser_take_screenshot", json!({"type": "png"}))
@@ -911,20 +1000,24 @@ impl BrowserTool {
     }
 
     /// Execute the `close` action.
-    async fn action_close(&self) -> Result<ToolResult> {
-        self.session.clear().await;
-        *self.last_snapshot.write().await = None;
-        match self.call_mcp("browser_close", json!({})).await {
-            Ok(_) => Ok(ToolResult::success("Browser closed.".to_string())),
-            Err(e) => Ok(browser_error_result("Close", &e)),
-        }
+    async fn action_close(&self, session_key: &str) -> Result<ToolResult> {
+        // Close only this conversation's tab (not the entire browser)
+        let _guard = self.operation_mutex.lock().await;
+        self.tab_manager
+            .close_session(session_key, &self.peer)
+            .await;
+        Ok(ToolResult::success("Browser tab closed.".to_string()))
     }
 
     /// Click at pixel coordinates (for canvas, SVG, maps, or elements without refs).
     ///
     /// Uses `page.mouse.click(x, y)` via `browser_run_code`. After clicking,
     /// auto-snapshots to give the model fresh refs (same pattern as `action_click`).
-    async fn action_click_coordinates(&self, args: &Value) -> Result<ToolResult> {
+    async fn action_click_coordinates(
+        &self,
+        args: &Value,
+        tab: &crate::browser::tab_session::TabSession,
+    ) -> Result<ToolResult> {
         let x = args
             .get("x")
             .and_then(|v| v.as_i64())
@@ -937,16 +1030,16 @@ impl BrowserTool {
         let code = format!(r#"async (page) => {{ await page.mouse.click({x}, {y}); }}"#);
 
         match self
-            .call_mcp("browser_run_code", json!({"code": code}))
+            .call_mcp_on_tab(tab, "browser_run_code", json!({"code": code}))
             .await
         {
             Ok(_) => {
                 // Auto-snapshot after click for fresh refs
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                match self.call_mcp("browser_snapshot", json!({})).await {
+                match self.call_mcp_on_tab(tab, "browser_snapshot", json!({})).await {
                     Ok(snap) => {
-                        let compact = self.compact_with_diff(&snap).await;
-                        self.last_was_snapshot.store(true, Ordering::Relaxed);
+                        let compact = self.compact_with_diff(&snap, tab).await;
+                        tab.last_was_snapshot.store(true, Ordering::Relaxed);
                         Ok(ToolResult::success(format!(
                             "Clicked at ({x}, {y}).\n\n{compact}"
                         )))
@@ -1024,14 +1117,13 @@ impl Tool for BrowserTool {
          - hover(ref): Hover over element\n\
          - scroll(direction, ref?): Scroll page or element up/down\n\
          - drag(ref, end_ref): Drag from ref to end_ref\n\
-         - tab_list/tab_new/tab_select(index)/tab_close(index): Tab management\n\
          - screenshot(): Take screenshot and describe via vision model\n\
          - click_coordinates(x, y): Click at pixel coordinates (for canvas/SVG/maps)\n\
          - block_resources(): Block images/fonts/media for faster navigation\n\
          - unblock_resources(): Restore normal resource loading\n\
          - evaluate(expression): Read page state via JS (READ-ONLY, no DOM changes)\n\
          - wait(seconds): Wait N seconds\n\
-         - close(): Close browser\n\n\
+         - close(): Close browser tab\n\n\
          RULES:\n\
          1. navigate() already returns the page — do NOT call snapshot() right after\n\
          2. Use refs from the LATEST snapshot only (e.g. ref=\"e42\")\n\
@@ -1050,8 +1142,7 @@ impl Tool for BrowserTool {
                     "enum": [
                         "navigate", "snapshot", "screenshot", "click", "type",
                         "fill", "select_option", "press_key", "hover", "scroll",
-                        "drag", "tab_list", "tab_new", "tab_select",
-                        "tab_close", "click_coordinates", "block_resources",
+                        "drag", "click_coordinates", "block_resources",
                         "unblock_resources", "evaluate", "close", "wait"
                     ],
                     "description": "Browser action to perform"
@@ -1077,10 +1168,6 @@ impl Tool for BrowserTool {
                     "enum": ["up", "down"],
                     "description": "Scroll direction"
                 },
-                "index": {
-                    "type": "integer",
-                    "description": "Tab index for tab_select/tab_close"
-                },
                 "expression": {
                     "type": "string",
                     "description": "JavaScript for evaluate"
@@ -1105,79 +1192,64 @@ impl Tool for BrowserTool {
         })
     }
 
-    async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolResult> {
-        // Exclusive browser access — only one agent session at a time.
-        let _permit = match tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            self.browser_lock.acquire(),
-        )
-        .await
-        {
-            Ok(Ok(permit)) => permit,
-            Ok(Err(_)) => {
-                return Ok(ToolResult::error(
-                    "Browser semaphore closed unexpectedly.".to_string(),
-                ))
-            }
-            Err(_) => {
-                return Ok(ToolResult::error(
-                    "Browser is currently in use by another session. \
-                     Wait a moment and try again."
-                        .to_string(),
-                ))
-            }
-        };
-
+    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
+        let session_key = format!("{}:{}", ctx.channel, ctx.chat_id);
         let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
 
-        // Reset consecutive snapshot flag for non-snapshot actions
+        tracing::debug!(action = %action, session_key = %session_key, "Browser tool action");
+
+        // Get or create this conversation's tab session.
+        // The operation_mutex is acquired inside get_or_create / call_mcp_on_tab.
+        let tab = {
+            let _guard = self.operation_mutex.lock().await;
+            self.tab_manager
+                .get_or_create(&session_key, &self.peer)
+                .await?
+        };
+
+        // Reset consecutive snapshot flag for non-snapshot actions (per-tab)
         if action != "snapshot" {
-            self.last_was_snapshot.store(false, Ordering::Relaxed);
+            tab.last_was_snapshot.store(false, Ordering::Relaxed);
         }
 
-        tracing::debug!(action = %action, "Browser tool action");
-
         let result = match action {
-            "navigate" => self.action_navigate(&args).await?,
-            "snapshot" => self.action_snapshot().await?,
-            "screenshot" => self.action_screenshot().await?,
-            "click" => self.action_click(&args).await?,
-            "type" => self.action_type(&args).await?,
-            "fill" => self.action_fill(&args).await?,
-            "select_option" => self.action_select_option(&args).await?,
-            "press_key" => self.action_press_key(&args).await?,
-            "hover" => self.action_hover(&args).await?,
-            "scroll" => self.action_scroll(&args).await?,
-            "drag" => self.action_drag(&args).await?,
-            "tab_list" | "tab_new" | "tab_select" | "tab_close" => {
-                self.action_tabs(action, &args).await?
-            }
-            "click_coordinates" => self.action_click_coordinates(&args).await?,
+            "navigate" => self.action_navigate(&args, &tab).await?,
+            "snapshot" => self.action_snapshot(&tab).await?,
+            "screenshot" => self.action_screenshot(&tab).await?,
+            "click" => self.action_click(&args, &tab).await?,
+            "type" => self.action_type(&args, &tab).await?,
+            "fill" => self.action_fill(&args, &tab).await?,
+            "select_option" => self.action_select_option(&args, &tab).await?,
+            "press_key" => self.action_press_key(&args, &tab).await?,
+            "hover" => self.action_hover(&args, &tab).await?,
+            "scroll" => self.action_scroll(&args, &tab).await?,
+            "drag" => self.action_drag(&args, &tab).await?,
+            "click_coordinates" => self.action_click_coordinates(&args, &tab).await?,
             "block_resources" => self.action_block_resources().await?,
             "unblock_resources" => self.action_unblock_resources().await?,
-            "evaluate" => self.action_evaluate(&args).await?,
+            "evaluate" => self.action_evaluate(&args, &tab).await?,
             "wait" => self.action_wait(&args).await?,
-            "close" => self.action_close().await?,
+            "close" => self.action_close(&session_key).await?,
             "" => ToolResult::error(
                 "Missing 'action' parameter. Available actions: \
                  navigate, snapshot, screenshot, click, type, fill, \
-                 select_option, press_key, hover, scroll, drag, tab_list, \
-                 tab_new, tab_select, tab_close, click_coordinates, \
-                 block_resources, unblock_resources, evaluate, wait, close"
+                 select_option, press_key, hover, scroll, drag, \
+                 click_coordinates, block_resources, unblock_resources, \
+                 evaluate, wait, close"
                     .to_string(),
             ),
             unknown => ToolResult::error(format!(
                 "Unknown action \"{unknown}\". Available actions: \
                  navigate, snapshot, screenshot, click, type, fill, \
-                 select_option, press_key, hover, scroll, drag, tab_list, \
-                 tab_new, tab_select, tab_close, click_coordinates, \
-                 block_resources, unblock_resources, evaluate, wait, close"
+                 select_option, press_key, hover, scroll, drag, \
+                 click_coordinates, block_resources, unblock_resources, \
+                 evaluate, wait, close"
             )),
         };
 
-        // Track session timestamp for all non-close actions (navigate tracks URL separately)
+        // Track per-tab timestamp for all non-close actions
         if action != "close" && !action.is_empty() {
-            self.session.note_action(None).await;
+            tab.note_action(None).await;
         }
 
         Ok(result)
@@ -1931,14 +2003,13 @@ mod tests {
          - hover(ref): Hover over element\n\
          - scroll(direction, ref?): Scroll page or element up/down\n\
          - drag(ref, end_ref): Drag from ref to end_ref\n\
-         - tab_list/tab_new/tab_select(index)/tab_close(index): Tab management\n\
          - screenshot(): Take screenshot and describe via vision model\n\
          - click_coordinates(x, y): Click at pixel coordinates (for canvas/SVG/maps)\n\
          - block_resources(): Block images/fonts/media for faster navigation\n\
          - unblock_resources(): Restore normal resource loading\n\
          - evaluate(expression): Read page state via JS (READ-ONLY, no DOM changes)\n\
          - wait(seconds): Wait N seconds\n\
-         - close(): Close browser";
+         - close(): Close browser tab";
         assert!(desc.contains("click_coordinates(x, y)"));
         assert!(desc.contains("block_resources()"));
         assert!(desc.contains("unblock_resources()"));

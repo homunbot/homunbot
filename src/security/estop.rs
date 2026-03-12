@@ -55,15 +55,20 @@ pub async fn emergency_stop(handles: &RwLock<EStopHandles>) -> EStopReport {
 
     let h = handles.read().await;
 
-    // 3. Close browser
+    // 3. Close all browser tabs
     let mut browser_closed = false;
     #[cfg(feature = "mcp")]
     if let Some(ref session) = h.browser_session {
-        // Force close regardless of idle state
-        if session.close_if_idle(0).await {
-            browser_closed = true;
-            tracing::info!("Emergency stop: browser closed");
+        // Force close all tabs regardless of idle state
+        session
+            .close_idle_tabs(0)
+            .await;
+        if session.has_any_active().await {
+            // Still has tabs — shouldn't happen, but log it
+            tracing::warn!("Emergency stop: some browser tabs may not have closed");
         }
+        browser_closed = true;
+        tracing::info!("Emergency stop: browser tabs closed");
     }
 
     // 4. Shutdown MCP servers

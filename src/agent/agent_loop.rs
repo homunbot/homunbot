@@ -814,16 +814,16 @@ impl AgentLoop {
             skill_env: None,
         };
 
-        // Browser session: idle cleanup and continuation hint
+        // Browser session: idle cleanup and per-conversation continuation hint
         #[cfg(feature = "mcp")]
         if let Some(ref session) = *self.browser_session.read().await {
-            // Close browser if idle too long (frees resources)
+            // Close browser tabs idle too long (frees resources)
             session
-                .close_if_idle(crate::tools::browser::BROWSER_IDLE_TIMEOUT_SECS)
+                .close_idle_tabs(crate::tools::browser::BROWSER_IDLE_TIMEOUT_SECS)
                 .await;
 
-            // If browser is still active, tell the model so it continues from there
-            if let Some(hint) = session.continuation_hint().await {
+            // If this conversation has an active browser tab, tell the model
+            if let Some(hint) = session.continuation_hint_for(session_key).await {
                 messages.push(ChatMessage::user(&hint));
             }
         }
@@ -1769,8 +1769,12 @@ impl AgentLoop {
             );
         }
 
-        // With MCP-based browser, the MCP server manages browser lifecycle.
-        // Cleanup happens when the MCP server shuts down (McpManager::shutdown).
+        // Close this conversation's browser tab if it had one (INFRA-1).
+        // The tab is no longer needed after the agent run completes.
+        #[cfg(feature = "mcp")]
+        if let Some(ref session) = *self.browser_session.read().await {
+            session.close_tab_for(session_key).await;
+        }
 
         // Record token usage (fire-and-forget)
         if total_usage.total_tokens > 0 {
