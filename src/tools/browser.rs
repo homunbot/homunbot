@@ -99,6 +99,59 @@ impl BrowserSession {
     }
 }
 
+/// Threshold: if more than 40% of lines changed, send full snapshot instead of diff.
+const DIFF_FULL_SNAPSHOT_THRESHOLD: f64 = 0.40;
+
+/// Minimum interactive elements from the ARIA snapshot before we bother looking
+/// for cursor-interactive elements. If the page already has ≥ this many refs,
+/// cursor detection is skipped (the page has good ARIA coverage).
+const CURSOR_DETECT_MAX_REFS: usize = 5;
+
+/// JS snippet injected via `browser_run_code` to find DOM elements that are
+/// visually interactive (cursor:pointer, onclick, tabindex) but lack ARIA roles.
+///
+/// Returns JSON array: `[{text, tag, hints}]`
+const CURSOR_INTERACTIVE_JS: &str = r#"async (page) => {
+    return await page.evaluate(() => {
+        const INTERACTIVE_ROLES = new Set([
+            'button','link','textbox','checkbox','radio','combobox','listbox',
+            'menuitem','menuitemcheckbox','menuitemradio','option','searchbox',
+            'slider','spinbutton','switch','tab','treeitem'
+        ]);
+        const INTERACTIVE_TAGS = new Set([
+            'a','button','input','select','textarea','details','summary'
+        ]);
+        const results = [];
+        for (const el of document.body.querySelectorAll('*')) {
+            const tag = el.tagName.toLowerCase();
+            if (INTERACTIVE_TAGS.has(tag)) continue;
+            const role = el.getAttribute('role');
+            if (role && INTERACTIVE_ROLES.has(role.toLowerCase())) continue;
+            const cs = getComputedStyle(el);
+            const pointer = cs.cursor === 'pointer';
+            const onclick = el.hasAttribute('onclick') || el.onclick !== null;
+            const ti = el.getAttribute('tabindex');
+            const tabidx = ti !== null && ti !== '-1';
+            if (!pointer && !onclick && !tabidx) continue;
+            if (pointer && !onclick && !tabidx) {
+                const p = el.parentElement;
+                if (p && getComputedStyle(p).cursor === 'pointer') continue;
+            }
+            const text = (el.textContent || '').trim().slice(0, 80);
+            if (!text) continue;
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) continue;
+            const hints = [];
+            if (pointer) hints.push('cursor:pointer');
+            if (onclick) hints.push('onclick');
+            if (tabidx) hints.push('tabindex');
+            results.push({text, tag, hints: hints.join(', ')});
+            if (results.length >= 15) break;
+        }
+        return JSON.stringify(results);
+    });
+}"#;
+
 /// Single unified browser tool that wraps Playwright MCP actions.
 pub struct BrowserTool {
     peer: Arc<McpPeer>,
@@ -108,6 +161,8 @@ pub struct BrowserTool {
     stealth_injected: AtomicBool,
     /// Shared session state, also held by the agent loop.
     session: Arc<BrowserSession>,
+    /// Last compact snapshot for diffing. Updated after every snapshot.
+    last_snapshot: RwLock<Option<String>>,
 }
 
 impl BrowserTool {
@@ -118,6 +173,7 @@ impl BrowserTool {
             last_was_snapshot: AtomicBool::new(false),
             stealth_injected: AtomicBool::new(false),
             session,
+            last_snapshot: RwLock::new(None),
         }
     }
 
@@ -129,6 +185,90 @@ impl BrowserTool {
     /// Call an individual Playwright MCP tool through the persistent peer.
     async fn call_mcp(&self, tool_name: &str, args: Value) -> Result<String> {
         self.peer.call_tool(tool_name, args).await
+    }
+
+    /// Compact a snapshot and return diff if the page changed minimally.
+    ///
+    /// If a previous snapshot exists and < 40% changed → return compact diff.
+    /// Otherwise → return full compact snapshot.
+    /// Always stores the new compact snapshot for the next diff.
+    async fn compact_with_diff(&self, raw_output: &str) -> String {
+        let compacted = compact_browser_snapshot(raw_output);
+        let previous = self.last_snapshot.read().await.clone();
+
+        // Store new snapshot for next diff
+        *self.last_snapshot.write().await = Some(compacted.clone());
+
+        // If we have a previous snapshot, compute diff
+        if let Some(prev) = previous {
+            let diff = crate::browser::diff::diff_snapshots(&prev, &compacted);
+            if diff.changed() && diff.change_ratio() < DIFF_FULL_SNAPSHOT_THRESHOLD {
+                // Small change: send compact diff instead of full snapshot
+                let header = extract_snapshot_header(&compacted);
+                let ref_count = compacted.matches("[ref=").count();
+                tracing::debug!(
+                    additions = diff.additions,
+                    removals = diff.removals,
+                    unchanged = diff.unchanged,
+                    ratio = %format!("{:.0}%", diff.change_ratio() * 100.0),
+                    "Browser snapshot: sending diff (small change)"
+                );
+                return crate::browser::diff::format_for_context(
+                    &format!(
+                        "{header}({ref_count} interactive elements) Use ref=\"eN\" as shown."
+                    ),
+                    &diff,
+                );
+            }
+        }
+
+        // Full snapshot: first snapshot, big change, or identical
+        compacted
+    }
+
+    /// Find DOM elements that are visually interactive but lack ARIA roles.
+    ///
+    /// Modern SPAs often use `<div onClick>` or `cursor:pointer` without proper
+    /// ARIA roles, making them invisible in the accessibility snapshot. This
+    /// injects a JS snippet to discover them and returns a formatted section
+    /// to append to the snapshot output.
+    ///
+    /// Only runs when the snapshot has few interactive refs (< CURSOR_DETECT_MAX_REFS),
+    /// meaning the ARIA tree is sparse and likely missing clickable elements.
+    async fn find_cursor_interactive(&self, snapshot: &str) -> Option<String> {
+        let ref_count = snapshot.matches("[ref=").count();
+        if ref_count >= CURSOR_DETECT_MAX_REFS {
+            return None;
+        }
+
+        let js_result = match self
+            .call_mcp("browser_run_code", json!({"code": CURSOR_INTERACTIVE_JS}))
+            .await
+        {
+            Ok(output) => output,
+            Err(e) => {
+                tracing::debug!("Cursor-interactive detection failed: {e}");
+                return None;
+            }
+        };
+
+        // The JS returns a JSON string inside MCP output — extract it
+        let json_str = js_result
+            .lines()
+            .find(|l| l.trim_start().starts_with('['))
+            .unwrap_or(&js_result);
+
+        let lines = parse_cursor_elements(json_str, snapshot);
+        if lines.is_empty() {
+            return None;
+        }
+
+        tracing::debug!(
+            found = lines.len(),
+            "Found cursor-interactive elements not in ARIA tree"
+        );
+
+        Some(format_cursor_section(&lines))
     }
 
     /// Normalize a ref value from model output.
@@ -246,8 +386,13 @@ impl BrowserTool {
         self.session.note_action(Some(url)).await;
 
         // Wait for the page to stabilize, then auto-snapshot.
-        let snapshot = self.wait_for_stable_snapshot().await;
+        let mut snapshot = self.wait_for_stable_snapshot().await;
         self.last_was_snapshot.store(true, Ordering::Relaxed);
+
+        // Detect hidden interactive elements on pages with sparse ARIA coverage
+        if let Some(cursor_section) = self.find_cursor_interactive(&snapshot).await {
+            snapshot.push_str(&cursor_section);
+        }
 
         let mut result = format!("Navigated to {url}\n\n");
         result.push_str(&snapshot);
@@ -288,6 +433,8 @@ impl BrowserTool {
                             interactive_count,
                             is_stable
                         );
+                        // Store as baseline for future diffs (navigate = new page)
+                        *self.last_snapshot.write().await = Some(compacted.clone());
                         return compacted;
                     }
 
@@ -327,7 +474,12 @@ impl BrowserTool {
         match self.call_mcp("browser_snapshot", json!({})).await {
             Ok(output) => {
                 self.last_was_snapshot.store(true, Ordering::Relaxed);
-                Ok(ToolResult::success(compact_browser_snapshot(&output)))
+                let mut compact = self.compact_with_diff(&output).await;
+                // Detect hidden interactive elements on sparse pages
+                if let Some(cursor_section) = self.find_cursor_interactive(&compact).await {
+                    compact.push_str(&cursor_section);
+                }
+                Ok(ToolResult::success(compact))
             }
             Err(e) => Ok(ToolResult::error(format!("Snapshot failed: {e}"))),
         }
@@ -352,7 +504,7 @@ impl BrowserTool {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         match self.call_mcp("browser_snapshot", json!({})).await {
             Ok(snap_output) => {
-                let compact = compact_browser_snapshot(&snap_output);
+                let compact = self.compact_with_diff(&snap_output).await;
                 self.last_was_snapshot.store(true, Ordering::Relaxed);
                 Ok(ToolResult::success(format!("{base_output}\n\n{compact}")))
             }
@@ -636,6 +788,7 @@ impl BrowserTool {
     /// Execute the `close` action.
     async fn action_close(&self) -> Result<ToolResult> {
         self.session.clear().await;
+        *self.last_snapshot.write().await = None;
         match self.call_mcp("browser_close", json!({})).await {
             Ok(_) => Ok(ToolResult::success("Browser closed.".to_string())),
             Err(e) => Ok(ToolResult::error(format!("Close failed: {e}"))),
@@ -858,6 +1011,19 @@ fn compact_action_short(output: &str, prefix: &str) -> String {
     s.trim().to_string()
 }
 
+/// Extract the header portion (URL, title, element count) from a compact snapshot.
+fn extract_snapshot_header(compact: &str) -> String {
+    let mut header = String::new();
+    for line in compact.lines() {
+        if line.trim_start().starts_with("- ") || line.trim_start().starts_with("(") {
+            break;
+        }
+        header.push_str(line);
+        header.push('\n');
+    }
+    header
+}
+
 /// Extract autocomplete/dropdown suggestions from a snapshot.
 ///
 /// Looks for `option "..." [ref=eN]` lines in the accessibility tree.
@@ -1033,6 +1199,45 @@ pub fn browser_action_from_args(args: &Value) -> Option<&str> {
     args.get("action").and_then(|v| v.as_str())
 }
 
+/// Format cursor-interactive elements into a section for the snapshot.
+fn format_cursor_section(lines: &[String]) -> String {
+    format!(
+        "\n# Hidden interactive elements (no ARIA role):\n{}",
+        lines.join("\n")
+    )
+}
+
+/// Parse cursor-interactive JS output and dedup against existing snapshot text.
+///
+/// Exposed for testing. Returns formatted lines for elements not already in the snapshot.
+fn parse_cursor_elements(json_str: &str, snapshot: &str) -> Vec<String> {
+    let elements: Vec<Value> = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    let existing_texts: std::collections::HashSet<String> = snapshot
+        .lines()
+        .filter_map(|l| {
+            let start = l.find('"')?;
+            let end = l[start + 1..].find('"')?;
+            Some(l[start + 1..start + 1 + end].to_lowercase())
+        })
+        .collect();
+
+    let mut lines = Vec::new();
+    for el in &elements {
+        let text = el.get("text").and_then(|v| v.as_str()).unwrap_or("");
+        if text.is_empty() || existing_texts.contains(&text.to_lowercase()) {
+            continue;
+        }
+        let tag = el.get("tag").and_then(|v| v.as_str()).unwrap_or("div");
+        let hints = el.get("hints").and_then(|v| v.as_str()).unwrap_or("");
+        lines.push(format!("- clickable <{tag}> \"{text}\" [{hints}]"));
+    }
+    lines
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -1166,5 +1371,47 @@ mod tests {
             Some("click")
         );
         assert_eq!(browser_action_from_args(&json!({})), None);
+    }
+
+    #[test]
+    fn test_parse_cursor_elements_basic() {
+        let json = r#"[{"text":"Sign In","tag":"div","hints":"cursor:pointer"},{"text":"Add to Cart","tag":"span","hints":"onclick"}]"#;
+        let snapshot = "- button \"Other\" [ref=e1]";
+        let lines = parse_cursor_elements(json, snapshot);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("clickable <div> \"Sign In\""));
+        assert!(lines[1].contains("onclick"));
+    }
+
+    #[test]
+    fn test_parse_cursor_elements_dedup() {
+        let json = r#"[{"text":"Login","tag":"div","hints":"cursor:pointer"},{"text":"New","tag":"span","hints":"tabindex"}]"#;
+        // "Login" already appears in the snapshot — should be deduped
+        let snapshot = "- button \"Login\" [ref=e1]\n- heading \"Welcome\"";
+        let lines = parse_cursor_elements(json, snapshot);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("\"New\""));
+    }
+
+    #[test]
+    fn test_parse_cursor_elements_empty() {
+        let lines = parse_cursor_elements("[]", "");
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn test_parse_cursor_elements_bad_json() {
+        let lines = parse_cursor_elements("not json", "");
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn test_format_cursor_section() {
+        let lines = vec![
+            "- clickable <div> \"Sign In\" [cursor:pointer]".to_string(),
+        ];
+        let section = format_cursor_section(&lines);
+        assert!(section.contains("# Hidden interactive elements"));
+        assert!(section.contains("Sign In"));
     }
 }

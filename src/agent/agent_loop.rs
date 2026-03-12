@@ -904,6 +904,10 @@ impl AgentLoop {
             let use_streaming = stream_tx.is_some();
 
             let active_model = &selected_model;
+
+            // Auto-compact context when it grows too large (prevents OOM / truncation)
+            auto_compact_context(&mut messages);
+
             let mut request_messages = messages.clone();
             if let Some(plan_message) = execution_plan.runtime_message() {
                 request_messages.push(plan_message);
@@ -2525,6 +2529,112 @@ fn tool_result_for_model_context(_tool_name: &str, output: &str) -> String {
     output.to_string()
 }
 
+/// Auto-compact the context when it grows beyond the safe threshold.
+///
+/// Strategy:
+/// - Threshold: 150K chars (leaves room for system prompt + tool defs)
+/// - Preserve: system messages, user messages, last 6 messages (active context)
+/// - Truncate: old tool results > 500 chars → keep first 200 + "[compacted]"
+/// - Clear: old content_parts (images) from non-recent messages
+///
+/// This prevents context explosion during long browser sessions or
+/// multi-tool workflows.
+fn auto_compact_context(messages: &mut Vec<ChatMessage>) {
+    const THRESHOLD_CHARS: usize = 150_000;
+    const PROTECT_RECENT: usize = 6; // Don't touch last N messages
+    const TRUNCATE_MIN_LEN: usize = 500; // Only truncate content > this
+    const TRUNCATE_KEEP: usize = 200; // Keep first N chars when truncating
+
+    let total: usize = messages.iter().map(|m| m.estimated_text_len()).sum();
+    if total <= THRESHOLD_CHARS {
+        return;
+    }
+
+    let safe_end = messages.len().saturating_sub(PROTECT_RECENT);
+    let mut compacted_count = 0usize;
+    let mut freed = 0usize;
+
+    for i in 0..safe_end {
+        let role = messages[i].role.clone();
+
+        // Never compact system or user messages
+        if role == "system" || role == "user" {
+            continue;
+        }
+
+        // Compact large tool results
+        if role == "tool" {
+            let should_truncate = messages[i]
+                .content
+                .as_ref()
+                .map(|c| c.len() > TRUNCATE_MIN_LEN)
+                .unwrap_or(false);
+            if should_truncate {
+                let content = messages[i].content.as_ref().unwrap();
+                let original_len = content.len();
+                let tool_name = messages[i]
+                    .name
+                    .as_deref()
+                    .unwrap_or("tool")
+                    .to_string();
+                let keep_end = content
+                    .char_indices()
+                    .nth(TRUNCATE_KEEP)
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(content.len());
+                let truncated = content[..keep_end].to_string();
+                let summary = format!(
+                    "{truncated}\n...[{tool_name} output compacted — \
+                     {original_len} chars → {TRUNCATE_KEEP}]",
+                );
+                freed += original_len.saturating_sub(summary.len());
+                messages[i].content = Some(summary);
+                compacted_count += 1;
+            }
+        }
+
+        // Compact large assistant messages (e.g. long explanations)
+        if role == "assistant" {
+            let should_truncate = messages[i]
+                .content
+                .as_ref()
+                .map(|c| c.len() > TRUNCATE_MIN_LEN * 2)
+                .unwrap_or(false);
+            if should_truncate {
+                let content = messages[i].content.as_ref().unwrap();
+                let original_len = content.len();
+                let keep_end = content
+                    .char_indices()
+                    .nth(TRUNCATE_KEEP * 2)
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(content.len());
+                let truncated = content[..keep_end].to_string();
+                let summary = format!("{truncated}\n...[compacted from {original_len} chars]");
+                freed += original_len.saturating_sub(summary.len());
+                messages[i].content = Some(summary);
+                compacted_count += 1;
+            }
+        }
+
+        // Clear content_parts (images) from old messages
+        if messages[i].content_parts.is_some() {
+            messages[i].content_parts = None;
+            compacted_count += 1;
+        }
+    }
+
+    if compacted_count > 0 {
+        let new_total: usize = messages.iter().map(|m| m.estimated_text_len()).sum();
+        tracing::info!(
+            original_chars = total,
+            compacted_chars = new_total,
+            freed_chars = freed,
+            messages_compacted = compacted_count,
+            "Auto-compacted context (threshold: {THRESHOLD_CHARS})"
+        );
+    }
+}
+
 // compact_browser_snapshot moved to tools::browser — agent_loop no longer
 // needs its own copy since BrowserTool handles compaction internally.
 
@@ -3264,5 +3374,90 @@ mod tests {
             .find(|m| is_browser_follow_up_policy(m))
             .unwrap();
         assert!(policy.content.as_ref().unwrap().contains("new hint"));
+    }
+
+    #[test]
+    fn auto_compact_context_truncates_large_tool_results() {
+        use super::auto_compact_context;
+        use crate::provider::ChatMessage;
+
+        let big_content = "x".repeat(200_000); // 200K chars > 150K threshold
+        let mut messages = vec![
+            ChatMessage::system("System prompt"),
+            ChatMessage::user("Hello"),
+            ChatMessage::tool_result("call1", "web_fetch", &big_content),
+            ChatMessage::assistant("Analysis..."),
+            ChatMessage::user("Continue"),
+            ChatMessage::assistant("More analysis"),
+            ChatMessage::user("And more"),
+            ChatMessage::assistant("Final thoughts"),
+            ChatMessage::user("Thanks"),
+            ChatMessage::assistant("You're welcome"),
+        ];
+
+        let before: usize = messages.iter().map(|m| m.estimated_text_len()).sum();
+        assert!(before > 150_000);
+
+        auto_compact_context(&mut messages);
+
+        let after: usize = messages.iter().map(|m| m.estimated_text_len()).sum();
+        assert!(after < before, "context should shrink: {after} < {before}");
+
+        // Tool result should be truncated with compacted marker
+        let tool_content = messages[2].content.as_ref().unwrap();
+        assert!(tool_content.contains("compacted"));
+        assert!(tool_content.len() < 1000);
+
+        // User and system messages should be untouched
+        assert_eq!(
+            messages[0].content.as_ref().unwrap(),
+            "System prompt"
+        );
+        assert_eq!(messages[1].content.as_ref().unwrap(), "Hello");
+    }
+
+    #[test]
+    fn auto_compact_context_preserves_recent_messages() {
+        use super::auto_compact_context;
+        use crate::provider::ChatMessage;
+
+        // Build a large context where the big tool result is recent (last 6)
+        let big_content = "x".repeat(200_000);
+        let mut messages = vec![
+            ChatMessage::system("System"),
+            ChatMessage::user("Hello"),
+            ChatMessage::assistant("Hi"),
+            ChatMessage::user("Search"),
+            ChatMessage::tool_result("call1", "web_fetch", &big_content),
+            ChatMessage::assistant("Done"),
+        ];
+
+        auto_compact_context(&mut messages);
+
+        // Tool result is in the last 6 → should NOT be compacted
+        assert_eq!(
+            messages[4].content.as_ref().unwrap().len(),
+            200_000,
+            "recent tool result should not be compacted"
+        );
+    }
+
+    #[test]
+    fn auto_compact_context_noop_under_threshold() {
+        use super::auto_compact_context;
+        use crate::provider::ChatMessage;
+
+        let mut messages = vec![
+            ChatMessage::system("System"),
+            ChatMessage::user("Hello"),
+            ChatMessage::tool_result("call1", "browser", "Small result"),
+            ChatMessage::assistant("Done"),
+        ];
+
+        let before: usize = messages.iter().map(|m| m.estimated_text_len()).sum();
+        auto_compact_context(&mut messages);
+        let after: usize = messages.iter().map(|m| m.estimated_text_len()).sum();
+
+        assert_eq!(before, after, "small context should not be touched");
     }
 }

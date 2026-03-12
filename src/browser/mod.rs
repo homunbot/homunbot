@@ -13,6 +13,7 @@
 //! headless = true
 //! ```
 
+pub mod diff;
 pub mod helpers;
 pub mod mcp_bridge;
 
