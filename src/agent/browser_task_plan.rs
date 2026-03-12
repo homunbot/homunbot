@@ -231,6 +231,12 @@ impl BrowserTaskPlanState {
                 "This is a compare-style browser task. Do not stop after the first source if another source still needs to be checked."
                     .to_string(),
             );
+            if self.required_sources.is_empty() {
+                lines.push(
+                    "No specific brand/site was requested — search at least 2-3 comparison or aggregator sites (e.g. Amazon, Zalando, eBay, Trovaprezzi, Google Shopping) to give a comprehensive overview with prices."
+                        .to_string(),
+                );
+            }
         }
         if let Some(current_source) = &self.current_source {
             lines.push(format!("Current browser source: {}", current_source));
@@ -273,21 +279,6 @@ impl BrowserRoutingDecision {
     pub fn from_prompt(user_prompt: &str) -> Self {
         let lower = user_prompt.to_ascii_lowercase();
         let required_sources = extract_required_sources(&lower);
-        let compare_mode = contains_any(
-            &lower,
-            &[
-                "compare",
-                "confronta",
-                "both",
-                "sia",
-                "che",
-                "piu economico",
-                "più economico",
-                "cheaper",
-                "lowest price",
-                "compare prices",
-            ],
-        ) || required_sources.len() > 1;
         let booking_intent = contains_any(
             &lower,
             &[
@@ -316,6 +307,41 @@ impl BrowserRoutingDecision {
                 "borsa", "bag", "orologio", "watch",
             ],
         );
+        let has_price_constraint = contains_any(
+            &lower,
+            &[
+                "costano meno",
+                "non costano più",
+                "meno di",
+                "sotto ",
+                "under ",
+                "below ",
+                "cheaper",
+                "cheapest",
+                "economico",
+                "economica",
+                "lowest price",
+                "best price",
+                "miglior prezzo",
+                "budget",
+            ],
+        );
+        let compare_mode = contains_any(
+            &lower,
+            &[
+                "compare",
+                "confronta",
+                "piu economico",
+                "più economico",
+                "cheaper",
+                "lowest price",
+                "compare prices",
+            ],
+        ) || contains_word(&lower, "both")
+            || contains_word(&lower, "sia")
+            || contains_word(&lower, "che")
+            || required_sources.len() > 1
+            || (shopping_intent && has_price_constraint);
         let interactive_web = booking_intent
             || shopping_intent
             || !required_sources.is_empty()
@@ -398,6 +424,22 @@ fn push_unique(items: &mut Vec<String>, value: String) {
 
 fn contains_any(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| text.contains(needle))
+}
+
+/// Check if a short word appears as a standalone word (not inside another word).
+/// Boundary = start/end of string, or a non-alphanumeric char.
+fn contains_word(text: &str, word: &str) -> bool {
+    for (idx, _) in text.match_indices(word) {
+        let before_ok = idx == 0
+            || !text.as_bytes()[idx - 1].is_ascii_alphanumeric();
+        let after = idx + word.len();
+        let after_ok = after >= text.len()
+            || !text.as_bytes()[after].is_ascii_alphanumeric();
+        if before_ok && after_ok {
+            return true;
+        }
+    }
+    false
 }
 
 fn extract_required_sources(lower_prompt: &str) -> Vec<String> {
@@ -647,6 +689,38 @@ mod tests {
         // "di" and "il" are filler, should not be extracted
         let brands = extract_brand_sources("il prezzo di un prodotto");
         assert!(brands.is_empty());
+    }
+
+    #[test]
+    fn generic_shopping_with_price_constraint_is_multi_source() {
+        let decision = BrowserRoutingDecision::from_prompt(
+            "trovami delle scarpe classiche marroni di pelle taglia 44 che non costano più di 50 euro",
+        );
+        assert_eq!(decision.task_class(), BrowserTaskClass::MultiSourceCompare);
+        assert!(decision.browser_required());
+        // No named sources — aggregator hint should appear instead
+        assert!(decision.required_sources().is_empty());
+    }
+
+    #[test]
+    fn generic_shopping_runtime_message_suggests_aggregators() {
+        let plan = BrowserTaskPlanState::new(
+            "trovami scarpe classiche marroni taglia 44 che non costano più di 50 euro",
+        );
+        let msg = plan.runtime_message(true).expect("expected runtime message");
+        let rendered = msg.rendered_text().unwrap();
+        assert!(rendered.contains("compare-style browser task"));
+        assert!(rendered.contains("aggregator sites"));
+    }
+
+    #[test]
+    fn shopping_without_price_constraint_is_interactive_web() {
+        // Just shopping intent, no price constraint, no brands → InteractiveWeb (not MultiSource)
+        let decision = BrowserRoutingDecision::from_prompt(
+            "trovami delle scarpe classiche marroni di pelle taglia 44",
+        );
+        assert_eq!(decision.task_class(), BrowserTaskClass::InteractiveWeb);
+        assert!(decision.browser_required());
     }
 
     #[test]
