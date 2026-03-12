@@ -198,13 +198,14 @@ impl BrowserTool {
     /// Always stores the new compact snapshot for the next diff.
     async fn compact_with_diff(&self, raw_output: &str) -> String {
         let compacted = compact_browser_snapshot(raw_output);
-        let previous = self.last_snapshot.read().await.clone();
+        let _previous = self.last_snapshot.read().await.clone();
 
         // Store new snapshot for next diff
         *self.last_snapshot.write().await = Some(compacted.clone());
 
         // If we have a previous snapshot, compute diff
-        if let Some(prev) = previous {
+        #[cfg(feature = "browser")]
+        if let Some(prev) = _previous {
             let diff = crate::browser::diff::diff_snapshots(&prev, &compacted);
             if diff.changed() && diff.change_ratio() < DIFF_FULL_SNAPSHOT_THRESHOLD {
                 // Small change: send compact diff instead of full snapshot

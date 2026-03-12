@@ -174,6 +174,8 @@ impl AgentLoop {
         if crate::browser::is_browser_tool(tool_name) {
             tracing::debug!(tool = %tool_name, "Browser tool cancelled (MCP server manages cleanup)");
         }
+        #[cfg(not(feature = "browser"))]
+        let _ = tool_name;
     }
 
     pub async fn new(
@@ -1271,27 +1273,32 @@ impl AgentLoop {
                         }
 
                         // Config-driven action policy (allow/deny by category + URL).
-                        let action = tool_call
-                            .arguments
-                            .get("action")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if let Some(reason) = crate::browser::action_policy::check_browser_policy(
-                            &config.browser.policy,
-                            action,
-                            &tool_call.arguments,
-                        ) {
-                            tracing::info!(
-                                tool = %tool_call.name,
-                                %reason,
-                                "Browser action denied by policy"
-                            );
-                            messages.push(ChatMessage::tool_result(
-                                &tool_call.id,
-                                &tool_call.name,
-                                &reason,
-                            ));
-                            continue;
+                        #[cfg(feature = "browser")]
+                        {
+                            let action = tool_call
+                                .arguments
+                                .get("action")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            if let Some(reason) =
+                                crate::browser::action_policy::check_browser_policy(
+                                    &config.browser.policy,
+                                    action,
+                                    &tool_call.arguments,
+                                )
+                            {
+                                tracing::info!(
+                                    tool = %tool_call.name,
+                                    %reason,
+                                    "Browser action denied by policy"
+                                );
+                                messages.push(ChatMessage::tool_result(
+                                    &tool_call.id,
+                                    &tool_call.name,
+                                    &reason,
+                                ));
+                                continue;
+                            }
                         }
                     }
 
