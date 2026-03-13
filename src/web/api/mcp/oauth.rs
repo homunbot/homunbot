@@ -49,6 +49,8 @@ pub(crate) struct GoogleMcpOauthExchangeResponse {
     scope: Option<String>,
     token_type: Option<String>,
     message: Option<String>,
+    /// Google account email (fetched via userinfo after exchange).
+    email: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,15 +96,38 @@ pub(crate) struct GitHubMcpOauthExchangeResponse {
     message: Option<String>,
 }
 
+// ── Google userinfo ──────────────────────────────────────────────
+
+/// Best-effort fetch of the Google account email (for instance naming).
+async fn fetch_google_email(client: &reqwest::Client, access_token: &str) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct UserInfo {
+        email: Option<String>,
+    }
+    let resp = client
+        .get("https://www.googleapis.com/oauth2/v2/userinfo")
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .ok()?;
+    let info: UserInfo = resp.json().await.ok()?;
+    info.email
+}
+
 // ── Scope helpers ────────────────────────────────────────────────
 
 fn google_mcp_scopes(service: &str) -> Option<&'static [&'static str]> {
     let normalized = service.trim().to_ascii_lowercase();
+    // "email" scope lets us fetch the user's email for instance naming.
     match normalized.as_str() {
-        "gmail" => Some(&["https://www.googleapis.com/auth/gmail.readonly"]),
-        "google-calendar" | "gcal" | "calendar" => {
-            Some(&["https://www.googleapis.com/auth/calendar"])
-        }
+        "gmail" => Some(&[
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "email",
+        ]),
+        "google-calendar" | "gcal" | "calendar" => Some(&[
+            "https://www.googleapis.com/auth/calendar",
+            "email",
+        ]),
         _ => None,
     }
 }
@@ -281,6 +306,13 @@ pub(super) async fn exchange_google_mcp_oauth_code(
         Some("Google OAuth token exchange succeeded.".to_string())
     };
 
+    // Best-effort: fetch the account email for instance naming.
+    let email = if let Some(at) = &body.access_token {
+        fetch_google_email(&client, at).await
+    } else {
+        None
+    };
+
     Ok(Json(GoogleMcpOauthExchangeResponse {
         ok: true,
         access_token: body.access_token,
@@ -289,6 +321,7 @@ pub(super) async fn exchange_google_mcp_oauth_code(
         scope: body.scope,
         token_type: body.token_type,
         message,
+        email,
     }))
 }
 
@@ -666,11 +699,16 @@ mod google_oauth_tests {
     fn google_oauth_scopes_support_known_services() {
         assert_eq!(
             google_mcp_scopes("gmail"),
-            Some(&["https://www.googleapis.com/auth/gmail.readonly"][..])
+            Some(
+                &[
+                    "https://www.googleapis.com/auth/gmail.readonly",
+                    "email"
+                ][..]
+            )
         );
         assert_eq!(
             google_mcp_scopes("google-calendar"),
-            Some(&["https://www.googleapis.com/auth/calendar"][..])
+            Some(&["https://www.googleapis.com/auth/calendar", "email"][..])
         );
         assert!(google_mcp_scopes("github").is_none());
     }
@@ -687,7 +725,7 @@ mod google_oauth_tests {
         let rendered = url.as_str().to_string();
         assert_eq!(
             scopes,
-            vec!["https://www.googleapis.com/auth/gmail.readonly"]
+            vec!["https://www.googleapis.com/auth/gmail.readonly", "email"]
         );
         assert!(rendered.contains("access_type=offline"));
         assert!(rendered.contains("prompt=consent"));

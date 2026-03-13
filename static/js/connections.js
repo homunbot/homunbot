@@ -476,14 +476,14 @@
         }
 
         // ── OAuth flow (Gmail, Google Calendar) ──────────────────────
-        bindOauthFlow(oauthConfig);
+        bindOauthFlow(oauthConfig, recipe);
         // ── MCP OAuth 2.1 flow (Notion) ─────────────────────────────
         bindMcpOauthFlow(mcpOauthConfig, recipe, instanceName, showNameField);
     }
 
     // ── OAuth flow binding ───────────────────────────────────────────
 
-    function bindOauthFlow(oauthConfig) {
+    function bindOauthFlow(oauthConfig, recipe) {
         var oauthBtn = document.getElementById('conn-oauth-btn');
         if (!oauthBtn || !oauthConfig) return;
 
@@ -519,7 +519,13 @@
             if (res.ok && tokenValue) {
                 var hidden = document.getElementById('conn-field-' + tokenField);
                 if (hidden) hidden.value = tokenValue;
-                setOauthStatus('\u2713 Authorization complete');
+                // Auto-fill instance name from Google email (e.g. "gmail-fabio")
+                var nameInput = document.getElementById('conn-instance-name');
+                if (nameInput && res.body.email) {
+                    var local = res.body.email.split('@')[0] || '';
+                    if (local) nameInput.value = recipe.id + '-' + local.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+                }
+                setOauthStatus('\u2713 Authorization complete' + (res.body.email ? ' (' + res.body.email + ')' : ''));
                 oauthBtn.disabled = true;
                 oauthBtn.textContent = '\u2713 Authorized';
             } else {
