@@ -51,6 +51,28 @@
         return ICONS[name] || ICONS.default;
     }
 
+    // ── OAuth helpers ──────────────────────────────────────────────
+
+    /** Map recipe → OAuth provider config. Returns null for non-OAuth recipes. */
+    function oauthConfigForRecipe(recipe) {
+        if (recipe.auth_mode !== 'oauth') return null;
+        var map = {
+            'gmail':            { provider: 'google', service: 'gmail' },
+            'google-calendar':  { provider: 'google', service: 'google-calendar' },
+        };
+        return map[recipe.id] || null;
+    }
+
+    /** Currently active OAuth listener (removed on dialog close). */
+    var _oauthMessageHandler = null;
+
+    function cleanupOauthListener() {
+        if (_oauthMessageHandler) {
+            window.removeEventListener('message', _oauthMessageHandler);
+            _oauthMessageHandler = null;
+        }
+    }
+
     // ── State ────────────────────────────────────────────────────────
 
     var state = {
@@ -162,15 +184,30 @@
     // ── Connect dialog ──────────────────────────────────────────────
 
     function openConnectDialog(recipeId) {
+        cleanupOauthListener(); // clean up any previous OAuth listener
         var recipe = state.recipes.find(function(r) { return r.id === recipeId; });
         if (!recipe) return;
 
         var isConnected = recipe.connection_status && recipe.connection_status.status === 'connected';
 
         // Build fields HTML (all values escaped)
+        var oauthConfig = oauthConfigForRecipe(recipe);
         var fieldsHtml = '';
         for (var i = 0; i < recipe.fields.length; i++) {
             var f = recipe.fields[i];
+
+            // For OAuth recipes: replace refresh_token field with Authorize button
+            if (oauthConfig && f.id === 'refresh_token') {
+                fieldsHtml += '<input type="hidden" id="conn-field-refresh_token" data-field-id="refresh_token">' +
+                    '<div class="form-group">' +
+                        '<label>Authorization</label>' +
+                        '<button type="button" class="btn btn-secondary" id="conn-oauth-btn">' +
+                            '\uD83D\uDD10 Authorize with Google</button>' +
+                        '<div class="form-hint" id="conn-oauth-status"></div>' +
+                    '</div>';
+                continue;
+            }
+
             var inputType = f.secret ? 'password' : (f.input || 'text');
             fieldsHtml += '<div class="form-group">' +
                 '<label for="conn-field-' + escapeHtml(f.id) + '">' + escapeHtml(f.label) + (f.required ? ' *' : '') + '</label>' +
@@ -317,6 +354,97 @@
                 }
             });
         }
+
+        // ── OAuth flow (Gmail, Google Calendar) ──────────────────────
+        var oauthBtn = document.getElementById('conn-oauth-btn');
+        if (oauthBtn && oauthConfig) {
+            var oauthStatusEl = document.getElementById('conn-oauth-status');
+
+            function setOauthStatus(msg) {
+                if (oauthStatusEl) oauthStatusEl.textContent = msg;
+            }
+
+            // Exchange auth code for refresh_token (auto, no manual step)
+            async function exchangeOauthCode(code) {
+                setOauthStatus('Authorization received, obtaining token...');
+                var clientId = (document.getElementById('conn-field-client_id') || {}).value || '';
+                var clientSecret = (document.getElementById('conn-field-client_secret') || {}).value || '';
+                var redirectUri = window.location.origin + '/mcp/oauth/' + oauthConfig.provider + '/callback';
+
+                var res = await api('/api/v1/mcp/oauth/' + oauthConfig.provider + '/exchange', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        service: oauthConfig.service,
+                        code: code,
+                        client_id: clientId,
+                        client_secret: clientSecret,
+                        redirect_uri: redirectUri,
+                    }),
+                });
+
+                if (res.ok && res.body && res.body.refresh_token) {
+                    var hidden = document.getElementById('conn-field-refresh_token');
+                    if (hidden) hidden.value = res.body.refresh_token;
+                    setOauthStatus('\u2713 Authorization complete');
+                    oauthBtn.disabled = true;
+                    oauthBtn.textContent = '\u2713 Authorized';
+                } else {
+                    var errMsg = (res.body && (res.body.message || res.body.error_description)) || 'Token exchange failed';
+                    setOauthStatus('Error: ' + errMsg);
+                    showToast(errMsg, 'error');
+                }
+            }
+
+            // Listen for callback postMessage from popup
+            _oauthMessageHandler = function(event) {
+                if (event.origin !== window.location.origin) return;
+                var data = event.data || {};
+                if (data.type !== 'homun-mcp-oauth-code') return;
+                if (data.provider !== oauthConfig.provider) return;
+                if (data.error) {
+                    setOauthStatus('Error: ' + (data.error_description || data.error));
+                    showToast(data.error_description || data.error, 'error');
+                    return;
+                }
+                exchangeOauthCode(data.code);
+            };
+            window.addEventListener('message', _oauthMessageHandler);
+
+            // Start OAuth flow on button click
+            oauthBtn.addEventListener('click', async function() {
+                var clientId = (document.getElementById('conn-field-client_id') || {}).value || '';
+                if (!clientId.trim()) {
+                    showToast('Enter your Client ID first', 'error');
+                    return;
+                }
+                var redirectUri = window.location.origin + '/mcp/oauth/' + oauthConfig.provider + '/callback';
+
+                oauthBtn.disabled = true;
+                setOauthStatus('Opening Google authorization...');
+
+                var res = await api('/api/v1/mcp/oauth/' + oauthConfig.provider + '/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        service: oauthConfig.service,
+                        client_id: clientId.trim(),
+                        redirect_uri: redirectUri,
+                    }),
+                });
+
+                if (res.ok && res.body && res.body.auth_url) {
+                    window.open(res.body.auth_url, '_blank', 'popup,width=720,height=840');
+                    setOauthStatus('Waiting for authorization in popup...');
+                    oauthBtn.disabled = false;
+                } else {
+                    var errMsg = (res.body && res.body.message) || 'Failed to start OAuth';
+                    setOauthStatus('Error: ' + errMsg);
+                    showToast(errMsg, 'error');
+                    oauthBtn.disabled = false;
+                }
+            });
+        }
     }
 
     // ── Success screen ──────────────────────────────────────────────
@@ -356,6 +484,7 @@
         var doneBtn = document.getElementById('conn-done-btn');
         if (doneBtn) {
             doneBtn.addEventListener('click', function() {
+                cleanupOauthListener();
                 var overlay = document.getElementById('mcp-modal-overlay');
                 if (overlay) overlay.classList.remove('active');
                 loadCatalog();
@@ -394,6 +523,18 @@
             }, 200);
         });
     }
+
+    // ── Modal close cleanup (shared overlay is closed by mcp.js) ────
+
+    var modalOverlayEl = document.getElementById('mcp-modal-overlay');
+    if (modalOverlayEl) {
+        modalOverlayEl.addEventListener('click', function(e) {
+            if (e.target === modalOverlayEl) cleanupOauthListener();
+        });
+    }
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') cleanupOauthListener();
+    });
 
     // ── Init ─────────────────────────────────────────────────────────
 
