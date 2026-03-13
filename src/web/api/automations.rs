@@ -65,6 +65,7 @@ struct PatchAutomationRequest {
     clear_deliver_to: Option<bool>,
     workflow_steps: Option<Vec<serde_json::Value>>,
     clear_workflow_steps: Option<bool>,
+    flow_json: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -529,6 +530,15 @@ async fn patch_automation(
                 )
             })?;
             update.workflow_steps_json = Some(Some(steps_json));
+        }
+    }
+
+    // Handle flow_json (visual graph)
+    if let Some(fj) = req.flow_json {
+        if fj.is_empty() {
+            update.flow_json = Some(None);
+        } else {
+            update.flow_json = Some(Some(fj));
         }
     }
 

@@ -7751,6 +7751,164 @@ html, body {
     word-break: break-word;
 }
 
+/* ─── Prompt preview in automation card ──────────────────────── */
+
+.automation-prompt-preview {
+    font-size: 12px;
+    color: var(--t3);
+    line-height: 1.4;
+    margin-top: 2px;
+    max-height: 2.8em; /* ~2 lines */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+/* ─── Master-detail layout ───────────────────────────────────── */
+
+.auto-list-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    max-width: none;
+    padding: 0;
+}
+
+.auto-master > .page-header {
+    padding: 24px 28px 0;
+}
+
+.auto-master > .auto-list-section {
+    padding: 0 28px;
+}
+
+.auto-master-detail {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    gap: 0;
+}
+
+.auto-master {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+}
+
+.auto-list-section {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+/* ─── Detail side panel (history) ────────────────────────────── */
+
+.auto-detail {
+    width: 380px;
+    flex-shrink: 0;
+    border-left: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+    animation: autoDetailSlide 0.2s ease-out;
+}
+
+@keyframes autoDetailSlide {
+    from { opacity: 0; transform: translateX(20px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+
+.auto-detail-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 18px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+}
+
+.auto-detail-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--t1);
+    margin: 0;
+}
+
+.auto-detail-close {
+    min-width: 28px;
+    padding: 2px 6px;
+    font-size: 18px;
+    line-height: 1;
+}
+
+.auto-detail-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0;
+}
+
+/* ─── Chat-style prompt bar ──────────────────────────────────── */
+
+.auto-prompt-bar {
+    padding: 12px 18px 14px;
+    flex-shrink: 0;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.auto-prompt-shell {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    max-width: 800px;
+    margin: 0 auto;
+    border-radius: 20px;
+    border: 1px solid rgba(44, 41, 36, 0.08);
+    background: rgba(251, 250, 247, 0.92);
+    backdrop-filter: blur(12px);
+    box-shadow: 0 4px 16px rgba(44, 41, 36, 0.06);
+    padding: 8px 12px;
+}
+
+.dark .auto-prompt-shell {
+    background: rgba(29, 28, 24, 0.88);
+    border-color: rgba(255, 255, 255, 0.08);
+}
+
+.auto-prompt-textarea {
+    flex: 1;
+    min-height: 36px;
+    max-height: 100px;
+    border: 0;
+    box-shadow: none !important;
+    background: transparent;
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 6px 4px;
+    resize: none;
+    outline: none;
+}
+
+.auto-prompt-textarea:focus {
+    box-shadow: none !important;
+    outline: none;
+}
+
+.auto-prompt-send-btn {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
 @media (max-width: 700px) {
     .automation-row {
         flex-direction: column;
@@ -7760,6 +7918,21 @@ html, body {
         width: 100%;
         margin-left: 0;
         justify-content: flex-start;
+    }
+
+    .auto-detail {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        max-width: 380px;
+        z-index: 60;
+        box-shadow: -4px 0 20px rgba(0, 0, 0, 0.15);
+    }
+
+    .auto-master-detail {
+        flex-direction: column;
     }
 }
 

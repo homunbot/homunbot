@@ -1371,36 +1371,55 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
 
 async fn automations_page() -> Html<String> {
     let body = r#"<main class="content">
-            <div class="content-inner" id="automations-list-view">
-                <div class="page-header">
-                    <div class="page-title-group">
-                        <h1 class="page-title">Automations</h1>
-                        <span class="badge badge-info" id="automations-count">0</span>
+            <div class="content-inner auto-list-view" id="automations-list-view">
+                <div class="auto-master-detail">
+                    <!-- Master: list + prompt bar -->
+                    <div class="auto-master" id="auto-master">
+                        <div class="page-header">
+                            <div class="page-title-group">
+                                <h1 class="page-title">Automations</h1>
+                                <span class="badge badge-info" id="automations-count">0</span>
+                            </div>
+                            <div class="actions">
+                                <button class="btn btn-primary btn-sm" id="btn-create-automation">
+                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"><path d="M8 3v10M3 8h10"/></svg>Create
+                                </button>
+                                <button class="btn btn-secondary btn-sm" id="btn-automations-refresh">Refresh</button>
+                            </div>
+                        </div>
+
+                        <section class="section auto-list-section">
+                            <div id="automations-list" class="item-list">
+                                <div class="empty-state">
+                                    <p>Loading automations...</p>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Chat-style prompt bar for NLP creation -->
+                        <div class="auto-prompt-bar" id="auto-prompt-bar">
+                            <div class="auto-prompt-shell">
+                                <textarea id="auto-prompt-input" class="input auto-prompt-textarea" rows="1" placeholder="Describe an automation to create..." autocomplete="off"></textarea>
+                                <button id="btn-auto-prompt-send" class="btn btn-primary auto-prompt-send-btn" title="Generate automation from description">
+                                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+                                </button>
+                            </div>
+                        </div>
                     </div>
-                    <div class="actions">
-                        <button class="btn btn-primary btn-sm" id="btn-create-automation">
-                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"><path d="M8 3v10M3 8h10"/></svg>Create Automation
-                        </button>
-                        <button class="btn btn-secondary btn-sm" id="btn-automations-refresh">Refresh</button>
+
+                    <!-- Detail: history side panel -->
+                    <div class="auto-detail" id="auto-detail" hidden>
+                        <div class="auto-detail-header">
+                            <h2 class="auto-detail-title" id="auto-detail-title">Run History</h2>
+                            <button class="btn btn-secondary btn-sm auto-detail-close" id="btn-auto-detail-close" title="Close panel">&times;</button>
+                        </div>
+                        <div id="automation-history" class="auto-detail-body scrollable-list">
+                            <div class="empty-state">
+                                <p>No runs yet for this automation.</p>
+                            </div>
+                        </div>
                     </div>
                 </div>
-
-                <section class="section">
-                    <div id="automations-list" class="item-list">
-                        <div class="empty-state">
-                            <p>Loading automations...</p>
-                        </div>
-                    </div>
-                </section>
-
-                <section class="section">
-                    <h2>Run History</h2>
-                    <div id="automation-history" class="scrollable-list">
-                        <div class="empty-state">
-                            <p>Select an automation to load run history.</p>
-                        </div>
-                    </div>
-                </section>
             </div>
 
             <!-- N8N Style Builder View -->

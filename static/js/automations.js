@@ -485,6 +485,7 @@ function renderAutomations() {
                                     <span class="automation-chip">last run: ${escapeHtml(formatTimestamp(item.last_run))}</span>
                                     ${dependencies.length ? `<span class="automation-chip">deps: ${escapeHtml(String(dependencies.length))}</span>` : ''}
                                 </div>
+                                ${item.prompt ? `<div class="automation-prompt-preview">${escapeHtml(shorten(item.prompt, 140))}</div>` : ''}
                                 <div class="item-detail">${escapeHtml(resultText)}</div>
                                 ${dependenciesText ? `<div class="automation-detail-line">${escapeHtml(shorten(dependenciesText, 240))}</div>` : ''}
                                 ${validationText ? `<div class="automation-detail-line automation-detail-line--error">${escapeHtml(shorten(validationText, 260))}</div>` : ''}
@@ -609,8 +610,24 @@ async function loadHistory(id) {
     selectedAutomationId = id;
     renderAutomations();
 
+    // Open side panel
+    const detail = document.getElementById('auto-detail');
+    const title = document.getElementById('auto-detail-title');
+    if (detail) {
+        detail.hidden = false;
+        const item = automations.find(a => a.id === id);
+        if (title) title.textContent = item ? `History — ${item.name}` : 'Run History';
+    }
+
     const rows = await apiRequest(`/v1/automations/${encodeURIComponent(id)}/history?limit=30`);
     renderHistoryRows(rows);
+}
+
+function closeHistoryPanel() {
+    selectedAutomationId = null;
+    const detail = document.getElementById('auto-detail');
+    if (detail) detail.hidden = true;
+    renderAutomations();
 }
 
 function onScheduleModeToggle(container, mode, id) {
@@ -847,8 +864,12 @@ async function onAutomationAction(event) {
         }
 
         if (action === 'edit') {
-            openEditorId = openEditorId === id ? null : id;
-            renderAutomations();
+            const item = automations.find(a => a.id === id);
+            if (item) {
+                document.getElementById('automations-list-view').style.display = 'none';
+                document.getElementById('automations-builder-view').style.display = 'flex';
+                Builder.loadAutomation(item);
+            }
             return;
         }
 
@@ -896,8 +917,7 @@ async function onAutomationAction(event) {
             });
             showToast('Automation deleted.', 'success');
             if (selectedAutomationId === id) {
-                selectedAutomationId = null;
-                renderHistoryRows([]);
+                closeHistoryPanel();
             }
             if (openEditorId === id) {
                 openEditorId = null;
@@ -999,26 +1019,27 @@ function collectAutomationWfSteps() {
 }
 
 async function initializeAutomationsPage() {
-    const createForm = document.getElementById('automation-create-form');
     const listEl = document.getElementById('automations-list');
     const refreshBtn = document.getElementById('btn-automations-refresh');
-    const scheduleModeEl = document.getElementById('automation-schedule-mode');
-    const triggerEl = document.getElementById('automation-trigger');
 
-    if (!createForm || !listEl || !refreshBtn || !scheduleModeEl || !triggerEl) {
-        return;
-    }
+    if (!listEl) return;
 
     await loadAutomationTargets();
-    renderCreateDeliverToSelect('cli:default');
 
-    createForm.addEventListener('submit', async (event) => {
-        try {
-            await onCreateAutomation(event);
-        } catch (err) {
-            showToast(err.message || 'Failed to create automation.', 'error');
-        }
-    });
+    // Legacy inline create form (removed — creation now uses Builder)
+    const createForm = document.getElementById('automation-create-form');
+    const scheduleModeEl = document.getElementById('automation-schedule-mode');
+    const triggerEl = document.getElementById('automation-trigger');
+    if (createForm) {
+        renderCreateDeliverToSelect('cli:default');
+        createForm.addEventListener('submit', async (event) => {
+            try {
+                await onCreateAutomation(event);
+            } catch (err) {
+                showToast(err.message || 'Failed to create automation.', 'error');
+            }
+        });
+    }
 
     listEl.addEventListener('click', onAutomationAction);
 
@@ -1049,25 +1070,27 @@ async function initializeAutomationsPage() {
         }
     });
 
-    refreshBtn.addEventListener('click', async () => {
-        try {
-            await loadAutomationTargets();
-            await loadAutomations();
-            if (selectedAutomationId) {
-                await loadHistory(selectedAutomationId);
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', async () => {
+            try {
+                await loadAutomationTargets();
+                await loadAutomations();
+                if (selectedAutomationId) {
+                    await loadHistory(selectedAutomationId);
+                }
+                showToast('Automation list refreshed.', 'success');
+            } catch (err) {
+                showToast(err.message || 'Refresh failed.', 'error');
             }
-            showToast('Automation list refreshed.', 'success');
-        } catch (err) {
-            showToast(err.message || 'Refresh failed.', 'error');
-        }
-    });
+        });
+    }
 
-    scheduleModeEl.addEventListener('change', onCreateScheduleModeChange);
-    triggerEl.addEventListener('change', onCreateTriggerModeChange);
-    onCreateScheduleModeChange();
-    onCreateTriggerModeChange();
+    if (scheduleModeEl) scheduleModeEl.addEventListener('change', onCreateScheduleModeChange);
+    if (triggerEl) triggerEl.addEventListener('change', onCreateTriggerModeChange);
+    if (scheduleModeEl) onCreateScheduleModeChange();
+    if (triggerEl) onCreateTriggerModeChange();
 
-    // Workflow toggle
+    // Workflow toggle (legacy inline form)
     const wfToggle = document.getElementById('automation-workflow-toggle');
     const wfStepsContainer = document.getElementById('automation-workflow-steps');
     const wfAddBtn = document.getElementById('automation-add-wf-step');
@@ -1080,6 +1103,12 @@ async function initializeAutomationsPage() {
         });
         wfAddBtn.addEventListener('click', () => addAutomationWfStep());
     }
+
+    // History panel close button
+    document.getElementById('btn-auto-detail-close')?.addEventListener('click', closeHistoryPanel);
+
+    // Prompt bar — NLP automation creation
+    setupAutoPromptBar();
 
     try {
         await loadAutomations();
@@ -1098,6 +1127,52 @@ async function initializeAutomationsPage() {
             // Silent background refresh errors.
         }
     }, 30000);
+}
+
+function setupAutoPromptBar() {
+    const input = document.getElementById('auto-prompt-input');
+    const btn = document.getElementById('btn-auto-prompt-send');
+    if (!input || !btn) return;
+
+    btn.addEventListener('click', () => submitAutoPrompt());
+
+    input.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            submitAutoPrompt();
+        }
+    });
+
+    // Auto-grow
+    input.addEventListener('input', () => {
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 100) + 'px';
+    });
+}
+
+async function submitAutoPrompt() {
+    const input = document.getElementById('auto-prompt-input');
+    const desc = input?.value.trim();
+    if (!desc) return;
+
+    // Switch to Builder and generate from prompt
+    document.getElementById('automations-list-view').style.display = 'none';
+    document.getElementById('automations-builder-view').style.display = 'flex';
+    Builder.reset();
+
+    // Set the prompt in the Builder prompt bar and trigger generation
+    const builderPrompt = document.getElementById('builder-prompt-input');
+    if (builderPrompt) {
+        builderPrompt.value = desc;
+        builderPrompt.style.height = 'auto';
+        builderPrompt.style.height = Math.min(builderPrompt.scrollHeight, 120) + 'px';
+    }
+
+    input.value = '';
+    input.style.height = '';
+
+    // Auto-generate the flow
+    await Builder.generateFromPrompt();
 }
 
 document.addEventListener('DOMContentLoaded', initializeAutomationsPage);
@@ -1429,6 +1504,9 @@ const Builder = {
     connectionStartType: null,
     tempEdgePath: null,
 
+    // Edit mode — null = creating new, string = editing existing automation ID
+    editingId: null,
+
     init() {
         this.canvas = document.getElementById('builder-canvas');
         this.nodesContainer = document.getElementById('builder-canvas-nodes');
@@ -1452,7 +1530,7 @@ const Builder = {
 
         document.getElementById('btn-builder-back')?.addEventListener('click', () => {
             document.getElementById('automations-builder-view').style.display = 'none';
-            document.getElementById('automations-list-view').style.display = 'block';
+            document.getElementById('automations-list-view').style.display = '';
         });
 
         document.getElementById('btn-builder-save')?.addEventListener('click', () => this.save());
@@ -1761,9 +1839,84 @@ const Builder = {
         this.edges = [];
         this.nodeCounter = 0;
         this.selectedNodeId = null;
+        this.editingId = null;
         document.getElementById('builder-automation-name').value = '';
         this.render();
         this.hideInspector();
+    },
+
+    /// Load an existing automation into the Builder for editing.
+    /// Always reconstructs from actual data (prompt, schedule, deliver_to) —
+    /// flow_json is only used for visual layout hints, not as data source.
+    loadAutomation(item) {
+        this.reset();
+        this.editingId = item.id;
+        document.getElementById('builder-automation-name').value = item.name || '';
+
+        const startX = 80, startY = 120, spacingX = 220;
+
+        // 1. Trigger node from schedule
+        const ui = scheduleToUi(item.schedule || 'cron:0 9 * * *');
+        const triggerData = Object.assign({}, this.defaultDataForKind('trigger'));
+        if (ui.mode === 'interval') {
+            triggerData.mode = 'interval';
+            triggerData.intervalHours = Number(ui.intervalHours) || 6;
+        } else if (ui.mode === 'custom') {
+            triggerData.mode = 'cron';
+        } else {
+            triggerData.mode = ui.mode || 'daily';
+            triggerData.time = ui.time || '09:00';
+            if (ui.mode === 'weekly') triggerData.weekday = ui.weekday;
+        }
+        this.nodeCounter++;
+        this.nodes.push({
+            id: 'trigger', kind: 'trigger',
+            x: startX, y: startY,
+            title: 'Schedule Trigger',
+            data: triggerData,
+        });
+
+        // 2. Middle nodes — from workflow steps or single LLM prompt
+        const steps = parseJsonArray(item.workflow_steps_json);
+        let lastId = 'trigger';
+        if (steps.length > 0) {
+            steps.forEach((step, i) => {
+                this.nodeCounter++;
+                const nodeId = 'node_' + this.nodeCounter;
+                this.nodes.push({
+                    id: nodeId, kind: step.approval_required ? 'approve' : 'llm',
+                    x: startX + (i + 1) * spacingX, y: startY,
+                    title: step.name || ('Step ' + (i + 1)),
+                    data: { prompt: step.instruction || '' },
+                });
+                this.edges.push({ id: 'edge_' + lastId + '_' + nodeId, from: lastId, to: nodeId });
+                lastId = nodeId;
+            });
+        } else {
+            this.nodeCounter++;
+            const taskId = 'node_' + this.nodeCounter;
+            this.nodes.push({
+                id: taskId, kind: 'llm',
+                x: startX + spacingX, y: startY,
+                title: 'LLM Task',
+                data: { prompt: item.prompt || '' },
+            });
+            this.edges.push({ id: 'edge_trigger_' + taskId, from: 'trigger', to: taskId });
+            lastId = taskId;
+        }
+
+        // 3. Deliver node
+        this.nodeCounter++;
+        const deliverId = 'node_' + this.nodeCounter;
+        this.nodes.push({
+            id: deliverId, kind: 'deliver',
+            x: startX + (this.nodes.length) * spacingX, y: startY,
+            title: 'Deliver',
+            data: { target: item.deliver_to || 'cli:default' },
+        });
+        this.edges.push({ id: 'edge_' + lastId + '_' + deliverId, from: lastId, to: deliverId });
+
+        this.render();
     },
 
     addNode(kind, x, y) {
@@ -2955,22 +3108,24 @@ const Builder = {
 
         const payload = { name, trigger: 'always' };
 
-        // Schedule from trigger — build from guided fields
+        // Schedule from trigger — convert to stored format (cron:... or every:...)
         const td = triggerNode.data;
         if (td.mode === 'cron') {
-            // Build cron from individual fields or fallback to combined field
-            const cronExpr = [
+            payload.cron = [
                 td.cronMinute || '0',
                 td.cronHour || '9',
                 td.cronDom || '*',
                 td.cronMonth || '*',
                 td.cronDow || '*',
             ].join(' ');
-            payload.cron = cronExpr;
         } else if (td.mode === 'interval') {
-            payload.schedule = 'every ' + (td.intervalHours || '6');
+            const hours = Number(td.intervalHours) || 6;
+            payload.every = Math.floor(hours * 3600);
         } else {
-            payload.schedule = 'daily ' + (td.time || '09:00');
+            // daily / weekdays / weekly → convert time to cron expression
+            const time = td.time || '09:00';
+            const [hh, mm] = time.split(':').map(Number);
+            payload.cron = (mm || 0) + ' ' + (hh || 9) + ' * * *';
         }
 
         // Prompt / workflow_steps from middle nodes
@@ -3001,13 +3156,23 @@ const Builder = {
 
         try {
             document.getElementById('builder-status').textContent = 'Saving...';
-            await apiRequest('/v1/automations', {
-                method: 'POST',
-                body: JSON.stringify(payload),
-            });
-            showToast('Automation created successfully!', 'success');
+            if (this.editingId) {
+                // Update existing automation
+                await apiRequest('/v1/automations/' + encodeURIComponent(this.editingId), {
+                    method: 'PATCH',
+                    body: JSON.stringify(payload),
+                });
+                showToast('Automation updated successfully!', 'success');
+            } else {
+                // Create new automation
+                await apiRequest('/v1/automations', {
+                    method: 'POST',
+                    body: JSON.stringify(payload),
+                });
+                showToast('Automation created successfully!', 'success');
+            }
             document.getElementById('automations-builder-view').style.display = 'none';
-            document.getElementById('automations-list-view').style.display = 'block';
+            document.getElementById('automations-list-view').style.display = '';
             await loadAutomations();
         } catch (err) {
             showToast(err.message || 'Failed to save.', 'error');
