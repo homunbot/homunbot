@@ -28,8 +28,6 @@ pub struct TabSession {
     pub last_action_at: RwLock<Option<Instant>>,
     /// Consecutive snapshot guard (prevents duplicate snapshots).
     pub last_was_snapshot: AtomicBool,
-    /// Last compact snapshot text (for diff-on-snapshot).
-    pub last_snapshot: RwLock<Option<String>>,
 }
 
 impl TabSession {
@@ -39,7 +37,6 @@ impl TabSession {
             last_url: RwLock::new(None),
             last_action_at: RwLock::new(None),
             last_was_snapshot: AtomicBool::new(false),
-            last_snapshot: RwLock::new(None),
         }
     }
 
@@ -152,10 +149,7 @@ impl TabSessionManager {
                 // Just clear the session but keep the tab
                 let mut sessions = self.sessions.write().await;
                 sessions.remove(session_key);
-                tracing::debug!(
-                    session_key,
-                    "Kept last browser tab open, removed session"
-                );
+                tracing::debug!(session_key, "Kept last browser tab open, removed session");
                 return;
             }
 

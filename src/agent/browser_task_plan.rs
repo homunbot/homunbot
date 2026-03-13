@@ -28,6 +28,8 @@ pub struct BrowserTaskPlanState {
     result_pages_seen: u8,
     pending_selection: bool,
     requires_fresh_snapshot: bool,
+    /// Whether the agent has entered a booking site via Google search.
+    used_google_entry: bool,
 }
 
 impl BrowserTaskPlanState {
@@ -45,11 +47,17 @@ impl BrowserTaskPlanState {
             result_pages_seen: 0,
             pending_selection: false,
             requires_fresh_snapshot: true,
+            used_google_entry: false,
         }
     }
 
     pub fn routing_decision(&self) -> &BrowserRoutingDecision {
         &self.routing
+    }
+
+    /// Whether a results page has been seen during this browser task.
+    pub fn has_seen_results(&self) -> bool {
+        self.result_pages_seen > 0
     }
 
     pub fn note_browser_result(&mut self, action: Option<&str>, output: &str) {
@@ -62,12 +70,14 @@ impl BrowserTaskPlanState {
             }
         }
 
-        if output.contains("Visible result hints:") {
+        if output.contains("Visible result hints:") || output.contains("RESULTS PAGE") {
             self.result_pages_seen = self.result_pages_seen.saturating_add(1);
         }
         self.pending_selection = lower.contains("visible suggestions:")
             || lower.contains("autocomplete still open")
-            || lower.contains("combobox-style field");
+            || lower.contains("combobox-style field")
+            || lower.contains("autocomplete dropdown appeared")
+            || lower.contains("select a suggestion before moving");
 
         if let Some(source_name) = source.clone().filter(|source| source != "about") {
             self.current_source = Some(source_name.clone());
@@ -81,6 +91,10 @@ impl BrowserTaskPlanState {
         match action.unwrap_or_default() {
             "navigate" | "navigate_back" => {
                 self.requires_fresh_snapshot = true;
+                // Track Google entry for FormBooking tasks
+                if !self.used_google_entry && lower.contains("google.com") {
+                    self.used_google_entry = true;
+                }
             }
             "snapshot" | "take_screenshot" => {
                 self.requires_fresh_snapshot = false;
@@ -89,6 +103,13 @@ impl BrowserTaskPlanState {
             | "select_option" | "fill_form" | "press_key" | "drag" => {
                 if lower.contains("latest browser step failed") || lower.contains("tool error") {
                     self.requires_fresh_snapshot = true;
+                }
+                // Click from Google results page completes the Google entry
+                if !self.used_google_entry
+                    && action.unwrap_or_default() == "click"
+                    && self.current_source.as_deref() == Some("google")
+                {
+                    self.used_google_entry = true;
                 }
             }
             _ => {}
@@ -148,6 +169,27 @@ impl BrowserTaskPlanState {
             );
         }
 
+        // --- Google-first veto for FormBooking tasks ---
+        if !self.used_google_entry
+            && matches!(self.routing.task_class, BrowserTaskClass::FormBooking)
+            && action == "navigate"
+        {
+            let target_url = arguments
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if !target_url.contains("google.com") {
+                let site_name =
+                    extract_source_name(&target_url).unwrap_or_else(|| target_url.clone());
+                return Some(format!(
+                    "Browser planner veto: for booking sites, navigate via Google search first \
+                     to establish a natural browsing session. Navigate to \
+                     https://www.google.com/search?q={site_name} and click the organic result."
+                ));
+            }
+        }
+
         if self.pending_selection {
             let allowed = match action {
                 "choose_suggestion" | "snapshot" | "wait" | "click" | "wait_for" => true,
@@ -166,6 +208,28 @@ impl BrowserTaskPlanState {
             }
         }
 
+        // --- Veto re-navigating to a site we already have open (applies to ALL task types) ---
+        if action == "navigate" {
+            if let Some(current_source) = &self.current_source {
+                let target_url = arguments
+                    .get("url")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                if let Some(target_source) = extract_source_name(&target_url) {
+                    if target_source == *current_source {
+                        return Some(format!(
+                            "Browser planner veto: you already have {} open. \
+                             Use snapshot() to see the current page, or click links/buttons on it. \
+                             Do NOT navigate() to the same site again — continue from where you are.",
+                            current_source
+                        ));
+                    }
+                }
+            }
+        }
+
+        // --- Compare-mode vetoes: don't leave or close before extracting ---
         if self.compare_mode && !self.required_sources.is_empty() {
             if let Some(current_source) = &self.current_source {
                 let current_done = self.extracted_sources.iter().any(|s| s == current_source);
@@ -734,5 +798,120 @@ mod tests {
             .required_sources()
             .contains(&"trenitalia".to_string()));
         assert!(decision.required_sources().contains(&"italo".to_string()));
+    }
+
+    #[test]
+    fn vetoes_re_navigate_same_site_for_form_booking() {
+        // FormBooking (NOT compare_mode) — the re-navigate veto must still fire.
+        let mut plan =
+            BrowserTaskPlanState::new("prenotami un treno su trenitalia da napoli a milano");
+        assert!(!plan.compare_mode, "should NOT be compare mode");
+        // Simulate: agent entered via Google (so Google-first veto is satisfied).
+        plan.note_browser_result(
+            Some("navigate"),
+            "Page URL: https://www.google.com/search?q=trenitalia",
+        );
+        plan.note_browser_result(Some("click"), "Page URL: https://www.trenitalia.com/");
+        assert!(plan.used_google_entry);
+        // Agent got a results page.
+        plan.note_browser_result(
+            Some("snapshot"),
+            "Page URL: https://www.trenitalia.com/it/treni_regionali.html\nVisible result hints:\n1. 12:30 Frecciarossa",
+        );
+        assert_eq!(plan.current_source.as_deref(), Some("trenitalia"));
+        // Now the agent tries to navigate back to trenitalia homepage — must be vetoed.
+        let veto = plan.veto_browser_action(&serde_json::json!({
+            "action": "navigate",
+            "url": "https://www.trenitalia.com/"
+        }));
+        assert!(
+            veto.is_some(),
+            "re-navigate to same site should be vetoed even for FormBooking"
+        );
+        assert!(veto.unwrap().contains("already have trenitalia open"));
+    }
+
+    #[test]
+    fn vetoes_direct_navigate_for_form_booking() {
+        let plan = BrowserTaskPlanState::new("book a train on trenitalia");
+        let veto = plan.veto_browser_action(&serde_json::json!({
+            "action": "navigate",
+            "url": "https://www.trenitalia.com/"
+        }));
+        assert!(
+            veto.is_some(),
+            "direct navigate to booking site must be vetoed"
+        );
+        assert!(veto.unwrap().contains("Google search"));
+    }
+
+    #[test]
+    fn allows_navigate_to_google_for_form_booking() {
+        let plan = BrowserTaskPlanState::new("book a train on trenitalia");
+        let veto = plan.veto_browser_action(&serde_json::json!({
+            "action": "navigate",
+            "url": "https://www.google.com/search?q=trenitalia"
+        }));
+        assert!(
+            veto.is_none(),
+            "navigate to Google itself should be allowed"
+        );
+    }
+
+    #[test]
+    fn allows_direct_navigate_after_google_entry() {
+        let mut plan = BrowserTaskPlanState::new("book a train on trenitalia");
+        // Navigate to Google
+        plan.note_browser_result(
+            Some("navigate"),
+            "Page URL: https://www.google.com/search?q=trenitalia",
+        );
+        // Click from Google results
+        plan.note_browser_result(Some("click"), "Page URL: https://www.trenitalia.com/");
+        assert!(plan.used_google_entry, "Google entry should be tracked");
+        // Snapshot to clear requires_fresh_snapshot
+        plan.note_browser_result(
+            Some("snapshot"),
+            "Page URL: https://www.trenitalia.com/\n- textbox \"From\" [ref=e1]",
+        );
+        // Direct navigate to a subpage should now be allowed
+        // (though re-navigate veto may still fire for same domain)
+        let veto = plan.veto_browser_action(&serde_json::json!({
+            "action": "navigate",
+            "url": "https://www.italotreno.it/"
+        }));
+        // No Google-first veto (used_google_entry = true), and different domain so no re-nav veto
+        assert!(
+            veto.is_none(),
+            "after Google entry, direct navigate should be allowed"
+        );
+    }
+
+    #[test]
+    fn no_google_veto_for_static_lookup() {
+        let plan = BrowserTaskPlanState::new("check the weather in london");
+        let veto = plan.veto_browser_action(&serde_json::json!({
+            "action": "navigate",
+            "url": "https://weather.com/"
+        }));
+        assert!(
+            veto.is_none(),
+            "StaticLookup should not trigger Google-first veto"
+        );
+    }
+
+    #[test]
+    fn no_google_veto_for_interactive_web() {
+        let plan = BrowserTaskPlanState::new("go to amazon and find headphones");
+        let veto = plan.veto_browser_action(&serde_json::json!({
+            "action": "navigate",
+            "url": "https://www.amazon.com/"
+        }));
+        // InteractiveWeb (shopping without booking keywords) — no Google-first veto
+        // Note: "amazon" triggers InteractiveWeb via required_sources, not FormBooking
+        assert!(
+            veto.is_none(),
+            "InteractiveWeb should not trigger Google-first veto"
+        );
     }
 }

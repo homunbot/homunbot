@@ -24,7 +24,7 @@ use crate::utils::retry;
 #[derive(Default)]
 pub struct EStopHandles {
     /// Browser session — call close to kill the browser.
-    #[cfg(feature = "mcp")]
+    #[cfg(feature = "browser")]
     pub browser_session: Option<Arc<crate::tools::BrowserSession>>,
     /// MCP manager — shutdown all server connections.
     #[cfg(feature = "mcp")]
@@ -57,12 +57,10 @@ pub async fn emergency_stop(handles: &RwLock<EStopHandles>) -> EStopReport {
 
     // 3. Close all browser tabs
     let mut browser_closed = false;
-    #[cfg(feature = "mcp")]
+    #[cfg(feature = "browser")]
     if let Some(ref session) = h.browser_session {
         // Force close all tabs regardless of idle state
-        session
-            .close_idle_tabs(0)
-            .await;
+        session.close_idle_tabs(0).await;
         if session.has_any_active().await {
             // Still has tabs — shouldn't happen, but log it
             tracing::warn!("Emergency stop: some browser tabs may not have closed");

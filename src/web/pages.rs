@@ -1960,7 +1960,12 @@ async fn mcp_page(State(state): State<Arc<AppState>>) -> Html<String> {
         </main>"#
     );
 
-    Html(page_html("MCP", "mcp", &body, &["connections.js", "mcp.js"]))
+    Html(page_html(
+        "MCP",
+        "mcp",
+        &body,
+        &["connections.js", "mcp.js"],
+    ))
 }
 
 #[derive(serde::Deserialize)]

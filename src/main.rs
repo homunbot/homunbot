@@ -809,18 +809,18 @@ async fn main() -> Result<()> {
                     tool_registry.register(tool);
                 }
             }
-            #[cfg(feature = "mcp")]
+            #[cfg(feature = "browser")]
             let mut _browser_session: Option<
                 std::sync::Arc<crate::tools::BrowserSession>,
             > = None;
-            #[cfg(feature = "mcp")]
+            #[cfg(feature = "browser")]
             if let Some(browser_peer) = mcp_manager.take_browser_peer() {
                 let browser_tool = crate::tools::BrowserTool::new(browser_peer);
                 _browser_session = Some(browser_tool.session());
                 tool_registry.register(Box::new(browser_tool));
                 tracing::info!("🌐 Browser tool registered successfully");
             } else {
-                #[cfg(feature = "mcp")]
+                #[cfg(feature = "browser")]
                 tracing::warn!(
                     "⚠️ Browser MCP peer not available — browser tool will NOT be registered. \
                      Check that @playwright/mcp is installed: npx @playwright/mcp --help"
@@ -865,7 +865,7 @@ async fn main() -> Result<()> {
             )
             .await;
             agent.set_registered_tool_names(tool_names).await;
-            #[cfg(feature = "mcp")]
+            #[cfg(feature = "browser")]
             if let Some(session) = _browser_session {
                 agent.set_browser_session(session).await;
             }
@@ -1351,21 +1351,24 @@ async fn main() -> Result<()> {
                     agent_for_mcp.register_deferred_tools(regular_tools).await;
 
                     // Handle browser peer: create BrowserTool and set session on both agent and estop
-                    if let Some(browser_peer) = mcp_manager.take_browser_peer() {
-                        let browser_tool = crate::tools::BrowserTool::new(browser_peer);
-                        let session = browser_tool.session();
-                        agent_for_mcp
-                            .register_deferred_tools(vec![Box::new(browser_tool)])
-                            .await;
-                        agent_for_mcp.set_browser_session(session.clone()).await;
-                        // Also update estop handles so emergency stop can close the browser
-                        estop_for_mcp.write().await.browser_session = Some(session);
-                        tracing::info!("🌐 Browser tool registered successfully");
-                    } else {
-                        tracing::warn!(
-                            "⚠️ Browser MCP peer not available — browser tool will NOT be registered. \
-                             Check that @playwright/mcp is installed: npx @playwright/mcp --help"
-                        );
+                    #[cfg(feature = "browser")]
+                    {
+                        if let Some(browser_peer) = mcp_manager.take_browser_peer() {
+                            let browser_tool = crate::tools::BrowserTool::new(browser_peer);
+                            let session = browser_tool.session();
+                            agent_for_mcp
+                                .register_deferred_tools(vec![Box::new(browser_tool)])
+                                .await;
+                            agent_for_mcp.set_browser_session(session.clone()).await;
+                            // Also update estop handles so emergency stop can close the browser
+                            estop_for_mcp.write().await.browser_session = Some(session);
+                            tracing::info!("🌐 Browser tool registered successfully");
+                        } else {
+                            tracing::warn!(
+                                "⚠️ Browser MCP peer not available — browser tool will NOT be registered. \
+                                 Check that @playwright/mcp is installed: npx @playwright/mcp --help"
+                            );
+                        }
                     }
 
                     tracing::info!(

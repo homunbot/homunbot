@@ -1,6 +1,6 @@
 pub mod approval;
 pub mod automation;
-#[cfg(feature = "mcp")]
+#[cfg(feature = "browser")]
 pub mod browser;
 pub mod business;
 pub mod cron;
@@ -29,7 +29,7 @@ pub use approval::{
     ApprovalManager, ApprovalResponse, PendingApproval,
 };
 pub use automation::CreateAutomationTool;
-#[cfg(feature = "mcp")]
+#[cfg(feature = "browser")]
 pub use browser::{BrowserSession, BrowserTool};
 pub use business::BusinessTool;
 pub use cron::CronTool;

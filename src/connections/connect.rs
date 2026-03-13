@@ -106,7 +106,11 @@ pub async fn connect_recipe(
         connected,
         tool_count,
         stored_vault_keys: setup_result.stored_vault_keys,
-        success: if ok { Some(recipe.success.clone()) } else { None },
+        success: if ok {
+            Some(recipe.success.clone())
+        } else {
+            None
+        },
     })
 }
 
@@ -121,7 +125,10 @@ mod tests {
     fn env_mapping_from_fields() {
         let recipe = find_recipe("github").unwrap();
         let mut values = HashMap::new();
-        values.insert("personal_access_token".to_string(), "ghp_test123".to_string());
+        values.insert(
+            "personal_access_token".to_string(),
+            "ghp_test123".to_string(),
+        );
 
         // Build env overrides the same way connect_recipe does
         let mut env_overrides = HashMap::new();

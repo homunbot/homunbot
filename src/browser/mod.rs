@@ -14,7 +14,6 @@
 //! ```
 
 pub mod action_policy;
-pub mod diff;
 pub mod helpers;
 pub mod mcp_bridge;
 pub mod tab_session;

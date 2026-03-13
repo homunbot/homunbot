@@ -134,8 +134,7 @@ async fn test_connection(
     let sandbox = config.security.execution_sandbox.clone();
     drop(config);
 
-    let report =
-        crate::mcp_setup::test_mcp_server_connection(&name, &server, Some(sandbox)).await;
+    let report = crate::mcp_setup::test_mcp_server_connection(&name, &server, Some(sandbox)).await;
 
     Ok(Json(serde_json::json!({
         "ok": true,

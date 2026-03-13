@@ -8,7 +8,7 @@
 //! Orchestration intelligence lives here:
 //! - Auto-snapshot after `type` to detect autocomplete suggestions
 //! - Ref normalization (strips common model mistakes)
-//! - Snapshot compaction (filter to interactive elements only)
+//! - Form plan injection (FORM PLAN prompt for form fields)
 //! - Consecutive snapshot guard
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,6 +37,9 @@ pub struct BrowserSession {
     pub(crate) tab_manager: Arc<crate::browser::TabSessionManager>,
     peer: Arc<McpPeer>,
     operation_mutex: Arc<tokio::sync::Mutex<()>>,
+    /// Set by the agent loop when a results page has been seen,
+    /// enabling richer page stage detection in subsequent snapshots.
+    pub(crate) seen_results: Arc<AtomicBool>,
 }
 
 impl BrowserSession {
@@ -49,6 +52,7 @@ impl BrowserSession {
             tab_manager,
             peer,
             operation_mutex,
+            seen_results: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -61,10 +65,7 @@ impl BrowserSession {
     pub async fn close_idle_tabs(&self, timeout_secs: u64) {
         let _guard = self.operation_mutex.lock().await;
         self.tab_manager
-            .close_idle_tabs(
-                std::time::Duration::from_secs(timeout_secs),
-                &self.peer,
-            )
+            .close_idle_tabs(std::time::Duration::from_secs(timeout_secs), &self.peer)
             .await;
     }
 
@@ -80,10 +81,12 @@ impl BrowserSession {
     pub async fn has_any_active(&self) -> bool {
         self.tab_manager.has_any_active().await
     }
-}
 
-/// Threshold: if more than 40% of lines changed, send full snapshot instead of diff.
-const DIFF_FULL_SNAPSHOT_THRESHOLD: f64 = 0.40;
+    /// Update the `seen_results` flag (called by the agent loop after results are detected).
+    pub fn set_seen_results(&self, seen: bool) {
+        self.seen_results.store(seen, Ordering::Relaxed);
+    }
+}
 
 /// Minimum interactive elements from the ARIA snapshot before we bother looking
 /// for cursor-interactive elements. If the page already has ≥ this many refs,
@@ -176,6 +179,11 @@ impl BrowserTool {
         Arc::clone(&self.session)
     }
 
+    /// Whether a results page has been seen (for stage-aware snapshot hints).
+    fn seen_results(&self) -> bool {
+        self.session.seen_results.load(Ordering::Relaxed)
+    }
+
     /// Call an individual Playwright MCP tool through the persistent peer.
     /// Used for global operations that don't target a specific tab
     /// (stealth injection, close, resource blocking).
@@ -216,43 +224,6 @@ impl BrowserTool {
     /// Otherwise → return full compact snapshot.
     /// Always stores the new compact snapshot for the next diff.
     /// Uses the per-conversation `TabSession` for snapshot state.
-    async fn compact_with_diff(
-        &self,
-        raw_output: &str,
-        tab: &crate::browser::tab_session::TabSession,
-    ) -> String {
-        let compacted = compact_browser_snapshot(raw_output);
-        let _previous = tab.last_snapshot.read().await.clone();
-
-        // Store new snapshot for next diff
-        *tab.last_snapshot.write().await = Some(compacted.clone());
-
-        // If we have a previous snapshot, compute diff
-        #[cfg(feature = "browser")]
-        if let Some(prev) = _previous {
-            let diff = crate::browser::diff::diff_snapshots(&prev, &compacted);
-            if diff.changed() && diff.change_ratio() < DIFF_FULL_SNAPSHOT_THRESHOLD {
-                // Small change: send compact diff instead of full snapshot
-                let header = extract_snapshot_header(&compacted);
-                let ref_count = compacted.matches("[ref=").count();
-                tracing::debug!(
-                    additions = diff.additions,
-                    removals = diff.removals,
-                    unchanged = diff.unchanged,
-                    ratio = %format!("{:.0}%", diff.change_ratio() * 100.0),
-                    "Browser snapshot: sending diff (small change)"
-                );
-                return crate::browser::diff::format_for_context(
-                    &format!("{header}({ref_count} interactive elements) Use ref=\"eN\" as shown."),
-                    &diff,
-                );
-            }
-        }
-
-        // Full snapshot: first snapshot, big change, or identical
-        compacted
-    }
-
     /// Find DOM elements that are visually interactive but lack ARIA roles.
     ///
     /// Modern SPAs often use `<div onClick>` or `cursor:pointer` without proper
@@ -335,6 +306,17 @@ impl BrowserTool {
     /// applies to subsequent page loads.
     async fn inject_stealth(&self) {
         if self.stealth_injected.load(Ordering::Relaxed) {
+            return;
+        }
+
+        // Check config — stealth is OFF by default because modern bot detectors
+        // can detect these patches, making the browser MORE identifiable.
+        let stealth_enabled = crate::config::Config::load()
+            .map(|c| c.browser.stealth)
+            .unwrap_or(false);
+        if !stealth_enabled {
+            tracing::debug!("Browser stealth injection disabled (config: browser.stealth = false)");
+            self.stealth_injected.store(true, Ordering::Relaxed);
             return;
         }
 
@@ -456,9 +438,12 @@ impl BrowserTool {
         let mut prev_count: usize = 0;
 
         for (attempt, delay) in DELAYS_MS.iter().enumerate() {
-            match self.call_mcp_on_tab(tab, "browser_snapshot", json!({})).await {
+            match self
+                .call_mcp_on_tab(tab, "browser_snapshot", json!({}))
+                .await
+            {
                 Ok(output) => {
-                    let compacted = compact_browser_snapshot(&output);
+                    let compacted = compact_browser_snapshot_staged(&output, self.seen_results());
                     let interactive_count = compacted.matches("[ref=").count();
 
                     let is_stable =
@@ -472,8 +457,6 @@ impl BrowserTool {
                             interactive_count,
                             is_stable
                         );
-                        // Store as baseline for future diffs (navigate = new page)
-                        *tab.last_snapshot.write().await = Some(compacted.clone());
                         return compacted;
                     }
 
@@ -513,10 +496,13 @@ impl BrowserTool {
             ));
         }
 
-        match self.call_mcp_on_tab(tab, "browser_snapshot", json!({})).await {
+        match self
+            .call_mcp_on_tab(tab, "browser_snapshot", json!({}))
+            .await
+        {
             Ok(output) => {
                 tab.last_was_snapshot.store(true, Ordering::Relaxed);
-                let mut compact = self.compact_with_diff(&output, tab).await;
+                let mut compact = compact_browser_snapshot_staged(&output, self.seen_results());
                 // Detect hidden interactive elements on sparse pages
                 if let Some(cursor_section) = self.find_cursor_interactive(&compact).await {
                     compact.push_str(&cursor_section);
@@ -548,9 +534,12 @@ impl BrowserTool {
 
         // Brief wait for DOM to settle, then auto-snapshot for fresh refs
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        match self.call_mcp_on_tab(tab, "browser_snapshot", json!({})).await {
+        match self
+            .call_mcp_on_tab(tab, "browser_snapshot", json!({}))
+            .await
+        {
             Ok(snap_output) => {
-                let compact = self.compact_with_diff(&snap_output, tab).await;
+                let compact = compact_browser_snapshot_staged(&snap_output, self.seen_results());
                 tab.last_was_snapshot.store(true, Ordering::Relaxed);
                 Ok(ToolResult::success(format!("{base_output}\n\n{compact}")))
             }
@@ -572,6 +561,14 @@ impl BrowserTool {
             .get("text")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("'text' parameter is required for type"))?;
+
+        // Click + select-all to clear any existing content before typing.
+        let _ = self
+            .call_mcp_on_tab(tab, "browser_click", json!({"ref": ref_val}))
+            .await;
+        let _ = self
+            .call_mcp_on_tab(tab, "browser_press_key", json!({"key": "ControlOrMeta+a"}))
+            .await;
 
         let type_result = self
             .call_mcp_on_tab(
@@ -603,6 +600,10 @@ impl BrowserTool {
     }
 
     /// Execute the `fill` action (clear + type, no autocomplete).
+    ///
+    /// Uses `browser_fill_form` (single MCP call) instead of separate
+    /// click + select-all + type (3 calls). Playwright's `fill()` handles
+    /// focus, clearing existing text, typing, and dispatching events.
     async fn action_fill(
         &self,
         args: &Value,
@@ -614,24 +615,59 @@ impl BrowserTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("'text' parameter is required for fill"))?;
 
-        // Select all existing text first, then type over it
-        let _ = self
-            .call_mcp_on_tab(tab, "browser_click", json!({"ref": ref_val}))
-            .await;
-        let _ = self
-            .call_mcp_on_tab(tab, "browser_press_key", json!({"key": "Control+a"}))
+        // Single MCP call: browser_fill_form clears + fills + dispatches events.
+        let fill_result = self
+            .call_mcp_on_tab(
+                tab,
+                "browser_fill_form",
+                json!({
+                    "fields": [{
+                        "name": "field",
+                        "type": "textbox",
+                        "ref": ref_val,
+                        "value": text
+                    }]
+                }),
+            )
             .await;
 
-        match self
-            .call_mcp_on_tab(tab, "browser_type", json!({"ref": ref_val, "text": text}))
+        let base_output = match fill_result {
+            Ok(output) => compact_action_short(&output, &format!("Filled with \"{text}\".")),
+            Err(e) => {
+                tracing::warn!("browser_fill_form failed, falling back to click+type: {e}");
+                // Fallback: click + select-all + type (3 calls)
+                let _ = self
+                    .call_mcp_on_tab(tab, "browser_click", json!({"ref": ref_val}))
+                    .await;
+                let _ = self
+                    .call_mcp_on_tab(tab, "browser_press_key", json!({"key": "ControlOrMeta+a"}))
+                    .await;
+                match self
+                    .call_mcp_on_tab(tab, "browser_type", json!({"ref": ref_val, "text": text}))
+                    .await
+                {
+                    Ok(output) => {
+                        compact_action_short(&output, &format!("Filled with \"{text}\"."))
+                    }
+                    Err(e2) => return Ok(browser_error_result("Fill", &e2)),
+                }
+            }
+        };
+
+        // Auto-snapshot after fill so the model can verify the value was set.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        if let Ok(snap_output) = self
+            .call_mcp_on_tab(tab, "browser_snapshot", json!({}))
             .await
         {
-            Ok(output) => Ok(ToolResult::success(compact_action_short(
-                &output,
-                &format!("Filled with \"{text}\"."),
-            ))),
-            Err(e) => Ok(browser_error_result("Fill", &e)),
+            let compact = compact_browser_snapshot_staged(&snap_output, self.seen_results());
+            tab.last_was_snapshot.store(true, Ordering::Relaxed);
+            return Ok(ToolResult::success(format!(
+                "{base_output}\n\n--- Page after fill ---\n{compact}"
+            )));
         }
+
+        Ok(ToolResult::success(base_output))
     }
 
     /// Execute the `select_option` action.
@@ -1036,9 +1072,12 @@ impl BrowserTool {
             Ok(_) => {
                 // Auto-snapshot after click for fresh refs
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                match self.call_mcp_on_tab(tab, "browser_snapshot", json!({})).await {
+                match self
+                    .call_mcp_on_tab(tab, "browser_snapshot", json!({}))
+                    .await
+                {
                     Ok(snap) => {
-                        let compact = self.compact_with_diff(&snap, tab).await;
+                        let compact = compact_browser_snapshot_staged(&snap, self.seen_results());
                         tab.last_was_snapshot.store(true, Ordering::Relaxed);
                         Ok(ToolResult::success(format!(
                             "Clicked at ({x}, {y}).\n\n{compact}"
@@ -1267,56 +1306,57 @@ impl Tool for BrowserTool {
 /// for tree hierarchy. This preserves context (a button inside a dialog,
 /// results inside a list) while filtering out noise.
 pub fn compact_browser_snapshot(output: &str) -> String {
+    compact_browser_snapshot_staged(output, false)
+}
+
+/// Compact a `browser_snapshot` output with stage-aware hints.
+///
+/// `seen_results` indicates the agent has previously seen a results page,
+/// enabling better classification (e.g. a form after results → data entry step).
+pub fn compact_browser_snapshot_staged(output: &str, seen_results: bool) -> String {
+    // Raw snapshots are larger — allow up to 80K by default
     let max_chars: usize = std::env::var("HOMUN_BROWSER_MAX_OUTPUT")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(50_000);
+        .unwrap_or(80_000);
 
     let (header_lines, tree_lines) = split_browser_output(output);
 
-    let mut compact = String::new();
+    let mut result = String::new();
 
     // Header (URL, title)
     for line in &header_lines {
-        compact.push_str(line);
-        compact.push('\n');
+        result.push_str(line);
+        result.push('\n');
     }
 
     if tree_lines.is_empty() {
-        return compact;
+        return result;
     }
 
-    // Compact tree: keep refs + content roles + value text + ancestors
-    let kept_tree = compact_tree(&tree_lines);
+    // Pass raw tree through — no compaction
+    let raw_tree: String = tree_lines.join("\n");
 
     // Summary
-    let ref_count = kept_tree.matches("[ref=").count();
-    compact.push_str(&format!(
+    let ref_count = raw_tree.matches("[ref=").count();
+    result.push_str(&format!(
         "({ref_count} interactive elements) Use ref=\"eN\" exactly as shown.\n\n",
     ));
 
-    compact.push_str(&kept_tree);
+    result.push_str(&raw_tree);
 
-    // Form planning instruction when form fields are detected
-    if has_form_fields(&kept_tree) {
-        compact.push_str(
-            "\n\n** FORM PLAN — do this before filling **\n\
-             For each field, write: field → value from user's request.\n\
-             IGNORE pre-filled / default values.\n\
-             Convert: \"mattina\"→06:00-12:00, \"pomeriggio\"→12:00-18:00, \
-             \"sera\"→18:00-23:00, \"domani\"→tomorrow's date.\n\
-             Autocomplete fields (combobox): type partial text → snapshot → click match.\n\
-             If a required value is missing, ask the user.\n",
-        );
+    // Stage-aware hints based on page structure
+    if let Some(hint) = page_stage_hint(&raw_tree, seen_results) {
+        result.push_str(&hint);
     }
 
     // Hard truncation (UTF-8 safe)
-    if compact.len() > max_chars {
-        truncate_utf8(&mut compact, max_chars);
-        compact.push_str("\n...[snapshot truncated]");
+    if result.len() > max_chars {
+        truncate_utf8(&mut result, max_chars);
+        result.push_str("\n...[snapshot truncated]");
     }
 
-    compact
+    result
 }
 
 /// Compact a simple browser action output — keep just the confirmation.
@@ -1332,19 +1372,6 @@ fn compact_action_short(output: &str, prefix: &str) -> String {
         s.push(' ');
     }
     s.trim().to_string()
-}
-
-/// Extract the header portion (URL, title, element count) from a compact snapshot.
-fn extract_snapshot_header(compact: &str) -> String {
-    let mut header = String::new();
-    for line in compact.lines() {
-        if line.trim_start().starts_with("- ") || line.trim_start().starts_with("(") {
-            break;
-        }
-        header.push_str(line);
-        header.push('\n');
-    }
-    header
 }
 
 /// Extract autocomplete/dropdown suggestions from a snapshot.
@@ -1400,106 +1427,175 @@ fn split_browser_output(output: &str) -> (Vec<&str>, Vec<&str>) {
     (header_lines, tree_lines)
 }
 
-/// Compact tree by keeping meaningful lines and their ancestors.
-///
-/// Inspired by agent-browser.dev's `compact_tree`:
-/// - Lines with `[ref=]` → interactive elements (clickable, fillable)
-/// - Lines matching content roles (heading, cell, listitem) → result data
-/// - Lines with value text (`": "` after attributes) → field values, displayed data
-/// - For every kept line, all ancestor lines (by indentation) are preserved
-///
-/// This preserves the tree hierarchy so the model sees context: a button inside
-/// a dialog, results inside a list, a form inside a section.
-fn compact_tree(lines: &[&str]) -> String {
-    if lines.is_empty() {
-        return String::new();
-    }
-
-    let mut keep = vec![false; lines.len()];
-
-    for (i, line) in lines.iter().enumerate() {
-        if should_keep_line(line) {
-            keep[i] = true;
-            // Mark ancestor lines (walk backwards, find smaller indents)
-            let my_indent = count_indent(line);
-            for j in (0..i).rev() {
-                let ancestor_indent = count_indent(lines[j]);
-                if ancestor_indent < my_indent {
-                    keep[j] = true;
-                    if ancestor_indent == 0 {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    lines
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| keep[*i])
-        .map(|(_, line)| *line)
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Decide whether a snapshot line carries meaningful information.
-///
-/// Three categories of meaningful lines:
-/// 1. Interactive elements with refs (can be clicked/filled)
-/// 2. Content roles that carry data (headings, table cells, list items)
-/// 3. Value text (field values, displayed data like prices/times)
-fn should_keep_line(line: &str) -> bool {
-    // 1. Interactive elements with refs — always keep
-    if line.contains("[ref=") {
-        return true;
-    }
-
-    let trimmed = line.trim_start().trim_start_matches("- ");
-
-    // 2. Content roles with quoted text (data display: titles, prices, names)
-    //    Matches agent-browser's CONTENT_ROLES: heading, cell, gridcell,
-    //    columnheader, rowheader, listitem, article
-    if (trimmed.starts_with("heading ")
-        || trimmed.starts_with("cell ")
-        || trimmed.starts_with("gridcell ")
-        || trimmed.starts_with("columnheader ")
-        || trimmed.starts_with("rowheader ")
-        || trimmed.starts_with("listitem "))
-        && trimmed.contains('"')
-    {
-        return true;
-    }
-
-    // 3. Value text: ": " after closing bracket indicates a field/element value
-    //    e.g., `textbox "Email" [ref=e5]: john@example.com`
-    if let Some(bracket_pos) = line.rfind(']') {
-        if line[bracket_pos..].contains(": ") {
-            return true;
-        }
-    }
-
-    false
-}
-
-/// Count indentation level in 2-space units.
-fn count_indent(line: &str) -> usize {
-    let trimmed = line.trim_start();
-    (line.len() - trimmed.len()) / 2
-}
-
-/// Check if the compact tree contains form fields (combobox, textbox, etc.).
+/// Check if the tree contains form fields (combobox, textbox, etc.).
 fn has_form_fields(tree: &str) -> bool {
     tree.lines().any(|line| {
         let t = line.trim_start().trim_start_matches("- ");
-        t.starts_with("combobox ")
-            || t.starts_with("textbox ")
-            || t.starts_with("checkbox ")
-            || t.starts_with("radio ")
-            || t.starts_with("searchbox ")
-            || t.starts_with("slider ")
-            || t.starts_with("spinbutton ")
+        is_form_field_role(t)
     })
+}
+
+// ============================================================================
+// Page stage detection (language-independent)
+// ============================================================================
+
+/// Language-independent page stage, detected from accessibility tree structure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageStage {
+    /// Multiple form fields, few repeated interactive groups (search/booking form).
+    SearchForm,
+    /// Multiple sibling groups each with interactive descendants (results listing).
+    ResultsListing,
+    /// Few form fields, content-heavy, 1-3 action buttons (proceed/confirm step).
+    ActionRequired,
+    /// No clear pattern detected.
+    Unknown,
+}
+
+/// Detect the page stage from the accessibility tree structure.
+///
+/// Purely structural — does NOT match on any text content (language-independent).
+/// `seen_results` hints that we've previously seen a results page, so a form
+/// is likely a continuation step rather than the initial search.
+pub fn detect_page_stage(tree: &str, _seen_results: bool) -> PageStage {
+    let mut form_field_count: usize = 0;
+    let mut button_ref_count: usize = 0;
+    let mut total_interactive: usize = 0;
+    // Track sibling groups: consecutive container roles at the same indent
+    // that each have at least one interactive descendant.
+    let mut current_group_indent: Option<usize> = None;
+    let mut current_group_count: usize = 0;
+    let mut max_group_run: usize = 0;
+
+    let lines: Vec<&str> = tree.lines().collect();
+
+    for (i, raw_line) in lines.iter().enumerate() {
+        let stripped = raw_line.trim_end();
+        let indent = stripped.len() - stripped.trim_start().len();
+        let trimmed = stripped.trim_start().trim_start_matches("- ");
+
+        // Count form fields
+        if is_form_field_role(trimmed) {
+            form_field_count += 1;
+        }
+
+        // Count interactive elements
+        if stripped.contains("[ref=") {
+            total_interactive += 1;
+            if trimmed.starts_with("button ") {
+                button_ref_count += 1;
+            }
+        }
+
+        // Detect container roles for repeated group analysis
+        let is_container = trimmed.starts_with("listitem")
+            || trimmed == "row"
+            || trimmed.starts_with("row ")
+            || trimmed.starts_with("row\"")
+            || trimmed == "group"
+            || trimmed.starts_with("group ")
+            || trimmed.starts_with("group\"")
+            || trimmed.starts_with("article");
+
+        if is_container {
+            // Check if this container has any interactive descendants
+            // (look ahead until next sibling at same or shallower indent)
+            let has_interactive = lines[i + 1..]
+                .iter()
+                .take_while(|next_line| {
+                    let next_stripped = next_line.trim_end();
+                    let next_indent = next_stripped.len() - next_stripped.trim_start().len();
+                    next_indent > indent
+                })
+                .any(|next_line| next_line.contains("[ref="));
+
+            if Some(indent) == current_group_indent {
+                // Same sibling level
+                if has_interactive {
+                    current_group_count += 1;
+                } else {
+                    // Non-interactive sibling breaks the run
+                    max_group_run = max_group_run.max(current_group_count);
+                    current_group_count = 0;
+                }
+            } else {
+                // New indent level — finalize previous group
+                max_group_run = max_group_run.max(current_group_count);
+                current_group_indent = Some(indent);
+                current_group_count = if has_interactive { 1 } else { 0 };
+            }
+        }
+    }
+    // Finalize last group
+    let repeated_interactive_groups = max_group_run.max(current_group_count);
+
+    // Classification (order matters — most specific first)
+    if repeated_interactive_groups >= 3 {
+        return PageStage::ResultsListing;
+    }
+    if form_field_count >= 2 && repeated_interactive_groups < 2 {
+        return PageStage::SearchForm;
+    }
+    if (1..=3).contains(&button_ref_count) && form_field_count < 3 && total_interactive < 15 {
+        return PageStage::ActionRequired;
+    }
+    PageStage::Unknown
+}
+
+/// Return a stage-appropriate hint to append to the snapshot, or `None`.
+fn page_stage_hint(tree: &str, seen_results: bool) -> Option<String> {
+    let stage = detect_page_stage(tree, seen_results);
+    match stage {
+        PageStage::SearchForm => Some(
+            "\n\n** FORM PLAN — do this before filling **\n\
+             For each field, write: field → value from user's request.\n\
+             IGNORE pre-filled / default values.\n\
+             Convert: \"mattina\"→06:00-12:00, \"pomeriggio\"→12:00-18:00, \
+             \"sera\"→18:00-23:00, \"domani\"→tomorrow's date.\n\
+             Autocomplete fields (combobox): type partial text → snapshot → click match.\n\
+             If a required value is missing, ask the user.\n"
+                .to_string(),
+        ),
+        PageStage::ResultsListing => Some(
+            "\n\n** RESULTS PAGE — selectable items detected **\n\
+             This page lists multiple options. Pick the best match for the user's\n\
+             request criteria, then click its selection element (button/link/radio).\n\
+             After selecting, take a snapshot to see the next step.\n"
+                .to_string(),
+        ),
+        PageStage::ActionRequired => Some(
+            "\n\n** ACTION STEP — review and proceed **\n\
+             This page shows content with limited actions. Review it, then click\n\
+             the appropriate button to advance. Do NOT navigate away.\n"
+                .to_string(),
+        ),
+        PageStage::Unknown => {
+            // Fallback: if form fields detected but stage is Unknown, still show FORM PLAN
+            if has_form_fields(tree) {
+                Some(
+                    "\n\n** FORM PLAN — do this before filling **\n\
+                     For each field, write: field → value from user's request.\n\
+                     IGNORE pre-filled / default values.\n\
+                     Autocomplete fields (combobox): type partial text → snapshot → click match.\n\
+                     If a required value is missing, ask the user.\n"
+                        .to_string(),
+                )
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Check if a trimmed ARIA role is a form field.
+fn is_form_field_role(trimmed: &str) -> bool {
+    trimmed.starts_with("combobox ")
+        || trimmed.starts_with("textbox ")
+        || trimmed.starts_with("checkbox ")
+        || trimmed.starts_with("radio ")
+        || trimmed.starts_with("searchbox ")
+        || trimmed.starts_with("slider ")
+        || trimmed.starts_with("spinbutton ")
 }
 
 /// Truncate a string to at most `max_bytes`, snapping to a char boundary.
@@ -1730,58 +1826,34 @@ mod tests {
     }
 
     #[test]
-    fn test_compact_browser_snapshot() {
-        // Use single-line string with explicit \n to preserve indentation
+    fn test_compact_browser_snapshot_raw_passthrough() {
         let output = "Page URL: https://example.com\nPage Title: Example\n- navigation\n  - heading \"Welcome\"\n  - textbox \"Email\" [ref=e5]\n  - textbox \"Password\" [ref=e6]\n  - button \"Login\" [ref=e7]\n- paragraph \"Footer text\"\n";
-        let compact = compact_browser_snapshot(output);
-        // Interactive elements preserved with refs
-        assert!(compact.contains("Email"));
-        assert!(compact.contains("[ref=e5]"));
-        assert!(compact.contains("3 interactive"));
-        // Heading preserved as content role
-        assert!(compact.contains("heading \"Welcome\""));
-        // Ancestor preserved (navigation contains the form)
-        assert!(compact.contains("navigation"));
-        // Non-interactive paragraph stripped
-        assert!(!compact.contains("Footer text"));
+        let result = compact_browser_snapshot(output);
+        // All elements preserved (no compaction)
+        assert!(result.contains("Email"));
+        assert!(result.contains("[ref=e5]"));
+        assert!(result.contains("3 interactive"));
+        assert!(result.contains("heading \"Welcome\""));
+        assert!(result.contains("navigation"));
+        // Raw passthrough: paragraph is now preserved
+        assert!(result.contains("Footer text"));
         // Form planning instruction present
-        assert!(compact.contains("FORM PLAN"));
+        assert!(result.contains("FORM PLAN"));
     }
 
     #[test]
-    fn test_compact_preserves_tree_hierarchy() {
+    fn test_compact_raw_preserves_full_tree() {
         let output = "- main\n  - section\n    - heading \"Results\"\n    - list\n      - listitem \"Train ICE 1234\"\n      - button \"Buy\" [ref=e10]\n  - footer\n    - paragraph \"Copyright\"\n";
-        let compact = compact_browser_snapshot(output);
-        // Button and its ancestors preserved
-        assert!(compact.contains("button \"Buy\" [ref=e10]"));
-        assert!(compact.contains("list"));
-        assert!(compact.contains("section"));
-        assert!(compact.contains("main"));
-        // Content role preserved
-        assert!(compact.contains("heading \"Results\""));
-        assert!(compact.contains("listitem \"Train ICE 1234\""));
-        // Footer without interactive content stripped
-        assert!(!compact.contains("Copyright"));
-    }
-
-    #[test]
-    fn test_compact_preserves_value_text() {
-        let output = "- form\n  - textbox \"City\" [ref=e1]: Napoli\n  - button \"Go\" [ref=e2]\n";
-        let compact = compact_browser_snapshot(output);
-        // Value text after ] is preserved
-        assert!(compact.contains(": Napoli"));
-        assert!(compact.contains("[ref=e1]"));
-    }
-
-    #[test]
-    fn test_compact_preserves_table_cells() {
-        let output = "- table\n  - row\n    - columnheader \"Time\"\n    - columnheader \"Price\"\n  - row\n    - cell \"06:15\"\n    - cell \"€49.90\"\n    - button \"Buy\" [ref=e20]\n";
-        let compact = compact_browser_snapshot(output);
-        assert!(compact.contains("cell \"06:15\""));
-        assert!(compact.contains("cell \"€49.90\""));
-        assert!(compact.contains("columnheader \"Time\""));
-        assert!(compact.contains("columnheader \"Price\""));
-        assert!(compact.contains("button \"Buy\" [ref=e20]"));
+        let result = compact_browser_snapshot(output);
+        // Everything preserved in raw mode
+        assert!(result.contains("button \"Buy\" [ref=e10]"));
+        assert!(result.contains("list"));
+        assert!(result.contains("section"));
+        assert!(result.contains("main"));
+        assert!(result.contains("heading \"Results\""));
+        assert!(result.contains("listitem \"Train ICE 1234\""));
+        assert!(result.contains("Copyright"));
+        assert!(result.contains("footer"));
     }
 
     #[test]
@@ -1797,30 +1869,6 @@ mod tests {
     fn test_no_autocomplete_suggestions() {
         let output = "- textbox \"Search\" [ref=e1]\n- button \"Go\" [ref=e2]\n";
         assert!(extract_autocomplete_suggestions(output).is_none());
-    }
-
-    #[test]
-    fn test_should_keep_line() {
-        // Interactive elements with refs
-        assert!(should_keep_line("  - textbox \"Email\" [ref=e5]"));
-        assert!(should_keep_line("  - button \"Submit\" [ref=e7]"));
-        // Content roles with text
-        assert!(should_keep_line("  - heading \"Results\""));
-        assert!(should_keep_line("  - cell \"€49.90\""));
-        assert!(should_keep_line("  - listitem \"Train ICE 1234\""));
-        // Value text after ]
-        assert!(should_keep_line("  - textbox \"City\" [ref=e1]: Roma"));
-        // Non-meaningful lines
-        assert!(!should_keep_line("  - paragraph \"text\""));
-        assert!(!should_keep_line("  - generic"));
-        assert!(!should_keep_line("  - navigation"));
-    }
-
-    #[test]
-    fn test_count_indent() {
-        assert_eq!(count_indent("- heading"), 0);
-        assert_eq!(count_indent("  - link"), 1);
-        assert_eq!(count_indent("    - text"), 2);
     }
 
     #[test]
@@ -2013,5 +2061,143 @@ mod tests {
         assert!(desc.contains("click_coordinates(x, y)"));
         assert!(desc.contains("block_resources()"));
         assert!(desc.contains("unblock_resources()"));
+    }
+
+    // ---- Page stage detection tests ----
+
+    #[test]
+    fn test_detect_results_listing() {
+        // 4 listitems each with a button → ResultsListing
+        let tree = "\
+- main
+  - list
+    - listitem \"Train 1\"
+      - text \"08:30\"
+      - button \"Select\" [ref=e1]
+    - listitem \"Train 2\"
+      - text \"09:30\"
+      - button \"Select\" [ref=e2]
+    - listitem \"Train 3\"
+      - text \"10:30\"
+      - button \"Select\" [ref=e3]
+    - listitem \"Train 4\"
+      - text \"11:30\"
+      - button \"Select\" [ref=e4]";
+        assert_eq!(detect_page_stage(tree, false), PageStage::ResultsListing);
+    }
+
+    #[test]
+    fn test_detect_search_form() {
+        // 3 form fields, no repeated interactive groups → SearchForm
+        let tree = "\
+- main
+  - combobox \"From\" [ref=e1]
+  - combobox \"To\" [ref=e2]
+  - textbox \"Date\" [ref=e3]
+  - button \"Search\" [ref=e4]";
+        assert_eq!(detect_page_stage(tree, false), PageStage::SearchForm);
+    }
+
+    #[test]
+    fn test_detect_action_required() {
+        // Summary content with 2 buttons, few interactive elements → ActionRequired
+        let tree = "\
+- main
+  - heading \"Booking Summary\"
+  - text \"Roma → Milano, 12:30\"
+  - text \"1 passenger, Economy\"
+  - button \"Back\" [ref=e1]
+  - button \"Confirm\" [ref=e2]";
+        assert_eq!(detect_page_stage(tree, false), PageStage::ActionRequired);
+    }
+
+    #[test]
+    fn test_detect_unknown_page() {
+        // Just a heading and lots of links — unknown
+        let tree = "\
+- navigation
+  - link \"Home\" [ref=e1]
+  - link \"About\" [ref=e2]
+  - link \"Contact\" [ref=e3]
+  - link \"FAQ\" [ref=e4]
+  - link \"Help\" [ref=e5]
+  - link \"Terms\" [ref=e6]
+  - link \"Privacy\" [ref=e7]
+  - link \"Blog\" [ref=e8]
+  - link \"Careers\" [ref=e9]
+  - link \"Press\" [ref=e10]
+  - link \"Partners\" [ref=e11]
+  - link \"Support\" [ref=e12]
+  - link \"Status\" [ref=e13]
+  - link \"API\" [ref=e14]
+  - link \"Docs\" [ref=e15]
+  - link \"Community\" [ref=e16]";
+        assert_eq!(detect_page_stage(tree, false), PageStage::Unknown);
+    }
+
+    #[test]
+    fn test_results_listing_with_rows() {
+        // Table-based results (rows with buttons)
+        let tree = "\
+- table
+  - row
+    - cell \"Flight 101\"
+    - cell \"$299\"
+    - button \"Book\" [ref=e1]
+  - row
+    - cell \"Flight 202\"
+    - cell \"$349\"
+    - button \"Book\" [ref=e2]
+  - row
+    - cell \"Flight 303\"
+    - cell \"$199\"
+    - button \"Book\" [ref=e3]";
+        assert_eq!(detect_page_stage(tree, false), PageStage::ResultsListing);
+    }
+
+    #[test]
+    fn test_results_listing_with_groups() {
+        // Card-based results (groups with buttons)
+        let tree = "\
+- main
+  - group \"Product A\"
+    - heading \"Shoes Model A\"
+    - text \"$89.00\"
+    - button \"Add to Cart\" [ref=e1]
+  - group \"Product B\"
+    - heading \"Shoes Model B\"
+    - text \"$120.00\"
+    - button \"Add to Cart\" [ref=e2]
+  - group \"Product C\"
+    - heading \"Shoes Model C\"
+    - text \"$65.00\"
+    - button \"Add to Cart\" [ref=e3]";
+        assert_eq!(detect_page_stage(tree, false), PageStage::ResultsListing);
+    }
+
+    #[test]
+    fn test_stage_hint_in_compact_snapshot() {
+        // Results page snapshot should contain the RESULTS PAGE hint
+        let output = "Page URL: https://trenitalia.com/results\n- main\n  - list\n    - listitem \"Train 1\"\n      - button \"Select\" [ref=e1]\n    - listitem \"Train 2\"\n      - button \"Select\" [ref=e2]\n    - listitem \"Train 3\"\n      - button \"Select\" [ref=e3]\n";
+        let result = compact_browser_snapshot_staged(output, false);
+        assert!(
+            result.contains("RESULTS PAGE"),
+            "should contain results hint"
+        );
+        assert!(result.contains("selectable items"));
+    }
+
+    #[test]
+    fn test_form_plan_still_works_in_staged() {
+        let output = "Page URL: https://example.com\n\
+- main\n\
+  - textbox \"Email\" [ref=e1]\n\
+  - textbox \"Password\" [ref=e2]\n\
+  - button \"Login\" [ref=e3]\n";
+        let result = compact_browser_snapshot_staged(output, false);
+        assert!(
+            result.contains("FORM PLAN"),
+            "form pages should still get FORM PLAN"
+        );
     }
 }

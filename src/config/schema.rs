@@ -1782,6 +1782,12 @@ pub struct BrowserConfig {
     pub default_profile: String,
     /// Named browser profiles for isolation
     pub profiles: HashMap<String, BrowserProfile>,
+    /// Inject anti-detection (stealth) scripts that mask automation signals
+    /// like `navigator.webdriver`. Default: false.
+    /// Modern bot detectors can detect these patches, making you MORE visible.
+    /// Only enable if a site specifically blocks `navigator.webdriver = true`.
+    #[serde(default)]
+    pub stealth: bool,
     /// Action policy — allow/deny categories and URL patterns
     #[serde(default)]
     pub policy: BrowserPolicyConfig,
@@ -1893,6 +1899,7 @@ impl Default for BrowserConfig {
             executable_path: String::new(),
             default_profile: "default".to_string(),
             profiles,
+            stealth: false,
             policy: BrowserPolicyConfig::default(),
         }
     }

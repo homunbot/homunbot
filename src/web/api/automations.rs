@@ -859,7 +859,7 @@ async fn generate_automation_flow(
 
     let system_prompt = r#"You are an automation flow designer. Given a user description, output ONLY valid JSON (no markdown, no explanation) describing an automation flow.
 
-Available node kinds: trigger, tool, skill, mcp, llm, condition, parallel, subprocess, loop, transform, deliver.
+Available node kinds: trigger, tool, skill, mcp, llm, condition, parallel, subprocess, loop, transform, approve, require_2fa, deliver.
 
 Output format:
 {
@@ -888,6 +888,8 @@ Rules:
 - Use "parallel" to run multiple branches simultaneously (e.g. fetch from 3 sources at once)
 - Use "loop" to repeat steps until a condition is met (e.g. retry, paginate)
 - Use "subprocess" to call another saved automation as a sub-workflow
+- Use "approve" before sensitive steps to require explicit user approval (label = approval question, meta = channel like "telegram:default")
+- Use "require_2fa" before critical steps to require two-factor authentication verification
 - Keep flows simple: 3-6 nodes typically
 - Node IDs should be n1, n2, n3, etc.
 - Wire edges sequentially from trigger to deliver
