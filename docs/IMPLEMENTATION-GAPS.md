@@ -1,6 +1,6 @@
 # Implementation Gaps
 
-Updated: March 13, 2026 (deep audit: vault, memory, RAG, sandbox, automations, security)
+Updated: March 13, 2026 (deep audit + connection recipes, automations builder edit, OAuth flows)
 
 This document is the operational backlog derived from the real codebase and the current roadmap.
 
@@ -244,16 +244,25 @@ Related docs:
 
 ## Skills And MCP
 
-Status: strong core
+Status: strong core, Connection Recipes complete (2026-03-13)
+
+What exists:
+
+- MCP catalog (Official Registry + MCPMarket + presets)
+- Connection Recipes: multi-instance support (`recipe_id` tracking, instance name scoping)
+- OAuth flows: Google (Gmail, Calendar), GitHub, Notion (OAuth 2.1 PKCE + Dynamic Client Registration)
+- HTTP/SSE transport via rmcp StreamableHTTP (Notion hosted MCP)
+- Google multi-account auto-naming with email from userinfo API
+- Connection test robustness: no sandbox overhead, error detail propagation, no double Bearer prefix
 
 Main gaps:
 
-- MCP and skill execution quality still inherit sandbox/runtime hardening gaps
-- automation dependency invalidation should remain closely watched as MCP/skills evolve
+- auto-discovery (suggest MCP when task context requires it) is in prompt but not proactive
+- no auto-refresh of OAuth tokens at runtime (tokens stored, refresh on reconnect)
 
 Next work:
 
-- no major feature gap before sandbox/channel work; keep this stable
+- keep stable; monitor token refresh behavior in production use
 
 Related docs:
 
@@ -261,16 +270,25 @@ Related docs:
 
 ## Automation And Workflows
 
-Status: strong core
+Status: strong core, Builder edit mode fixed (2026-03-13)
+
+What exists:
+
+- Visual flow builder (n8n-style) with 13 node kinds, NLP generation, 6 templates
+- Schema-driven forms for tool/MCP parameters with smart API overrides
+- Builder supports both create (POST) and edit (PATCH) with `editingId` tracking
+- `flow_json` persisted and restored on edit (visual graph roundtrip)
+- Workflow engine with persistent multi-step execution, approval gates, retry, resume-on-boot
 
 Main gaps:
 
-- the core exists, but reliability depends on the same release discipline as web/chat/browser
-- future work is more about operational confidence than missing foundation
+- **AUTO-2**: no real-time validation in builder (errors only after save)
+- **AUTO-4**: no wizard alternative for non-technical users (only builder)
+- reliability depends on release discipline (no automated E2E tests for automations)
 
 Next work:
 
-- maintain; avoid introducing complexity until sandbox/chat/channel backlog is reduced
+- AUTO-2 (inline validation) and AUTO-4 (step-by-step wizard) are next UX improvements
 
 Related docs:
 
@@ -350,31 +368,27 @@ Next work:
 
 ## Automations UX
 
-Status: powerful but too technical for non-dev users (deep audit 2026-03-13)
+Status: solid, most critical gaps resolved (updated 2026-03-13)
 
 ### What works
-- Visual flow builder with n8n-style SVG canvas, 11 node kinds
-- Parameter auto-discovery from tool JSON Schema (shows hints)
-- MCP cascade dropdowns (server → tool)
-- LLM-assisted flow generation from natural language
-- Simple form alternative for basic prompt+schedule automations
+- Visual flow builder with n8n-style SVG canvas, 13 node kinds (incl. approve, require_2fa)
+- ✅ Schema-driven forms from JSON Schema (AUTO-1) — per-field forms with smart API overrides
+- ✅ MCP cascade dropdowns (server → tool → schema form)
+- ✅ LLM-assisted flow generation from natural language
+- ✅ 6 template automations (AUTO-3) — Daily Email Digest, Web Monitor, Standup, News, Security, File Organizer
+- ✅ Builder edit mode (AUTO-1c) — edit opens Builder, PATCH with flow_json roundtrip
+- ✅ Automations loading fix (AUTO-1d) — guard check + Builder schedule format
 
-### Critical UX gaps
+### Remaining UX gaps
 
-1. **Tool arguments = raw JSON textarea**: When user adds a "tool" node, parameters are a JSON textarea with an auto-generated placeholder. No per-field form (text input for strings, number spinner for numbers, checkbox for booleans, select for enums).
+1. **No real-time validation** (AUTO-2): Errors appear only after save. No inline warnings for missing trigger, missing deliver, or required parameters not filled.
 
-2. **No real-time validation**: Errors appear only after save. No inline warnings for missing trigger, missing deliver, or required parameters not filled.
-
-3. **Zero template automations**: No pre-built templates. User starts from blank every time.
-
-4. **Visual builder intimidating for non-technical users**: 11 node kinds, requires understanding of flow logic. No wizard alternative for simple automations.
+2. **No wizard for non-technical users** (AUTO-4): Visual builder has 13 node kinds, requires understanding of flow logic. No step-by-step wizard alternative for simple automations.
 
 Next work:
 
-- **P1**: Generate per-field forms from tool JSON Schema (AUTO-1)
-- **P1**: Add 5-10 template automations (AUTO-3)
-- **P1**: Add step-by-step wizard for simple automations (AUTO-4)
-- **P2**: Real-time validation in builder (AUTO-2)
+- **P1**: Real-time validation in builder (AUTO-2)
+- **P1**: Step-by-step wizard for simple automations (AUTO-4)
 
 ## Dashboard
 
@@ -560,10 +574,12 @@ Next work:
 ### Phase 2: Consolidamento
 7. ~~Memory→reasoning wiring~~ ✅ VERIFIED WORKING
 8. ~~Sandbox~~ ✅ (all SBX-1..6 complete)
-9. **AUTO-1**: Form guidato parametri tool in automation builder
+9. ~~**AUTO-1**: Form guidato parametri tool~~ ✅ DONE (schema-form.js + smart overrides)
 10. **DASH-1**: Dashboard redesign con informazioni actionable
 11. **AUD-2**: Feature gating RAG/embeddings — documentare chiaramente
 12. Web chat/browser E2E in CI
+13. **AUTO-2**: Validazione real-time nel builder
+14. **AUTO-4**: Wizard step-by-step per automazioni semplici
 
 ### Phase 3: Espansione
 13. Channel hardening: Discord + Slack + WhatsApp

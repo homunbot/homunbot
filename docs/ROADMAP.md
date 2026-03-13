@@ -347,6 +347,16 @@ pub async fn llm_one_shot(config: &Config, req: OneShotRequest) -> Result<OneSho
   - wizard MCP coerente, helper OAuth integrato, preset sandbox chiari e recommendation panel
 - ✅ Provider OAuth multipli supportati nel wizard:
   - Google (Gmail, Calendar) + GitHub con callback provider-aware in Web UI
+- ✅ Notion OAuth 2.1 end-to-end (2026-03-13):
+  - PKCE + Dynamic Client Registration + auto token refresh
+  - HTTP/SSE transport via rmcp StreamableHTTP
+- ✅ Google multi-account auto-naming (2026-03-13):
+  - Fetch email via `googleapis.com/oauth2/v2/userinfo` dopo token exchange
+  - Auto-fill instance name con `{recipe}-{local}` (es. `gmail-fabio`)
+- ✅ Fix connection test robustness (2026-03-13):
+  - Fix double Bearer prefix in HTTP transport (`Bearer Bearer <token>` → `Bearer <token>`)
+  - Skip sandbox entirely for connection tests (solo initialize + list_tools)
+  - Propagate error detail to UI (non piu' generic "Connection test failed")
 
 ### 5.5 Stato Dettagliato (Skill Shield)
 
@@ -1462,6 +1472,8 @@ Implicazioni:
 |---|------|-----------------|--------|
 | AUTO-1 | **Form guidato per parametri tool + MCP** | ✅ DONE (2026-03-13) — `schema-form.js` (209 LOC): genera form field-by-field da JSON Schema (enum→select, boolean→checkbox, number→spinner, string→text). Smart API overrides per tool noti (`read_email_inbox.account` → dropdown email configurati, `message.channel` → dropdown canali). Fallback textarea JSON. Stessa form per nodi MCP. | ~~1 settimana~~ |
 | AUTO-1b | **Inspector guidato completo tutti i nodi** | ✅ DONE (2026-03-13) — Condition/loop/transform: preset buttons cliccabili. Subprocess: async dropdown automazioni salvate. LLM model: async dropdown da `/v1/providers/models`. Nodi approve (gate approvazione con canale) e require_2fa (gate 2FA). 13 node kinds totali. | ~~incluso~~ |
+| AUTO-1c | **Builder edit mode** | ✅ DONE (2026-03-13) — Click "Edit" su automation apre il Builder (non piu' inline editor). `editingId` traccia create vs edit. `save()` usa PATCH per update, POST per create. `flow_json` supportato in PATCH endpoint. Ricostruzione flow da schedule+prompt se `flow_json` assente. | ~~incluso~~ |
+| AUTO-1d | **Fix automations loading** | ✅ DONE (2026-03-13) — `initializeAutomationsPage()` faceva early return perche' controllava ID di un form inline rimosso. Guard ora richiede solo `automations-list`. Fix format schedule nel Builder (`daily 09:00` → `cron:0 9 * * *`). | ~~incluso~~ |
 | AUTO-2 | **Validazione real-time nel builder** | Errori appaiono solo dopo il save. Serve: validazione inline durante l'editing (trigger mancante, deliver mancante, parametri required non compilati). | 3-5 giorni |
 | AUTO-3 | **Template automazioni pronte** | ✅ DONE (2026-03-13) — 6 template preconfigurati (Daily Email Digest, Web Monitor, Daily Standup, News Briefing, Security Check, File Organizer). Gallery visibile su canvas vuoto, click carica flow. Template include nodi + edges completi. | ~~3-5 giorni~~ |
 | AUTO-4 | **Wizard step-by-step per automazioni semplici** | Il visual builder e' intimidatorio per utenti non-tecnici. Serve: wizard alternativo per automazioni semplici (1. Cosa vuoi fare? 2. Quando? 3. Dove ricevere il risultato?). | 1 settimana |
@@ -1626,9 +1638,11 @@ Programma Security Web (P0)              ✅ DONE (~810 LOC, 23 test)
   ✅ SEC-8 Email content framing (untrusted labels on inbound emails)
   ✅ SEC-9 Vault output guard (coperto da SEC-6 + exfiltration guard)
     |
-Programma AUTO-1+ UX Automazioni (P1)   ✅ DONE (~650 LOC)
+Programma AUTO-1+ UX Automazioni (P1)   ✅ DONE (~700 LOC)
   ✅ AUTO-1 Schema-driven form tool/MCP (schema-form.js 209 LOC, override API smart)
   ✅ AUTO-1b Inspector completo tutti nodi (presets, async dropdown, approve/2FA)
+  ✅ AUTO-1c Builder edit mode (edit apre Builder, PATCH con flow_json)
+  ✅ AUTO-1d Fix automations loading + Builder schedule format
   ✅ AUTO-3 Template gallery (6 template su canvas vuoto)
   ✅ NLP generate-flow aggiornato con approve/require_2fa
     |
@@ -1641,7 +1655,7 @@ Sprint 9+: Future (P3)
   Voice, Extended thinking, Prometheus, distribuzione
 ```
 
-**Completato: Sprint 1-8 + SBX-1..6 (tutti validati CI cross-platform) + CHAT-1..6 + smoke manuali CHAT-7/Browser + core Browser + Design System + Workflow Engine + Automations Builder v2 (visual flow + guided inspector + NLP) + AUTO-1+ (schema-driven forms, smart API overrides, 6 template, presets, approve/2FA gates) + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4, SEC-6..9) + Unified LLM Engine + Smart web_fetch routing (search-first + JS detection + browser hints) + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
+**Completato: Sprint 1-8 + SBX-1..6 (tutti validati CI cross-platform) + CHAT-1..6 + smoke manuali CHAT-7/Browser + core Browser + Design System + Workflow Engine + Automations Builder v2 (visual flow + guided inspector + NLP + edit mode) + AUTO-1+ (schema-driven forms, smart API overrides, 6 template, presets, approve/2FA gates, builder edit) + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4, SEC-6..9) + Unified LLM Engine + Smart web_fetch routing (search-first + JS detection + browser hints) + Connection Recipes (multi-instance, Notion OAuth 2.1, Google auto-naming, HTTP/SSE transport) + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
 **Rimanente: AUTO-2 (validazione real-time builder), AUTO-4 (wizard step-by-step), formalizzazione release-grade CHAT-7 e Browser E2E, Mobile App, Sprint 9+**
 **Deferred: BIZ-2..5 (Business Autopilot avanzato — core engine BIZ-1 done, resto rimandato)**
 **CI: 11/11 check verdi (check&lint, test, 4 feature matrix, 5 build cross-platform + sandbox validation) — 595 test**
