@@ -94,7 +94,15 @@ pub async fn connect_recipe(
             .cloned()
             .expect("server should exist after setup");
 
-        let test = mcp_setup::test_mcp_server_connection(instance_name, &server, sandbox).await;
+        // HTTP transport connects to a remote server — no local process to sandbox.
+        let effective_sandbox = if server.transport == "http" {
+            None
+        } else {
+            sandbox
+        };
+
+        let test =
+            mcp_setup::test_mcp_server_connection(instance_name, &server, effective_sandbox).await;
         (Some(test.connected), test.tool_count, test.error)
     };
 
