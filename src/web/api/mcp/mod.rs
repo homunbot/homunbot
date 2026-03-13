@@ -39,6 +39,14 @@ pub(crate) fn routes() -> Router<Arc<AppState>> {
             axum::routing::post(oauth::exchange_github_mcp_oauth_code),
         )
         .route(
+            "/v1/mcp/oauth/notion/start",
+            axum::routing::post(oauth::start_notion_mcp_oauth),
+        )
+        .route(
+            "/v1/mcp/oauth/notion/exchange",
+            axum::routing::post(oauth::exchange_notion_mcp_oauth_code),
+        )
+        .route(
             "/v1/mcp/servers",
             get(crud::list_mcp_servers).post(crud::upsert_mcp_server),
         )

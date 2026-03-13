@@ -604,6 +604,7 @@ mod tests {
                 capabilities: vec!["image-analysis".to_string()],
                 enabled: true,
                 recipe_id: None,
+                auth_env_key: None,
             },
         );
         config.mcp.servers.insert(
@@ -617,6 +618,7 @@ mod tests {
                 capabilities: vec!["image-analysis".to_string()],
                 enabled: true,
                 recipe_id: None,
+                auth_env_key: None,
             },
         );
 

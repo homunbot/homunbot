@@ -16,6 +16,17 @@ pub struct McpServerPreset {
     pub aliases: Vec<String>,
     #[serde(default)]
     pub keywords: Vec<String>,
+    /// Transport type: "stdio" (default) or "http".
+    #[serde(default = "default_stdio")]
+    pub transport: String,
+    /// For HTTP transport: the server URL.
+    pub url: Option<String>,
+    /// For HTTP transport: env key whose value is the Bearer token.
+    pub auth_env_key: Option<String>,
+}
+
+fn default_stdio() -> String {
+    "stdio".to_string()
 }
 
 /// Environment variable requirement for an MCP preset.
@@ -52,6 +63,9 @@ pub fn all_mcp_presets() -> Vec<McpServerPreset> {
                 "folder".to_string(),
                 "filesystem".to_string(),
             ],
+            transport: "stdio".to_string(),
+            url: None,
+            auth_env_key: None,
         },
         McpServerPreset {
             id: "github".to_string(),
@@ -78,6 +92,9 @@ pub fn all_mcp_presets() -> Vec<McpServerPreset> {
                 "issue".to_string(),
                 "code".to_string(),
             ],
+            transport: "stdio".to_string(),
+            url: None,
+            auth_env_key: None,
         },
         McpServerPreset {
             id: "fetch".to_string(),
@@ -97,6 +114,9 @@ pub fn all_mcp_presets() -> Vec<McpServerPreset> {
                 "page".to_string(),
                 "fetch".to_string(),
             ],
+            transport: "stdio".to_string(),
+            url: None,
+            auth_env_key: None,
         },
         McpServerPreset {
             id: "gmail".to_string(),
@@ -138,6 +158,9 @@ pub fn all_mcp_presets() -> Vec<McpServerPreset> {
                 "email".to_string(),
                 "inbox".to_string(),
             ],
+            transport: "stdio".to_string(),
+            url: None,
+            auth_env_key: None,
         },
         McpServerPreset {
             id: "google-calendar".to_string(),
@@ -179,24 +202,24 @@ pub fn all_mcp_presets() -> Vec<McpServerPreset> {
                 "meeting".to_string(),
                 "schedule".to_string(),
             ],
+            transport: "stdio".to_string(),
+            url: None,
+            auth_env_key: None,
         },
         McpServerPreset {
             id: "notion".to_string(),
             display_name: "Notion".to_string(),
-            description: "Access Notion pages and databases.".to_string(),
-            command: "npx".to_string(),
-            args: vec![
-                "-y".to_string(),
-                "@modelcontextprotocol/server-notion".to_string(),
-            ],
+            description: "Access Notion pages and databases via hosted MCP.".to_string(),
+            command: String::new(),
+            args: vec![],
             env: vec![McpEnvVar {
                 key: "NOTION_TOKEN".to_string(),
-                description: "Notion integration token.".to_string(),
+                description: "Notion OAuth access token.".to_string(),
                 required: true,
                 secret: true,
                 vault_key: "mcp.notion.token".to_string(),
             }],
-            docs_url: Some("https://github.com/modelcontextprotocol/servers".to_string()),
+            docs_url: Some("https://mcp.notion.com".to_string()),
             aliases: vec!["notes".to_string()],
             keywords: vec![
                 "notion".to_string(),
@@ -204,6 +227,9 @@ pub fn all_mcp_presets() -> Vec<McpServerPreset> {
                 "database".to_string(),
                 "workspace".to_string(),
             ],
+            transport: "http".to_string(),
+            url: Some("https://mcp.notion.com/mcp".to_string()),
+            auth_env_key: Some("NOTION_TOKEN".to_string()),
         },
         McpServerPreset {
             id: "slack".to_string(),
@@ -230,6 +256,9 @@ pub fn all_mcp_presets() -> Vec<McpServerPreset> {
                 "message".to_string(),
                 "team".to_string(),
             ],
+            transport: "stdio".to_string(),
+            url: None,
+            auth_env_key: None,
         },
     ]
 }

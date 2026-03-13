@@ -439,8 +439,64 @@ async fn connect_server(
 ) -> Result<(McpPeer, Vec<rmcp::model::Tool>, McpServerInfo)> {
     match config.transport.as_str() {
         "stdio" => connect_stdio(name, config, sandbox_config).await,
-        other => anyhow::bail!("Unsupported MCP transport: {other}. Only 'stdio' is supported."),
+        "http" => connect_http(name, config).await,
+        other => anyhow::bail!("Unsupported MCP transport: {other}"),
     }
+}
+
+/// Connect to an MCP server via HTTP (StreamableHttp) transport
+async fn connect_http(
+    name: &str,
+    config: &McpServerConfig,
+) -> Result<(McpPeer, Vec<rmcp::model::Tool>, McpServerInfo)> {
+    use rmcp::transport::streamable_http_client::{
+        StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
+    };
+
+    let url = config
+        .url
+        .as_deref()
+        .context("MCP http server requires a 'url'")?;
+
+    // Resolve Bearer token from auth_env_key → config.env → vault
+    let mut transport_config = StreamableHttpClientTransportConfig::with_uri(url);
+    if let Some(auth_key) = &config.auth_env_key {
+        if let Some(raw_value) = config.env.get(auth_key) {
+            let token = resolve_env_value(name, auth_key, raw_value)
+                .with_context(|| format!("Failed to resolve auth token for MCP '{name}'"))?;
+            transport_config = transport_config.auth_header(format!("Bearer {token}"));
+        }
+    }
+
+    let transport = StreamableHttpClientTransport::from_config(transport_config);
+
+    let service = ()
+        .serve(transport)
+        .await
+        .with_context(|| format!("MCP HTTP initialization failed for server '{name}' at {url}"))?;
+
+    let (server_name, server_version) = match service.peer_info() {
+        Some(info) => (
+            info.server_info.name.to_string(),
+            info.server_info.version.to_string(),
+        ),
+        None => ("unknown".to_string(), "unknown".to_string()),
+    };
+
+    let tools = service
+        .list_all_tools()
+        .await
+        .with_context(|| format!("Failed to list tools from MCP HTTP server '{name}'"))?;
+
+    let info = McpServerInfo {
+        name: name.to_string(),
+        server_name,
+        server_version,
+        tool_count: tools.len(),
+        connected: true,
+    };
+
+    Ok((McpPeer::new(service), tools, info))
 }
 
 pub async fn call_tool_once(
@@ -662,6 +718,7 @@ mod tests {
                 capabilities: Vec::new(),
                 enabled: false,
                 recipe_id: None,
+                auth_env_key: None,
             },
         );
         let (manager, tools) = McpManager::start(&servers).await;

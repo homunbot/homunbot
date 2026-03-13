@@ -57,8 +57,9 @@
     function oauthConfigForRecipe(recipe) {
         if (recipe.auth_mode !== 'oauth') return null;
         var map = {
-            'gmail':            { provider: 'google', service: 'gmail' },
-            'google-calendar':  { provider: 'google', service: 'google-calendar' },
+            'gmail':            { provider: 'google', service: 'gmail', tokenField: 'refresh_token', tokenKey: 'refresh_token', providerLabel: 'Google' },
+            'google-calendar':  { provider: 'google', service: 'google-calendar', tokenField: 'refresh_token', tokenKey: 'refresh_token', providerLabel: 'Google' },
+            'notion':           { provider: 'notion', service: 'notion', tokenField: 'token', tokenKey: 'access_token', providerLabel: 'Notion' },
         };
         return map[recipe.id] || null;
     }
@@ -329,16 +330,28 @@
             '</div>';
         }
 
+        // Show redirect URI hint for OAuth recipes
+        if (oauthConfig) {
+            var callbackUrl = window.location.origin + '/mcp/oauth/' + oauthConfig.provider + '/callback';
+            fieldsHtml += '<div class="form-group">' +
+                '<label>Redirect URI</label>' +
+                '<input class="input" type="text" value="' + escapeHtml(callbackUrl) + '" readonly style="opacity:0.8;cursor:text" onclick="this.select()">' +
+                '<div class="form-hint">Add this URL as Authorized redirect URI in your OAuth app settings</div>' +
+            '</div>';
+        }
+
         for (var i = 0; i < recipe.fields.length; i++) {
             var f = recipe.fields[i];
 
-            // For OAuth recipes: replace refresh_token field with Authorize button
-            if (oauthConfig && f.id === 'refresh_token') {
-                fieldsHtml += '<input type="hidden" id="conn-field-refresh_token" data-field-id="refresh_token">' +
+            // For OAuth recipes: replace token field with Authorize button
+            var oauthTokenField = oauthConfig ? (oauthConfig.tokenField || 'refresh_token') : null;
+            if (oauthConfig && f.id === oauthTokenField) {
+                var providerLabel = oauthConfig.providerLabel || 'Google';
+                fieldsHtml += '<input type="hidden" id="conn-field-' + escapeHtml(f.id) + '" data-field-id="' + escapeHtml(f.id) + '">' +
                     '<div class="form-group">' +
                         '<label>Authorization</label>' +
                         '<button type="button" class="btn btn-secondary" id="conn-oauth-btn">' +
-                            '\uD83D\uDD10 Authorize with Google</button>' +
+                            '\uD83D\uDD10 Authorize with ' + escapeHtml(providerLabel) + '</button>' +
                         '<div class="form-hint" id="conn-oauth-status"></div>' +
                     '</div>';
                 continue;
@@ -455,7 +468,10 @@
             if (oauthStatusEl) oauthStatusEl.textContent = msg;
         }
 
-        // Exchange auth code for refresh_token (auto, no manual step)
+        // Exchange auth code for token (auto, no manual step)
+        var tokenField = oauthConfig.tokenField || 'refresh_token';
+        var tokenKey = oauthConfig.tokenKey || 'refresh_token';
+
         async function exchangeOauthCode(code) {
             setOauthStatus('Authorization received, obtaining token...');
             var clientId = (document.getElementById('conn-field-client_id') || {}).value || '';
@@ -474,9 +490,10 @@
                 }),
             });
 
-            if (res.ok && res.body && res.body.refresh_token) {
-                var hidden = document.getElementById('conn-field-refresh_token');
-                if (hidden) hidden.value = res.body.refresh_token;
+            var tokenValue = res.body && res.body[tokenKey];
+            if (res.ok && tokenValue) {
+                var hidden = document.getElementById('conn-field-' + tokenField);
+                if (hidden) hidden.value = tokenValue;
                 setOauthStatus('\u2713 Authorization complete');
                 oauthBtn.disabled = true;
                 oauthBtn.textContent = '\u2713 Authorized';
@@ -512,7 +529,7 @@
             var redirectUri = window.location.origin + '/mcp/oauth/' + oauthConfig.provider + '/callback';
 
             oauthBtn.disabled = true;
-            setOauthStatus('Opening Google authorization...');
+            setOauthStatus('Opening ' + (oauthConfig.providerLabel || 'OAuth') + ' authorization...');
 
             var res = await api('/api/v1/mcp/oauth/' + oauthConfig.provider + '/start', {
                 method: 'POST',

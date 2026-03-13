@@ -63,11 +63,18 @@ pub struct RecipeField {
 /// MCP server configuration embedded in the recipe.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecipeMcpConfig {
+    #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default = "default_stdio")]
     pub transport: String,
+    /// For HTTP transport: the server URL.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// For HTTP transport: env key whose value is used as Bearer token.
+    #[serde(default)]
+    pub auth_env_key: Option<String>,
 }
 
 /// Success screen copy after a service is connected.

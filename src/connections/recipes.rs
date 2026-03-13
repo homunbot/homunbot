@@ -151,6 +151,9 @@ pub fn recipe_to_preset(recipe: &ConnectionRecipe, instance_name: &str) -> McpSe
         docs_url: None,
         aliases: vec![],
         keywords: vec![],
+        transport: recipe.mcp.transport.clone(),
+        url: recipe.mcp.url.clone(),
+        auth_env_key: recipe.mcp.auth_env_key.clone(),
     }
 }
 

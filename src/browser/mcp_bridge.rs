@@ -65,6 +65,7 @@ pub fn browser_mcp_server_config(browser: &BrowserConfig) -> Option<McpServerCon
         capabilities: vec!["browser".to_string()],
         enabled: true,
         recipe_id: None,
+        auth_env_key: None,
     })
 }
 

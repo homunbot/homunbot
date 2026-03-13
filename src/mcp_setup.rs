@@ -112,21 +112,31 @@ pub fn apply_mcp_preset_setup(
         }
     }
 
-    let args = preset
-        .args
-        .iter()
-        .map(|arg| render_mcp_arg_template(arg))
-        .collect::<Vec<_>>();
+    let is_http = preset.transport == "http";
+    let args = if is_http {
+        vec![]
+    } else {
+        preset
+            .args
+            .iter()
+            .map(|arg| render_mcp_arg_template(arg))
+            .collect::<Vec<_>>()
+    };
 
     let server_config = McpServerConfig {
-        transport: "stdio".to_string(),
-        command: Some(preset.command.clone()),
+        transport: preset.transport.clone(),
+        command: if is_http {
+            None
+        } else {
+            Some(preset.command.clone())
+        },
         args,
-        url: None,
+        url: preset.url.clone(),
         env: merged_env,
         capabilities: Vec::new(),
         enabled: true,
         recipe_id: None,
+        auth_env_key: preset.auth_env_key.clone(),
     };
     config
         .mcp
@@ -220,6 +230,7 @@ mod tests {
             capabilities: Vec::new(),
             enabled: true,
             recipe_id: None,
+            auth_env_key: None,
         }
     }
 

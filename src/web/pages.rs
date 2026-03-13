@@ -29,6 +29,10 @@ pub fn router() -> Router<Arc<AppState>> {
             "/mcp/oauth/github/callback",
             get(mcp_github_oauth_callback_page),
         )
+        .route(
+            "/mcp/oauth/notion/callback",
+            get(mcp_notion_oauth_callback_page),
+        )
         .route("/memory", get(memory_page))
         .route("/knowledge", get(knowledge_page))
         .route("/vault", get(vault_page))
@@ -2003,6 +2007,19 @@ async fn mcp_github_oauth_callback_page(
     render_mcp_oauth_callback_page(
         "github",
         "GitHub",
+        query.code.unwrap_or_default(),
+        query.state.unwrap_or_default(),
+        query.error.unwrap_or_default(),
+        query.error_description.unwrap_or_default(),
+    )
+}
+
+async fn mcp_notion_oauth_callback_page(
+    Query(query): Query<McpGitHubOauthCallbackQuery>,
+) -> Html<String> {
+    render_mcp_oauth_callback_page(
+        "notion",
+        "Notion",
         query.code.unwrap_or_default(),
         query.state.unwrap_or_default(),
         query.error.unwrap_or_default(),

@@ -1845,6 +1845,7 @@ async fn main() -> Result<()> {
                         capabilities: Vec::new(),
                         enabled: true,
                         recipe_id: None,
+                        auth_env_key: None,
                     };
                     config.mcp.servers.insert(name.clone(), server);
                     config.save()?;

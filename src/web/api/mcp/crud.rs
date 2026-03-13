@@ -243,6 +243,7 @@ pub(super) async fn upsert_mcp_server(
         capabilities,
         enabled: req.enabled.unwrap_or(true),
         recipe_id: None,
+        auth_env_key: None,
     };
 
     config.mcp.servers.insert(req.name.clone(), server);

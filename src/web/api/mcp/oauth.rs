@@ -134,7 +134,7 @@ fn build_google_mcp_oauth_url(
         qp.append_pair("response_type", "code");
         qp.append_pair("scope", &scopes.join(" "));
         qp.append_pair("access_type", "offline");
-        qp.append_pair("prompt", "consent");
+        qp.append_pair("prompt", "consent select_account");
         qp.append_pair("include_granted_scopes", "true");
         qp.append_pair("state", state);
     }
@@ -410,13 +410,181 @@ pub(super) async fn exchange_github_mcp_oauth_code(
     }))
 }
 
+// ── Notion OAuth ────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct NotionMcpOauthStartRequest {
+    client_id: String,
+    redirect_uri: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct NotionMcpOauthStartResponse {
+    ok: bool,
+    auth_url: String,
+    redirect_uri: String,
+    state: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct NotionMcpOauthExchangeRequest {
+    code: String,
+    client_id: String,
+    client_secret: String,
+    redirect_uri: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct NotionOauthTokenResponse {
+    access_token: Option<String>,
+    token_type: Option<String>,
+    workspace_id: Option<String>,
+    workspace_name: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct NotionMcpOauthExchangeResponse {
+    ok: bool,
+    access_token: Option<String>,
+    workspace_name: Option<String>,
+    message: Option<String>,
+}
+
+fn build_notion_mcp_oauth_url(
+    client_id: &str,
+    redirect_uri: &str,
+    state: &str,
+) -> anyhow::Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse("https://api.notion.com/v1/oauth/authorize")?;
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("client_id", client_id.trim());
+        qp.append_pair("redirect_uri", redirect_uri.trim());
+        qp.append_pair("response_type", "code");
+        qp.append_pair("owner", "user");
+        qp.append_pair("state", state);
+    }
+    Ok(url)
+}
+
+pub(super) async fn start_notion_mcp_oauth(
+    Json(req): Json<NotionMcpOauthStartRequest>,
+) -> Result<Json<NotionMcpOauthStartResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if req.client_id.trim().is_empty() || req.redirect_uri.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "client_id and redirect_uri are required"
+            })),
+        ));
+    }
+
+    let state = uuid::Uuid::new_v4().to_string();
+    let auth_url =
+        build_notion_mcp_oauth_url(&req.client_id, &req.redirect_uri, &state).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    Ok(Json(NotionMcpOauthStartResponse {
+        ok: true,
+        auth_url: auth_url.to_string(),
+        redirect_uri: req.redirect_uri.trim().to_string(),
+        state,
+    }))
+}
+
+pub(super) async fn exchange_notion_mcp_oauth_code(
+    Json(req): Json<NotionMcpOauthExchangeRequest>,
+) -> Result<Json<NotionMcpOauthExchangeResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if req.client_id.trim().is_empty()
+        || req.client_secret.trim().is_empty()
+        || req.code.trim().is_empty()
+        || req.redirect_uri.trim().is_empty()
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "code, client_id, client_secret, and redirect_uri are required"
+            })),
+        ));
+    }
+
+    let client = reqwest::Client::builder()
+        .use_rustls_tls()
+        .build()
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    // Notion uses HTTP Basic Auth for token exchange: base64(client_id:client_secret)
+    let response = client
+        .post("https://api.notion.com/v1/oauth/token")
+        .basic_auth(req.client_id.trim(), Some(req.client_secret.trim()))
+        .json(&serde_json::json!({
+            "grant_type": "authorization_code",
+            "code": req.code.trim(),
+            "redirect_uri": req.redirect_uri.trim(),
+        }))
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    let status = response.status();
+    let body = response
+        .json::<NotionOauthTokenResponse>()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    if !status.is_success() || body.access_token.is_none() {
+        let detail = body
+            .error
+            .clone()
+            .unwrap_or_else(|| "Notion OAuth token exchange failed".to_string());
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": detail })),
+        ));
+    }
+
+    let workspace_label = body
+        .workspace_name
+        .clone()
+        .unwrap_or_else(|| "workspace".to_string());
+
+    Ok(Json(NotionMcpOauthExchangeResponse {
+        ok: true,
+        access_token: body.access_token,
+        workspace_name: body.workspace_name,
+        message: Some(format!(
+            "Notion OAuth succeeded — connected to \"{workspace_label}\"."
+        )),
+    }))
+}
+
 // ── Tests ────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod google_oauth_tests {
     use super::{
-        build_github_mcp_oauth_url, build_google_mcp_oauth_url, github_mcp_scopes,
-        google_mcp_scopes,
+        build_github_mcp_oauth_url, build_google_mcp_oauth_url, build_notion_mcp_oauth_url,
+        github_mcp_scopes, google_mcp_scopes,
     };
 
     #[test]
@@ -448,6 +616,7 @@ mod google_oauth_tests {
         );
         assert!(rendered.contains("access_type=offline"));
         assert!(rendered.contains("prompt=consent"));
+        assert!(rendered.contains("select_account"));
         assert!(rendered.contains("state=state-xyz"));
     }
 
@@ -474,5 +643,20 @@ mod google_oauth_tests {
         assert!(rendered.contains("client_id=gh-client"));
         assert!(rendered.contains("state=state-123"));
         assert!(rendered.contains("scope=repo+read%3Aorg+read%3Auser"));
+    }
+
+    #[test]
+    fn build_notion_oauth_url_contains_owner_and_state() {
+        let url = build_notion_mcp_oauth_url(
+            "notion-client",
+            "http://localhost:8080/mcp/oauth/notion/callback",
+            "state-abc",
+        )
+        .expect("notion oauth url");
+        let rendered = url.as_str().to_string();
+        assert!(rendered.contains("client_id=notion-client"));
+        assert!(rendered.contains("owner=user"));
+        assert!(rendered.contains("response_type=code"));
+        assert!(rendered.contains("state=state-abc"));
     }
 }

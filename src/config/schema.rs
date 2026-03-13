@@ -1175,6 +1175,9 @@ pub struct McpServerConfig {
     /// `None` for servers configured manually or via MCP presets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recipe_id: Option<String>,
+    /// For HTTP transport: env key whose resolved value is used as Bearer token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_env_key: Option<String>,
 }
 
 impl Default for McpServerConfig {
@@ -1188,6 +1191,7 @@ impl Default for McpServerConfig {
             capabilities: Vec::new(),
             enabled: true,
             recipe_id: None,
+            auth_env_key: None,
         }
     }
 }
