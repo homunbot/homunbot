@@ -104,14 +104,12 @@ async fn connect(
         .unwrap_or_else(|| recipe.id.clone());
 
     let mut config = state.config.read().await.clone();
-    let sandbox = config.security.execution_sandbox.clone();
 
     let result = crate::connections::connect::connect_recipe(
         &mut config,
         &recipe,
         &instance_name,
         &req.fields,
-        Some(sandbox),
         req.skip_test,
     )
     .await

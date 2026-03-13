@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Config, ExecutionSandboxConfig};
+use crate::config::Config;
 use crate::mcp_setup::{self, McpConnectionTestResult};
 
 use super::recipes::recipe_to_preset;
@@ -39,7 +39,6 @@ pub async fn connect_recipe(
     recipe: &ConnectionRecipe,
     instance_name: &str,
     field_values: &HashMap<String, String>,
-    sandbox: Option<ExecutionSandboxConfig>,
     skip_test: bool,
 ) -> Result<ConnectResult> {
     // 1. Map field IDs → env keys
@@ -94,15 +93,11 @@ pub async fn connect_recipe(
             .cloned()
             .expect("server should exist after setup");
 
-        // HTTP transport connects to a remote server — no local process to sandbox.
-        let effective_sandbox = if server.transport == "http" {
-            None
-        } else {
-            sandbox
-        };
-
+        // Connection tests only do initialize + list_tools — no user data is processed,
+        // so sandbox isolation is unnecessary and would block systems without Docker/bubblewrap.
+        // Sandbox enforcement applies at runtime during actual tool calls.
         let test =
-            mcp_setup::test_mcp_server_connection(instance_name, &server, effective_sandbox).await;
+            mcp_setup::test_mcp_server_connection(instance_name, &server, None).await;
         (Some(test.connected), test.tool_count, test.error)
     };
 
