@@ -9,14 +9,14 @@ use std::sync::Arc;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Json;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 use serde::Deserialize;
 
 use crate::connections::recipes::{
-    find_recipe, load_all_recipes, recipe_connection_status, recipe_to_preset,
+    find_recipe, load_all_recipes, recipe_connection_status, recipe_instances,
 };
-use crate::connections::{ConnectionCatalogItem, ConnectionStatus};
+use crate::connections::ConnectionCatalogItem;
 
 use super::super::server::AppState;
 
@@ -27,6 +27,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route("/v1/connections/recipes/{id}/connect", post(connect))
         .route("/v1/connections/{name}/test", post(test_connection))
         .route("/v1/connections/{name}/capabilities", get(capabilities))
+        .route("/v1/connections/{name}", delete(disconnect))
         .route("/v1/connections", get(list_connected))
 }
 
@@ -41,9 +42,11 @@ async fn catalog(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> 
         .into_iter()
         .map(|recipe| {
             let status = recipe_connection_status(&recipe, &config);
+            let instances = recipe_instances(&recipe, &config);
             ConnectionCatalogItem {
                 recipe,
                 connection_status: status,
+                instances,
             }
         })
         .collect();
@@ -82,6 +85,9 @@ struct ConnectRequest {
     /// Skip the connection test after setup (default: false).
     #[serde(default)]
     skip_test: bool,
+    /// Instance name for multi-account support. Defaults to recipe id.
+    #[serde(default)]
+    instance_name: Option<String>,
 }
 
 /// Connect a service: store credentials, configure MCP server, optionally test.
@@ -92,19 +98,25 @@ async fn connect(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let recipe = find_recipe(&id).ok_or(StatusCode::NOT_FOUND)?;
 
+    let instance_name = req
+        .instance_name
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| recipe.id.clone());
+
     let mut config = state.config.read().await.clone();
     let sandbox = config.security.execution_sandbox.clone();
 
     let result = crate::connections::connect::connect_recipe(
         &mut config,
         &recipe,
+        &instance_name,
         &req.fields,
         Some(sandbox),
         req.skip_test,
     )
     .await
     .map_err(|e| {
-        tracing::error!(recipe_id = %id, error = %e, "Connection setup failed");
+        tracing::error!(recipe_id = %id, instance = %instance_name, error = %e, "Connection setup failed");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -213,6 +225,26 @@ struct ToolInfo {
     description: String,
 }
 
+// ── DELETE /v1/connections/:name ──────────────────────────────────────
+
+/// Disconnect a single server instance by name.
+async fn disconnect(
+    Path(name): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mut config = state.config.read().await.clone();
+    if config.mcp.servers.remove(&name).is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    state
+        .save_config(config)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    tracing::info!(name = %name, "Connection instance disconnected");
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
 // ── GET /v1/connections ──────────────────────────────────────────────
 
 /// List all services that are connected (recipe ↔ config.mcp.servers cross-reference).
@@ -222,18 +254,21 @@ async fn list_connected(State(state): State<Arc<AppState>>) -> Json<serde_json::
 
     let connected: Vec<serde_json::Value> = recipes
         .into_iter()
-        .filter_map(|recipe| {
-            let server = config.mcp.servers.get(&recipe.id)?;
-            if !server.enabled {
-                return None;
-            }
-            Some(serde_json::json!({
-                "id": recipe.id,
-                "display_name": recipe.display_name,
-                "icon": recipe.icon,
-                "category": recipe.category,
-                "capability_intro": recipe.capability_intro,
-            }))
+        .flat_map(|recipe| {
+            let instances = recipe_instances(&recipe, &config);
+            instances
+                .into_iter()
+                .filter(|i| i.enabled)
+                .map(move |inst| {
+                    serde_json::json!({
+                        "id": recipe.id,
+                        "instance_name": inst.name,
+                        "display_name": recipe.display_name,
+                        "icon": recipe.icon,
+                        "category": recipe.category,
+                        "capability_intro": recipe.capability_intro,
+                    })
+                })
         })
         .collect();
 

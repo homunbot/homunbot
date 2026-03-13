@@ -126,6 +126,7 @@ pub fn apply_mcp_preset_setup(
         env: merged_env,
         capabilities: Vec::new(),
         enabled: true,
+        recipe_id: None,
     };
     config
         .mcp
@@ -218,6 +219,7 @@ mod tests {
             env: HashMap::new(),
             capabilities: Vec::new(),
             enabled: true,
+            recipe_id: None,
         }
     }
 

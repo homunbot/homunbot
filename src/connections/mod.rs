@@ -91,12 +91,24 @@ pub enum ConnectionStatus {
     Error { message: String },
 }
 
+/// Info about a single connected instance of a recipe (e.g. "gmail-work").
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionInstance {
+    /// Server name in config (e.g. "gmail", "gmail-work").
+    pub name: String,
+    pub tool_count: usize,
+    pub enabled: bool,
+}
+
 /// A recipe bundled with its live connection status (for API responses).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionCatalogItem {
     #[serde(flatten)]
     pub recipe: ConnectionRecipe,
     pub connection_status: ConnectionStatus,
+    /// All server instances derived from this recipe.
+    #[serde(default)]
+    pub instances: Vec<ConnectionInstance>,
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

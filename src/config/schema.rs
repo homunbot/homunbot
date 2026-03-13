@@ -1171,6 +1171,10 @@ pub struct McpServerConfig {
     /// Whether this server is enabled
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Connection Recipe that created this server (for multi-instance support).
+    /// `None` for servers configured manually or via MCP presets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipe_id: Option<String>,
 }
 
 impl Default for McpServerConfig {
@@ -1183,6 +1187,7 @@ impl Default for McpServerConfig {
             env: HashMap::new(),
             capabilities: Vec::new(),
             enabled: true,
+            recipe_id: None,
         }
     }
 }

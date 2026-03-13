@@ -1844,6 +1844,7 @@ async fn main() -> Result<()> {
                         env: std::collections::HashMap::new(),
                         capabilities: Vec::new(),
                         enabled: true,
+                        recipe_id: None,
                     };
                     config.mcp.servers.insert(name.clone(), server);
                     config.save()?;

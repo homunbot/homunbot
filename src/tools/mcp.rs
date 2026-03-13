@@ -661,6 +661,7 @@ mod tests {
                 env: HashMap::new(),
                 capabilities: Vec::new(),
                 enabled: false,
+                recipe_id: None,
             },
         );
         let (manager, tools) = McpManager::start(&servers).await;

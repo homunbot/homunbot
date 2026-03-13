@@ -603,6 +603,7 @@ mod tests {
                 env: HashMap::new(),
                 capabilities: vec!["image-analysis".to_string()],
                 enabled: true,
+                recipe_id: None,
             },
         );
         config.mcp.servers.insert(
@@ -615,6 +616,7 @@ mod tests {
                 env: HashMap::new(),
                 capabilities: vec!["image-analysis".to_string()],
                 enabled: true,
+                recipe_id: None,
             },
         );
 

@@ -73,6 +73,22 @@
         }
     }
 
+    // ── Multi-instance helpers ────────────────────────────────────
+
+    /** Get active (enabled) instances from a catalog item. */
+    function activeInstances(item) {
+        return (item.instances || []).filter(function(i) { return i.enabled; });
+    }
+
+    /** Auto-generate next instance name (e.g. "gmail-2"). */
+    function nextInstanceName(recipeId, instances) {
+        for (var n = 2; n <= 99; n++) {
+            var candidate = recipeId + '-' + n;
+            if (!instances.some(function(i) { return i.name === candidate; })) return candidate;
+        }
+        return recipeId + '-' + Date.now();
+    }
+
     // ── State ────────────────────────────────────────────────────────
 
     var state = {
@@ -150,15 +166,20 @@
         var html = '';
         for (var i = 0; i < items.length; i++) {
             var item = items[i];
-            var isConnected = item.connection_status && item.connection_status.status === 'connected';
-            var statusBadge = isConnected
-                ? '<span class="conn-status-badge conn-status-connected">Connected</span>'
-                : '<span class="conn-status-badge conn-status-not-connected">Not connected</span>';
+            var active = activeInstances(item);
+            var statusBadge;
+            if (active.length === 0) {
+                statusBadge = '<span class="conn-status-badge conn-status-not-connected">Not connected</span>';
+            } else if (active.length === 1) {
+                statusBadge = '<span class="conn-status-badge conn-status-connected">Connected</span>';
+            } else {
+                statusBadge = '<span class="conn-status-badge conn-status-connected">' + active.length + ' connected</span>';
+            }
             var authLabel = item.auth_mode === 'oauth' ? 'OAuth' : 'API Key';
             var authBadge = '<span class="badge badge-neutral">' + escapeHtml(authLabel) + '</span>';
-            var toolCount = isConnected && item.connection_status.tool_count ? ' \u00b7 ' + item.connection_status.tool_count + ' tools' : '';
+            var toolCount = active.length > 0 && item.connection_status && item.connection_status.tool_count ? ' \u00b7 ' + item.connection_status.tool_count + ' tools' : '';
 
-            html += '<div class="conn-card' + (isConnected ? ' conn-card--connected' : '') + '" data-recipe-id="' + escapeHtml(item.id) + '">' +
+            html += '<div class="conn-card' + (active.length > 0 ? ' conn-card--connected' : '') + '" data-recipe-id="' + escapeHtml(item.id) + '">' +
                 '<div class="conn-card-header">' +
                     '<div class="conn-card-icon">' + getIcon(item.icon) + '</div>' +
                     '<div class="conn-card-title">' +
@@ -171,8 +192,8 @@
                 '</div>' +
                 '<div class="conn-card-footer">' +
                     '<div class="conn-card-badges">' + statusBadge + authBadge + toolCount + '</div>' +
-                    '<button class="btn btn-sm ' + (isConnected ? 'btn-secondary' : 'btn-primary') + ' conn-action-btn" data-recipe-id="' + escapeHtml(item.id) + '">' +
-                        (isConnected ? 'Manage' : 'Connect') +
+                    '<button class="btn btn-sm ' + (active.length > 0 ? 'btn-secondary' : 'btn-primary') + ' conn-action-btn" data-recipe-id="' + escapeHtml(item.id) + '">' +
+                        (active.length > 0 ? 'Manage' : 'Connect') +
                     '</button>' +
                 '</div>' +
             '</div>';
@@ -181,18 +202,133 @@
         elGrid.insertAdjacentHTML('beforeend', html);
     }
 
-    // ── Connect dialog ──────────────────────────────────────────────
+    // ── Dialog router ────────────────────────────────────────────────
 
     function openConnectDialog(recipeId) {
-        cleanupOauthListener(); // clean up any previous OAuth listener
+        cleanupOauthListener();
         var recipe = state.recipes.find(function(r) { return r.id === recipeId; });
         if (!recipe) return;
 
-        var isConnected = recipe.connection_status && recipe.connection_status.status === 'connected';
+        var active = activeInstances(recipe);
+        if (active.length > 0) {
+            openManageDialog(recipe, recipe.instances || []);
+        } else {
+            openConnectForm(recipe, recipe.id, false);
+        }
+    }
 
-        // Build fields HTML (all values escaped)
+    // ── Manage dialog (instances list) ───────────────────────────────
+
+    function openManageDialog(recipe, instances) {
+        var modalOverlay = document.getElementById('mcp-modal-overlay');
+        var modalTitle = document.getElementById('mcp-modal-title');
+        var modalSubtitle = document.getElementById('mcp-modal-subtitle');
+        var modalMeta = document.getElementById('mcp-modal-meta');
+        var modalContent = document.getElementById('mcp-modal-content');
+        var modalFooter = document.getElementById('mcp-modal-footer');
+        if (!modalOverlay || !modalContent) return;
+
+        modalTitle.textContent = 'Manage ' + recipe.display_name;
+        modalSubtitle.textContent = recipe.subtitle;
+        if (modalMeta) {
+            modalMeta.textContent = '';
+            modalMeta.insertAdjacentHTML('beforeend',
+                '<span class="badge badge-neutral">' + escapeHtml(recipe.category) + '</span> ' +
+                '<span class="badge badge-neutral">' + escapeHtml(recipe.auth_mode === 'oauth' ? 'OAuth' : 'API Key') + '</span>'
+            );
+        }
+
+        // Build instances list
+        var html = '<div class="conn-instances-list">';
+        for (var i = 0; i < instances.length; i++) {
+            var inst = instances[i];
+            html += '<div class="conn-instance-row" data-name="' + escapeHtml(inst.name) + '">' +
+                '<span class="conn-instance-name">' + escapeHtml(inst.name) + '</span>' +
+                '<span class="conn-instance-tools">' + inst.tool_count + ' tools</span>' +
+                '<button class="btn btn-sm btn-secondary conn-instance-test" data-name="' + escapeHtml(inst.name) + '">Test</button>' +
+                '<button class="btn btn-sm btn-danger conn-instance-disconnect" data-name="' + escapeHtml(inst.name) + '">Disconnect</button>' +
+            '</div>';
+        }
+        html += '</div>';
+
+        modalContent.textContent = '';
+        modalContent.insertAdjacentHTML('beforeend', html);
+
+        modalFooter.textContent = '';
+        modalFooter.insertAdjacentHTML('beforeend',
+            '<button class="btn btn-primary" id="conn-add-account-btn">Add Account</button>'
+        );
+
+        modalOverlay.classList.add('active');
+
+        // Bind instance test buttons
+        modalContent.querySelectorAll('.conn-instance-test').forEach(function(btn) {
+            btn.addEventListener('click', async function() {
+                btn.disabled = true;
+                btn.textContent = '...';
+                var res = await api('/api/v1/connections/' + encodeURIComponent(btn.dataset.name) + '/test', { method: 'POST' });
+                btn.disabled = false;
+                btn.textContent = 'Test';
+                if (res.ok && res.body && res.body.connected) {
+                    showToast(btn.dataset.name + ': OK \u2014 ' + res.body.tool_count + ' tools', 'success');
+                } else {
+                    showToast(btn.dataset.name + ': ' + ((res.body && res.body.error) || 'Test failed'), 'error');
+                }
+            });
+        });
+
+        // Bind disconnect buttons
+        modalContent.querySelectorAll('.conn-instance-disconnect').forEach(function(btn) {
+            btn.addEventListener('click', async function() {
+                btn.disabled = true;
+                btn.textContent = '...';
+                var res = await api('/api/v1/connections/' + encodeURIComponent(btn.dataset.name), { method: 'DELETE' });
+                if (res.ok) {
+                    showToast('Disconnected ' + btn.dataset.name, 'success');
+                    // Reload and re-open manage dialog
+                    await loadCatalog();
+                    var updated = state.recipes.find(function(r) { return r.id === recipe.id; });
+                    if (updated && activeInstances(updated).length > 0) {
+                        openManageDialog(updated, updated.instances || []);
+                    } else {
+                        modalOverlay.classList.remove('active');
+                    }
+                } else {
+                    btn.disabled = false;
+                    btn.textContent = 'Disconnect';
+                    showToast('Failed to disconnect', 'error');
+                }
+            });
+        });
+
+        // Bind "Add Account"
+        var addBtn = document.getElementById('conn-add-account-btn');
+        if (addBtn) {
+            addBtn.addEventListener('click', function() {
+                var name = nextInstanceName(recipe.id, instances);
+                openConnectForm(recipe, name, true);
+            });
+        }
+    }
+
+    // ── Connect form ─────────────────────────────────────────────────
+
+    function openConnectForm(recipe, instanceName, showNameField) {
+        cleanupOauthListener();
         var oauthConfig = oauthConfigForRecipe(recipe);
+
+        // Build fields HTML
         var fieldsHtml = '';
+
+        // Instance name field (only for multi-account)
+        if (showNameField) {
+            fieldsHtml += '<div class="form-group">' +
+                '<label for="conn-instance-name">Account Name *</label>' +
+                '<input id="conn-instance-name" class="input" type="text" value="' + escapeHtml(instanceName) + '" placeholder="e.g. ' + escapeHtml(recipe.id) + '-work">' +
+                '<div class="form-hint">Unique name for this account</div>' +
+            '</div>';
+        }
+
         for (var i = 0; i < recipe.fields.length; i++) {
             var f = recipe.fields[i];
 
@@ -228,7 +364,8 @@
 
         if (!modalOverlay || !modalContent) return;
 
-        modalTitle.textContent = (isConnected ? 'Manage ' : 'Connect ') + recipe.display_name;
+        modalTitle.textContent = 'Connect ' + recipe.display_name;
+        if (showNameField) modalTitle.textContent += ' (' + instanceName + ')';
         modalSubtitle.textContent = recipe.subtitle;
 
         if (modalMeta) {
@@ -239,24 +376,14 @@
             );
         }
 
-        var actionsHtml = '';
-        if (isConnected) {
-            actionsHtml = '<div class="conn-connected-actions">' +
-                '<button class="btn btn-secondary btn-sm" id="conn-test-btn" data-name="' + escapeHtml(recipe.id) + '">Test Connection</button>' +
-                '<button class="btn btn-secondary btn-sm" id="conn-capabilities-btn" data-name="' + escapeHtml(recipe.id) + '">View Tools</button>' +
-                '</div>' +
-                '<hr style="border-color: var(--border); margin: 16px 0;">' +
-                '<p class="form-hint" style="margin-bottom: 12px;">Update credentials to reconnect:</p>';
-        }
-
         modalContent.textContent = '';
         modalContent.insertAdjacentHTML('beforeend',
-            actionsHtml + '<form id="conn-form" class="form">' + fieldsHtml + '</form>'
+            '<form id="conn-form" class="form">' + fieldsHtml + '</form>'
         );
 
         modalFooter.textContent = '';
         modalFooter.insertAdjacentHTML('beforeend',
-            '<button class="btn btn-primary" id="conn-submit-btn">' + (isConnected ? 'Reconnect' : 'Connect') + '</button>'
+            '<button class="btn btn-primary" id="conn-submit-btn">Connect</button>'
         );
 
         modalOverlay.classList.add('active');
@@ -265,6 +392,17 @@
         var submitBtn = document.getElementById('conn-submit-btn');
         if (submitBtn) {
             submitBtn.addEventListener('click', async function() {
+                // Resolve instance name
+                var resolvedName = instanceName;
+                if (showNameField) {
+                    var nameInput = document.getElementById('conn-instance-name');
+                    resolvedName = nameInput ? nameInput.value.trim() : instanceName;
+                    if (!resolvedName) {
+                        showToast('Enter an account name', 'error');
+                        return;
+                    }
+                }
+
                 var fields = {};
                 var form = document.getElementById('conn-form');
                 if (form) {
@@ -275,7 +413,7 @@
 
                 // Validate required
                 var missing = recipe.fields.filter(function(f) { return f.required && !fields[f.id]; });
-                if (missing.length > 0 && !isConnected) {
+                if (missing.length > 0) {
                     showToast('Missing required: ' + missing.map(function(f) { return f.label; }).join(', '), 'error');
                     return;
                 }
@@ -286,11 +424,11 @@
                 var res = await api('/api/v1/connections/recipes/' + encodeURIComponent(recipe.id) + '/connect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ fields: fields, skip_test: false }),
+                    body: JSON.stringify({ fields: fields, skip_test: false, instance_name: resolvedName }),
                 });
 
                 submitBtn.disabled = false;
-                submitBtn.textContent = isConnected ? 'Reconnect' : 'Connect';
+                submitBtn.textContent = 'Connect';
 
                 if (res.ok && res.body && res.body.ok) {
                     showSuccessScreen(recipe, res.body);
@@ -301,150 +439,102 @@
             });
         }
 
-        // Bind test
-        var testBtn = document.getElementById('conn-test-btn');
-        if (testBtn) {
-            testBtn.addEventListener('click', async function() {
-                testBtn.disabled = true;
-                testBtn.textContent = 'Testing...';
-                var res = await api('/api/v1/connections/' + encodeURIComponent(testBtn.dataset.name) + '/test', {
-                    method: 'POST',
-                });
-                testBtn.disabled = false;
-                testBtn.textContent = 'Test Connection';
-                if (res.ok && res.body && res.body.connected) {
-                    showToast('Connection OK \u2014 ' + res.body.tool_count + ' tools', 'success');
-                } else {
-                    showToast((res.body && res.body.error) || 'Test failed', 'error');
-                }
-            });
-        }
-
-        // Bind capabilities
-        var capBtn = document.getElementById('conn-capabilities-btn');
-        if (capBtn) {
-            capBtn.addEventListener('click', async function() {
-                capBtn.disabled = true;
-                capBtn.textContent = 'Loading tools...';
-                var res = await api('/api/v1/connections/' + encodeURIComponent(capBtn.dataset.name) + '/capabilities');
-                capBtn.disabled = false;
-                capBtn.textContent = 'View Tools';
-                if (res.ok && res.body && Array.isArray(res.body.tools)) {
-                    var toolsHtml = '';
-                    if (res.body.tools.length === 0) {
-                        toolsHtml = '<p class="form-hint">No tools discovered.</p>';
-                    } else {
-                        toolsHtml = '<ul class="conn-tools-list">';
-                        for (var j = 0; j < res.body.tools.length; j++) {
-                            var t = res.body.tools[j];
-                            toolsHtml += '<li><strong>' + escapeHtml(t.name) + '</strong> \u2014 ' + escapeHtml(t.description) + '</li>';
-                        }
-                        toolsHtml += '</ul>';
-                    }
-                    var toolsEl = document.getElementById('conn-tools-display');
-                    if (!toolsEl) {
-                        toolsEl = document.createElement('div');
-                        toolsEl.id = 'conn-tools-display';
-                        capBtn.parentElement.parentElement.insertBefore(toolsEl, capBtn.parentElement.nextSibling);
-                    }
-                    toolsEl.textContent = '';
-                    toolsEl.insertAdjacentHTML('beforeend', '<h3 style="font-size:14px; margin:12px 0 8px;">Available Tools</h3>' + toolsHtml);
-                } else {
-                    showToast('Failed to load tools', 'error');
-                }
-            });
-        }
-
         // ── OAuth flow (Gmail, Google Calendar) ──────────────────────
+        bindOauthFlow(oauthConfig);
+    }
+
+    // ── OAuth flow binding ───────────────────────────────────────────
+
+    function bindOauthFlow(oauthConfig) {
         var oauthBtn = document.getElementById('conn-oauth-btn');
-        if (oauthBtn && oauthConfig) {
-            var oauthStatusEl = document.getElementById('conn-oauth-status');
+        if (!oauthBtn || !oauthConfig) return;
 
-            function setOauthStatus(msg) {
-                if (oauthStatusEl) oauthStatusEl.textContent = msg;
-            }
+        var oauthStatusEl = document.getElementById('conn-oauth-status');
 
-            // Exchange auth code for refresh_token (auto, no manual step)
-            async function exchangeOauthCode(code) {
-                setOauthStatus('Authorization received, obtaining token...');
-                var clientId = (document.getElementById('conn-field-client_id') || {}).value || '';
-                var clientSecret = (document.getElementById('conn-field-client_secret') || {}).value || '';
-                var redirectUri = window.location.origin + '/mcp/oauth/' + oauthConfig.provider + '/callback';
-
-                var res = await api('/api/v1/mcp/oauth/' + oauthConfig.provider + '/exchange', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        service: oauthConfig.service,
-                        code: code,
-                        client_id: clientId,
-                        client_secret: clientSecret,
-                        redirect_uri: redirectUri,
-                    }),
-                });
-
-                if (res.ok && res.body && res.body.refresh_token) {
-                    var hidden = document.getElementById('conn-field-refresh_token');
-                    if (hidden) hidden.value = res.body.refresh_token;
-                    setOauthStatus('\u2713 Authorization complete');
-                    oauthBtn.disabled = true;
-                    oauthBtn.textContent = '\u2713 Authorized';
-                } else {
-                    var errMsg = (res.body && (res.body.message || res.body.error_description)) || 'Token exchange failed';
-                    setOauthStatus('Error: ' + errMsg);
-                    showToast(errMsg, 'error');
-                }
-            }
-
-            // Listen for callback postMessage from popup
-            _oauthMessageHandler = function(event) {
-                if (event.origin !== window.location.origin) return;
-                var data = event.data || {};
-                if (data.type !== 'homun-mcp-oauth-code') return;
-                if (data.provider !== oauthConfig.provider) return;
-                if (data.error) {
-                    setOauthStatus('Error: ' + (data.error_description || data.error));
-                    showToast(data.error_description || data.error, 'error');
-                    return;
-                }
-                exchangeOauthCode(data.code);
-            };
-            window.addEventListener('message', _oauthMessageHandler);
-
-            // Start OAuth flow on button click
-            oauthBtn.addEventListener('click', async function() {
-                var clientId = (document.getElementById('conn-field-client_id') || {}).value || '';
-                if (!clientId.trim()) {
-                    showToast('Enter your Client ID first', 'error');
-                    return;
-                }
-                var redirectUri = window.location.origin + '/mcp/oauth/' + oauthConfig.provider + '/callback';
-
-                oauthBtn.disabled = true;
-                setOauthStatus('Opening Google authorization...');
-
-                var res = await api('/api/v1/mcp/oauth/' + oauthConfig.provider + '/start', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        service: oauthConfig.service,
-                        client_id: clientId.trim(),
-                        redirect_uri: redirectUri,
-                    }),
-                });
-
-                if (res.ok && res.body && res.body.auth_url) {
-                    window.open(res.body.auth_url, '_blank', 'popup,width=720,height=840');
-                    setOauthStatus('Waiting for authorization in popup...');
-                    oauthBtn.disabled = false;
-                } else {
-                    var errMsg = (res.body && res.body.message) || 'Failed to start OAuth';
-                    setOauthStatus('Error: ' + errMsg);
-                    showToast(errMsg, 'error');
-                    oauthBtn.disabled = false;
-                }
-            });
+        function setOauthStatus(msg) {
+            if (oauthStatusEl) oauthStatusEl.textContent = msg;
         }
+
+        // Exchange auth code for refresh_token (auto, no manual step)
+        async function exchangeOauthCode(code) {
+            setOauthStatus('Authorization received, obtaining token...');
+            var clientId = (document.getElementById('conn-field-client_id') || {}).value || '';
+            var clientSecret = (document.getElementById('conn-field-client_secret') || {}).value || '';
+            var redirectUri = window.location.origin + '/mcp/oauth/' + oauthConfig.provider + '/callback';
+
+            var res = await api('/api/v1/mcp/oauth/' + oauthConfig.provider + '/exchange', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    service: oauthConfig.service,
+                    code: code,
+                    client_id: clientId,
+                    client_secret: clientSecret,
+                    redirect_uri: redirectUri,
+                }),
+            });
+
+            if (res.ok && res.body && res.body.refresh_token) {
+                var hidden = document.getElementById('conn-field-refresh_token');
+                if (hidden) hidden.value = res.body.refresh_token;
+                setOauthStatus('\u2713 Authorization complete');
+                oauthBtn.disabled = true;
+                oauthBtn.textContent = '\u2713 Authorized';
+            } else {
+                var errMsg = (res.body && (res.body.message || res.body.error_description)) || 'Token exchange failed';
+                setOauthStatus('Error: ' + errMsg);
+                showToast(errMsg, 'error');
+            }
+        }
+
+        // Listen for callback postMessage from popup
+        _oauthMessageHandler = function(event) {
+            if (event.origin !== window.location.origin) return;
+            var data = event.data || {};
+            if (data.type !== 'homun-mcp-oauth-code') return;
+            if (data.provider !== oauthConfig.provider) return;
+            if (data.error) {
+                setOauthStatus('Error: ' + (data.error_description || data.error));
+                showToast(data.error_description || data.error, 'error');
+                return;
+            }
+            exchangeOauthCode(data.code);
+        };
+        window.addEventListener('message', _oauthMessageHandler);
+
+        // Start OAuth flow on button click
+        oauthBtn.addEventListener('click', async function() {
+            var clientId = (document.getElementById('conn-field-client_id') || {}).value || '';
+            if (!clientId.trim()) {
+                showToast('Enter your Client ID first', 'error');
+                return;
+            }
+            var redirectUri = window.location.origin + '/mcp/oauth/' + oauthConfig.provider + '/callback';
+
+            oauthBtn.disabled = true;
+            setOauthStatus('Opening Google authorization...');
+
+            var res = await api('/api/v1/mcp/oauth/' + oauthConfig.provider + '/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    service: oauthConfig.service,
+                    client_id: clientId.trim(),
+                    redirect_uri: redirectUri,
+                }),
+            });
+
+            if (res.ok && res.body && res.body.auth_url) {
+                window.open(res.body.auth_url, '_blank', 'popup,width=720,height=840');
+                setOauthStatus('Waiting for authorization in popup...');
+                oauthBtn.disabled = false;
+            } else {
+                var errMsg = (res.body && res.body.message) || 'Failed to start OAuth';
+                setOauthStatus('Error: ' + errMsg);
+                showToast(errMsg, 'error');
+                oauthBtn.disabled = false;
+            }
+        });
     }
 
     // ── Success screen ──────────────────────────────────────────────

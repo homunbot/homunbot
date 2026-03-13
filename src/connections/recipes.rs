@@ -85,29 +85,49 @@ pub fn find_recipe(id: &str) -> Option<ConnectionRecipe> {
     load_all_recipes().into_iter().find(|r| r.id == id)
 }
 
-/// Check whether a recipe's service is already connected.
+/// Find all MCP server instances derived from a recipe.
 ///
-/// A recipe is "connected" if `config.mcp.servers` contains a server
-/// with the same key as the recipe `id`.
+/// Matches by `McpServerConfig::recipe_id` (explicit) or by server name
+/// equalling `recipe.id` (legacy configs without `recipe_id`).
+pub fn recipe_instances(
+    recipe: &ConnectionRecipe,
+    config: &Config,
+) -> Vec<super::ConnectionInstance> {
+    config
+        .mcp
+        .servers
+        .iter()
+        .filter(|(name, server)| {
+            server.recipe_id.as_deref() == Some(recipe.id.as_str())
+                || (server.recipe_id.is_none() && **name == recipe.id)
+        })
+        .map(|(name, server)| super::ConnectionInstance {
+            name: name.clone(),
+            tool_count: server.capabilities.len(),
+            enabled: server.enabled,
+        })
+        .collect()
+}
+
+/// Aggregate connection status across all instances of a recipe.
 pub fn recipe_connection_status(recipe: &ConnectionRecipe, config: &Config) -> ConnectionStatus {
-    match config.mcp.servers.get(&recipe.id) {
-        Some(server) if server.enabled => {
-            // We can't know tool_count without starting the server,
-            // so report 0 here; the API can enrich it on demand.
-            ConnectionStatus::Connected {
-                tool_count: server.capabilities.len(),
-            }
+    let instances = recipe_instances(recipe, config);
+    let active: Vec<_> = instances.iter().filter(|i| i.enabled).collect();
+    if active.is_empty() {
+        ConnectionStatus::NotConnected
+    } else {
+        ConnectionStatus::Connected {
+            tool_count: active.iter().map(|i| i.tool_count).sum(),
         }
-        Some(_) => ConnectionStatus::Error {
-            message: "Server is disabled".to_string(),
-        },
-        None => ConnectionStatus::NotConnected,
     }
 }
 
 /// Convert a recipe into an `McpServerPreset` for use with
 /// [`crate::mcp_setup::apply_mcp_preset_setup`].
-pub fn recipe_to_preset(recipe: &ConnectionRecipe) -> McpServerPreset {
+///
+/// `instance_name` determines the vault key namespace — each instance gets
+/// isolated secrets (e.g. `mcp.gmail-work.client_id`).
+pub fn recipe_to_preset(recipe: &ConnectionRecipe, instance_name: &str) -> McpServerPreset {
     let env = recipe
         .fields
         .iter()
@@ -117,7 +137,7 @@ pub fn recipe_to_preset(recipe: &ConnectionRecipe) -> McpServerPreset {
             description: f.help.clone(),
             required: f.required,
             secret: f.secret,
-            vault_key: format!("mcp.{}.{}", recipe.id, f.id),
+            vault_key: format!("mcp.{}.{}", instance_name, f.id),
         })
         .collect();
 
@@ -176,13 +196,24 @@ mod tests {
     #[test]
     fn recipe_to_preset_conversion() {
         let recipe = find_recipe("github").expect("github recipe should exist");
-        let preset = recipe_to_preset(&recipe);
+        let preset = recipe_to_preset(&recipe, "github");
         assert_eq!(preset.id, "github");
         assert_eq!(preset.command, "npx");
         assert!(!preset.env.is_empty());
         assert_eq!(preset.env[0].key, "GITHUB_PERSONAL_ACCESS_TOKEN");
         assert!(preset.env[0].secret);
         assert_eq!(preset.env[0].vault_key, "mcp.github.personal_access_token");
+    }
+
+    #[test]
+    fn recipe_to_preset_custom_instance_name() {
+        let recipe = find_recipe("github").expect("github recipe should exist");
+        let preset = recipe_to_preset(&recipe, "github-work");
+        // Vault keys use instance name, not recipe id
+        assert_eq!(
+            preset.env[0].vault_key,
+            "mcp.github-work.personal_access_token"
+        );
     }
 
     #[test]
@@ -197,5 +228,37 @@ mod tests {
         let config = Config::default();
         let status = recipe_connection_status(&recipe, &config);
         assert!(matches!(status, ConnectionStatus::NotConnected));
+    }
+
+    #[test]
+    fn recipe_instances_finds_by_recipe_id() {
+        let recipe = find_recipe("gmail").unwrap();
+        let mut config = Config::default();
+
+        // Add two instances with explicit recipe_id
+        let mut s1 = crate::config::McpServerConfig::default();
+        s1.recipe_id = Some("gmail".to_string());
+        config.mcp.servers.insert("gmail".to_string(), s1);
+
+        let mut s2 = crate::config::McpServerConfig::default();
+        s2.recipe_id = Some("gmail".to_string());
+        config.mcp.servers.insert("gmail-work".to_string(), s2);
+
+        let instances = recipe_instances(&recipe, &config);
+        assert_eq!(instances.len(), 2);
+    }
+
+    #[test]
+    fn recipe_instances_legacy_name_match() {
+        let recipe = find_recipe("github").unwrap();
+        let mut config = Config::default();
+
+        // Legacy config: no recipe_id, server name = recipe id
+        let s = crate::config::McpServerConfig::default();
+        config.mcp.servers.insert("github".to_string(), s);
+
+        let instances = recipe_instances(&recipe, &config);
+        assert_eq!(instances.len(), 1);
+        assert_eq!(instances[0].name, "github");
     }
 }

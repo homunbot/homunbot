@@ -30,14 +30,14 @@ pub struct ConnectResult {
 
 /// Connect a service using a recipe and user-provided field values.
 ///
-/// This orchestrates:
-/// 1. Building env overrides from field values (field.env_key → value)
-/// 2. Converting the recipe to an `McpServerPreset`
-/// 3. Calling `apply_mcp_preset_setup` to store secrets and configure the server
-/// 4. Optionally testing the connection
+/// `instance_name` is the MCP server key in config (e.g. "gmail", "gmail-work").
+/// For a single-instance recipe this equals `recipe.id`; for multi-instance it
+/// can be any user-chosen name. Vault keys and config entries are namespaced
+/// by `instance_name` to keep credentials isolated.
 pub async fn connect_recipe(
     config: &mut Config,
     recipe: &ConnectionRecipe,
+    instance_name: &str,
     field_values: &HashMap<String, String>,
     sandbox: Option<ExecutionSandboxConfig>,
     skip_test: bool,
@@ -52,17 +52,22 @@ pub async fn connect_recipe(
         }
     }
 
-    // 2. Convert recipe → preset
-    let preset = recipe_to_preset(recipe);
+    // 2. Convert recipe → preset (vault keys scoped to instance_name)
+    let preset = recipe_to_preset(recipe, instance_name);
 
     // 3. Apply setup (stores secrets in vault, writes config)
     let setup_result = mcp_setup::apply_mcp_preset_setup(
         config,
         &preset,
-        &recipe.id,
+        instance_name,
         &env_overrides,
         true, // overwrite existing
     )?;
+
+    // Tag the server with its source recipe for multi-instance discovery
+    if let Some(server) = config.mcp.servers.get_mut(instance_name) {
+        server.recipe_id = Some(recipe.id.clone());
+    }
 
     if !setup_result.missing_required_env.is_empty() {
         return Ok(ConnectResult {
@@ -85,11 +90,11 @@ pub async fn connect_recipe(
         let server = config
             .mcp
             .servers
-            .get(&recipe.id)
+            .get(instance_name)
             .cloned()
             .expect("server should exist after setup");
 
-        let test = mcp_setup::test_mcp_server_connection(&recipe.id, &server, sandbox).await;
+        let test = mcp_setup::test_mcp_server_connection(instance_name, &server, sandbox).await;
         (Some(test.connected), test.tool_count)
     };
 
