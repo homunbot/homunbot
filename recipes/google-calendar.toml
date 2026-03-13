@@ -8,7 +8,7 @@ capability_intro = "View, create, and manage your calendar events"
 
 [mcp]
 command = "npx"
-args = ["-y", "@modelcontextprotocol/server-google-calendar"]
+args = ["-y", "mcp-server-google-workspace"]
 transport = "stdio"
 
 [success]

@@ -125,7 +125,7 @@ pub fn all_mcp_presets() -> Vec<McpServerPreset> {
             command: "npx".to_string(),
             args: vec![
                 "-y".to_string(),
-                "@modelcontextprotocol/server-gmail".to_string(),
+                "mcp-server-google-workspace".to_string(),
             ],
             env: vec![
                 McpEnvVar {
@@ -169,7 +169,7 @@ pub fn all_mcp_presets() -> Vec<McpServerPreset> {
             command: "npx".to_string(),
             args: vec![
                 "-y".to_string(),
-                "@modelcontextprotocol/server-google-calendar".to_string(),
+                "mcp-server-google-workspace".to_string(),
             ],
             env: vec![
                 McpEnvVar {
@@ -209,7 +209,7 @@ pub fn all_mcp_presets() -> Vec<McpServerPreset> {
         McpServerPreset {
             id: "notion".to_string(),
             display_name: "Notion".to_string(),
-            description: "Access Notion pages and databases via hosted MCP.".to_string(),
+            description: "Access Notion pages and databases via official MCP (OAuth 2.1).".to_string(),
             command: String::new(),
             args: vec![],
             env: vec![McpEnvVar {

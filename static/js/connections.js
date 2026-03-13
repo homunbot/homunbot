@@ -59,7 +59,15 @@
         var map = {
             'gmail':            { provider: 'google', service: 'gmail', tokenField: 'refresh_token', tokenKey: 'refresh_token', providerLabel: 'Google' },
             'google-calendar':  { provider: 'google', service: 'google-calendar', tokenField: 'refresh_token', tokenKey: 'refresh_token', providerLabel: 'Google' },
-            'notion':           { provider: 'notion', service: 'notion', tokenField: 'token', tokenKey: 'access_token', providerLabel: 'Notion' },
+        };
+        return map[recipe.id] || null;
+    }
+
+    /** Map recipe → MCP OAuth 2.1 config (PKCE + Dynamic Client Registration). */
+    function mcpOauthConfigForRecipe(recipe) {
+        if (recipe.auth_mode !== 'mcp_oauth') return null;
+        var map = {
+            'notion': { provider: 'notion', tokenField: 'token', tokenKey: 'access_token', providerLabel: 'Notion' },
         };
         return map[recipe.id] || null;
     }
@@ -176,7 +184,7 @@
             } else {
                 statusBadge = '<span class="conn-status-badge conn-status-connected">' + active.length + ' connected</span>';
             }
-            var authLabel = item.auth_mode === 'oauth' ? 'OAuth' : 'API Key';
+            var authLabel = (item.auth_mode === 'oauth' || item.auth_mode === 'mcp_oauth') ? 'OAuth' : 'API Key';
             var authBadge = '<span class="badge badge-neutral">' + escapeHtml(authLabel) + '</span>';
             var toolCount = active.length > 0 && item.connection_status && item.connection_status.tool_count ? ' \u00b7 ' + item.connection_status.tool_count + ' tools' : '';
 
@@ -317,6 +325,7 @@
     function openConnectForm(recipe, instanceName, showNameField) {
         cleanupOauthListener();
         var oauthConfig = oauthConfigForRecipe(recipe);
+        var mcpOauthConfig = mcpOauthConfigForRecipe(recipe);
 
         // Build fields HTML
         var fieldsHtml = '';
@@ -330,7 +339,7 @@
             '</div>';
         }
 
-        // Show redirect URI hint for OAuth recipes
+        // Show redirect URI hint for standard OAuth recipes (not mcp_oauth — those are automatic)
         if (oauthConfig) {
             var callbackUrl = window.location.origin + '/mcp/oauth/' + oauthConfig.provider + '/callback';
             fieldsHtml += '<div class="form-group">' +
@@ -340,10 +349,24 @@
             '</div>';
         }
 
+        // MCP OAuth 2.1: no user fields — just a Connect button + hidden token field
+        if (mcpOauthConfig) {
+            fieldsHtml += '<input type="hidden" id="conn-field-' + escapeHtml(mcpOauthConfig.tokenField) + '" data-field-id="' + escapeHtml(mcpOauthConfig.tokenField) + '">' +
+                '<div class="form-group" style="text-align:center;padding:var(--sp-24) 0">' +
+                    '<p style="margin-bottom:var(--sp-16);color:var(--text-secondary)">Click below to authorize access via Notion\'s OAuth.</p>' +
+                    '<button type="button" class="btn btn-primary" id="conn-mcp-oauth-btn">' +
+                        '\uD83D\uDD10 Connect to ' + escapeHtml(mcpOauthConfig.providerLabel) + '</button>' +
+                    '<div class="form-hint" id="conn-mcp-oauth-status" style="margin-top:var(--sp-8)"></div>' +
+                '</div>';
+        }
+
         for (var i = 0; i < recipe.fields.length; i++) {
             var f = recipe.fields[i];
 
-            // For OAuth recipes: replace token field with Authorize button
+            // For MCP OAuth 2.1: skip all fields (the hidden token is already rendered above)
+            if (mcpOauthConfig && f.id === mcpOauthConfig.tokenField) continue;
+
+            // For standard OAuth: replace token field with Authorize button
             var oauthTokenField = oauthConfig ? (oauthConfig.tokenField || 'refresh_token') : null;
             if (oauthConfig && f.id === oauthTokenField) {
                 var providerLabel = oauthConfig.providerLabel || 'Google';
@@ -454,6 +477,8 @@
 
         // ── OAuth flow (Gmail, Google Calendar) ──────────────────────
         bindOauthFlow(oauthConfig);
+        // ── MCP OAuth 2.1 flow (Notion) ─────────────────────────────
+        bindMcpOauthFlow(mcpOauthConfig, recipe, instanceName, showNameField);
     }
 
     // ── OAuth flow binding ───────────────────────────────────────────
@@ -550,6 +575,131 @@
                 setOauthStatus('Error: ' + errMsg);
                 showToast(errMsg, 'error');
                 oauthBtn.disabled = false;
+            }
+        });
+    }
+
+    // ── MCP OAuth 2.1 flow (PKCE + Dynamic Client Registration) ────
+
+    function bindMcpOauthFlow(mcpOauthConfig, recipe, instanceName, showNameField) {
+        var btn = document.getElementById('conn-mcp-oauth-btn');
+        if (!btn || !mcpOauthConfig) return;
+
+        var statusEl = document.getElementById('conn-mcp-oauth-status');
+        function setStatus(msg) { if (statusEl) statusEl.textContent = msg; }
+
+        // Store PKCE verifier + client_id in closure
+        var _codeVerifier = null;
+        var _clientId = null;
+        var tokenField = mcpOauthConfig.tokenField || 'token';
+        var tokenKey = mcpOauthConfig.tokenKey || 'access_token';
+        var redirectUri = window.location.origin + '/mcp/oauth/' + mcpOauthConfig.provider + '/callback';
+
+        // Exchange auth code for tokens (PKCE)
+        async function exchangeMcpOauthCode(code) {
+            setStatus('Authorization received, exchanging token...');
+            var res = await api('/api/v1/mcp/oauth/' + mcpOauthConfig.provider + '/exchange', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    code: code,
+                    code_verifier: _codeVerifier,
+                    client_id: _clientId,
+                    redirect_uri: redirectUri,
+                }),
+            });
+
+            var tokenValue = res.body && res.body[tokenKey];
+            if (res.ok && tokenValue) {
+                var hidden = document.getElementById('conn-field-' + tokenField);
+                if (hidden) hidden.value = tokenValue;
+                setStatus('\u2713 Authorization complete');
+                btn.disabled = true;
+                btn.textContent = '\u2713 Connected';
+                // Auto-submit the form
+                autoSubmitConnection(recipe, instanceName, showNameField);
+            } else {
+                var errMsg = (res.body && (res.body.message || res.body.error)) || 'Token exchange failed';
+                setStatus('Error: ' + errMsg);
+                showToast(errMsg, 'error');
+                btn.disabled = false;
+            }
+        }
+
+        // Listen for callback postMessage
+        _oauthMessageHandler = function(event) {
+            if (event.origin !== window.location.origin) return;
+            var data = event.data || {};
+            if (data.type !== 'homun-mcp-oauth-code') return;
+            if (data.provider !== mcpOauthConfig.provider) return;
+            if (data.error) {
+                setStatus('Error: ' + (data.error_description || data.error));
+                showToast(data.error_description || data.error, 'error');
+                return;
+            }
+            exchangeMcpOauthCode(data.code);
+        };
+        window.addEventListener('message', _oauthMessageHandler);
+
+        // Start flow on click
+        btn.addEventListener('click', async function() {
+            btn.disabled = true;
+            setStatus('Registering client...');
+
+            var res = await api('/api/v1/mcp/oauth/' + mcpOauthConfig.provider + '/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ redirect_uri: redirectUri }),
+            });
+
+            if (res.ok && res.body && res.body.auth_url) {
+                _codeVerifier = res.body.code_verifier;
+                _clientId = res.body.client_id;
+                window.open(res.body.auth_url, '_blank', 'popup,width=720,height=840');
+                setStatus('Waiting for authorization...');
+                btn.disabled = false;
+            } else {
+                var errMsg = (res.body && res.body.error) || 'Failed to start MCP OAuth';
+                setStatus('Error: ' + errMsg);
+                showToast(errMsg, 'error');
+                btn.disabled = false;
+            }
+        });
+    }
+
+    /** Auto-submit the connection form after MCP OAuth completes. */
+    function autoSubmitConnection(recipe, instanceName, showNameField) {
+        var resolvedName = instanceName;
+        if (showNameField) {
+            var nameInput = document.getElementById('conn-instance-name');
+            resolvedName = nameInput ? nameInput.value.trim() : instanceName;
+        }
+
+        var fields = {};
+        var form = document.getElementById('conn-form');
+        if (form) {
+            form.querySelectorAll('input[data-field-id]').forEach(function(input) {
+                if (input.value.trim()) fields[input.dataset.fieldId] = input.value.trim();
+            });
+        }
+
+        var submitBtn = document.getElementById('conn-submit-btn');
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Connecting...';
+        }
+
+        api('/api/v1/connections/recipes/' + encodeURIComponent(recipe.id) + '/connect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fields: fields, skip_test: false, instance_name: resolvedName }),
+        }).then(function(res) {
+            if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Connect'; }
+            if (res.ok && res.body && res.body.ok) {
+                showSuccessScreen(recipe, res.body);
+            } else {
+                var msg = (res.body && res.body.message) || 'Connection failed';
+                showToast(msg, 'error');
             }
         });
     }

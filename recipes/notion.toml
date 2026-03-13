@@ -3,7 +3,7 @@ display_name = "Notion"
 subtitle = "Pages, databases, and workspace"
 icon = "notion"
 category = "Productivity"
-auth_mode = "oauth"
+auth_mode = "mcp_oauth"
 capability_intro = "Access and manage your Notion pages and databases"
 
 [mcp]
@@ -15,32 +15,14 @@ auth_env_key = "NOTION_TOKEN"
 title = "Notion connected"
 body = "You can now ask: Show me my recent Notion pages"
 
-[[fields]]
-id = "client_id"
-label = "Notion OAuth Client ID"
-help = "OAuth Client ID from your Notion public integration"
-secret = true
-required = true
-input = "text"
-source_hint = "notion.so/profile/integrations → New integration → Public → OAuth Client ID"
-env_key = "NOTION_CLIENT_ID"
-
-[[fields]]
-id = "client_secret"
-label = "Notion OAuth Client Secret"
-help = "OAuth Client Secret from your Notion public integration"
-secret = true
-required = true
-input = "password"
-source_hint = "notion.so/profile/integrations → New integration → Public → OAuth Client Secret"
-env_key = "NOTION_CLIENT_SECRET"
+# Only a hidden token field — user never fills this manually.
+# The MCP OAuth 2.1 flow (Dynamic Client Registration + PKCE) auto-fills it.
 
 [[fields]]
 id = "token"
 label = "Notion Access Token"
-help = "OAuth access token obtained after authorization"
+help = "MCP OAuth access token (auto-filled)"
 secret = true
 required = true
 input = "password"
-source_hint = "Obtained via OAuth flow after granting workspace access"
 env_key = "NOTION_TOKEN"

@@ -8,7 +8,7 @@ capability_intro = "Search, read, and manage your Gmail inbox"
 
 [mcp]
 command = "npx"
-args = ["-y", "@modelcontextprotocol/server-gmail"]
+args = ["-y", "mcp-server-google-workspace"]
 transport = "stdio"
 
 [success]

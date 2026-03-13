@@ -410,11 +410,28 @@ pub(super) async fn exchange_github_mcp_oauth_code(
     }))
 }
 
-// ── Notion OAuth ────────────────────────────────────────────────
+// ── Notion MCP OAuth 2.1 (PKCE + Dynamic Client Registration) ──
+
+/// PKCE: generate (code_verifier, code_challenge) using SHA-256.
+fn generate_pkce_pair() -> (String, String) {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+
+    // code_verifier: 43-128 chars, URL-safe random
+    let random_bytes: [u8; 32] = rand::random();
+    let verifier = URL_SAFE_NO_PAD.encode(random_bytes);
+
+    // code_challenge: BASE64URL(SHA256(verifier))
+    let mut hasher = Sha256::new();
+    hasher.update(verifier.as_bytes());
+    let challenge = URL_SAFE_NO_PAD.encode(hasher.finalize());
+
+    (verifier, challenge)
+}
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct NotionMcpOauthStartRequest {
-    client_id: String,
     redirect_uri: String,
 }
 
@@ -422,93 +439,150 @@ pub(crate) struct NotionMcpOauthStartRequest {
 pub(crate) struct NotionMcpOauthStartResponse {
     ok: bool,
     auth_url: String,
-    redirect_uri: String,
     state: String,
+    /// PKCE code_verifier — frontend stores this and sends it back during exchange.
+    code_verifier: String,
+    /// Dynamically registered client_id.
+    client_id: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct NotionMcpOauthExchangeRequest {
     code: String,
+    /// PKCE code_verifier returned from /start.
+    code_verifier: String,
+    /// client_id returned from /start (Dynamic Client Registration).
     client_id: String,
-    client_secret: String,
     redirect_uri: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct NotionOauthTokenResponse {
+struct McpOauthTokenResponse {
     access_token: Option<String>,
+    refresh_token: Option<String>,
+    expires_in: Option<u64>,
     token_type: Option<String>,
-    workspace_id: Option<String>,
-    workspace_name: Option<String>,
     error: Option<String>,
+    error_description: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct NotionMcpOauthExchangeResponse {
     ok: bool,
     access_token: Option<String>,
-    workspace_name: Option<String>,
+    refresh_token: Option<String>,
+    expires_in: Option<u64>,
     message: Option<String>,
 }
 
-fn build_notion_mcp_oauth_url(
-    client_id: &str,
+/// MCP OAuth 2.1: Dynamic Client Registration (RFC 7591).
+async fn register_mcp_client(
+    registration_endpoint: &str,
+    client_name: &str,
     redirect_uri: &str,
-    state: &str,
-) -> anyhow::Result<reqwest::Url> {
-    let mut url = reqwest::Url::parse("https://api.notion.com/v1/oauth/authorize")?;
-    {
-        let mut qp = url.query_pairs_mut();
-        qp.append_pair("client_id", client_id.trim());
-        qp.append_pair("redirect_uri", redirect_uri.trim());
-        qp.append_pair("response_type", "code");
-        qp.append_pair("owner", "user");
-        qp.append_pair("state", state);
-    }
-    Ok(url)
-}
-
-pub(super) async fn start_notion_mcp_oauth(
-    Json(req): Json<NotionMcpOauthStartRequest>,
-) -> Result<Json<NotionMcpOauthStartResponse>, (StatusCode, Json<serde_json::Value>)> {
-    if req.client_id.trim().is_empty() || req.redirect_uri.trim().is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "client_id and redirect_uri are required"
-            })),
-        ));
-    }
-
-    let state = uuid::Uuid::new_v4().to_string();
-    let auth_url =
-        build_notion_mcp_oauth_url(&req.client_id, &req.redirect_uri, &state).map_err(|e| {
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    let client = reqwest::Client::builder()
+        .use_rustls_tls()
+        .build()
+        .map_err(|e| {
             (
-                StatusCode::BAD_REQUEST,
+                StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": e.to_string() })),
             )
         })?;
 
+    let resp = client
+        .post(registration_endpoint)
+        .json(&serde_json::json!({
+            "client_name": client_name,
+            "redirect_uris": [redirect_uri],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none"
+        }))
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("Registration failed: {e}") })),
+            )
+        })?;
+
+    let body: serde_json::Value = resp.json().await.map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": format!("Registration parse failed: {e}") })),
+        )
+    })?;
+
+    body["client_id"].as_str().map(|s| s.to_string()).ok_or_else(|| {
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": "Registration did not return client_id" })),
+        )
+    })
+}
+
+/// Start Notion MCP OAuth 2.1: register client + generate PKCE + build auth URL.
+pub(super) async fn start_notion_mcp_oauth(
+    Json(req): Json<NotionMcpOauthStartRequest>,
+) -> Result<Json<NotionMcpOauthStartResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if req.redirect_uri.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "redirect_uri is required" })),
+        ));
+    }
+
+    // 1. Dynamic Client Registration
+    let client_id =
+        register_mcp_client("https://mcp.notion.com/register", "Homun", req.redirect_uri.trim())
+            .await?;
+
+    // 2. PKCE
+    let (code_verifier, code_challenge) = generate_pkce_pair();
+
+    // 3. Build authorization URL
+    let state = uuid::Uuid::new_v4().to_string();
+    let mut url = reqwest::Url::parse("https://mcp.notion.com/authorize").map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("client_id", &client_id);
+        qp.append_pair("redirect_uri", req.redirect_uri.trim());
+        qp.append_pair("response_type", "code");
+        qp.append_pair("code_challenge", &code_challenge);
+        qp.append_pair("code_challenge_method", "S256");
+        qp.append_pair("state", &state);
+    }
+
     Ok(Json(NotionMcpOauthStartResponse {
         ok: true,
-        auth_url: auth_url.to_string(),
-        redirect_uri: req.redirect_uri.trim().to_string(),
+        auth_url: url.to_string(),
         state,
+        code_verifier,
+        client_id,
     }))
 }
 
+/// Exchange Notion MCP OAuth 2.1 code for tokens (with PKCE verifier).
 pub(super) async fn exchange_notion_mcp_oauth_code(
     Json(req): Json<NotionMcpOauthExchangeRequest>,
 ) -> Result<Json<NotionMcpOauthExchangeResponse>, (StatusCode, Json<serde_json::Value>)> {
-    if req.client_id.trim().is_empty()
-        || req.client_secret.trim().is_empty()
-        || req.code.trim().is_empty()
+    if req.code.trim().is_empty()
+        || req.code_verifier.trim().is_empty()
+        || req.client_id.trim().is_empty()
         || req.redirect_uri.trim().is_empty()
     {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
-                "error": "code, client_id, client_secret, and redirect_uri are required"
+                "error": "code, code_verifier, client_id, and redirect_uri are required"
             })),
         ));
     }
@@ -523,15 +597,16 @@ pub(super) async fn exchange_notion_mcp_oauth_code(
             )
         })?;
 
-    // Notion uses HTTP Basic Auth for token exchange: base64(client_id:client_secret)
+    // Token exchange with PKCE verifier (public client, no client_secret)
     let response = client
-        .post("https://api.notion.com/v1/oauth/token")
-        .basic_auth(req.client_id.trim(), Some(req.client_secret.trim()))
-        .json(&serde_json::json!({
-            "grant_type": "authorization_code",
-            "code": req.code.trim(),
-            "redirect_uri": req.redirect_uri.trim(),
-        }))
+        .post("https://mcp.notion.com/token")
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", req.code.trim()),
+            ("redirect_uri", req.redirect_uri.trim()),
+            ("client_id", req.client_id.trim()),
+            ("code_verifier", req.code_verifier.trim()),
+        ])
         .send()
         .await
         .map_err(|e| {
@@ -543,7 +618,7 @@ pub(super) async fn exchange_notion_mcp_oauth_code(
 
     let status = response.status();
     let body = response
-        .json::<NotionOauthTokenResponse>()
+        .json::<McpOauthTokenResponse>()
         .await
         .map_err(|e| {
             (
@@ -554,27 +629,21 @@ pub(super) async fn exchange_notion_mcp_oauth_code(
 
     if !status.is_success() || body.access_token.is_none() {
         let detail = body
-            .error
-            .clone()
-            .unwrap_or_else(|| "Notion OAuth token exchange failed".to_string());
+            .error_description
+            .or(body.error)
+            .unwrap_or_else(|| "Notion MCP token exchange failed".to_string());
         return Err((
             StatusCode::BAD_GATEWAY,
             Json(serde_json::json!({ "error": detail })),
         ));
     }
 
-    let workspace_label = body
-        .workspace_name
-        .clone()
-        .unwrap_or_else(|| "workspace".to_string());
-
     Ok(Json(NotionMcpOauthExchangeResponse {
         ok: true,
         access_token: body.access_token,
-        workspace_name: body.workspace_name,
-        message: Some(format!(
-            "Notion OAuth succeeded — connected to \"{workspace_label}\"."
-        )),
+        refresh_token: body.refresh_token,
+        expires_in: body.expires_in,
+        message: Some("Notion MCP OAuth succeeded.".to_string()),
     }))
 }
 
@@ -583,7 +652,7 @@ pub(super) async fn exchange_notion_mcp_oauth_code(
 #[cfg(test)]
 mod google_oauth_tests {
     use super::{
-        build_github_mcp_oauth_url, build_google_mcp_oauth_url, build_notion_mcp_oauth_url,
+        build_github_mcp_oauth_url, build_google_mcp_oauth_url, generate_pkce_pair,
         github_mcp_scopes, google_mcp_scopes,
     };
 
@@ -646,17 +715,13 @@ mod google_oauth_tests {
     }
 
     #[test]
-    fn build_notion_oauth_url_contains_owner_and_state() {
-        let url = build_notion_mcp_oauth_url(
-            "notion-client",
-            "http://localhost:8080/mcp/oauth/notion/callback",
-            "state-abc",
-        )
-        .expect("notion oauth url");
-        let rendered = url.as_str().to_string();
-        assert!(rendered.contains("client_id=notion-client"));
-        assert!(rendered.contains("owner=user"));
-        assert!(rendered.contains("response_type=code"));
-        assert!(rendered.contains("state=state-abc"));
+    fn pkce_pair_has_valid_format() {
+        let (verifier, challenge) = generate_pkce_pair();
+        // Verifier is base64url of 32 random bytes → 43 chars
+        assert!(verifier.len() >= 43);
+        // Challenge is base64url of SHA-256 → 43 chars
+        assert!(challenge.len() >= 43);
+        // Verifier and challenge must differ
+        assert_ne!(verifier, challenge);
     }
 }
