@@ -170,7 +170,7 @@ lru = { version = "0.16", optional = true }
 pdf-extract = { version = "0.10", optional = true }
 calamine = { version = "0.32", optional = true }
 zip = { version = "2", optional = true, default-features = false, features = ["deflate"] }
-quick-xml = { version = "0.37", optional = true }
+quick-xml = { version = "0.39", optional = true }
 
 # --- MCP client (also powers browser via @playwright/mcp) ---
 rmcp = { version = "0.16", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"], optional = true }
