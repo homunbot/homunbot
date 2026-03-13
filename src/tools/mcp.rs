@@ -458,13 +458,15 @@ async fn connect_http(
         .as_deref()
         .context("MCP http server requires a 'url'")?;
 
-    // Resolve Bearer token from auth_env_key → config.env → vault
+    // Resolve Bearer token from auth_env_key → config.env → vault.
+    // rmcp's `bearer_auth()` adds the "Bearer " prefix automatically,
+    // so we pass only the raw token value.
     let mut transport_config = StreamableHttpClientTransportConfig::with_uri(url);
     if let Some(auth_key) = &config.auth_env_key {
         if let Some(raw_value) = config.env.get(auth_key) {
             let token = resolve_env_value(name, auth_key, raw_value)
                 .with_context(|| format!("Failed to resolve auth token for MCP '{name}'"))?;
-            transport_config = transport_config.auth_header(format!("Bearer {token}"));
+            transport_config = transport_config.auth_header(token);
         }
     }
 
