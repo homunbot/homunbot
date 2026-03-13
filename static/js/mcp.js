@@ -1691,5 +1691,41 @@
     bindModalActions();
     bindOauthHelper();
     syncInstallPanelVisibility();
-    refreshAll('');
+
+    // ── View toggle: Connect Services ↔ Advanced MCP ─────────────
+    var elConnView = document.getElementById('connections-view');
+    var elAdvView = document.getElementById('mcp-advanced-view');
+    var elViewToggle = document.getElementById('conn-view-toggle');
+
+    function switchView(mode) {
+        localStorage.setItem('mcp-view-mode', mode);
+        if (elConnView) elConnView.style.display = mode === 'connections' ? '' : 'none';
+        if (elAdvView) elAdvView.style.display = mode === 'advanced' ? '' : 'none';
+        if (elViewToggle) {
+            elViewToggle.querySelectorAll('.conn-view-tab').forEach(function(tab) {
+                tab.classList.toggle('active', tab.dataset.view === mode);
+            });
+        }
+        // Lazy-load advanced MCP data only when switching to it
+        if (mode === 'advanced' && state.servers.length === 0) {
+            refreshAll('');
+        }
+    }
+
+    if (elViewToggle) {
+        elViewToggle.addEventListener('click', function(e) {
+            var tab = e.target.closest('.conn-view-tab');
+            if (!tab) return;
+            switchView(tab.dataset.view);
+        });
+    }
+
+    // Initialize with saved preference or default to "connections"
+    var savedView = localStorage.getItem('mcp-view-mode') || 'connections';
+    switchView(savedView);
+
+    // Always load advanced data if starting in advanced mode; otherwise lazy
+    if (savedView === 'advanced') {
+        refreshAll('');
+    }
 })();

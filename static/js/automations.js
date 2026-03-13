@@ -1188,6 +1188,24 @@ const NODE_KINDS = {
         hasIn: true, hasOut: true,
         description: 'Reuse a saved automation as a step. Example: call your "Email Summarizer" automation inside a larger "Morning Digest" flow.',
     },
+    approve: {
+        label: 'Require Approval',
+        accent: '#FF7043',
+        icon: 'M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z',
+        group: 'control',
+        hasIn: true, hasOut: true,
+        shape: 'diamond',
+        description: 'Pause and ask for user approval before continuing. Choose which channel to send the approval request.',
+    },
+    require_2fa: {
+        label: 'Require 2FA',
+        accent: '#AB47BC',
+        icon: 'M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1s3.1 1.39 3.1 3.1v2z',
+        group: 'control',
+        hasIn: true, hasOut: true,
+        shape: 'diamond',
+        description: 'Require two-factor authentication verification before continuing. Adds an extra security layer for sensitive operations.',
+    },
     deliver: {
         label: 'Deliver',
         accent: '#42A5F5',
@@ -1233,11 +1251,165 @@ async function getCachedTargets() {
     return _cachedTargets;
 }
 
+// Cache for smart parameter overrides
+let _cachedEmailAccounts = null;
+let _cachedModels = null;
+
+async function getCachedEmailAccounts() {
+    if (_cachedEmailAccounts) return _cachedEmailAccounts;
+    try {
+        const resp = await apiRequest('/v1/email-accounts');
+        // API returns { accounts: [...] } — extract the array
+        const arr = Array.isArray(resp) ? resp : (resp && Array.isArray(resp.accounts) ? resp.accounts : null);
+        if (arr && arr.length > 0) _cachedEmailAccounts = arr;
+        return arr || [];
+    } catch (_) { return []; } // Don't cache errors — retry next time
+}
+async function getCachedModels() {
+    if (_cachedModels) return _cachedModels;
+    try {
+        const resp = await apiRequest('/v1/providers/models');
+        // API returns { ok, models: [...], current, ... } — extract the array
+        const arr = Array.isArray(resp) ? resp : (resp && Array.isArray(resp.models) ? resp.models : null);
+        if (arr && arr.length > 0) _cachedModels = arr;
+        return arr || [];
+    } catch (_) { return []; } // Don't cache errors — retry next time
+}
+
+/**
+ * Resolve smart parameter overrides for a tool.
+ * Returns { paramName: [{ value, label }] } for params with known values.
+ */
+async function resolveParamOverrides(toolName) {
+    const overrides = {};
+    try {
+        if (toolName === 'read_email_inbox') {
+            const accounts = await getCachedEmailAccounts();
+            if (Array.isArray(accounts) && accounts.length > 0) {
+                overrides.account = accounts
+                    .filter(a => a.enabled !== false && a.configured !== false)
+                    .map(a => ({
+                        value: a.name,
+                        label: a.name + (a.username ? ' (' + a.username + ')' : ''),
+                    }));
+            }
+        }
+        if (toolName === 'message') {
+            const targets = await getCachedTargets();
+            if (Array.isArray(targets) && targets.length > 0) {
+                overrides.channel = targets.map(t => ({ value: t.value, label: t.label }));
+            }
+        }
+    } catch (_) { /* ignore, no overrides */ }
+    return overrides;
+}
+
 const NODE_GROUPS = [
     { key: 'triggers',   label: 'Triggers' },
     { key: 'processing', label: 'Processing' },
     { key: 'control',    label: 'Control Flow' },
     { key: 'output',     label: 'Output' },
+];
+
+// ─── Automation Templates ────────────────────────────────────────────────────────────────────
+const AUTOMATION_TEMPLATES = [
+    {
+        id: 'email-digest',
+        icon: '\u{1F4EC}',
+        name: 'Daily Email Digest',
+        description: 'Check inbox every morning, summarize, and send digest',
+        flow: {
+            nodes: [
+                { id: 'n1', kind: 'trigger', label: 'Every morning', meta: 'daily 08:00' },
+                { id: 'n2', kind: 'tool', label: 'read_email_inbox' },
+                { id: 'n3', kind: 'llm', label: 'Summarize new emails concisely' },
+                { id: 'n4', kind: 'deliver', label: 'Send digest' },
+            ],
+            edges: [{ from: 'n1', to: 'n2' }, { from: 'n2', to: 'n3' }, { from: 'n3', to: 'n4' }],
+        },
+    },
+    {
+        id: 'web-monitor',
+        icon: '\u{1F50D}',
+        name: 'Web Monitor',
+        description: 'Periodically check a website for changes and notify you',
+        flow: {
+            nodes: [
+                { id: 'n1', kind: 'trigger', label: 'Every 6 hours', meta: 'every 6h' },
+                { id: 'n2', kind: 'tool', label: 'web_fetch' },
+                { id: 'n3', kind: 'llm', label: 'Analyze if content changed' },
+                { id: 'n4', kind: 'condition', label: 'Has changes?' },
+                { id: 'n5', kind: 'deliver', label: 'Notify changes' },
+            ],
+            edges: [
+                { from: 'n1', to: 'n2' }, { from: 'n2', to: 'n3' },
+                { from: 'n3', to: 'n4' }, { from: 'n4', to: 'n5' },
+            ],
+        },
+    },
+    {
+        id: 'daily-standup',
+        icon: '\u{1F4CB}',
+        name: 'Daily Standup',
+        description: 'Generate a daily standup update every weekday morning',
+        flow: {
+            nodes: [
+                { id: 'n1', kind: 'trigger', label: 'Weekdays 9am', meta: 'daily 09:00' },
+                { id: 'n2', kind: 'llm', label: 'Prepare daily standup summary based on recent activity' },
+                { id: 'n3', kind: 'deliver', label: 'Send standup' },
+            ],
+            edges: [{ from: 'n1', to: 'n2' }, { from: 'n2', to: 'n3' }],
+        },
+    },
+    {
+        id: 'news-briefing',
+        icon: '\u{1F4F0}',
+        name: 'News Briefing',
+        description: 'Search for news on a topic and get a morning summary',
+        flow: {
+            nodes: [
+                { id: 'n1', kind: 'trigger', label: 'Every morning', meta: 'daily 07:00' },
+                { id: 'n2', kind: 'tool', label: 'web_search' },
+                { id: 'n3', kind: 'llm', label: 'Summarize the top news into a brief' },
+                { id: 'n4', kind: 'deliver', label: 'Send briefing' },
+            ],
+            edges: [{ from: 'n1', to: 'n2' }, { from: 'n2', to: 'n3' }, { from: 'n3', to: 'n4' }],
+        },
+    },
+    {
+        id: 'security-check',
+        icon: '\u{1F6E1}',
+        name: 'Security Check',
+        description: 'Run a nightly security audit and alert on issues',
+        flow: {
+            nodes: [
+                { id: 'n1', kind: 'trigger', label: 'Every night', meta: 'daily 22:00' },
+                { id: 'n2', kind: 'tool', label: 'shell' },
+                { id: 'n3', kind: 'llm', label: 'Analyze logs for security issues' },
+                { id: 'n4', kind: 'condition', label: 'Issues found?' },
+                { id: 'n5', kind: 'deliver', label: 'Alert owner' },
+            ],
+            edges: [
+                { from: 'n1', to: 'n2' }, { from: 'n2', to: 'n3' },
+                { from: 'n3', to: 'n4' }, { from: 'n4', to: 'n5' },
+            ],
+        },
+    },
+    {
+        id: 'file-organizer',
+        icon: '\u{1F5C2}',
+        name: 'File Organizer',
+        description: 'Weekly scan of a folder to identify old or unused files',
+        flow: {
+            nodes: [
+                { id: 'n1', kind: 'trigger', label: 'Monday 8am', meta: 'daily 08:00' },
+                { id: 'n2', kind: 'tool', label: 'list_files' },
+                { id: 'n3', kind: 'llm', label: 'Identify old files and suggest cleanup' },
+                { id: 'n4', kind: 'deliver', label: 'Send report' },
+            ],
+            edges: [{ from: 'n1', to: 'n2' }, { from: 'n2', to: 'n3' }, { from: 'n3', to: 'n4' }],
+        },
+    },
 ];
 
 // ─── Automations Builder (n8n Style) ────────────────────────────────────────────────────────
@@ -1434,10 +1606,28 @@ const Builder = {
             if (!this.selectedNodeId) return;
             const node = this.nodes.find(n => n.id === this.selectedNodeId);
             if (!node) return;
-            if (e.target.dataset.field) {
-                node.data[e.target.dataset.field] = e.target.value;
-                this.renderNodes();
+            const field = e.target.dataset.field;
+            if (!field) return;
+
+            if (field.startsWith('arg__')) {
+                // Schema form field — store in node.data.arguments object
+                const paramName = field.substring(5);
+                if (typeof node.data.arguments !== 'object' || node.data.arguments === null) {
+                    try { node.data.arguments = JSON.parse(node.data.arguments || '{}'); }
+                    catch (_) { node.data.arguments = {}; }
+                }
+                const inputType = e.target.type;
+                if (inputType === 'checkbox') {
+                    node.data.arguments[paramName] = e.target.checked;
+                } else if (inputType === 'number') {
+                    node.data.arguments[paramName] = e.target.value === '' ? '' : Number(e.target.value);
+                } else {
+                    node.data.arguments[paramName] = e.target.value;
+                }
+            } else {
+                node.data[field] = e.target.value;
             }
+            this.renderNodes();
         };
         this.inspectorBody.addEventListener('input', handleFieldChange);
         this.inspectorBody.addEventListener('change', handleFieldChange);
@@ -1556,6 +1746,10 @@ const Builder = {
             case 'subprocess':
                 if (flowNode.label) base.workflow_ref = flowNode.label;
                 break;
+            case 'approve':
+                if (flowNode.label) base.approve_message = flowNode.label;
+                if (flowNode.meta) base.approve_channel = flowNode.meta;
+                break;
         }
         return base;
     },
@@ -1595,15 +1789,17 @@ const Builder = {
                 intervalHours: 6, weekdays: ['mon','tue','wed','thu','fri'],
                 cronMinute: '0', cronHour: '9', cronDom: '*', cronMonth: '*', cronDow: '*',
             };
-            case 'tool':       return { tool_name: '', arguments: '' };
+            case 'tool':       return { tool_name: '', arguments: {} };
             case 'skill':      return { skill_name: '' };
-            case 'mcp':        return { server: '', tool: '' };
+            case 'mcp':        return { server: '', tool: '', arguments: {} };
             case 'llm':        return { prompt: '', model: '' };
             case 'condition':  return { expression: '', true_label: 'Yes', false_label: 'No' };
-            case 'parallel':   return {};
+            case 'parallel':   return { branches: 2 };
             case 'loop':       return { max_iterations: 10, condition: '' };
             case 'subprocess': return { workflow_ref: '' };
             case 'transform':  return { template: '' };
+            case 'approve':    return { approve_channel: '', approve_message: '' };
+            case 'require_2fa': return {};
             case 'deliver':    return { target: 'cli:default' };
             default:           return {};
         }
@@ -1662,6 +1858,67 @@ const Builder = {
     render() {
         this.renderNodes();
         this.renderEdges();
+        this.renderTemplates();
+    },
+
+    renderTemplates() {
+        let container = document.getElementById('builder-templates');
+        if (!container) {
+            // Create template container above the canvas
+            container = document.createElement('div');
+            container.id = 'builder-templates';
+            const canvasEl = this.canvas;
+            if (canvasEl && canvasEl.parentNode) {
+                canvasEl.parentNode.insertBefore(container, canvasEl);
+            }
+        }
+        // Show templates only when canvas is empty
+        if (this.nodes.length > 0) {
+            container.style.display = 'none';
+            return;
+        }
+        container.style.display = '';
+        container.textContent = '';
+
+        const heading = document.createElement('h3');
+        heading.className = 'template-heading';
+        heading.textContent = 'Start from a template';
+        container.appendChild(heading);
+
+        const grid = document.createElement('div');
+        grid.className = 'template-grid';
+
+        AUTOMATION_TEMPLATES.forEach(tmpl => {
+            const card = document.createElement('div');
+            card.className = 'template-card';
+            card.addEventListener('click', () => {
+                this.loadFlowData(tmpl.flow, tmpl.name);
+            });
+
+            const icon = document.createElement('div');
+            icon.className = 'template-card-icon';
+            icon.textContent = tmpl.icon;
+            card.appendChild(icon);
+
+            const name = document.createElement('div');
+            name.className = 'template-card-name';
+            name.textContent = tmpl.name;
+            card.appendChild(name);
+
+            const desc = document.createElement('div');
+            desc.className = 'template-card-desc';
+            desc.textContent = tmpl.description;
+            card.appendChild(desc);
+
+            grid.appendChild(card);
+        });
+
+        container.appendChild(grid);
+
+        const orHint = document.createElement('p');
+        orHint.className = 'template-or-hint';
+        orHint.textContent = 'Or drag nodes from the palette to build from scratch';
+        container.appendChild(orHint);
     },
 
     nodeDescription(node) {
@@ -1677,10 +1934,12 @@ const Builder = {
             case 'mcp':        return d.server ? (d.server + (d.tool ? ' \u2192 ' + d.tool : '')) : 'Configure MCP...';
             case 'llm':        return d.prompt ? shorten(d.prompt, 25) : 'Configure prompt...';
             case 'condition':  return d.expression ? shorten(d.expression, 25) : 'Set condition...';
-            case 'parallel':   return 'Parallel execution';
+            case 'parallel':   return (d.branches || 2) + ' branches in parallel';
             case 'loop':       return d.condition ? shorten(d.condition, 20) : ('Max ' + (d.max_iterations || 10) + ' iterations');
             case 'subprocess': return d.workflow_ref || 'Select workflow...';
             case 'transform':  return d.template ? shorten(d.template, 25) : 'Configure transform...';
+            case 'approve':    return d.approve_channel ? ('via ' + d.approve_channel) : 'Configure approval...';
+            case 'require_2fa': return '2FA verification gate';
             case 'deliver':    return d.target || 'cli:default';
             default:           return '';
         }
@@ -1901,6 +2160,27 @@ const Builder = {
             body.appendChild(a);
         };
 
+        // Add clickable preset buttons that populate a target field
+        const addPresetButtons = (presets, targetFieldName) => {
+            const row = document.createElement('div');
+            row.className = 'preset-buttons';
+            presets.forEach(p => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'preset-btn';
+                btn.textContent = p.label;
+                btn.addEventListener('click', () => {
+                    const target = body.querySelector('[data-field="' + targetFieldName + '"]');
+                    if (target) {
+                        target.value = p.value;
+                        target.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                });
+                row.appendChild(btn);
+            });
+            body.appendChild(row);
+        };
+
         // Async-populate a <select> — checks renderId to avoid stale fills
         const asyncPopulateSelect = (sel, fetchFn, mapFn, emptyMsg) => {
             const placeholder = document.createElement('option');
@@ -2083,16 +2363,46 @@ const Builder = {
                 const toolRef = {};
                 addField('Tool', 'tool_name', 'select', { options: [], ref: toolRef });
 
-                // Parameter hint area — updated when tool is selected
-                const paramHint = document.createElement('div');
-                paramHint.className = 'form-hint tool-param-hint';
-                paramHint.style.display = 'none';
-                body.appendChild(paramHint);
+                // Container for dynamic schema fields (replaces JSON textarea)
+                const toolSchemaContainer = document.createElement('div');
+                toolSchemaContainer.className = 'schema-fields-container';
+                body.appendChild(toolSchemaContainer);
 
-                addField('Arguments (JSON)', 'arguments', 'textarea', {
-                    rows: 3, placeholder: '{"query": "..."}'
-                });
-                const argsTextarea = body.querySelector('textarea[data-field="arguments"]');
+                const renderToolSchema = async (toolName) => {
+                    toolSchemaContainer.textContent = '';
+                    if (!toolName) return;
+                    const [data, overrides] = await Promise.all([
+                        getCachedTools(),
+                        resolveParamOverrides(toolName),
+                    ]);
+                    if (this._inspectorRenderId !== renderId) return;
+                    const tool = data.tools.find(t => t.name === toolName);
+                    const currentArgs = window.SchemaForm.parseArguments(d.arguments);
+                    if (currentArgs === null || !tool || !tool.parameters || !tool.parameters.properties) {
+                        // Fallback: raw JSON textarea
+                        const group = document.createElement('div');
+                        group.className = 'form-group';
+                        const lbl = document.createElement('label');
+                        lbl.textContent = 'Arguments (JSON)';
+                        group.appendChild(lbl);
+                        const ta = document.createElement('textarea');
+                        ta.className = 'input';
+                        ta.rows = 3;
+                        ta.dataset.field = 'arguments';
+                        ta.placeholder = '{"key": "value"}';
+                        ta.value = typeof d.arguments === 'string'
+                            ? d.arguments
+                            : JSON.stringify(d.arguments || {}, null, 2);
+                        group.appendChild(ta);
+                        toolSchemaContainer.appendChild(group);
+                        return;
+                    }
+                    // Initialize arguments as object if needed
+                    if (typeof d.arguments !== 'object' || d.arguments === null) {
+                        d.arguments = currentArgs;
+                    }
+                    window.SchemaForm.render(toolSchemaContainer, tool.parameters, currentArgs, overrides);
+                };
 
                 if (toolRef.el) {
                     asyncPopulateSelect(toolRef.el, getCachedTools, data => {
@@ -2102,41 +2412,10 @@ const Builder = {
                         }));
                     }, '-- Select a tool --');
 
-                    // When tool is selected, show parameter hints from schema
                     toolRef.el.addEventListener('change', () => {
-                        const toolName = toolRef.el.value;
-                        getCachedTools().then(data => {
-                            if (this._inspectorRenderId !== renderId) return;
-                            const tool = data.tools.find(t => t.name === toolName);
-                            if (tool && tool.parameters && tool.parameters.properties) {
-                                const props = tool.parameters.properties;
-                                const required = tool.parameters.required || [];
-                                const lines = Object.entries(props).map(([key, schema]) => {
-                                    const req = required.includes(key) ? ' (required)' : '';
-                                    const desc = schema.description ? ': ' + schema.description : '';
-                                    return key + req + desc;
-                                });
-                                paramHint.textContent = 'Parameters: ' + lines.join(' | ');
-                                paramHint.style.display = 'block';
-
-                                // Build example JSON for placeholder
-                                if (argsTextarea) {
-                                    const example = {};
-                                    for (const [key, schema] of Object.entries(props)) {
-                                        if (schema.enum) example[key] = schema.enum[0];
-                                        else if (schema.type === 'number' || schema.type === 'integer') example[key] = 0;
-                                        else if (schema.type === 'boolean') example[key] = true;
-                                        else example[key] = '...';
-                                    }
-                                    argsTextarea.placeholder = JSON.stringify(example, null, 2);
-                                }
-                            } else {
-                                paramHint.style.display = 'none';
-                            }
-                        });
+                        renderToolSchema(toolRef.el.value);
                     });
 
-                    // Trigger hint if tool already selected
                     if (d.tool_name) {
                         setTimeout(() => toolRef.el.dispatchEvent(new Event('change')), 500);
                     }
@@ -2188,6 +2467,40 @@ const Builder = {
                 addField('MCP Server', 'server', 'select', { options: [], ref: serverRef });
                 const mcpToolRef = {};
                 addField('Tool', 'tool', 'select', { options: [], ref: mcpToolRef });
+
+                // Container for MCP tool schema fields
+                const mcpSchemaContainer = document.createElement('div');
+                mcpSchemaContainer.className = 'schema-fields-container';
+                body.appendChild(mcpSchemaContainer);
+
+                // Render schema form when MCP tool is selected
+                const renderMcpToolSchema = (serverName, toolName) => {
+                    mcpSchemaContainer.textContent = '';
+                    if (!serverName || !toolName) return;
+                    const fullToolName = serverName + '__' + toolName;
+                    getCachedTools().then(data => {
+                        if (this._inspectorRenderId !== renderId) return;
+                        const tool = data.tools.find(t => t.name === fullToolName);
+                        const currentArgs = window.SchemaForm.parseArguments(d.arguments);
+                        if (!tool || !tool.parameters || !tool.parameters.properties) return;
+                        if (typeof d.arguments !== 'object' || d.arguments === null) {
+                            d.arguments = currentArgs || {};
+                        }
+                        window.SchemaForm.render(mcpSchemaContainer, tool.parameters, currentArgs || {});
+                    });
+                };
+
+                if (mcpToolRef.el) {
+                    mcpToolRef.el.addEventListener('change', () => {
+                        if (this._inspectorRenderId !== renderId) return;
+                        const serverName = serverRef.el ? serverRef.el.value : d.server;
+                        renderMcpToolSchema(serverName, mcpToolRef.el.value);
+                    });
+                    // Render schema if tool already selected
+                    if (d.server && d.tool) {
+                        setTimeout(() => renderMcpToolSchema(d.server, d.tool), 600);
+                    }
+                }
 
                 if (serverRef.el) {
                     asyncPopulateSelect(serverRef.el, getCachedMcpServers, servers => {
@@ -2250,6 +2563,28 @@ const Builder = {
                             if (serverRef.el) serverRef.el.dispatchEvent(new Event('change'));
                         }, 500);
                     }
+                }
+
+                // Banner: no MCP servers? Suggest Connect Services page
+                if (serverRef.el) {
+                    getCachedMcpServers().then(servers => {
+                        if (this._inspectorRenderId !== renderId) return;
+                        const active = Array.isArray(servers) ? servers.filter(s => s.enabled !== false) : [];
+                        if (active.length === 0) {
+                            const banner = document.createElement('div');
+                            banner.className = 'schema-field-hint';
+                            banner.style.cssText = 'margin: 8px 0; padding: 10px 12px; border: 1px solid var(--accent); border-radius: var(--r-md); background: var(--accent-light);';
+                            banner.textContent = '';
+                            const link = document.createElement('a');
+                            link.href = '/mcp';
+                            link.textContent = 'Connect a service';
+                            link.style.cssText = 'font-weight: 600; color: var(--accent-text);';
+                            banner.appendChild(document.createTextNode('No MCP servers configured. '));
+                            banner.appendChild(link);
+                            banner.appendChild(document.createTextNode(' first (GitHub, Gmail, Slack, etc.).'));
+                            body.appendChild(banner);
+                        }
+                    });
                 }
 
                 // Search catalog section — always shown so user can discover servers
@@ -2335,65 +2670,194 @@ const Builder = {
             }
 
             // ─── LLM ────────────────────────────────────────────
-            case 'llm':
+            case 'llm': {
                 addField('Prompt', 'prompt', 'textarea', {
                     rows: 5, placeholder: 'What should the agent do?\n\nExample: Summarize the latest news about AI safety'
                 });
-                addField('Model (optional)', 'model', 'text', {
-                    placeholder: 'Leave empty for default model',
-                    list: 'model-suggestions',
-                });
-                // Add datalist for model suggestions (non-blocking)
-                (() => {
-                    const dl = document.createElement('datalist');
-                    dl.id = 'model-suggestions';
-                    const commonModels = [
-                        'anthropic/claude-sonnet-4-20250514',
-                        'anthropic/claude-haiku-4-20250414',
-                        'openai/gpt-4o',
-                        'openai/gpt-4o-mini',
-                        'google/gemini-2.0-flash',
-                    ];
-                    commonModels.forEach(m => {
-                        const opt = document.createElement('option');
-                        opt.value = m;
-                        dl.appendChild(opt);
-                    });
-                    body.appendChild(dl);
-                })();
+                const modelRef = {};
+                addField('Model', 'model', 'select', { options: [], ref: modelRef });
+                if (modelRef.el) {
+                    // Replicate the proven pattern from chat.js: direct fetch + optgroups
+                    const sel = modelRef.el;
+                    sel.textContent = '';
+                    const loading = document.createElement('option');
+                    loading.value = '';
+                    loading.textContent = 'Loading models...';
+                    loading.disabled = true;
+                    sel.appendChild(loading);
+
+                    (async () => {
+                        try {
+                            const resp = await fetch('/api/v1/providers/models');
+                            const data = await resp.json();
+                            if (this._inspectorRenderId !== renderId) return;
+
+                            // Group by provider (same as chat.js)
+                            const groups = {};
+                            if (data.ok && Array.isArray(data.models)) {
+                                data.models.forEach(m => {
+                                    if (!groups[m.provider]) groups[m.provider] = [];
+                                    groups[m.provider].push({ value: m.model, label: m.label });
+                                });
+                            }
+
+                            // Fetch Ollama live models if configured
+                            if (data.ollama_configured) {
+                                try {
+                                    const olResp = await fetch('/api/v1/providers/ollama/models');
+                                    const olData = await olResp.json();
+                                    if (olData.ok && Array.isArray(olData.models) && olData.models.length > 0) {
+                                        groups['ollama'] = olData.models.map(m => ({
+                                            value: 'ollama/' + m.name,
+                                            label: m.name + (m.size ? ' (' + m.size + ')' : ''),
+                                        }));
+                                    }
+                                } catch (_) { /* Ollama might not be running */ }
+                            }
+
+                            if (this._inspectorRenderId !== renderId) return;
+                            sel.textContent = '';
+
+                            // Default option
+                            const defOpt = document.createElement('option');
+                            defOpt.value = '';
+                            defOpt.textContent = '-- Default model --';
+                            if (!d.model) defOpt.selected = true;
+                            sel.appendChild(defOpt);
+
+                            // Populate optgroups per provider
+                            const providerNames = { anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Google Gemini', openrouter: 'OpenRouter', deepseek: 'DeepSeek', groq: 'Groq', mistral: 'Mistral', xai: 'xAI', together: 'Together', ollama: 'Ollama (local)', ollama_cloud: 'Ollama Cloud' };
+                            for (const [provider, models] of Object.entries(groups)) {
+                                const optgroup = document.createElement('optgroup');
+                                optgroup.label = providerNames[provider] || provider;
+                                models.forEach(m => {
+                                    const opt = document.createElement('option');
+                                    opt.value = m.value;
+                                    opt.textContent = m.label;
+                                    if (d.model === m.value) opt.selected = true;
+                                    optgroup.appendChild(opt);
+                                });
+                                sel.appendChild(optgroup);
+                            }
+
+                            if (Object.keys(groups).length === 0) {
+                                defOpt.textContent = 'No models configured';
+                            }
+                        } catch (err) {
+                            if (this._inspectorRenderId !== renderId) return;
+                            sel.textContent = '';
+                            const errOpt = document.createElement('option');
+                            errOpt.value = '';
+                            errOpt.textContent = '-- Default model --';
+                            sel.appendChild(errOpt);
+                        }
+                    })();
+                }
                 break;
+            }
 
             // ─── CONDITION ──────────────────────────────────────
             case 'condition':
                 addField('Condition Expression', 'expression', 'textarea', {
                     rows: 3, placeholder: 'e.g. has_new_emails == true\n     result.count > 0'
                 });
+                addPresetButtons([
+                    { label: 'Contains keyword', value: 'result contains "keyword"' },
+                    { label: 'Is empty', value: 'result is empty' },
+                    { label: 'Count > N', value: 'count of items > 5' },
+                    { label: 'Success', value: 'previous step succeeded' },
+                ], 'expression');
                 addField('True Branch Label', 'true_label', 'text', { placeholder: 'Yes' });
                 addField('False Branch Label', 'false_label', 'text', { placeholder: 'No' });
                 break;
 
             // ─── PARALLEL ───────────────────────────────────────
-            case 'parallel':
-                addHint('Connect multiple outputs from this node to run branches in parallel.');
+            case 'parallel': {
+                addField('Number of Branches', 'branches', 'number', { defaultVal: 2, min: 2, max: 10 });
+                addHint('How it works: add the parallel node, then add one node for each branch below it. ' +
+                    'Connect the parallel node to each branch node. All branches run simultaneously, ' +
+                    'and results are merged before the next step.');
+
+                // Visual example
+                const example = document.createElement('div');
+                example.className = 'schema-field-hint';
+                example.style.whiteSpace = 'pre';
+                example.style.fontFamily = 'var(--ff-mono, monospace)';
+                example.style.lineHeight = '1.5';
+                example.style.marginTop = '8px';
+                example.textContent =
+                    '         ┌─ Check Gmail\n' +
+                    'Parallel ┤\n' +
+                    '         └─ Check Slack\n' +
+                    '              ↓\n' +
+                    '         Merge & Deliver';
+                body.appendChild(example);
                 break;
+            }
 
             // ─── LOOP ───────────────────────────────────────────
             case 'loop':
                 addField('Max Iterations', 'max_iterations', 'number', { defaultVal: 10, min: 1, max: 100 });
                 addField('Break Condition', 'condition', 'text', { placeholder: 'e.g. no_more_items' });
+                addPresetButtons([
+                    { label: 'All processed', value: 'all items processed' },
+                    { label: 'Error found', value: 'an error occurs' },
+                    { label: 'No more results', value: 'no more results' },
+                ], 'condition');
                 break;
 
             // ─── SUBPROCESS ─────────────────────────────────────
-            case 'subprocess':
-                addField('Workflow Reference', 'workflow_ref', 'text', { placeholder: 'Automation name or ID' });
-                addHint('Reference another saved automation to run as a sub-step.');
+            case 'subprocess': {
+                const wfRef = {};
+                addField('Workflow', 'workflow_ref', 'select', { options: [], ref: wfRef });
+                if (wfRef.el) {
+                    asyncPopulateSelect(wfRef.el,
+                        () => apiRequest('/v1/automations'),
+                        items => (Array.isArray(items) ? items : []).map(a => ({
+                            value: a.name || a.id,
+                            label: a.name || ('Automation #' + a.id),
+                        })),
+                        '-- Select automation --');
+                }
+                addHint('Select a saved automation to run as a sub-step.');
                 break;
+            }
 
             // ─── TRANSFORM ──────────────────────────────────────
             case 'transform':
                 addField('Template / Code', 'template', 'textarea', {
-                    rows: 5, placeholder: 'Transform template or code...\n\nExample: Extract "subject" and "from" fields from email data'
+                    rows: 5, placeholder: 'Describe how to transform the data...\n\nExample: Extract "subject" and "from" fields from email data'
                 });
+                addPresetButtons([
+                    { label: 'Extract summary', value: 'Extract only the summary from the result' },
+                    { label: 'Format as list', value: 'Format as a bullet-point list' },
+                    { label: 'JSON to text', value: 'Convert JSON to readable text' },
+                    { label: 'First N items', value: 'Keep only the first 5 items' },
+                ], 'template');
+                break;
+
+            // ─── APPROVE ───────────────────────────────────────
+            case 'approve': {
+                const approveRef = {};
+                addField('Send Approval Request To', 'approve_channel', 'select', { options: [], ref: approveRef });
+                if (approveRef.el) {
+                    asyncPopulateSelect(approveRef.el, getCachedTargets, targets => {
+                        if (!Array.isArray(targets)) return [];
+                        return targets.map(t => ({ value: t.value, label: t.label }));
+                    }, '-- Select channel --');
+                }
+                addField('Approval Message', 'approve_message', 'textarea', {
+                    rows: 2, placeholder: 'What should the user approve?\n\nExample: Proceed with sending the report?'
+                });
+                addHint('The automation will pause here and wait for user approval before continuing.');
+                break;
+            }
+
+            // ─── REQUIRE 2FA ──────────────────────────────────
+            case 'require_2fa':
+                addHint('This node requires two-factor authentication verification before the automation can continue. The user will be prompted to enter their 2FA code.');
+                addHint('Make sure 2FA is enabled in Settings > Vault & 2FA.');
+                addLink('\u2192 Configure 2FA', '/vault');
                 break;
 
             // ─── DELIVER ────────────────────────────────────────
@@ -2423,14 +2887,26 @@ const Builder = {
         const d = node.data;
         switch (node.kind) {
             case 'llm':        return d.prompt || 'Execute task';
-            case 'tool':       return 'Use tool: ' + (d.tool_name || 'unknown') + (d.arguments ? ' with args: ' + d.arguments : '');
+            case 'tool': {
+                const argsStr = window.SchemaForm
+                    ? window.SchemaForm.serializeArguments(d.arguments)
+                    : (typeof d.arguments === 'string' ? d.arguments : JSON.stringify(d.arguments || {}));
+                return 'Use tool: ' + (d.tool_name || 'unknown') + (argsStr ? ' with args: ' + argsStr : '');
+            }
             case 'skill':      return 'Run skill: ' + (d.skill_name || 'unknown');
-            case 'mcp':        return 'Call MCP: ' + (d.server || '?') + '/' + (d.tool || '?');
+            case 'mcp': {
+                const mcpArgsStr = window.SchemaForm
+                    ? window.SchemaForm.serializeArguments(d.arguments)
+                    : (typeof d.arguments === 'string' ? d.arguments : JSON.stringify(d.arguments || {}));
+                return 'Call MCP: ' + (d.server || '?') + '/' + (d.tool || '?') + (mcpArgsStr ? ' with args: ' + mcpArgsStr : '');
+            }
             case 'condition':  return 'If: ' + (d.expression || '?');
             case 'transform':  return 'Transform: ' + (d.template || '?');
             case 'loop':       return 'Loop (max ' + (d.max_iterations || 10) + '): ' + (d.condition || 'until done');
             case 'subprocess': return 'Run workflow: ' + (d.workflow_ref || '?');
-            case 'parallel':   return 'Execute branches in parallel';
+            case 'parallel':   return 'Execute ' + (d.branches || 2) + ' branches in parallel';
+            case 'approve':    return 'Require approval' + (d.approve_channel ? ' via ' + d.approve_channel : '') + (d.approve_message ? ': ' + d.approve_message : '');
+            case 'require_2fa': return 'Require 2FA verification before proceeding';
             default:           return node.title;
         }
     },
@@ -2455,6 +2931,8 @@ const Builder = {
             case 'loop':       return 'max:' + (d.max_iterations || 10);
             case 'subprocess': return d.workflow_ref || '';
             case 'transform':  return '';
+            case 'approve':    return d.approve_channel || '';
+            case 'require_2fa': return '2fa';
             default:           return '';
         }
     },
@@ -2503,7 +2981,7 @@ const Builder = {
             payload.workflow_steps = middleNodes.map((n, i) => ({
                 name: n.title || ('Step ' + (i + 1)),
                 instruction: this.nodeToInstruction(n),
-                approval_required: false,
+                approval_required: n.kind === 'approve',
             }));
         }
 

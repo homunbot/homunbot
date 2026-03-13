@@ -5,6 +5,7 @@ mod browser;
 mod business;
 mod channels;
 mod chat;
+mod connections;
 mod email_accounts;
 mod health;
 mod knowledge;
@@ -55,6 +56,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .merge(approvals::routes())
         // --- Email Accounts (multi-account) ---
         .merge(email_accounts::routes())
+        // --- Connection Recipes ---
+        .merge(connections::routes())
         .merge(automations::routes())
         // --- Usage ---
         .merge(usage::routes())

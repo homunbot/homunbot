@@ -1,0 +1,46 @@
+id = "gmail"
+display_name = "Gmail"
+subtitle = "Search and read your email"
+icon = "gmail"
+category = "Communication"
+auth_mode = "oauth"
+capability_intro = "Search, read, and manage your Gmail inbox"
+
+[mcp]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-gmail"]
+transport = "stdio"
+
+[success]
+title = "Gmail connected"
+body = "You can now ask: Show me my unread emails"
+
+[[fields]]
+id = "client_id"
+label = "Google Client ID"
+help = "OAuth Client ID from Google Cloud Console"
+secret = true
+required = true
+input = "text"
+source_hint = "Google Cloud Console → APIs & Services → Credentials"
+env_key = "GOOGLE_CLIENT_ID"
+
+[[fields]]
+id = "client_secret"
+label = "Google Client Secret"
+help = "OAuth Client Secret from Google Cloud Console"
+secret = true
+required = true
+input = "password"
+source_hint = "Google Cloud Console → APIs & Services → Credentials"
+env_key = "GOOGLE_CLIENT_SECRET"
+
+[[fields]]
+id = "refresh_token"
+label = "Google Refresh Token"
+help = "OAuth Refresh Token obtained after authorization"
+secret = true
+required = true
+input = "password"
+source_hint = "Obtained via OAuth flow after granting Gmail access"
+env_key = "GOOGLE_REFRESH_TOKEN"

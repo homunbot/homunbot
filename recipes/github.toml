@@ -1,0 +1,26 @@
+id = "github"
+display_name = "GitHub"
+subtitle = "Repositories, issues, and pull requests"
+icon = "github"
+category = "Developer"
+auth_mode = "api_key"
+capability_intro = "Manage repositories, issues, and pull requests"
+
+[mcp]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+transport = "stdio"
+
+[success]
+title = "GitHub connected"
+body = "You can now ask: Show me the open issues in repo X"
+
+[[fields]]
+id = "personal_access_token"
+label = "GitHub Token"
+help = "Personal access token to access your repositories"
+secret = true
+required = true
+input = "password"
+source_hint = "GitHub → Settings → Developer settings → Personal access tokens"
+env_key = "GITHUB_PERSONAL_ACCESS_TOKEN"

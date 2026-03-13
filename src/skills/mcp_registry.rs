@@ -205,6 +205,32 @@ pub fn all_mcp_presets() -> Vec<McpServerPreset> {
                 "workspace".to_string(),
             ],
         },
+        McpServerPreset {
+            id: "slack".to_string(),
+            display_name: "Slack".to_string(),
+            description: "Read and interact with Slack channels and messages.".to_string(),
+            command: "npx".to_string(),
+            args: vec![
+                "-y".to_string(),
+                "@modelcontextprotocol/server-slack".to_string(),
+            ],
+            env: vec![McpEnvVar {
+                key: "SLACK_BOT_TOKEN".to_string(),
+                description: "Slack Bot User OAuth Token (xoxb-...).".to_string(),
+                required: true,
+                secret: true,
+                vault_key: "mcp.slack.bot_token".to_string(),
+            }],
+            docs_url: Some("https://github.com/modelcontextprotocol/servers".to_string()),
+            aliases: vec![],
+            keywords: vec![
+                "slack".to_string(),
+                "chat".to_string(),
+                "channel".to_string(),
+                "message".to_string(),
+                "team".to_string(),
+            ],
+        },
     ]
 }
 

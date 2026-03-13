@@ -1,0 +1,26 @@
+id = "slack"
+display_name = "Slack"
+subtitle = "Messages, channels, and team communication"
+icon = "slack"
+category = "Communication"
+auth_mode = "api_key"
+capability_intro = "Read messages and interact with your Slack workspace"
+
+[mcp]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-slack"]
+transport = "stdio"
+
+[success]
+title = "Slack connected"
+body = "You can now ask: What are the latest messages in #general?"
+
+[[fields]]
+id = "bot_token"
+label = "Slack Bot Token"
+help = "Bot User OAuth Token (starts with xoxb-)"
+secret = true
+required = true
+input = "password"
+source_hint = "Slack API → Your App → OAuth & Permissions → Bot User OAuth Token"
+env_key = "SLACK_BOT_TOKEN"

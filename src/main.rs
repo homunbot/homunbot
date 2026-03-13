@@ -39,6 +39,7 @@ mod bus;
 mod business;
 mod channels;
 mod config;
+mod connections;
 mod logs;
 mod mcp_setup;
 mod provider;

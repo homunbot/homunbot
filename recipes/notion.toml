@@ -1,0 +1,26 @@
+id = "notion"
+display_name = "Notion"
+subtitle = "Pages, databases, and workspace"
+icon = "notion"
+category = "Productivity"
+auth_mode = "api_key"
+capability_intro = "Access and manage your Notion pages and databases"
+
+[mcp]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-notion"]
+transport = "stdio"
+
+[success]
+title = "Notion connected"
+body = "You can now ask: Show me my recent Notion pages"
+
+[[fields]]
+id = "token"
+label = "Notion Integration Token"
+help = "Internal integration token for your workspace"
+secret = true
+required = true
+input = "password"
+source_hint = "Notion → Settings → Integrations → Create new integration"
+env_key = "NOTION_TOKEN"

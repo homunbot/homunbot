@@ -1474,7 +1474,7 @@ async fn automations_page() -> Html<String> {
         "Automations",
         "automations",
         body,
-        &["flow-renderer.js", "automations.js"],
+        &["flow-renderer.js", "schema-form.js", "automations.js"],
     ))
 }
 
@@ -1804,7 +1804,32 @@ async fn mcp_page(State(state): State<Arc<AppState>>) -> Html<String> {
                         <h1 class="page-title">MCP Servers</h1>
                         <span class="badge badge-info" id="mcp-server-count">Loading...</span>
                     </div>
+                    <div class="conn-view-toggle" id="conn-view-toggle">
+                        <button class="conn-view-tab active" data-view="connections">Connect Services</button>
+                        <button class="conn-view-tab" data-view="advanced">Advanced MCP</button>
+                    </div>
                 </div>
+
+                <div id="connections-view">
+                    <section class="section">
+                        <div class="skills-search">
+                            <svg class="skills-search-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7.5" cy="7.5" r="5.5"/><path d="M12 12l4.5 4.5"/></svg>
+                            <input type="text" id="conn-search-input" class="input skills-search-input" placeholder="Search services..." autocomplete="off">
+                        </div>
+                    </section>
+                    <section class="section">
+                        <div class="skills-results-header">
+                            <h2>Services</h2>
+                            <span class="badge badge-neutral" id="conn-count"></span>
+                        </div>
+                        <div id="conn-category-chips" class="mcp-category-chips"></div>
+                        <div class="skill-list mcp-skill-list" id="conn-grid">
+                            <div class="empty-state"><p>Loading services...</p></div>
+                        </div>
+                    </section>
+                </div>
+
+                <div id="mcp-advanced-view" style="display:none;">
 
                 <section class="section">
                     <div class="mcp-sandbox-panel">
@@ -1913,6 +1938,8 @@ async fn mcp_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     </div>
                 </section>
 
+                </div><!-- /mcp-advanced-view -->
+
                 <div class="skill-modal-overlay" id="mcp-modal-overlay">
                     <div class="skill-modal" id="mcp-modal">
                         <div class="skill-modal-header">
@@ -1933,7 +1960,7 @@ async fn mcp_page(State(state): State<Arc<AppState>>) -> Html<String> {
         </main>"#
     );
 
-    Html(page_html("MCP", "mcp", &body, &["mcp.js"]))
+    Html(page_html("MCP", "mcp", &body, &["connections.js", "mcp.js"]))
 }
 
 #[derive(serde::Deserialize)]
