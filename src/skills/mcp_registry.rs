@@ -123,10 +123,7 @@ pub fn all_mcp_presets() -> Vec<McpServerPreset> {
             display_name: "Gmail".to_string(),
             description: "Search and read Gmail messages via OAuth-backed MCP server.".to_string(),
             command: "npx".to_string(),
-            args: vec![
-                "-y".to_string(),
-                "mcp-server-google-workspace".to_string(),
-            ],
+            args: vec!["-y".to_string(), "mcp-server-google-workspace".to_string()],
             env: vec![
                 McpEnvVar {
                     key: "GOOGLE_CLIENT_ID".to_string(),
@@ -167,10 +164,7 @@ pub fn all_mcp_presets() -> Vec<McpServerPreset> {
             display_name: "Google Calendar".to_string(),
             description: "Read and manage Google Calendar events.".to_string(),
             command: "npx".to_string(),
-            args: vec![
-                "-y".to_string(),
-                "mcp-server-google-workspace".to_string(),
-            ],
+            args: vec!["-y".to_string(), "mcp-server-google-workspace".to_string()],
             env: vec![
                 McpEnvVar {
                     key: "GOOGLE_CLIENT_ID".to_string(),
@@ -209,7 +203,8 @@ pub fn all_mcp_presets() -> Vec<McpServerPreset> {
         McpServerPreset {
             id: "notion".to_string(),
             display_name: "Notion".to_string(),
-            description: "Access Notion pages and databases via official MCP (OAuth 2.1).".to_string(),
+            description: "Access Notion pages and databases via official MCP (OAuth 2.1)."
+                .to_string(),
             command: String::new(),
             args: vec![],
             env: vec![McpEnvVar {

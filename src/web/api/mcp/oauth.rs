@@ -516,12 +516,15 @@ async fn register_mcp_client(
         )
     })?;
 
-    body["client_id"].as_str().map(|s| s.to_string()).ok_or_else(|| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": "Registration did not return client_id" })),
-        )
-    })
+    body["client_id"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": "Registration did not return client_id" })),
+            )
+        })
 }
 
 /// Start Notion MCP OAuth 2.1: register client + generate PKCE + build auth URL.
@@ -536,9 +539,12 @@ pub(super) async fn start_notion_mcp_oauth(
     }
 
     // 1. Dynamic Client Registration
-    let client_id =
-        register_mcp_client("https://mcp.notion.com/register", "Homun", req.redirect_uri.trim())
-            .await?;
+    let client_id = register_mcp_client(
+        "https://mcp.notion.com/register",
+        "Homun",
+        req.redirect_uri.trim(),
+    )
+    .await?;
 
     // 2. PKCE
     let (code_verifier, code_challenge) = generate_pkce_pair();
