@@ -186,7 +186,7 @@ async-imap = { version = "0.11", optional = true, default-features = false, feat
 tokio-rustls = { version = "0.26", optional = true, features = ["ring"] }
 rustls-pemfile = { version = "2", optional = true }
 rustls-pki-types = { version = "1", optional = true }
-rcgen = { version = "0.13", optional = true }
+rcgen = { version = "0.14", optional = true }
 webpki-roots = { version = "0.26", optional = true }
 
 # --- Skill installer (archive extraction) ---
