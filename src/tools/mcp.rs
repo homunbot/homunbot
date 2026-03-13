@@ -25,6 +25,8 @@ pub struct McpServerInfo {
     pub server_version: String,
     pub tool_count: usize,
     pub connected: bool,
+    /// Error detail when `connected` is false (for diagnostics).
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -326,6 +328,7 @@ impl McpManager {
                     server_version: String::new(),
                     tool_count: 0,
                     connected: false,
+                    error: None,
                 });
                 continue;
             }
@@ -377,13 +380,15 @@ impl McpManager {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(server = %name, error = %e, "Failed to connect MCP server");
+                    let err_detail = format!("{e:#}");
+                    tracing::warn!(server = %name, error = %err_detail, "Failed to connect MCP server");
                     server_infos.push(McpServerInfo {
                         name: name.clone(),
                         server_name: String::new(),
                         server_version: String::new(),
                         tool_count: 0,
                         connected: false,
+                        error: Some(err_detail),
                     });
                 }
             }
@@ -496,6 +501,7 @@ async fn connect_http(
         server_version,
         tool_count: tools.len(),
         connected: true,
+        error: None,
     };
 
     Ok((McpPeer::new(service), tools, info))
@@ -611,6 +617,7 @@ async fn connect_stdio(
         server_version,
         tool_count: tools.len(),
         connected: true,
+        error: None,
     };
 
     Ok((McpPeer::new(service), tools, info))
@@ -692,6 +699,7 @@ mod tests {
             server_version: "1.0".to_string(),
             tool_count: 3,
             connected: true,
+            error: None,
         };
         assert!(info.connected);
         assert_eq!(info.tool_count, 3);

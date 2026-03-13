@@ -187,7 +187,7 @@ pub async fn test_mcp_server_connection(
             tool_count: info.tool_count,
             server_name: info.server_name,
             server_version: info.server_version,
-            error: None,
+            error: info.error,
         }
     } else {
         McpConnectionTestResult {

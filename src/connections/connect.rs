@@ -84,8 +84,8 @@ pub async fn connect_recipe(
     }
 
     // 4. Optionally test the connection
-    let (connected, tool_count) = if skip_test {
-        (None, 0)
+    let (connected, tool_count, test_error) = if skip_test {
+        (None, 0, None)
     } else {
         let server = config
             .mcp
@@ -95,12 +95,14 @@ pub async fn connect_recipe(
             .expect("server should exist after setup");
 
         let test = mcp_setup::test_mcp_server_connection(instance_name, &server, sandbox).await;
-        (Some(test.connected), test.tool_count)
+        (Some(test.connected), test.tool_count, test.error)
     };
 
     let ok = connected.unwrap_or(true);
     let message = if ok {
         recipe.success.title.clone()
+    } else if let Some(err) = &test_error {
+        format!("Connection test failed: {err}")
     } else {
         "Connection test failed. The server was configured but could not connect.".to_string()
     };
