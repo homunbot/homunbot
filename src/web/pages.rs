@@ -45,6 +45,7 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/approvals", get(approvals_page))
         .route("/account", get(account_page))
+        .route("/maintenance", get(maintenance_page))
         .route("/logs", get(logs_page))
 }
 
@@ -104,6 +105,7 @@ const SETTINGS_PAGES: &[&str] = &[
     "shell",
     "sandbox",
     "approvals",
+    "maintenance",
     "logs",
 ];
 
@@ -180,6 +182,7 @@ fn sidebar(active: &str) -> String {
                 <a href="/shell" class="sidebar-subnav-link{shell_a}">Shell</a>
                 <a href="/sandbox" class="sidebar-subnav-link{sandbox_a}">Sandbox</a>
                 <a href="/approvals" class="sidebar-subnav-link{approvals_a}">Approvals</a>
+                <a href="/maintenance" class="sidebar-subnav-link{maintenance_a}">Database</a>
                 <a href="/logs" class="sidebar-subnav-link{logs_a}">Logs</a>
             </div>
         </nav>"##,
@@ -216,6 +219,7 @@ fn sidebar(active: &str) -> String {
         shell_a = a("shell"),
         sandbox_a = a("sandbox"),
         approvals_a = a("approvals"),
+        maintenance_a = a("maintenance"),
         logs_a = a("logs"),
     )
 }
@@ -4370,4 +4374,26 @@ pub async fn setup_wizard_page() -> Html<String> {
     "##;
 
     Html(standalone_page("Setup", body))
+}
+
+// ─── Maintenance ─────────────────────────────────────────────────
+
+async fn maintenance_page() -> Html<String> {
+    let body = r#"<main class="content">
+            <div class="content-inner">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">Database</h1>
+                        <p class="page-subtitle">View storage usage and purge data by domain</p>
+                    </div>
+                </div>
+                <div id="maintenance-content">
+                    <div class="empty-state">
+                        <p>Loading database stats...</p>
+                    </div>
+                </div>
+            </div>
+        </main>"#;
+
+    Html(page_html("Database", "maintenance", body, &["maintenance.js"]))
 }

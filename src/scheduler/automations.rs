@@ -246,6 +246,37 @@ TASK:\n{task}"
     )
 }
 
+/// Build an effective prompt for execution from an AutomationRow.
+/// For multi-step automations whose prompt is a generic placeholder,
+/// compose a meaningful prompt from the workflow steps.
+pub fn build_effective_prompt_from_row(automation: &crate::storage::AutomationRow) -> String {
+    if let Some(ref steps_json) = automation.workflow_steps_json {
+        #[derive(Deserialize)]
+        struct Step {
+            name: String,
+            instruction: String,
+        }
+        if let Ok(steps) = serde_json::from_str::<Vec<Step>>(steps_json) {
+            if !steps.is_empty() {
+                let mut prompt = format!(
+                    "Execute automation \"{}\" with these steps:\n",
+                    automation.name
+                );
+                for (i, step) in steps.iter().enumerate() {
+                    prompt.push_str(&format!(
+                        "{}. {}: {}\n",
+                        i + 1,
+                        step.name,
+                        step.instruction
+                    ));
+                }
+                return prompt;
+            }
+        }
+    }
+    automation.prompt.clone()
+}
+
 /// A declared dependency for an automation plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutomationDependency {

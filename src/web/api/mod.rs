@@ -10,6 +10,7 @@ mod email_accounts;
 mod health;
 mod knowledge;
 mod logs;
+mod maintenance;
 mod mcp;
 mod memory;
 mod permissions;
@@ -59,6 +60,8 @@ pub fn router() -> Router<Arc<AppState>> {
         // --- Connection Recipes ---
         .merge(connections::routes())
         .merge(automations::routes())
+        // --- Maintenance ---
+        .merge(maintenance::routes())
         // --- Usage ---
         .merge(usage::routes())
         .merge(workflows::routes())

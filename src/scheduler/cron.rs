@@ -306,9 +306,12 @@ impl CronScheduler {
                 }
             }
 
+            // Build effective prompt: for multi-step automations, compose from workflow steps
+            let effective_prompt =
+                crate::scheduler::automations::build_effective_prompt_from_row(&automation);
             let runtime_prompt = crate::scheduler::automations::build_runtime_run_input_from_plan(
                 automation.plan_json.as_deref(),
-                &automation.prompt,
+                &effective_prompt,
             );
 
             let event = CronEvent {

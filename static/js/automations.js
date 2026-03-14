@@ -3132,12 +3132,17 @@ const Builder = {
         if (middleNodes.length === 1 && middleNodes[0].kind === 'llm') {
             payload.prompt = middleNodes[0].data.prompt || 'Execute task';
         } else {
-            payload.prompt = 'Multi-step automation';
-            payload.workflow_steps = middleNodes.map((n, i) => ({
+            // Build a composite prompt from all workflow step instructions
+            const steps = middleNodes.map((n, i) => ({
                 name: n.title || ('Step ' + (i + 1)),
                 instruction: this.nodeToInstruction(n),
                 approval_required: n.kind === 'approve',
             }));
+            const stepDescriptions = steps
+                .map((s, i) => `${i + 1}. ${s.name}: ${s.instruction}`)
+                .join('\n');
+            payload.prompt = `Multi-step automation:\n${stepDescriptions}`;
+            payload.workflow_steps = steps;
         }
 
         // Deliver

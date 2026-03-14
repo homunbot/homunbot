@@ -786,9 +786,12 @@ async fn run_automation_now(
         }));
     };
 
+    // Build the effective prompt: for multi-step automations, incorporate workflow steps
+    let effective_prompt =
+        crate::scheduler::automations::build_effective_prompt_from_row(&automation);
     let runtime_prompt = crate::scheduler::automations::build_runtime_run_input_from_plan(
         automation.plan_json.as_deref(),
-        &automation.prompt,
+        &effective_prompt,
     );
 
     let msg = crate::bus::InboundMessage {
@@ -950,3 +953,4 @@ Example: "check emails every morning and send summary to Telegram"
 
     Ok(Json(GenerateFlowResponse { name, flow }))
 }
+

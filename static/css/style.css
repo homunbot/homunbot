@@ -8875,3 +8875,147 @@ html, body {
     margin-top: 16px;
 }
 
+/* ─── Maintenance / Database page ────────────────────────────── */
+
+.maint-summary {
+    display: flex;
+    gap: 24px;
+    margin-bottom: 24px;
+    padding: 20px 24px;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+}
+.maint-summary-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.maint-summary-value {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--t1);
+    font-variant-numeric: tabular-nums;
+}
+.maint-summary-label {
+    font-size: 12px;
+    color: var(--t3);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.maint-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 16px;
+}
+
+.maint-card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    transition: border-color 0.15s;
+}
+.maint-card:hover {
+    border-color: var(--accent);
+}
+.maint-card--empty {
+    opacity: 0.55;
+}
+.maint-card--empty:hover {
+    border-color: var(--border);
+}
+
+.maint-card-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+}
+.maint-card-icon {
+    flex-shrink: 0;
+    color: var(--accent);
+    margin-top: 2px;
+}
+.maint-card-info {
+    flex: 1;
+    min-width: 0;
+}
+.maint-card-title {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--t1);
+    text-transform: capitalize;
+}
+.maint-card-desc {
+    font-size: 12px;
+    color: var(--t3);
+    margin-top: 2px;
+}
+.maint-card-count {
+    flex-shrink: 0;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--t2);
+    padding: 2px 8px;
+    background: var(--surface-2);
+    border-radius: 6px;
+    font-variant-numeric: tabular-nums;
+}
+
+.maint-card-tables {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    background: var(--surface-0);
+    border-radius: 8px;
+    font-size: 12px;
+}
+.maint-table-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 0;
+}
+.maint-table-name {
+    color: var(--t2);
+    font-family: var(--font-mono);
+}
+.maint-table-rows {
+    color: var(--t3);
+    font-variant-numeric: tabular-nums;
+}
+
+.maint-card-actions {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 4px;
+}
+
+.btn-danger {
+    background: var(--error, #c0392b);
+    color: #fff;
+    border: none;
+}
+.btn-danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--error, #c0392b), #000 15%);
+}
+.btn-danger:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+@media (max-width: 768px) {
+    .maint-grid {
+        grid-template-columns: 1fr;
+    }
+    .maint-summary {
+        flex-wrap: wrap;
+        gap: 16px;
+    }
+}
+
