@@ -516,11 +516,46 @@ function renderAutomations() {
     renderMiniFlows();
 }
 
+/**
+ * Enrich flow nodes with instruction text from workflow_steps_json.
+ * Adds a `description` field to each node so tooltips can show what each step does.
+ */
+function enrichFlowWithSteps(flow, stepsJson) {
+    if (!flow || !flow.nodes || !stepsJson) return;
+    var steps;
+    try {
+        steps = typeof stepsJson === 'string' ? JSON.parse(stepsJson) : stepsJson;
+    } catch (_) { return; }
+    if (!Array.isArray(steps) || steps.length === 0) return;
+
+    // Match flow nodes to steps by label → step.name, or by order (step_0, step_1...)
+    var stepsByName = {};
+    steps.forEach(function (s) { if (s.name) stepsByName[s.name.toLowerCase()] = s; });
+
+    var stepIdx = 0;
+    flow.nodes.forEach(function (node) {
+        // Skip trigger / deliver / condition nodes — only enrich processing steps
+        if (node.kind === 'trigger' || node.kind === 'deliver') return;
+
+        // Try match by label → step name
+        var match = node.label ? stepsByName[node.label.toLowerCase()] : null;
+        if (!match && stepIdx < steps.length) {
+            match = steps[stepIdx++];
+        }
+        if (match && match.instruction) {
+            node.description = match.instruction;
+        }
+    });
+}
+
 function renderMiniFlows() {
     if (typeof window.HomunFlow === 'undefined') return;
     automations.forEach(function (item) {
         var flow = parseFlowJson(item.flow_json);
         if (!flow) return;
+
+        // Enrich flow nodes with workflow step instructions for richer tooltips
+        enrichFlowWithSteps(flow, item.workflow_steps_json);
 
         // Mini strip in collapsed card
         var miniEl = document.querySelector('.automation-flow-mini[data-flow-mini-id="' + item.id + '"]');

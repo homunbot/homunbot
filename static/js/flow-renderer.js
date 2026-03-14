@@ -680,17 +680,78 @@
                 }));
             }
 
-            // Native SVG tooltip
-            var title = svgEl('title');
-            var tip = node.kind.charAt(0).toUpperCase() + node.kind.slice(1) + ': ' + node.label;
-            if (node.meta) tip += ' — ' + node.meta;
-            title.textContent = tip;
-            nodeG.appendChild(title);
+            // Build tooltip text
+            var tipTitle = node.kind.charAt(0).toUpperCase() + node.kind.slice(1) + ': ' + node.label;
+            if (node.meta) tipTitle += ' — ' + node.meta;
+            var tipDesc = node.description || '';
+
+            // Store tooltip data as attributes for CSS/JS tooltip
+            nodeG.setAttribute('data-tip-title', tipTitle);
+            if (tipDesc) nodeG.setAttribute('data-tip-desc', tipDesc);
+            nodeG.style.cursor = 'pointer';
 
             svg.appendChild(nodeG);
         });
 
+        // Attach hover tooltip to the container (positioned above dots)
+        attachMiniTooltip(container);
         container.appendChild(svg);
+    }
+
+    // ─── Mini flow tooltip ──────────────────────────────────────────
+
+    var _tooltip = null;
+
+    function getTooltip() {
+        if (_tooltip) return _tooltip;
+        _tooltip = document.createElement('div');
+        _tooltip.className = 'flow-mini-tooltip';
+        _tooltip.style.display = 'none';
+        document.body.appendChild(_tooltip);
+        return _tooltip;
+    }
+
+    function attachMiniTooltip(container) {
+        container.addEventListener('mouseenter', function (e) {
+            var dot = e.target.closest('.flow-mini-dot');
+            if (!dot) return;
+            var title = dot.getAttribute('data-tip-title');
+            if (!title) return;
+            var desc = dot.getAttribute('data-tip-desc') || '';
+            var tip = getTooltip();
+            tip.textContent = '';
+            var titleEl = document.createElement('div');
+            titleEl.className = 'flow-mini-tooltip-title';
+            titleEl.textContent = title;
+            tip.appendChild(titleEl);
+            if (desc) {
+                var descEl = document.createElement('div');
+                descEl.className = 'flow-mini-tooltip-desc';
+                descEl.textContent = desc;
+                tip.appendChild(descEl);
+            }
+            tip.style.display = 'block';
+            positionTooltip(tip, dot);
+        }, true);
+
+        container.addEventListener('mouseleave', function (e) {
+            var dot = e.target.closest('.flow-mini-dot');
+            if (dot) {
+                var tip = getTooltip();
+                tip.style.display = 'none';
+            }
+        }, true);
+    }
+
+    function positionTooltip(tip, dot) {
+        var rect = dot.getBoundingClientRect();
+        var tipW = tip.offsetWidth;
+        var left = rect.left + rect.width / 2 - tipW / 2;
+        if (left < 8) left = 8;
+        if (left + tipW > window.innerWidth - 8) left = window.innerWidth - tipW - 8;
+        tip.style.left = left + 'px';
+        tip.style.top = (rect.top - tip.offsetHeight - 6 + window.scrollY) + 'px';
+        tip.style.position = 'absolute';
     }
 
     // ─── Public API ───────────────────────────────────────────────

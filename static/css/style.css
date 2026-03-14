@@ -7671,6 +7671,30 @@ html, body {
     filter: brightness(1.2);
 }
 
+/* Mini flow tooltip */
+.flow-mini-tooltip {
+    z-index: 1000;
+    max-width: 320px;
+    padding: 8px 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+    pointer-events: none;
+    font-size: 12px;
+    line-height: 1.4;
+}
+.flow-mini-tooltip-title {
+    font-weight: 600;
+    color: var(--t1);
+    margin-bottom: 2px;
+}
+.flow-mini-tooltip-desc {
+    color: var(--t3);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
 /* Full canvas nodes */
 .flow-node {
     cursor: default;
