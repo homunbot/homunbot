@@ -614,7 +614,7 @@ async function loadHistory(id) {
     const detail = document.getElementById('auto-detail');
     const title = document.getElementById('auto-detail-title');
     if (detail) {
-        detail.hidden = false;
+        detail.style.display = 'flex';
         const item = automations.find(a => a.id === id);
         if (title) title.textContent = item ? `History — ${item.name}` : 'Run History';
     }
@@ -626,7 +626,7 @@ async function loadHistory(id) {
 function closeHistoryPanel() {
     selectedAutomationId = null;
     const detail = document.getElementById('auto-detail');
-    if (detail) detail.hidden = true;
+    if (detail) detail.style.display = 'none';
     renderAutomations();
 }
 

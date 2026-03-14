@@ -1371,10 +1371,10 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
 
 async fn automations_page() -> Html<String> {
     let body = r#"<main class="content">
-            <div class="content-inner auto-list-view" id="automations-list-view">
-                <div class="auto-master-detail">
+            <div class="content-inner auto-list-view" id="automations-list-view" style="max-width:none;padding:0;display:flex;flex-direction:column;height:100%;">
+                <div class="auto-master-detail" style="display:flex;flex:1;min-height:0;overflow:hidden;">
                     <!-- Master: list + prompt bar -->
-                    <div class="auto-master" id="auto-master">
+                    <div class="auto-master" id="auto-master" style="flex:1;min-width:0;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;padding-left:216px;padding-right:24px;">
                         <div class="page-header">
                             <div class="page-title-group">
                                 <h1 class="page-title">Automations</h1>
@@ -1408,7 +1408,7 @@ async fn automations_page() -> Html<String> {
                     </div>
 
                     <!-- Detail: history side panel -->
-                    <div class="auto-detail" id="auto-detail" hidden>
+                    <div class="auto-detail" id="auto-detail" style="display:none;width:380px;flex-shrink:0;border-left:1px solid var(--border);flex-direction:column;">
                         <div class="auto-detail-header">
                             <h2 class="auto-detail-title" id="auto-detail-title">Run History</h2>
                             <button class="btn btn-secondary btn-sm auto-detail-close" id="btn-auto-detail-close" title="Close panel">&times;</button>
