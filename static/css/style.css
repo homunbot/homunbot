@@ -7781,11 +7781,11 @@ html, body {
 }
 
 .auto-master > .page-header {
-    padding: 24px 28px 0;
+    padding-top: 24px;
 }
 
 .auto-master > .auto-list-section {
-    padding: 0 28px;
+    padding: 0;
 }
 
 .auto-master-detail {
@@ -7803,6 +7803,9 @@ html, body {
     flex-direction: column;
     overflow-y: auto;
     overflow-x: hidden;
+    /* 200px subnav + 16px gap */
+    padding-left: 216px;
+    padding-right: 24px;
 }
 
 .auto-list-section {
@@ -7919,6 +7922,11 @@ html, body {
 }
 
 @media (max-width: 700px) {
+    .auto-master {
+        padding-left: 16px;
+        padding-right: 16px;
+    }
+
     .automation-row {
         flex-direction: column;
     }
