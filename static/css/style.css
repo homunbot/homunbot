@@ -7499,6 +7499,7 @@ html, body {
     flex-direction: column;
     gap: 6px;
     min-width: 0;
+    overflow: hidden;
 }
 
 .automation-top {
@@ -7536,6 +7537,9 @@ html, body {
     margin-left: auto;
     justify-content: flex-end;
     align-self: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    flex-shrink: 0;
 }
 
 .automation-row--selected {
@@ -7798,6 +7802,7 @@ html, body {
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+    overflow-x: hidden;
 }
 
 .auto-list-section {
@@ -7816,6 +7821,10 @@ html, body {
     display: flex;
     flex-direction: column;
     animation: autoDetailSlide 0.2s ease-out;
+}
+
+.auto-detail[hidden] {
+    display: none;
 }
 
 @keyframes autoDetailSlide {
