@@ -27,7 +27,7 @@ default = ["cli", "web-ui", "file-tools", "shell-tool", "web-tools", "cron-tool"
 
 # === Core Features ===
 cli = ["dep:clap", "dep:ratatui", "dep:crossterm"]
-web-ui = ["cli", "dep:axum", "dep:tower", "dep:tower-http", "dep:rust-embed", "dep:mime_guess", "dep:pulldown-cmark",
+web-ui = ["cli", "mcp", "dep:axum", "dep:tower", "dep:tower-http", "dep:rust-embed", "dep:mime_guess", "dep:pulldown-cmark",
            "dep:tokio-rustls", "dep:rustls-pemfile", "dep:rcgen", "dep:hyper-util"]
 file-tools = []
 shell-tool = []
