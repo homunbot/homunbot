@@ -39,3 +39,15 @@ CLAUDE.md
 COMPARISON.md
 PROJECT.md
 TASKS.md
+
+# Secrets
+.env
+
+# Playwright CLI snapshots
+.playwright-cli/
+
+# Build output / screenshots
+output/
+
+# Mobile app (prototype, not part of main binary)
+mobile-app/
