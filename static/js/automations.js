@@ -1330,7 +1330,7 @@ const NODE_KINDS = {
 // Fetched once when first needed by inspector dropdowns, then reused.
 let _cachedTools = null;
 let _cachedSkills = null;
-let _cachedMcpServers = null;
+// _cachedMcpServers removed — now uses McpLoader (DRY)
 let _cachedTargets = null;
 
 async function getCachedTools() {
@@ -1348,12 +1348,7 @@ async function getCachedSkills() {
     }
     return _cachedSkills;
 }
-async function getCachedMcpServers() {
-    if (!_cachedMcpServers) {
-        try { _cachedMcpServers = await apiRequest('/v1/mcp/servers'); } catch (_) { _cachedMcpServers = []; }
-    }
-    return _cachedMcpServers;
-}
+// getCachedMcpServers removed — now uses McpLoader (DRY)
 async function getCachedTargets() {
     if (!_cachedTargets) {
         try { _cachedTargets = await apiRequest('/v1/automations/targets'); } catch (_) { _cachedTargets = []; }
@@ -1740,10 +1735,32 @@ const Builder = {
             } else {
                 node.data[field] = e.target.value;
             }
+            // Validate field + node after change (AUTO-2)
+            if (window.AutoValidate) {
+                const rule = window.AutoValidate.fieldRule(node.kind, field);
+                if (rule) window.AutoValidate.validateField(e.target, rule);
+                window.AutoValidate.validateNode(node);
+            }
             this.renderNodes();
         };
         this.inspectorBody.addEventListener('input', handleFieldChange);
         this.inspectorBody.addEventListener('change', handleFieldChange);
+
+        // Validate on blur for immediate feedback when leaving a field (AUTO-2)
+        this.inspectorBody.addEventListener('blur', (e) => {
+            if (!e.target.dataset || !e.target.dataset.field) return;
+            // Use selectedNodeId if still set, otherwise skip inline validation
+            // (node badge is handled proactively by renderNodes)
+            const nodeId = this.selectedNodeId;
+            if (!nodeId) return;
+            const node = this.nodes.find(n => n.id === nodeId);
+            if (!node || !window.AutoValidate) return;
+            const field = e.target.dataset.field;
+            const rule = window.AutoValidate.fieldRule(node.kind, field);
+            if (rule) window.AutoValidate.validateField(e.target, rule);
+            window.AutoValidate.validateNode(node);
+            this.renderNodes();
+        }, true); // useCapture: blur does not bubble
     },
 
     // ── Prompt Bar ───────────────────────────────────────────────
@@ -2174,6 +2191,17 @@ const Builder = {
 
             el.appendChild(headerDiv);
             el.appendChild(bodyDiv);
+
+            // Validate node and show error badge on canvas (AUTO-2)
+            if (window.AutoValidate) window.AutoValidate.validateNode(node);
+            if (node._errors && node._errors.length > 0) {
+                el.classList.add('builder-node--error');
+                const badge = document.createElement('div');
+                badge.className = 'builder-node-error-badge';
+                badge.textContent = node._errors.length;
+                badge.title = node._errors.join('\n');
+                el.appendChild(badge);
+            }
 
             // Connection handles
             if (cfg.hasIn) {
@@ -2665,17 +2693,15 @@ const Builder = {
                 const renderMcpToolSchema = (serverName, toolName) => {
                     mcpSchemaContainer.textContent = '';
                     if (!serverName || !toolName) return;
-                    const fullToolName = serverName + '__' + toolName;
-                    getCachedTools().then(data => {
-                        if (this._inspectorRenderId !== renderId) return;
-                        const tool = data.tools.find(t => t.name === fullToolName);
-                        const currentArgs = window.SchemaForm.parseArguments(d.arguments);
-                        if (!tool || !tool.parameters || !tool.parameters.properties) return;
-                        if (typeof d.arguments !== 'object' || d.arguments === null) {
-                            d.arguments = currentArgs || {};
-                        }
-                        window.SchemaForm.render(mcpSchemaContainer, tool.parameters, currentArgs || {});
-                    });
+                    // Use cached tools from on-demand discovery (stored on node._mcpTools)
+                    const cachedTools = node._mcpTools || [];
+                    const tool = cachedTools.find(t => t.name === toolName);
+                    const currentArgs = window.SchemaForm.parseArguments(d.arguments);
+                    if (!tool || !tool.parameters || !tool.parameters.properties) return;
+                    if (typeof d.arguments !== 'object' || d.arguments === null) {
+                        d.arguments = currentArgs || {};
+                    }
+                    window.SchemaForm.render(mcpSchemaContainer, tool.parameters, currentArgs || {});
                 };
 
                 if (mcpToolRef.el) {
@@ -2690,15 +2716,11 @@ const Builder = {
                     }
                 }
 
-                if (serverRef.el) {
-                    asyncPopulateSelect(serverRef.el, getCachedMcpServers, servers => {
-                        if (!Array.isArray(servers)) return [];
-                        return servers
-                            .filter(s => s.enabled !== false)
-                            .map(s => ({ value: s.name, label: s.name }));
-                    }, '-- Select MCP server --');
+                if (serverRef.el && window.McpLoader) {
+                    // Use shared McpLoader for server dropdown (DRY)
+                    McpLoader.populateServerSelect(serverRef.el, d.server);
 
-                    // Cascade: when server changes, populate tool dropdown from cached tools
+                    // Cascade: when server changes, discover tools via McpLoader
                     serverRef.el.addEventListener('change', () => {
                         if (this._inspectorRenderId !== renderId) return;
                         const selectedServer = serverRef.el.value;
@@ -2706,41 +2728,25 @@ const Builder = {
                         node.data.tool = '';
                         if (!mcpToolRef.el) return;
 
-                        // Populate tool dropdown with MCP tools prefixed by server name
                         mcpToolRef.el.textContent = '';
                         const empty = document.createElement('option');
                         empty.value = '';
-                        empty.textContent = selectedServer ? 'Loading tools...' : '-- Select server first --';
+                        empty.textContent = selectedServer ? 'Connecting...' : '-- Select server first --';
                         mcpToolRef.el.appendChild(empty);
 
                         if (selectedServer) {
-                            getCachedTools().then(data => {
+                            McpLoader.discoverTools(selectedServer).then(data => {
                                 if (this._inspectorRenderId !== renderId) return;
-                                mcpToolRef.el.textContent = '';
-                                const emptyOpt = document.createElement('option');
-                                emptyOpt.value = '';
-                                emptyOpt.textContent = '-- Select tool --';
-                                mcpToolRef.el.appendChild(emptyOpt);
+                                // Cache discovered tools for schema rendering
+                                node._mcpTools = data.tools || [];
 
-                                const prefix = selectedServer + '__';
-                                const mcpTools = data.tools
-                                    .filter(t => t.name.startsWith(prefix))
-                                    .map(t => ({
-                                        value: t.name.substring(prefix.length),
-                                        label: t.name.substring(prefix.length) +
-                                            (t.description ? ' \u2014 ' + t.description.substring(0, 40) : ''),
-                                    }));
-
-                                if (mcpTools.length === 0) {
-                                    emptyOpt.textContent = 'No tools found for ' + selectedServer;
+                                if (!data.ok || !data.tools || data.tools.length === 0) {
+                                    empty.textContent = data.error
+                                        ? 'Connection failed \u2014 ' + data.error.substring(0, 50)
+                                        : 'No tools found for ' + selectedServer;
+                                    return;
                                 }
-                                mcpTools.forEach(item => {
-                                    const opt = document.createElement('option');
-                                    opt.value = item.value;
-                                    opt.textContent = item.label;
-                                    if (d.tool === item.value) opt.selected = true;
-                                    mcpToolRef.el.appendChild(opt);
-                                });
+                                McpLoader.populateToolSelect(mcpToolRef.el, data.tools, d.tool);
                             });
                         }
                     });
@@ -2754,8 +2760,8 @@ const Builder = {
                 }
 
                 // Banner: no MCP servers? Suggest Connect Services page
-                if (serverRef.el) {
-                    getCachedMcpServers().then(servers => {
+                if (serverRef.el && window.McpLoader) {
+                    McpLoader.fetchServers().then(servers => {
                         if (this._inspectorRenderId !== renderId) return;
                         const active = Array.isArray(servers) ? servers.filter(s => s.enabled !== false) : [];
                         if (active.length === 0) {
@@ -2848,7 +2854,7 @@ const Builder = {
                 addLink('\u2192 Full MCP Server Setup', '/mcp');
 
                 // Empty state
-                getCachedMcpServers().then(servers => {
+                if (window.McpLoader) McpLoader.fetchServers().then(servers => {
                     if (this._inspectorRenderId !== renderId) return;
                     if (!Array.isArray(servers) || servers.length === 0) {
                         addHint('No MCP servers configured yet. Search above or visit the MCP page.');
@@ -2864,8 +2870,8 @@ const Builder = {
                 });
                 const modelRef = {};
                 addField('Model', 'model', 'select', { options: [], ref: modelRef });
-                if (modelRef.el) {
-                    // Replicate the proven pattern from chat.js: direct fetch + optgroups
+                if (modelRef.el && window.ModelLoader) {
+                    // Use shared ModelLoader (DRY: same logic as chat.js)
                     const sel = modelRef.el;
                     sel.textContent = '';
                     const loading = document.createElement('option');
@@ -2874,72 +2880,17 @@ const Builder = {
                     loading.disabled = true;
                     sel.appendChild(loading);
 
-                    (async () => {
-                        try {
-                            const resp = await fetch('/api/v1/providers/models');
-                            const data = await resp.json();
-                            if (this._inspectorRenderId !== renderId) return;
-
-                            // Group by provider (same as chat.js)
-                            const groups = {};
-                            if (data.ok && Array.isArray(data.models)) {
-                                data.models.forEach(m => {
-                                    if (!groups[m.provider]) groups[m.provider] = [];
-                                    groups[m.provider].push({ value: m.model, label: m.label });
-                                });
-                            }
-
-                            // Fetch Ollama live models if configured
-                            if (data.ollama_configured) {
-                                try {
-                                    const olResp = await fetch('/api/v1/providers/ollama/models');
-                                    const olData = await olResp.json();
-                                    if (olData.ok && Array.isArray(olData.models) && olData.models.length > 0) {
-                                        groups['ollama'] = olData.models.map(m => ({
-                                            value: 'ollama/' + m.name,
-                                            label: m.name + (m.size ? ' (' + m.size + ')' : ''),
-                                        }));
-                                    }
-                                } catch (_) { /* Ollama might not be running */ }
-                            }
-
-                            if (this._inspectorRenderId !== renderId) return;
-                            sel.textContent = '';
-
-                            // Default option
-                            const defOpt = document.createElement('option');
-                            defOpt.value = '';
-                            defOpt.textContent = '-- Default model --';
-                            if (!d.model) defOpt.selected = true;
-                            sel.appendChild(defOpt);
-
-                            // Populate optgroups per provider
-                            const providerNames = { anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Google Gemini', openrouter: 'OpenRouter', deepseek: 'DeepSeek', groq: 'Groq', mistral: 'Mistral', xai: 'xAI', together: 'Together', ollama: 'Ollama (local)', ollama_cloud: 'Ollama Cloud' };
-                            for (const [provider, models] of Object.entries(groups)) {
-                                const optgroup = document.createElement('optgroup');
-                                optgroup.label = providerNames[provider] || provider;
-                                models.forEach(m => {
-                                    const opt = document.createElement('option');
-                                    opt.value = m.value;
-                                    opt.textContent = m.label;
-                                    if (d.model === m.value) opt.selected = true;
-                                    optgroup.appendChild(opt);
-                                });
-                                sel.appendChild(optgroup);
-                            }
-
-                            if (Object.keys(groups).length === 0) {
-                                defOpt.textContent = 'No models configured';
-                            }
-                        } catch (err) {
-                            if (this._inspectorRenderId !== renderId) return;
-                            sel.textContent = '';
-                            const errOpt = document.createElement('option');
-                            errOpt.value = '';
-                            errOpt.textContent = '-- Default model --';
-                            sel.appendChild(errOpt);
-                        }
-                    })();
+                    ModelLoader.fetchGrouped().then(result => {
+                        if (this._inspectorRenderId !== renderId) return;
+                        ModelLoader.populateSelect(sel, result.groups, d.model);
+                    }).catch(() => {
+                        if (this._inspectorRenderId !== renderId) return;
+                        sel.textContent = '';
+                        const errOpt = document.createElement('option');
+                        errOpt.value = '';
+                        errOpt.textContent = '-- Default model --';
+                        sel.appendChild(errOpt);
+                    });
                 }
                 break;
             }
@@ -3126,20 +3077,35 @@ const Builder = {
     },
 
     async save() {
-        const name = document.getElementById('builder-automation-name').value.trim();
-        if (!name) {
-            showToast('Please enter an automation name.', 'error');
-            return;
+        const nameInput = document.getElementById('builder-automation-name');
+        const name = nameInput.value.trim();
+
+        // Full pre-save validation (AUTO-2)
+        if (window.AutoValidate) {
+            const result = window.AutoValidate.validateAll(this.nodes, this.edges, name);
+            this.renderNodes(); // re-render to show error badges
+            if (!result.valid) {
+                showToast(result.errors[0], 'error');
+                if (!name) nameInput.focus();
+                return;
+            }
+        } else {
+            // Fallback: original checks if auto-validate.js not loaded
+            if (!name) {
+                showToast('Please enter an automation name.', 'error');
+                return;
+            }
+            const triggerCheck = this.nodes.find(n => n.kind === 'trigger');
+            const middleCheck = this.nodes.filter(n => n.kind !== 'trigger' && n.kind !== 'deliver');
+            if (!triggerCheck || middleCheck.length === 0) {
+                showToast('Need at least a Trigger and one processing node.', 'error');
+                return;
+            }
         }
 
         const triggerNode = this.nodes.find(n => n.kind === 'trigger');
         const deliverNode = this.nodes.find(n => n.kind === 'deliver');
         const middleNodes = this.nodes.filter(n => n.kind !== 'trigger' && n.kind !== 'deliver');
-
-        if (!triggerNode || middleNodes.length === 0) {
-            showToast('Need at least a Trigger and one processing node.', 'error');
-            return;
-        }
 
         const payload = { name, trigger: 'always' };
 

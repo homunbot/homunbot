@@ -378,14 +378,7 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .map(|(n, _)| n)
         .unwrap_or("none");
 
-    let skills_count = crate::skills::SkillInstaller::list_installed()
-        .await
-        .map(|s| s.len())
-        .unwrap_or(0);
-
-    let channels_html = build_channels_html(&config);
     let uptime_display = format_uptime(uptime);
-    let channel_count = count_active_channels(&config);
 
     // Show warning if no model is configured
     let no_model_warning = if provider == "none" || config.agent.model.is_empty() {
@@ -419,31 +412,52 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                     <a href="/setup" class="stat-card stat-card-link">
                         <div class="stat-label">Model</div>
                         <div class="stat-value">{model}</div>
-                        <div class="stat-sub">via {provider} → Settings</div>
+                        <div class="stat-sub">via {provider}</div>
                     </a>
                     <div class="stat-card">
                         <div class="stat-label">Uptime</div>
                         <div class="stat-value" data-live-uptime="{uptime_secs}">{uptime_display}</div>
                         <div class="stat-sub">since start</div>
                     </div>
-                    <div class="stat-card" data-editable data-key="agent.temperature">
-                        <div class="stat-label">Temperature</div>
-                        <div class="stat-value">{temperature}</div>
-                        <div class="stat-sub">creativity</div>
-                        <div class="inline-edit">
-                            <input type="number" class="inline-input" value="{temperature}" step="0.1" min="0" max="2">
-                            <div class="inline-actions">
-                                <button class="btn btn-save btn-sm">Save</button>
-                                <button class="btn btn-cancel btn-sm">Cancel</button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Channels</div>
-                        <div class="stat-value">{channel_count}</div>
-                        <div class="stat-sub">{skills_count} skills</div>
-                    </div>
+                    <a href="/automations" class="stat-card stat-card-link" id="stat-next-automation">
+                        <div class="stat-label">Next Automation</div>
+                        <div class="stat-value" id="stat-next-auto-value">—</div>
+                        <div class="stat-sub" id="stat-next-auto-name">loading...</div>
+                    </a>
+                    <a href="/workflows" class="stat-card stat-card-link" id="stat-workflows">
+                        <div class="stat-label">Workflows</div>
+                        <div class="stat-value" id="stat-workflows-value">—</div>
+                        <div class="stat-sub" id="stat-workflows-sub">loading...</div>
+                    </a>
                 </div>
+
+                <section class="section" id="dash-automations-section">
+                    <div class="dash-section-header">
+                        <h2>Upcoming Automations</h2>
+                        <a href="/automations" class="dash-section-link">View all →</a>
+                    </div>
+                    <div class="item-list" id="dash-automations-list">
+                        <div class="dash-loading">Loading automations...</div>
+                    </div>
+                </section>
+
+                <section class="section" id="dash-activity-section">
+                    <div class="dash-section-header">
+                        <h2>Recent Activity</h2>
+                    </div>
+                    <div class="item-list" id="dash-activity-list">
+                        <div class="dash-loading">Loading activity...</div>
+                    </div>
+                </section>
+
+                <section class="section" id="dash-health-section">
+                    <div class="dash-section-header">
+                        <h2>System Health</h2>
+                    </div>
+                    <div class="dash-health-grid" id="dash-health-grid">
+                        <div class="dash-loading">Loading...</div>
+                    </div>
+                </section>
 
                 <section class="section usage-section">
                     <h2>Token Usage</h2>
@@ -467,29 +481,6 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                         <button class="btn btn-secondary btn-sm" type="button" id="usage-refresh">Refresh</button>
                     </div>
 
-                    <div class="stats-grid usage-stats-grid">
-                        <div class="stat-card">
-                            <div class="stat-label">Total Tokens</div>
-                            <div class="stat-value" id="usage-total-tokens">-</div>
-                            <div class="stat-sub" id="usage-days-count">-</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-label">Prompt Tokens</div>
-                            <div class="stat-value" id="usage-prompt-tokens">-</div>
-                            <div class="stat-sub">input</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-label">Completion Tokens</div>
-                            <div class="stat-value" id="usage-completion-tokens">-</div>
-                            <div class="stat-sub">output</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-label">Estimated Cost (USD)</div>
-                            <div class="stat-value" id="usage-estimated-cost">$0.00</div>
-                            <div class="stat-sub" id="usage-total-calls">- calls</div>
-                        </div>
-                    </div>
-
                     <div class="usage-panels">
                         <div class="usage-panel">
                             <div class="usage-panel-title">Daily Token Trend</div>
@@ -497,46 +488,11 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                             <div class="usage-chart-empty" id="usage-chart-empty" hidden>No usage data in selected range.</div>
                         </div>
                         <div class="usage-panel">
-                            <div class="usage-panel-title">Prompt vs Completion</div>
-                            <div class="usage-split" id="usage-split"></div>
+                            <div class="usage-panel-title">Estimated Cost</div>
+                            <div class="stat-value" id="usage-estimated-cost" style="margin-bottom:4px">$0.00</div>
+                            <div class="stat-sub" id="usage-total-calls">— calls</div>
+                            <div class="usage-split" id="usage-split" style="margin-top:12px"></div>
                         </div>
-                    </div>
-
-                    <div class="usage-table-wrap">
-                        <table class="usage-table" id="usage-models-table">
-                            <thead>
-                                <tr>
-                                    <th>Model</th>
-                                    <th>Provider</th>
-                                    <th>Prompt</th>
-                                    <th>Completion</th>
-                                    <th>Total</th>
-                                    <th>Calls</th>
-                                    <th>Est. Cost</th>
-                                </tr>
-                            </thead>
-                            <tbody id="usage-models-body">
-                                <tr>
-                                    <td colspan="7" class="usage-loading">Loading usage...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-                <section class="section">
-                    <h2>Channels</h2>
-                    <div class="item-list">
-                        {channels_html}
-                    </div>
-                </section>
-
-                <section class="section">
-                    <h2>Quick Actions</h2>
-                    <div class="actions">
-                        <a href="/chat" class="btn btn-primary">Open Chat</a>
-                        <a href="/skills" class="btn btn-secondary">Manage Skills</a>
-                        <a href="/setup" class="btn btn-secondary">Settings</a>
                     </div>
                 </section>
             </div>
@@ -545,10 +501,6 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         provider = provider,
         uptime_secs = uptime,
         uptime_display = uptime_display,
-        temperature = config.agent.temperature,
-        skills_count = skills_count,
-        channel_count = channel_count,
-        channels_html = channels_html,
         no_model_warning = no_model_warning,
     );
 
@@ -556,7 +508,7 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "Dashboard",
         "dashboard",
         &body,
-        &["dashboard.js"],
+        &["dashboard.js", "dash-usage.js"],
     ))
     .into_response()
 }
@@ -1368,7 +1320,7 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
         current_vision_model = current_vision_model,
     );
 
-    Html(page_html("Chat", "chat", &body, &["chat.js"]))
+    Html(page_html("Chat", "chat", &body, &["model-loader.js", "chat.js"]))
 }
 
 // ─── Automations ────────────────────────────────────────────────
@@ -1501,7 +1453,7 @@ async fn automations_page() -> Html<String> {
         "Automations",
         "automations",
         body,
-        &["flow-renderer.js", "schema-form.js", "automations.js"],
+        &["flow-renderer.js", "model-loader.js", "mcp-loader.js", "schema-form.js", "auto-validate.js", "automations.js"],
     ))
 }
 
@@ -2851,11 +2803,11 @@ async fn sandbox_page(State(state): State<Arc<AppState>>) -> Html<String> {
                 </div>
 
                 <section class="section" id="sandbox-docker-status-section">
-                    <h2>Docker Status</h2>
+                    <h2>Backend Status</h2>
                     <div class="sandbox-docker-status" id="sandbox-docker-status">
                         <div class="sandbox-docker-status-icon" id="sandbox-docker-status-icon">⏳</div>
                         <div class="sandbox-docker-status-info">
-                            <div class="sandbox-docker-status-text" id="sandbox-docker-status-text">Checking Docker availability...</div>
+                            <div class="sandbox-docker-status-text" id="sandbox-docker-status-text">Detecting available backends...</div>
                             <div class="sandbox-docker-status-detail" id="sandbox-docker-status-detail"></div>
                         </div>
                         <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-docker-status">Refresh</button>
@@ -2877,14 +2829,14 @@ async fn sandbox_page(State(state): State<Arc<AppState>>) -> Html<String> {
                                 <span class="sandbox-profile-title">Safe</span>
                                 <span class="badge badge-neutral" id="sandbox-profile-safe-badge">Fallback allowed</span>
                             </div>
-                            <p class="sandbox-profile-desc" id="sandbox-profile-safe-desc">Prefers isolation, but keeps working if Docker is unavailable.</p>
+                            <p class="sandbox-profile-desc" id="sandbox-profile-safe-desc">Sandbox active with auto-detected backend. Falls back to native if unavailable.</p>
                         </button>
                         <button type="button" class="sandbox-profile-card" data-sandbox-profile="strict">
                             <div class="sandbox-profile-header">
                                 <span class="sandbox-profile-title">Strict</span>
                                 <span class="badge badge-warning" id="sandbox-profile-strict-badge">Blocks on failure</span>
                             </div>
-                            <p class="sandbox-profile-desc" id="sandbox-profile-strict-desc">Requires Docker. Blocks execution if sandbox backend is unavailable.</p>
+                            <p class="sandbox-profile-desc" id="sandbox-profile-strict-desc">Requires an isolation backend. Blocks execution if no backend is available.</p>
                         </button>
                         <button type="button" class="sandbox-profile-card" data-sandbox-profile="disabled">
                             <div class="sandbox-profile-header">
@@ -2927,6 +2879,7 @@ async fn sandbox_page(State(state): State<Arc<AppState>>) -> Html<String> {
                                     <option value="docker">docker</option>
                                     <option value="linux_native">linux_native</option>
                                     <option value="windows_native">windows_native</option>
+                                    <option value="macos_seatbelt">macos_seatbelt</option>
                                     <option value="none">none</option>
                                 </select>
                             </div>
