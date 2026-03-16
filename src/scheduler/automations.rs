@@ -263,12 +263,7 @@ pub fn build_effective_prompt_from_row(automation: &crate::storage::AutomationRo
                     automation.name
                 );
                 for (i, step) in steps.iter().enumerate() {
-                    prompt.push_str(&format!(
-                        "{}. {}: {}\n",
-                        i + 1,
-                        step.name,
-                        step.instruction
-                    ));
+                    prompt.push_str(&format!("{}. {}: {}\n", i + 1, step.name, step.instruction));
                 }
                 return prompt;
             }

@@ -1,0 +1,207 @@
+- generic [ref=e2]:
+  - navigation [ref=e3]:
+    - link "HOMUN" [ref=e5] [cursor=pointer]:
+      - /url: /
+      - generic "HOMUN" [ref=e6]
+    - generic [ref=e7]:
+      - link "Chat" [ref=e9] [cursor=pointer]:
+        - /url: /chat
+        - img [ref=e11]
+        - text: Chat
+      - link "Dashboard" [ref=e13] [cursor=pointer]:
+        - /url: /dashboard
+        - img [ref=e15]
+        - text: Dashboard
+      - link "Tools" [ref=e20] [cursor=pointer]:
+        - /url: /automations
+        - img [ref=e22]
+        - text: Tools
+      - button "Stop" [ref=e24] [cursor=pointer]:
+        - img [ref=e26]
+        - text: Stop
+    - generic [ref=e29]:
+      - link "Account" [ref=e30] [cursor=pointer]:
+        - /url: /account
+        - img [ref=e32]
+        - text: Account
+      - link "Settings" [ref=e35] [cursor=pointer]:
+        - /url: /setup
+        - img [ref=e37]
+        - text: Settings
+      - button "Logout" [ref=e40]:
+        - img [ref=e42]
+        - text: Logout
+  - main [ref=e45]:
+    - generic [ref=e47]:
+      - complementary [ref=e48]:
+        - generic [ref=e49]:
+          - generic [ref=e50]: Conversations
+          - generic [ref=e51]:
+            - button "Search" [ref=e52] [cursor=pointer]:
+              - img [ref=e53]
+            - button "New conversation" [ref=e56] [cursor=pointer]:
+              - img [ref=e57]
+        - generic [ref=e58]:
+          - generic [ref=e506]: Oggi
+          - generic [ref=e507]:
+            - button "Use the browser tool only and answer with the fi… 21:46" [ref=e508] [cursor=pointer]:
+              - generic [ref=e509]: Use the browser tool only and answer with the fi…
+              - generic [ref=e510]: 21:46
+            - button "Conversation actions" [ref=e511] [cursor=pointer]:
+              - img [ref=e512]
+          - generic [ref=e516]:
+            - button "New conversation 20:41" [ref=e517] [cursor=pointer]:
+              - generic [ref=e518]: New conversation
+              - generic [ref=e519]: 20:41
+            - button "Conversation actions" [ref=e520] [cursor=pointer]:
+              - img [ref=e521]
+          - generic [ref=e525]:
+            - button "New conversation 20:39" [ref=e526] [cursor=pointer]:
+              - generic [ref=e527]: New conversation
+              - generic [ref=e528]: 20:39
+            - button "Conversation actions" [ref=e529] [cursor=pointer]:
+              - img [ref=e530]
+          - generic [ref=e534]:
+            - button "Session smoke marker two. Reply briefly. 19:52" [ref=e535] [cursor=pointer]:
+              - generic [ref=e536]: Session smoke marker two. Reply briefly.
+              - generic [ref=e537]: 19:52
+            - button "Conversation actions" [ref=e538] [cursor=pointer]:
+              - img [ref=e539]
+          - generic [ref=e543]:
+            - button "Session smoke marker one. Reply briefly. 19:51" [ref=e544] [cursor=pointer]:
+              - generic [ref=e545]: Session smoke marker one. Reply briefly.
+              - generic [ref=e546]: 19:51
+            - button "Conversation actions" [ref=e547] [cursor=pointer]:
+              - img [ref=e548]
+          - generic [ref=e552]:
+            - button "Session smoke marker two. Reply briefly. 19:50" [ref=e553] [cursor=pointer]:
+              - generic [ref=e554]: Session smoke marker two. Reply briefly.
+              - generic [ref=e555]: 19:50
+            - button "Conversation actions" [ref=e556] [cursor=pointer]:
+              - img [ref=e557]
+          - generic [ref=e561]:
+            - button "Session smoke marker one. Reply briefly. 19:48" [ref=e562] [cursor=pointer]:
+              - generic [ref=e563]: Session smoke marker one. Reply briefly.
+              - generic [ref=e564]: 19:48
+            - button "Conversation actions" [ref=e565] [cursor=pointer]:
+              - img [ref=e566]
+          - generic [ref=e570]:
+            - button "Session smoke marker two. Reply briefly. 19:46" [ref=e571] [cursor=pointer]:
+              - generic [ref=e572]: Session smoke marker two. Reply briefly.
+              - generic [ref=e573]: 19:46
+            - button "Conversation actions" [ref=e574] [cursor=pointer]:
+              - img [ref=e575]
+          - generic [ref=e579]:
+            - button "Session smoke marker two. Reply briefly. 19:45" [ref=e580] [cursor=pointer]:
+              - generic [ref=e581]: Session smoke marker two. Reply briefly.
+              - generic [ref=e582]: 19:45
+            - button "Conversation actions" [ref=e583] [cursor=pointer]:
+              - img [ref=e584]
+          - generic [ref=e588]:
+            - button "Produce exactly 120 numbered lines. Keep writing… 19:42" [ref=e589] [cursor=pointer]:
+              - generic [ref=e590]: Produce exactly 120 numbered lines. Keep writing…
+              - generic [ref=e591]: 19:42
+            - button "Conversation actions" [ref=e592] [cursor=pointer]:
+              - img [ref=e593]
+          - generic [ref=e597]:
+            - button "Session smoke marker two. Reply briefly. 19:41" [ref=e598] [cursor=pointer]:
+              - generic [ref=e599]: Session smoke marker two. Reply briefly.
+              - generic [ref=e600]: 19:41
+            - button "Conversation actions" [ref=e601] [cursor=pointer]:
+              - img [ref=e602]
+          - generic [ref=e606]:
+            - button "Mi leggi i dati della mia patente 00:16" [ref=e607] [cursor=pointer]:
+              - generic [ref=e608]: Mi leggi i dati della mia patente
+              - generic [ref=e609]: 00:16
+            - button "Conversation actions" [ref=e610] [cursor=pointer]:
+              - img [ref=e611]
+          - generic [ref=e615]: Ieri
+          - generic [ref=e616]:
+            - button "Crea un workflow in cui mi trovi 3 barzellette n… Ieri" [ref=e617] [cursor=pointer]:
+              - generic [ref=e618]: Crea un workflow in cui mi trovi 3 barzellette n…
+              - generic [ref=e619]: Ieri
+            - button "Conversation actions" [ref=e620] [cursor=pointer]:
+              - img [ref=e621]
+      - generic [ref=e169]:
+        - generic [ref=e170]:
+          - generic [ref=e172]:
+            - generic [ref=e173]: Use the browser tool only and answer with the fi…
+            - generic [ref=e175]: Live
+          - generic [ref=e177]:
+            - button "New conversation" [ref=e178] [cursor=pointer]:
+              - img [ref=e179]
+            - button "Clear screen" [ref=e180] [cursor=pointer]:
+              - img [ref=e181]
+            - button "Toggle sidebar" [ref=e184] [cursor=pointer]:
+              - img [ref=e185]
+        - generic [ref=e187]:
+          - 'button "Use the browser tool only and answer with the final token only. Open this exact URL: data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%20lang%3D%22en%22%3E%3Cmeta%20charset%3D%22utf-8%22%3E%3Ctitle%3EBrowser%20T… (3/5) ›" [ref=e505] [cursor=pointer]':
+            - generic [ref=e190]:
+              - generic [ref=e191]: "Use the browser tool only and answer with the final token only. Open this exact URL: data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%20lang%3D%22en%22%3E%3Cmeta%20charset%3D%22utf-8%22%3E%3Ctitle%3EBrowser%20T…"
+              - generic [ref=e192]: (3/5)
+            - generic [ref=e193]: ›
+          - generic [ref=e194]:
+            - generic [ref=e477]: "Use the browser tool only and answer with the final token only. Open this exact URL: data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%20lang%3D%22en%22%3E%3Cmeta%20charset%3D%22utf-8%22%3E%3Ctitle%3EBrowser%20Tool%20Fixture%3C%2Ftitle%3E%3Cbody%3E%3Ch1%3EBrowser%20Tool%20Challenge%3C%2Fh1%3E%3Cp%3EType%20%3Cstrong%20id%3D%22expected-code%22%3EORBIT-42%3C%2Fstrong%3E%20and%20click%20%3Cstrong%3EReveal%20answer%3C%2Fstrong%3E.%3C%2Fp%3E%3Clabel%3EChallenge%20code%20%3Cinput%20id%3D%22challenge-input%22%20autocomplete%3D%22off%22%3E%3C%2Flabel%3E%3Cbutton%20id%3D%22reveal-btn%22%20type%3D%22button%22%20disabled%3EReveal%20answer%3C%2Fbutton%3E%3Cp%20id%3D%22status%22%3EWaiting.%3C%2Fp%3E%3Cdiv%20id%3D%22result%22%20hidden%3E%3C%2Fdiv%3E%3Cscript%3Econst%20e%3D%22ORBIT-42%22%2Ci%3Ddocument.getElementById(%22challenge-input%22)%2Cb%3Ddocument.getElementById(%22reveal-btn%22)%2Cs%3Ddocument.getElementById(%22status%22)%2Cr%3Ddocument.getElementById(%22result%22)%3Bi.addEventListener(%22input%22%2C()%3D%3E%7Bconst%20ok%3Di.value.trim()%3D%3D%3De%3Bb.disabled%3D!ok%3Bs.textContent%3Dok%3F%22Ready%20to%20reveal.%22%3A%22Waiting.%22%3B%7D)%3Bb.addEventListener(%22click%22%2C()%3D%3E%7Br.textContent%3D%5B%22browser%22%2C%22smoke%22%2C%22token%22%2C%2242%22%5D.join(%22-%22)%3Br.hidden%3Dfalse%3Bs.textContent%3D%22Answer%20revealed.%22%3B%7D)%3B%3C%2Fscript%3E%0A Type the required challenge code into the input, click \"Reveal answer\", then read the final token. Do not use web_search or web_fetch."
+            - generic [ref=e481] [cursor=pointer]:
+              - generic [ref=e482]:
+                - generic [ref=e483]: Searched the web
+                - generic [ref=e484]: 3 steps
+              - generic [ref=e485]: ›
+            - paragraph [ref=e626]: browser-smoke-token-42
+        - generic [ref=e214]:
+          - textbox "Reply to Homun…" [active] [ref=e215]
+          - generic [ref=e217]:
+            - generic [ref=e218]:
+              - combobox "Model" [ref=e220] [cursor=pointer]:
+                - option "qwen3.5:397b-cloud" [selected]
+                - option "── Switch to ──" [disabled]
+                - option "qwen3.5:397b-cloud (0.0 GB)"
+                - option "qwen3-coder-next:cloud (0.0 GB)"
+                - option "qwen3-coder:480b-cloud (0.0 GB)"
+                - option "deepseek-v3.1:671b-cloud (0.0 GB)"
+                - option "ministral-3:14b-cloud (0.0 GB)"
+                - option "llama3.1:8b (4.9 GB)"
+                - option "qwen3-vl:235b-cloud (0.0 GB)"
+                - option "glm-5:cloud (0.0 GB)"
+                - option "minimax-m2:cloud (0.0 GB)"
+                - option "kimi-k2.5:cloud (0.0 GB)"
+                - option "glm-4.6:cloud (0.0 GB)"
+                - option "minimax-m2"
+                - option "minimax-m2.1"
+                - option "minimax-m2.5"
+                - option "ministral-3:3b"
+                - option "devstral-small-2:24b"
+                - option "gemma3:4b"
+                - option "cogito-2.1:671b"
+                - option "qwen3-coder:480b"
+                - option "qwen3-vl:235b"
+                - option "kimi-k2.5"
+                - option "mistral-large-3:675b"
+                - option "kimi-k2:1t"
+                - option "devstral-2:123b"
+                - option "glm-4.6"
+                - option "kimi-k2-thinking"
+                - option "ministral-3:8b"
+                - option "gemini-3-flash-preview"
+                - option "glm-5"
+                - option "qwen3-coder-next"
+                - option "deepseek-v3.2"
+                - option "gpt-oss:120b"
+                - option "ministral-3:14b"
+                - option "glm-4.7"
+                - option "qwen3-next:80b"
+                - option "nemotron-3-nano:30b"
+                - option "qwen3-vl:235b-instruct"
+                - option "gemma3:12b"
+                - option "gemma3:27b"
+                - option "rnj-1:8b"
+                - option "qwen3.5:397b"
+                - option "deepseek-v3.1:671b"
+                - option "gpt-oss:20b"
+              - generic [ref=e227]:
+                - generic [ref=e228]: image
+                - generic [ref=e229]: tools
+            - generic [ref=e221]:
+              - button "+" [ref=e223] [cursor=pointer]
+              - button "Send message" [ref=e627] [cursor=pointer]:
+                - img [ref=e354]

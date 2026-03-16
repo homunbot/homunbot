@@ -1,0 +1,5 @@
+### Page
+- Page URL: https://ui.homun.bot/chat?c=d854079a-92ad-496f-aa7f-8b0f1a9f77dc
+- Page Title: Chat — Homun
+### Snapshot
+- [Snapshot](.playwright-cli/page-2026-03-10T20-57-22-965Z.yml)

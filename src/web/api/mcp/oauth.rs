@@ -124,10 +124,9 @@ fn google_mcp_scopes(service: &str) -> Option<Vec<&'static str>> {
             "https://www.googleapis.com/auth/gmail.readonly",
             "email",
         ]),
-        "google-calendar" | "gcal" | "calendar" => Some(vec![
-            "https://www.googleapis.com/auth/calendar",
-            "email",
-        ]),
+        "google-calendar" | "gcal" | "calendar" => {
+            Some(vec!["https://www.googleapis.com/auth/calendar", "email"])
+        }
         // Unified google-workspace: combine Gmail + Calendar scopes.
         // Comma-separated services can be passed (e.g. "gmail,calendar").
         "google-workspace" => Some(vec![
@@ -717,7 +716,9 @@ pub(super) async fn exchange_notion_mcp_oauth_code(
     if let Ok(secrets) = crate::storage::global_secrets() {
         if let Some(rt) = body.refresh_token.as_deref() {
             let _ = secrets.set(
-                &crate::storage::SecretKey::custom(&format!("vault.mcp.{inst}.notion_refresh_token")),
+                &crate::storage::SecretKey::custom(&format!(
+                    "vault.mcp.{inst}.notion_refresh_token"
+                )),
                 rt,
             );
         }

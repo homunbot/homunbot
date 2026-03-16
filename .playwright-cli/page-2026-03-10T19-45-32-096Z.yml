@@ -1,0 +1,156 @@
+- generic [ref=e2]:
+  - navigation [ref=e3]:
+    - link "HOMUN" [ref=e5] [cursor=pointer]:
+      - /url: /
+      - generic "HOMUN" [ref=e6]
+    - generic [ref=e7]:
+      - link "Chat" [ref=e9] [cursor=pointer]:
+        - /url: /chat
+        - img [ref=e11]
+        - text: Chat
+      - link "Dashboard" [ref=e13] [cursor=pointer]:
+        - /url: /dashboard
+        - img [ref=e15]
+        - text: Dashboard
+      - link "Tools" [ref=e20] [cursor=pointer]:
+        - /url: /automations
+        - img [ref=e22]
+        - text: Tools
+      - button "Stop" [ref=e24] [cursor=pointer]:
+        - img [ref=e26]
+        - text: Stop
+    - generic [ref=e29]:
+      - link "Account" [ref=e30] [cursor=pointer]:
+        - /url: /account
+        - img [ref=e32]
+        - text: Account
+      - link "Settings" [ref=e35] [cursor=pointer]:
+        - /url: /setup
+        - img [ref=e37]
+        - text: Settings
+      - button "Logout" [ref=e40]:
+        - img [ref=e42]
+        - text: Logout
+  - main [ref=e45]:
+    - generic [ref=e47]:
+      - complementary [ref=e48]:
+        - generic [ref=e49]:
+          - generic [ref=e50]: Conversations
+          - generic [ref=e51]:
+            - button "Search" [ref=e52] [cursor=pointer]:
+              - img [ref=e53]
+            - button "New conversation" [ref=e56] [cursor=pointer]:
+              - img [ref=e57]
+        - generic [ref=e58]:
+          - generic [ref=e206]: Oggi
+          - generic [ref=e207]:
+            - button "Session smoke marker two. Reply briefly. 20:45" [ref=e208] [cursor=pointer]:
+              - generic [ref=e209]: Session smoke marker two. Reply briefly.
+              - generic [ref=e210]: 20:45
+            - button "Conversation actions" [ref=e211] [cursor=pointer]:
+              - img [ref=e212]
+          - generic [ref=e216]:
+            - button "Produce exactly 120 numbered lines. Keep writing… 19:42" [ref=e217] [cursor=pointer]:
+              - generic [ref=e218]: Produce exactly 120 numbered lines. Keep writing…
+              - generic [ref=e219]: 19:42
+            - button "Conversation actions" [ref=e220] [cursor=pointer]:
+              - img [ref=e221]
+          - generic [ref=e225]:
+            - button "Session smoke marker two. Reply briefly. 19:41" [ref=e226] [cursor=pointer]:
+              - generic [ref=e227]: Session smoke marker two. Reply briefly.
+              - generic [ref=e228]: 19:41
+            - button "Conversation actions" [ref=e229] [cursor=pointer]:
+              - img [ref=e230]
+          - generic [ref=e234]:
+            - button "Mi leggi i dati della mia patente 00:16" [ref=e235] [cursor=pointer]:
+              - generic [ref=e236]: Mi leggi i dati della mia patente
+              - generic [ref=e237]: 00:16
+            - button "Conversation actions" [ref=e238] [cursor=pointer]:
+              - img [ref=e239]
+          - generic [ref=e243]: Ieri
+          - generic [ref=e244]:
+            - button "Crea un workflow in cui mi trovi 3 barzellette n… Ieri" [ref=e245] [cursor=pointer]:
+              - generic [ref=e246]: Crea un workflow in cui mi trovi 3 barzellette n…
+              - generic [ref=e247]: Ieri
+            - button "Conversation actions" [ref=e248] [cursor=pointer]:
+              - img [ref=e249]
+      - generic [ref=e106]:
+        - generic [ref=e107]:
+          - generic [ref=e109]:
+            - generic [ref=e110]: Session smoke marker two. Reply briefly.
+            - generic [ref=e112]: Live
+          - generic [ref=e113]:
+            - button "New conversation" [ref=e114] [cursor=pointer]:
+              - img [ref=e115]
+            - button "Clear screen" [ref=e116] [cursor=pointer]:
+              - img [ref=e117]
+            - button "Toggle sidebar" [ref=e120] [cursor=pointer]:
+              - img [ref=e121]
+        - generic [ref=e123]:
+          - button "Produce exactly 120 numbered lines. Keep writing until all 120 are complete. Do not summarize early. (0/1) ›" [ref=e195] [cursor=pointer]:
+            - generic [ref=e196]:
+              - generic [ref=e197]: Produce exactly 120 numbered lines. Keep writing until all 120 are complete. Do not summarize early.
+              - generic [ref=e198]: (0/1)
+            - generic [ref=e199]: ›
+          - generic [ref=e124]:
+            - generic [ref=e126]: Session smoke marker two. Reply briefly.
+            - paragraph [ref=e129]: Session smoke marker two acknowledged ✅
+            - generic [ref=e201]: Produce exactly 120 numbered lines. Keep writing until all 120 are complete. Do not summarize early.
+            - paragraph [ref=e253]: Stopped by user.
+        - generic [ref=e131]:
+          - textbox "Reply to Homun…" [ref=e132]
+          - generic [ref=e134]:
+            - generic [ref=e135]:
+              - combobox "Model" [ref=e137] [cursor=pointer]:
+                - option "qwen3.5:397b-cloud" [selected]
+                - option "── Switch to ──" [disabled]
+                - option "qwen3.5:397b-cloud (0.0 GB)"
+                - option "qwen3-coder-next:cloud (0.0 GB)"
+                - option "qwen3-coder:480b-cloud (0.0 GB)"
+                - option "deepseek-v3.1:671b-cloud (0.0 GB)"
+                - option "ministral-3:14b-cloud (0.0 GB)"
+                - option "llama3.1:8b (4.9 GB)"
+                - option "qwen3-vl:235b-cloud (0.0 GB)"
+                - option "glm-5:cloud (0.0 GB)"
+                - option "minimax-m2:cloud (0.0 GB)"
+                - option "kimi-k2.5:cloud (0.0 GB)"
+                - option "glm-4.6:cloud (0.0 GB)"
+                - option "kimi-k2.5"
+                - option "mistral-large-3:675b"
+                - option "kimi-k2:1t"
+                - option "devstral-2:123b"
+                - option "glm-4.6"
+                - option "kimi-k2-thinking"
+                - option "ministral-3:8b"
+                - option "gemini-3-flash-preview"
+                - option "glm-5"
+                - option "qwen3-coder-next"
+                - option "deepseek-v3.2"
+                - option "gpt-oss:120b"
+                - option "ministral-3:14b"
+                - option "glm-4.7"
+                - option "qwen3-next:80b"
+                - option "nemotron-3-nano:30b"
+                - option "qwen3-vl:235b-instruct"
+                - option "gemma3:12b"
+                - option "gemma3:27b"
+                - option "rnj-1:8b"
+                - option "qwen3.5:397b"
+                - option "deepseek-v3.1:671b"
+                - option "gpt-oss:20b"
+                - option "minimax-m2"
+                - option "minimax-m2.1"
+                - option "minimax-m2.5"
+                - option "ministral-3:3b"
+                - option "devstral-small-2:24b"
+                - option "gemma3:4b"
+                - option "cogito-2.1:671b"
+                - option "qwen3-coder:480b"
+                - option "qwen3-vl:235b"
+              - generic [ref=e144]:
+                - generic [ref=e145]: image
+                - generic [ref=e146]: tools
+            - generic [ref=e138]:
+              - button "+" [ref=e140] [cursor=pointer]
+              - button "Send message" [active] [ref=e254] [cursor=pointer]:
+                - img [ref=e142]

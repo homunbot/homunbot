@@ -1,0 +1,6 @@
+### Page
+- Page URL: https://ui.homun.bot/chat?c=adc9cec6-00f8-4a04-82d2-2d8cf44d9d1b
+- Page Title: Chat — Homun
+- Console: 4 errors, 0 warnings
+### Snapshot
+- [Snapshot](.playwright-cli/page-2026-03-10T21-04-51-401Z.yml)

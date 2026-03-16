@@ -96,8 +96,7 @@ pub async fn connect_recipe(
         // Connection tests only do initialize + list_tools — no user data is processed,
         // so sandbox isolation is unnecessary and would block systems without Docker/bubblewrap.
         // Sandbox enforcement applies at runtime during actual tool calls.
-        let test =
-            mcp_setup::test_mcp_server_connection(instance_name, &server, None).await;
+        let test = mcp_setup::test_mcp_server_connection(instance_name, &server, None).await;
         if test.connected {
             if let Some(srv) = config.mcp.servers.get_mut(instance_name) {
                 srv.discovered_tool_count = Some(test.tool_count);

@@ -174,7 +174,10 @@ mod tests {
         // Verify all required ids exist
         let ids: Vec<&str> = recipes.iter().map(|r| r.id.as_str()).collect();
         assert!(ids.contains(&"github"), "Missing github recipe");
-        assert!(ids.contains(&"google-workspace"), "Missing google-workspace");
+        assert!(
+            ids.contains(&"google-workspace"),
+            "Missing google-workspace"
+        );
         assert!(ids.contains(&"notion"), "Missing notion recipe");
         assert!(ids.contains(&"slack"), "Missing slack recipe");
     }
@@ -239,14 +242,14 @@ mod tests {
         // Add two instances with explicit recipe_id
         let mut s1 = crate::config::McpServerConfig::default();
         s1.recipe_id = Some("google-workspace".to_string());
-        config.mcp.servers.insert("google-workspace".to_string(), s1);
-
-        let mut s2 = crate::config::McpServerConfig::default();
-        s2.recipe_id = Some("google-workspace".to_string());
         config
             .mcp
             .servers
-            .insert("google-work".to_string(), s2);
+            .insert("google-workspace".to_string(), s1);
+
+        let mut s2 = crate::config::McpServerConfig::default();
+        s2.recipe_id = Some("google-workspace".to_string());
+        config.mcp.servers.insert("google-work".to_string(), s2);
 
         let instances = recipe_instances(&recipe, &config);
         assert_eq!(instances.len(), 2);

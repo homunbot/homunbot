@@ -318,7 +318,9 @@ mod inner {
                                 Err(_) => {
                                     return (
                                         StatusCode::INTERNAL_SERVER_ERROR,
-                                        Json(serde_json::json!({"error": "2FA configuration error"})),
+                                        Json(
+                                            serde_json::json!({"error": "2FA configuration error"}),
+                                        ),
                                     )
                                         .into_response();
                                 }

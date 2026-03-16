@@ -1194,39 +1194,35 @@ impl AgentLoop {
                 let budget = token_budget;
 
                 if used >= budget {
-                    tracing::warn!(
-                        used,
-                        budget,
-                        "Token budget exhausted — stopping agent loop"
-                    );
+                    tracing::warn!(used, budget, "Token budget exhausted — stopping agent loop");
                     if let Some(ref tx) = stream_tx {
-                        let _ = tx.send(crate::provider::StreamChunk {
-                            delta: format!("[token budget exhausted: {}/{}]", used, budget),
-                            done: false,
-                            event_type: Some("status".to_string()),
-                            tool_call_data: None,
-                        }).await;
+                        let _ = tx
+                            .send(crate::provider::StreamChunk {
+                                delta: format!("[token budget exhausted: {}/{}]", used, budget),
+                                done: false,
+                                event_type: Some("status".to_string()),
+                                tool_call_data: None,
+                            })
+                            .await;
                     }
                     token_budget_exhausted = true;
                     break 'agent_loop;
                 } else if used >= budget * 80 / 100 && !token_warning_sent {
-                    tracing::info!(
-                        used,
-                        budget,
-                        "Token budget at 80% — injecting wrap-up hint"
-                    );
+                    tracing::info!(used, budget, "Token budget at 80% — injecting wrap-up hint");
                     messages.push(ChatMessage::user(
                         "⚠ TOKEN BUDGET WARNING: You have used 80% of the session token budget. \
                          Start wrapping up: summarize your findings and give the user a final answer. \
                          Avoid starting new tool chains.",
                     ));
                     if let Some(ref tx) = stream_tx {
-                        let _ = tx.send(crate::provider::StreamChunk {
-                            delta: "[token budget at 80%]".to_string(),
-                            done: false,
-                            event_type: Some("status".to_string()),
-                            tool_call_data: None,
-                        }).await;
+                        let _ = tx
+                            .send(crate::provider::StreamChunk {
+                                delta: "[token budget at 80%]".to_string(),
+                                done: false,
+                                event_type: Some("status".to_string()),
+                                tool_call_data: None,
+                            })
+                            .await;
                     }
                     token_warning_sent = true;
                 }
@@ -1699,12 +1695,14 @@ impl AgentLoop {
                         if period == 1 { "" } else { "s" },
                     )));
                     if let Some(ref tx) = stream_tx {
-                        let _ = tx.send(crate::provider::StreamChunk {
-                            delta: format!("[loop detected: period {}]", period),
-                            done: false,
-                            event_type: Some("status".to_string()),
-                            tool_call_data: None,
-                        }).await;
+                        let _ = tx
+                            .send(crate::provider::StreamChunk {
+                                delta: format!("[loop detected: period {}]", period),
+                                done: false,
+                                event_type: Some("status".to_string()),
+                                tool_call_data: None,
+                            })
+                            .await;
                     }
                 }
             } else {
@@ -2460,9 +2458,8 @@ fn detect_cycle(signatures: &[String]) -> Option<usize> {
         if len < 2 * period {
             continue;
         }
-        let is_cycle = (0..period).all(|i| {
-            signatures[len - 1 - i] == signatures[len - 1 - i - period]
-        });
+        let is_cycle =
+            (0..period).all(|i| signatures[len - 1 - i] == signatures[len - 1 - i - period]);
         if is_cycle {
             return Some(period);
         }
@@ -3878,7 +3875,10 @@ mod cycle_detection_tests {
 
     #[test]
     fn detect_cycle_period_3() {
-        assert_eq!(detect_cycle(&sigs(&["A", "B", "C", "A", "B", "C"])), Some(3));
+        assert_eq!(
+            detect_cycle(&sigs(&["A", "B", "C", "A", "B", "C"])),
+            Some(3)
+        );
     }
 
     #[test]
@@ -3928,7 +3928,10 @@ mod cycle_detection_tests {
             "web_search:rust tokio",
             "web_fetch:https://b.com",
         ]);
-        let normalized: Vec<String> = raw.iter().map(|s| normalize_signature_for_cycle(s)).collect();
+        let normalized: Vec<String> = raw
+            .iter()
+            .map(|s| normalize_signature_for_cycle(s))
+            .collect();
         assert_eq!(detect_cycle(&normalized), Some(2));
     }
 }

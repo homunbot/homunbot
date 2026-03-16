@@ -350,14 +350,18 @@ impl McpManager {
             let sb = sandbox_config.clone();
             handles.push(tokio::spawn(async move {
                 let t0 = std::time::Instant::now();
-                let result = tokio::time::timeout(CONNECT_TIMEOUT, connect_server(&name, &config, &sb)).await;
+                let result =
+                    tokio::time::timeout(CONNECT_TIMEOUT, connect_server(&name, &config, &sb))
+                        .await;
                 let elapsed = t0.elapsed();
                 match result {
                     Ok(inner) => (name, elapsed, inner),
                     Err(_) => (
                         name.clone(),
                         elapsed,
-                        Err(anyhow::anyhow!("Connection timed out after {CONNECT_TIMEOUT:?}")),
+                        Err(anyhow::anyhow!(
+                            "Connection timed out after {CONNECT_TIMEOUT:?}"
+                        )),
                     ),
                 }
             }));
@@ -428,7 +432,11 @@ impl McpManager {
                     // Try OAuth token refresh + reconnect for auth failures
                     if is_auth_error {
                         if let Some(server_cfg) = servers.get(&name) {
-                            match super::mcp_token_refresh::try_refresh_for_server(&name, server_cfg).await {
+                            match super::mcp_token_refresh::try_refresh_for_server(
+                                &name, server_cfg,
+                            )
+                            .await
+                            {
                                 Ok(refresh) => {
                                     tracing::info!(server = %name, "OAuth token refreshed, retrying connection");
 
@@ -438,7 +446,9 @@ impl McpManager {
                                     // Update env with fresh access token if server uses auth_env_key
                                     let mut retry_cfg = server_cfg.clone();
                                     if let Some(ref auth_key) = retry_cfg.auth_env_key {
-                                        retry_cfg.env.insert(auth_key.clone(), refresh.access_token.clone());
+                                        retry_cfg
+                                            .env
+                                            .insert(auth_key.clone(), refresh.access_token.clone());
                                     }
                                     match connect_server(&name, &retry_cfg, &sandbox_config).await {
                                         Ok((peer, discovered_tools, info)) => {
@@ -449,9 +459,16 @@ impl McpManager {
                                                 "MCP server reconnected after token refresh"
                                             );
                                             for mcp_tool in discovered_tools {
-                                                let tool_name = format!("{}__{}", name, mcp_tool.name);
-                                                let description = mcp_tool.description.as_deref().unwrap_or("No description").to_string();
-                                                let input_schema = Value::Object(mcp_tool.input_schema.as_ref().clone());
+                                                let tool_name =
+                                                    format!("{}__{}", name, mcp_tool.name);
+                                                let description = mcp_tool
+                                                    .description
+                                                    .as_deref()
+                                                    .unwrap_or("No description")
+                                                    .to_string();
+                                                let input_schema = Value::Object(
+                                                    mcp_tool.input_schema.as_ref().clone(),
+                                                );
                                                 tools.push(Box::new(McpClientTool {
                                                     tool_name,
                                                     mcp_tool_name: mcp_tool.name.to_string(),
@@ -465,11 +482,13 @@ impl McpManager {
                                             if let Some(ref rc) = runtime_config {
                                                 let mut cfg = rc.write().await;
                                                 if let Some(srv) = cfg.mcp.servers.get_mut(&name) {
-                                                    srv.discovered_tool_count = Some(info.tool_count);
+                                                    srv.discovered_tool_count =
+                                                        Some(info.tool_count);
                                                 }
                                             }
                                             server_infos.push(info);
-                                            let needs_persistent = name == crate::browser::BROWSER_MCP_SERVER_NAME;
+                                            let needs_persistent =
+                                                name == crate::browser::BROWSER_MCP_SERVER_NAME;
                                             if runtime_hot_reload && !needs_persistent {
                                                 peer.shutdown().await;
                                             } else {
@@ -815,7 +834,8 @@ fn persist_refreshed_tokens(
         }
         // Update Notion refresh_token if rotated
         if let Some(ref new_rt) = refresh.new_refresh_token {
-            let rt_key = SecretKey::custom(&format!("vault.mcp.{server_name}.notion_refresh_token"));
+            let rt_key =
+                SecretKey::custom(&format!("vault.mcp.{server_name}.notion_refresh_token"));
             let _ = secrets.set(&rt_key, new_rt);
         }
     }

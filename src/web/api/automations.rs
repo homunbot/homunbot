@@ -953,4 +953,3 @@ Example: "check emails every morning and send summary to Telegram"
 
     Ok(Json(GenerateFlowResponse { name, flow }))
 }
-

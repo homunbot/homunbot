@@ -439,8 +439,7 @@ mod sandbox_config_tests {
             backend: "MacOS_Seatbelt".to_string(),
             ..ExecutionSandboxConfig::default()
         };
-        let normalized =
-            normalize_execution_sandbox(cfg).expect("valid macos seatbelt backend");
+        let normalized = normalize_execution_sandbox(cfg).expect("valid macos seatbelt backend");
         assert_eq!(normalized.backend, "macos_seatbelt");
     }
 

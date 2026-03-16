@@ -1,0 +1,332 @@
+- generic [ref=e2]:
+  - navigation [ref=e3]:
+    - link "HOMUN" [ref=e5] [cursor=pointer]:
+      - /url: /
+      - generic "HOMUN" [ref=e6]
+    - generic [ref=e7]:
+      - link "Chat" [ref=e9] [cursor=pointer]:
+        - /url: /chat
+        - img [ref=e11]
+        - text: Chat
+      - link "Dashboard" [ref=e13] [cursor=pointer]:
+        - /url: /dashboard
+        - img [ref=e15]
+        - text: Dashboard
+      - link "Tools" [ref=e20] [cursor=pointer]:
+        - /url: /automations
+        - img [ref=e22]
+        - text: Tools
+      - button "Stop" [ref=e24] [cursor=pointer]:
+        - img [ref=e26]
+        - text: Stop
+    - generic [ref=e29]:
+      - link "Account" [ref=e30] [cursor=pointer]:
+        - /url: /account
+        - img [ref=e32]
+        - text: Account
+      - link "Settings" [ref=e35] [cursor=pointer]:
+        - /url: /setup
+        - img [ref=e37]
+        - text: Settings
+      - button "Logout" [ref=e40]:
+        - img [ref=e42]
+        - text: Logout
+  - main [ref=e45]:
+    - generic [ref=e47]:
+      - complementary [ref=e48]:
+        - generic [ref=e49]:
+          - generic [ref=e50]: Conversations
+          - generic [ref=e51]:
+            - button "Search" [ref=e52] [cursor=pointer]:
+              - img [ref=e53]
+            - button "New conversation" [ref=e56] [cursor=pointer]:
+              - img [ref=e57]
+        - generic [ref=e58]:
+          - generic [ref=e97]: Oggi
+          - generic [ref=e98]:
+            - button "Session smoke marker two. Reply briefly. 19:52" [ref=e99] [cursor=pointer]:
+              - generic [ref=e100]: Session smoke marker two. Reply briefly.
+              - generic [ref=e101]: 19:52
+            - button "Conversation actions" [ref=e102] [cursor=pointer]:
+              - img [ref=e103]
+          - generic [ref=e107]:
+            - button "Session smoke marker one. Reply briefly. 19:51" [ref=e108] [cursor=pointer]:
+              - generic [ref=e109]: Session smoke marker one. Reply briefly.
+              - generic [ref=e110]: 19:51
+            - button "Conversation actions" [ref=e111] [cursor=pointer]:
+              - img [ref=e112]
+          - generic [ref=e116]:
+            - button "Session smoke marker two. Reply briefly. 19:50" [ref=e117] [cursor=pointer]:
+              - generic [ref=e118]: Session smoke marker two. Reply briefly.
+              - generic [ref=e119]: 19:50
+            - button "Conversation actions" [ref=e120] [cursor=pointer]:
+              - img [ref=e121]
+          - generic [ref=e125]:
+            - button "Session smoke marker one. Reply briefly. 19:48" [ref=e126] [cursor=pointer]:
+              - generic [ref=e127]: Session smoke marker one. Reply briefly.
+              - generic [ref=e128]: 19:48
+            - button "Conversation actions" [ref=e129] [cursor=pointer]:
+              - img [ref=e130]
+          - generic [ref=e134]:
+            - button "Session smoke marker two. Reply briefly. 19:46" [ref=e135] [cursor=pointer]:
+              - generic [ref=e136]: Session smoke marker two. Reply briefly.
+              - generic [ref=e137]: 19:46
+            - button "Conversation actions" [ref=e138] [cursor=pointer]:
+              - img [ref=e139]
+          - generic [ref=e143]:
+            - button "Session smoke marker two. Reply briefly. 19:45" [ref=e144] [cursor=pointer]:
+              - generic [ref=e145]: Session smoke marker two. Reply briefly.
+              - generic [ref=e146]: 19:45
+            - button "Conversation actions" [ref=e147] [cursor=pointer]:
+              - img [ref=e148]
+          - generic [ref=e152]:
+            - button "Produce exactly 120 numbered lines. Keep writing… 19:42" [ref=e153] [cursor=pointer]:
+              - generic [ref=e154]: Produce exactly 120 numbered lines. Keep writing…
+              - generic [ref=e155]: 19:42
+            - button "Conversation actions" [ref=e156] [cursor=pointer]:
+              - img [ref=e157]
+          - generic [ref=e161]:
+            - button "Session smoke marker two. Reply briefly. 19:41" [ref=e162] [cursor=pointer]:
+              - generic [ref=e163]: Session smoke marker two. Reply briefly.
+              - generic [ref=e164]: 19:41
+            - button "Conversation actions" [ref=e165] [cursor=pointer]:
+              - img [ref=e166]
+          - generic [ref=e170]:
+            - button "Mi leggi i dati della mia patente 00:16" [ref=e171] [cursor=pointer]:
+              - generic [ref=e172]: Mi leggi i dati della mia patente
+              - generic [ref=e173]: 00:16
+            - button "Conversation actions" [ref=e174] [cursor=pointer]:
+              - img [ref=e175]
+          - generic [ref=e179]: Ieri
+          - generic [ref=e180]:
+            - button "Crea un workflow in cui mi trovi 3 barzellette n… Ieri" [ref=e181] [cursor=pointer]:
+              - generic [ref=e182]: Crea un workflow in cui mi trovi 3 barzellette n…
+              - generic [ref=e183]: Ieri
+            - button "Conversation actions" [ref=e184] [cursor=pointer]:
+              - img [ref=e185]
+      - generic [ref=e59]:
+        - generic [ref=e60]:
+          - generic [ref=e62]:
+            - generic [ref=e63]: Session smoke marker two. Reply briefly.
+            - generic [ref=e65]: Live
+          - generic [ref=e67]:
+            - button "New conversation" [ref=e68] [cursor=pointer]:
+              - img [ref=e69]
+            - button "Clear screen" [ref=e70] [cursor=pointer]:
+              - img [ref=e71]
+            - button "Toggle sidebar" [ref=e74] [cursor=pointer]:
+              - img [ref=e75]
+        - generic [ref=e82]:
+          - generic [ref=e190]: Session smoke marker two. Reply briefly.
+          - paragraph [ref=e193]: Session smoke marker two acknowledged ✅
+          - generic [ref=e195]: Restore-run smoke marker. Produce exactly 150 numbered lines and do not stop early.
+          - generic [ref=e197]:
+            - list [ref=e198]:
+              - listitem [ref=e199]: Line 1
+              - listitem [ref=e200]: Line 2
+              - listitem [ref=e201]: Line 3
+              - listitem [ref=e202]: Line 4
+              - listitem [ref=e203]: Line 5
+              - listitem [ref=e204]: Line 6
+              - listitem [ref=e205]: Line 7
+              - listitem [ref=e206]: Line 8
+              - listitem [ref=e207]: Line 9
+              - listitem [ref=e208]: Line 10
+              - listitem [ref=e209]: Line 11
+              - listitem [ref=e210]: Line 12
+              - listitem [ref=e211]: Line 13
+              - listitem [ref=e212]: Line 14
+              - listitem [ref=e213]: Line 15
+              - listitem [ref=e214]: Line 16
+              - listitem [ref=e215]: Line 17
+              - listitem [ref=e216]: Line 18
+              - listitem [ref=e217]: Line 19
+              - listitem [ref=e218]: Line 20
+              - listitem [ref=e219]: Line 21
+              - listitem [ref=e220]: Line 22
+              - listitem [ref=e221]: Line 23
+              - listitem [ref=e222]: Line 24
+              - listitem [ref=e223]: Line 25
+              - listitem [ref=e224]: Line 26
+              - listitem [ref=e225]: Line 27
+              - listitem [ref=e226]: Line 28
+              - listitem [ref=e227]: Line 29
+              - listitem [ref=e228]: Line 30
+              - listitem [ref=e229]: Line 31
+              - listitem [ref=e230]: Line 32
+              - listitem [ref=e231]: Line 33
+              - listitem [ref=e232]: Line 34
+              - listitem [ref=e233]: Line 35
+              - listitem [ref=e234]: Line 36
+              - listitem [ref=e235]: Line 37
+              - listitem [ref=e236]: Line 38
+              - listitem [ref=e237]: Line 39
+              - listitem [ref=e238]: Line 40
+              - listitem [ref=e239]: Line 41
+              - listitem [ref=e240]: Line 42
+              - listitem [ref=e241]: Line 43
+              - listitem [ref=e242]: Line 44
+              - listitem [ref=e243]: Line 45
+              - listitem [ref=e244]: Line 46
+              - listitem [ref=e245]: Line 47
+              - listitem [ref=e246]: Line 48
+              - listitem [ref=e247]: Line 49
+              - listitem [ref=e248]: Line 50
+              - listitem [ref=e249]: Line 51
+              - listitem [ref=e250]: Line 52
+              - listitem [ref=e251]: Line 53
+              - listitem [ref=e252]: Line 54
+              - listitem [ref=e253]: Line 55
+              - listitem [ref=e254]: Line 56
+              - listitem [ref=e255]: Line 57
+              - listitem [ref=e256]: Line 58
+              - listitem [ref=e257]: Line 59
+              - listitem [ref=e258]: Line 60
+              - listitem [ref=e259]: Line 61
+              - listitem [ref=e260]: Line 62
+              - listitem [ref=e261]: Line 63
+              - listitem [ref=e262]: Line 64
+              - listitem [ref=e263]: Line 65
+              - listitem [ref=e264]: Line 66
+              - listitem [ref=e265]: Line 67
+              - listitem [ref=e266]: Line 68
+              - listitem [ref=e267]: Line 69
+              - listitem [ref=e268]: Line 70
+              - listitem [ref=e269]: Line 71
+              - listitem [ref=e270]: Line 72
+              - listitem [ref=e271]: Line 73
+              - listitem [ref=e272]: Line 74
+              - listitem [ref=e273]: Line 75
+              - listitem [ref=e274]: Line 76
+              - listitem [ref=e275]: Line 77
+              - listitem [ref=e276]: Line 78
+              - listitem [ref=e277]: Line 79
+              - listitem [ref=e278]: Line 80
+              - listitem [ref=e279]: Line 81
+              - listitem [ref=e280]: Line 82
+              - listitem [ref=e281]: Line 83
+              - listitem [ref=e282]: Line 84
+              - listitem [ref=e283]: Line 85
+              - listitem [ref=e284]: Line 86
+              - listitem [ref=e285]: Line 87
+              - listitem [ref=e286]: Line 88
+              - listitem [ref=e287]: Line 89
+              - listitem [ref=e288]: Line 90
+              - listitem [ref=e289]: Line 91
+              - listitem [ref=e290]: Line 92
+              - listitem [ref=e291]: Line 93
+              - listitem [ref=e292]: Line 94
+              - listitem [ref=e293]: Line 95
+              - listitem [ref=e294]: Line 96
+              - listitem [ref=e295]: Line 97
+              - listitem [ref=e296]: Line 98
+              - listitem [ref=e297]: Line 99
+              - listitem [ref=e298]: Line 100
+              - listitem [ref=e299]: Line 101
+              - listitem [ref=e300]: Line 102
+              - listitem [ref=e301]: Line 103
+              - listitem [ref=e302]: Line 104
+              - listitem [ref=e303]: Line 105
+              - listitem [ref=e304]: Line 106
+              - listitem [ref=e305]: Line 107
+              - listitem [ref=e306]: Line 108
+              - listitem [ref=e307]: Line 109
+              - listitem [ref=e308]: Line 110
+              - listitem [ref=e309]: Line 111
+              - listitem [ref=e310]: Line 112
+              - listitem [ref=e311]: Line 113
+              - listitem [ref=e312]: Line 114
+              - listitem [ref=e313]: Line 115
+              - listitem [ref=e314]: Line 116
+              - listitem [ref=e315]: Line 117
+              - listitem [ref=e316]: Line 118
+              - listitem [ref=e317]: Line 119
+              - listitem [ref=e318]: Line 120
+              - listitem [ref=e319]: Line 121
+              - listitem [ref=e320]: Line 122
+              - listitem [ref=e321]: Line 123
+              - listitem [ref=e322]: Line 124
+              - listitem [ref=e323]: Line 125
+              - listitem [ref=e324]: Line 126
+              - listitem [ref=e325]: Line 127
+              - listitem [ref=e326]: Line 128
+              - listitem [ref=e327]: Line 129
+              - listitem [ref=e328]: Line 130
+              - listitem [ref=e329]: Line 131
+              - listitem [ref=e330]: Line 132
+              - listitem [ref=e331]: Line 133
+              - listitem [ref=e332]: Line 134
+              - listitem [ref=e333]: Line 135
+              - listitem [ref=e334]: Line 136
+              - listitem [ref=e335]: Line 137
+              - listitem [ref=e336]: Line 138
+              - listitem [ref=e337]: Line 139
+              - listitem [ref=e338]: Line 140
+              - listitem [ref=e339]: Line 141
+              - listitem [ref=e340]: Line 142
+              - listitem [ref=e341]: Line 143
+              - listitem [ref=e342]: Line 144
+              - listitem [ref=e343]: Line 145
+              - listitem [ref=e344]: Line 146
+              - listitem [ref=e345]: Line 147
+              - listitem [ref=e346]: Line 148
+              - listitem [ref=e347]: Line 149
+              - listitem [ref=e348]: Line 150
+            - paragraph [ref=e349]: ✅ 150 lines complete.
+        - generic [ref=e84]:
+          - textbox "Reply to Homun…" [active] [ref=e85]
+          - generic [ref=e87]:
+            - generic [ref=e88]:
+              - combobox "Model" [ref=e90] [cursor=pointer]:
+                - option "qwen3.5:397b-cloud" [selected]
+                - option "── Switch to ──" [disabled]
+                - option "qwen3.5:397b-cloud (0.0 GB)"
+                - option "qwen3-coder-next:cloud (0.0 GB)"
+                - option "qwen3-coder:480b-cloud (0.0 GB)"
+                - option "deepseek-v3.1:671b-cloud (0.0 GB)"
+                - option "ministral-3:14b-cloud (0.0 GB)"
+                - option "llama3.1:8b (4.9 GB)"
+                - option "qwen3-vl:235b-cloud (0.0 GB)"
+                - option "glm-5:cloud (0.0 GB)"
+                - option "minimax-m2:cloud (0.0 GB)"
+                - option "kimi-k2.5:cloud (0.0 GB)"
+                - option "glm-4.6:cloud (0.0 GB)"
+                - option "qwen3-next:80b"
+                - option "qwen3-coder-next"
+                - option "nemotron-3-nano:30b"
+                - option "gpt-oss:20b"
+                - option "ministral-3:3b"
+                - option "rnj-1:8b"
+                - option "qwen3.5:397b"
+                - option "kimi-k2:1t"
+                - option "kimi-k2.5"
+                - option "gpt-oss:120b"
+                - option "ministral-3:8b"
+                - option "glm-4.6"
+                - option "mistral-large-3:675b"
+                - option "gemma3:4b"
+                - option "cogito-2.1:671b"
+                - option "deepseek-v3.1:671b"
+                - option "glm-4.7"
+                - option "qwen3-vl:235b-instruct"
+                - option "minimax-m2.1"
+                - option "minimax-m2.5"
+                - option "devstral-2:123b"
+                - option "devstral-small-2:24b"
+                - option "gemma3:27b"
+                - option "qwen3-coder:480b"
+                - option "deepseek-v3.2"
+                - option "gemini-3-flash-preview"
+                - option "glm-5"
+                - option "kimi-k2-thinking"
+                - option "qwen3-vl:235b"
+                - option "ministral-3:14b"
+                - option "gemma3:12b"
+                - option "minimax-m2"
+              - generic [ref=e350]:
+                - generic [ref=e351]: image
+                - generic [ref=e352]: tools
+            - generic [ref=e91]:
+              - button "+" [ref=e93] [cursor=pointer]
+              - button "Send message" [ref=e94] [cursor=pointer]:
+                - img [ref=e95]

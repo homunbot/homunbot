@@ -1,0 +1,94 @@
+- generic [ref=e2]:
+  - navigation [ref=e3]:
+    - link "HOMUN" [ref=e5] [cursor=pointer]:
+      - /url: /
+      - generic "HOMUN" [ref=e6]
+    - generic [ref=e7]:
+      - link "Chat" [ref=e9] [cursor=pointer]:
+        - /url: /chat
+        - img [ref=e11]
+        - text: Chat
+      - link "Dashboard" [ref=e13] [cursor=pointer]:
+        - /url: /dashboard
+        - img [ref=e15]
+        - text: Dashboard
+      - link "Tools" [ref=e20] [cursor=pointer]:
+        - /url: /automations
+        - img [ref=e22]
+        - text: Tools
+      - button "Stop" [ref=e24] [cursor=pointer]:
+        - img [ref=e26]
+        - text: Stop
+    - generic [ref=e29]:
+      - link "Account" [ref=e30] [cursor=pointer]:
+        - /url: /account
+        - img [ref=e32]
+        - text: Account
+      - link "Settings" [ref=e35] [cursor=pointer]:
+        - /url: /setup
+        - img [ref=e37]
+        - text: Settings
+      - button "Logout" [ref=e40]:
+        - img [ref=e42]
+        - text: Logout
+  - main [ref=e45]:
+    - generic [ref=e47]:
+      - complementary [ref=e48]:
+        - generic [ref=e49]:
+          - generic [ref=e50]: Conversations
+          - generic [ref=e51]:
+            - button "Search" [ref=e52] [cursor=pointer]:
+              - img [ref=e53]
+            - button "New conversation" [ref=e56] [cursor=pointer]:
+              - img [ref=e57]
+        - generic [ref=e58]:
+          - generic [ref=e59]: Oggi
+          - generic [ref=e60]:
+            - button "Produce exactly 120 numbered lines. Keep writing… 19:39" [ref=e61] [cursor=pointer]:
+              - generic [ref=e62]: Produce exactly 120 numbered lines. Keep writing…
+              - generic [ref=e63]: 19:39
+            - button "Conversation actions" [ref=e64] [cursor=pointer]:
+              - img [ref=e65]
+          - generic [ref=e69]:
+            - button "Mi leggi i dati della mia patente 00:16" [ref=e70] [cursor=pointer]:
+              - generic [ref=e71]: Mi leggi i dati della mia patente
+              - generic [ref=e72]: 00:16
+            - button "Conversation actions" [ref=e73] [cursor=pointer]:
+              - img [ref=e74]
+          - generic [ref=e78]: Ieri
+          - generic [ref=e79]:
+            - button "Crea un workflow in cui mi trovi 3 barzellette n… Ieri" [ref=e80] [cursor=pointer]:
+              - generic [ref=e81]: Crea un workflow in cui mi trovi 3 barzellette n…
+              - generic [ref=e82]: Ieri
+            - button "Conversation actions" [ref=e83] [cursor=pointer]:
+              - img [ref=e84]
+      - generic [ref=e88]:
+        - generic [ref=e89]:
+          - generic [ref=e91]:
+            - generic [ref=e92]: Produce exactly 120 numbered lines. Keep writing…
+            - generic [ref=e93]:
+              - generic [ref=e94]: Live
+              - generic "Running" [ref=e95]
+          - generic [ref=e96]:
+            - button "New conversation" [ref=e97] [cursor=pointer]:
+              - img [ref=e98]
+            - button "Clear screen" [ref=e99] [cursor=pointer]:
+              - img [ref=e100]
+            - button "Toggle sidebar" [ref=e103] [cursor=pointer]:
+              - img [ref=e104]
+        - generic [ref=e107]:
+          - generic [ref=e109]: Produce exactly 120 numbered lines. Keep writing until all 120 are complete. Do not summarize early.
+          - paragraph [ref=e112]: Stopped by user.
+          - generic [ref=e114]: Produce exactly 120 numbered lines. Keep writing until all 120 are complete. Do not summarize early.
+          - paragraph [ref=e117]: Stopped by user.
+          - generic [ref=e119]: Restore-run smoke marker. Produce exactly 150 numbered lines and do not stop early.
+          - generic [ref=e120]: 1. Line one 2. Line two 3. Line three 4. Line four 5. Line five 6. Line six 7. Line seven 8. Line eight 9. Line nine 10. Line ten 11. Line eleven 12. Line twelve 13. Line thirteen 14. Line fourteen 15. Line fifteen 16. Line sixteen 17. Line seventeen 18. Line eighteen 19. Line nineteen 20. Line twenty 21. Line twenty-one 22. Line twenty-two 23. Line twenty-three 24. Line twenty-four 25. Line twenty-five 26. Line twenty-six 27. Line twenty-seven 28. Line twenty-eight 29. Line twenty-nine 30. Line thirty 31. Line thirty-one 32. Line thirty-two 33. Line thirty-three 34. Line thirty-four 35. Line thirty-five 36. Line thirty-six 37. Line thirty-seven 38. Line thirty-eight 39. Line thirty-nine 40. Line forty 41. Line forty-one 42. Line forty-two 43. Line forty-three 44. Line forty-four 45. Line forty-five 46. Line forty-six 47. Line forty-seven 48. Line forty-eight 49. Line forty-nine 50. Line fifty 51. Line fifty-one 52. Line fifty-two 53. Line fifty-three 54. Line fifty-four 55. Line fifty-five 56. Line fifty-six 57. Line fifty-seven 58. Line fifty-eight 59. Line fifty-nine 60. Line sixty 61. Line sixty-one 62. Line sixty-two 63. Line sixty-three 64. Line sixty-four 65. Line sixty-five 66. Line sixty-six 67. Line sixty-seven 68. Line sixty-eight 69. Line sixty-nine 70. Line seventy 71. Line seventy-one 72. Line seventy-two 73. Line seventy-three 74. Line seventy-four 75. Line seventy-five 76. Line seventy-six 77. Line seventy-seven 78. Line seventy-eight 79. Line seventy-nine 80. Line eighty 81. Line eighty-one 82. Line eighty-two 83. Line eighty-three 84. Line eighty-four 85. Line eighty-five 86. Line eighty-six 87. Line eighty-seven 88. Line eighty-eight 89. Line eighty-nine 90. Line ninety 91. Line ninety-one 92. Line ninety-two 93. Line ninety-three 94. Line ninety-four 95. Line ninety-five 96. Line ninety-six 97. Line ninety-seven 98. Line ninety-eight 99. Line ninety-nine 100. Line one hundred 101. Line one hundred-one 102. Line one hundred-two 103. Line one hundred-three 104. Line one hundred-four 105. Line one hundred-five 106. Line one hundred-six 107. Line one hundred-seven 108. Line one hundred-eight 109. Line one hundred-nine 110. Line one hundred-ten 111. Line one hundred-eleven 112. Line one hundred-twelve 113. Line one hundred-thirteen 114. Line one hundred-fourteen 115. Line one hundred-fifteen 116. Line one hundred-sixteen 117. Line one hundred-seventeen 118. Line one hundred-eighteen 119. Line one hundred-nineteen 120. Line one hundred-twenty 121. Line one hundred-twenty-one 122. Line one hundred-twenty-two 123. Line one hundred-twenty-three 124. Line one hundred-twenty-four 125. Line one hundred-twenty-five 126. Line one hundred-twenty-six 127. Line one hundred-twenty-seven 128. Line one hundred-twenty-eight 129. Line one hundred-twenty-nine 130. Line one hundred-thirty 131. Line one hundred-thirty-one 132. Line one hundred-thirty-two 133. Line one hundred-thirty-three 134. Line one hundred-thirty-four 135. Line one hundred-thirty-five 136. Line one hundred-thirty-six 137. Line one hundred-thirty-seven 13|
+        - generic [ref=e122]:
+          - textbox "Reply to Homun…" [active] [ref=e123]
+          - generic [ref=e125]:
+            - combobox "Model" [ref=e128] [cursor=pointer]:
+              - option "ollama/qwen3.5:397b-cloud" [selected]
+            - generic [ref=e129]:
+              - button "+" [ref=e131] [cursor=pointer]
+              - button "Stop current run" [ref=e132] [cursor=pointer]:
+                - img [ref=e133]

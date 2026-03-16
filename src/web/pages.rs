@@ -1327,7 +1327,12 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
         current_vision_model = current_vision_model,
     );
 
-    Html(page_html("Chat", "chat", &body, &["model-loader.js", "chat.js"]))
+    Html(page_html(
+        "Chat",
+        "chat",
+        &body,
+        &["model-loader.js", "chat.js"],
+    ))
 }
 
 // ─── Automations ────────────────────────────────────────────────
@@ -1460,7 +1465,14 @@ async fn automations_page() -> Html<String> {
         "Automations",
         "automations",
         body,
-        &["flow-renderer.js", "model-loader.js", "mcp-loader.js", "schema-form.js", "auto-validate.js", "automations.js"],
+        &[
+            "flow-renderer.js",
+            "model-loader.js",
+            "mcp-loader.js",
+            "schema-form.js",
+            "auto-validate.js",
+            "automations.js",
+        ],
     ))
 }
 
@@ -4355,5 +4367,10 @@ async fn maintenance_page() -> Html<String> {
             </div>
         </main>"#;
 
-    Html(page_html("Database", "maintenance", body, &["maintenance.js"]))
+    Html(page_html(
+        "Database",
+        "maintenance",
+        body,
+        &["maintenance.js"],
+    ))
 }

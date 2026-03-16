@@ -6,10 +6,10 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-#[cfg(feature = "vault-2fa")]
-use crate::security::{global_session_manager, TotpManager, TwoFactorStorage};
 use super::registry::{get_optional_string, get_string_param, Tool, ToolContext, ToolResult};
 use crate::rag::RagEngine;
+#[cfg(feature = "vault-2fa")]
+use crate::security::{global_session_manager, TotpManager, TwoFactorStorage};
 
 pub struct KnowledgeTool {
     engine: Arc<Mutex<RagEngine>>,
@@ -281,13 +281,13 @@ impl Tool for KnowledgeTool {
                         return Ok(ToolResult::success(
                             "2FA_REQUIRED: Two-factor authentication is enabled. \
                              Provide your authenticator code via the 'code' parameter, \
-                             or use a 'session_id' from a previous vault 'confirm' call."
+                             or use a 'session_id' from a previous vault 'confirm' call.",
                         ));
                     };
 
                     if !authenticated {
                         return Ok(ToolResult::error(
-                            "Authentication failed. Invalid code or expired session."
+                            "Authentication failed. Invalid code or expired session.",
                         ));
                     }
                 }
@@ -297,14 +297,9 @@ impl Tool for KnowledgeTool {
                     Some(chunk) => Ok(ToolResult::success(format!(
                         "**Revealed chunk {} (source_id: {}):**\n\n{}\n\n\
                          ⚠️ This chunk was marked sensitive. Handle with care.",
-                        chunk_id,
-                        chunk.source_id,
-                        chunk.content,
+                        chunk_id, chunk.source_id, chunk.content,
                     ))),
-                    None => Ok(ToolResult::error(format!(
-                        "Chunk {} not found.",
-                        chunk_id
-                    ))),
+                    None => Ok(ToolResult::error(format!("Chunk {} not found.", chunk_id))),
                 }
             }
 

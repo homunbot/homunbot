@@ -61,16 +61,8 @@ const DOMAIN_GROUPS: &[(&str, &str, &[&str])] = &[
         "Token usage statistics and skill audit log",
         &["token_usage", "skill_audit"],
     ),
-    (
-        "cron",
-        "Scheduled cron jobs",
-        &["cron_jobs"],
-    ),
-    (
-        "email",
-        "Pending email queue",
-        &["email_pending"],
-    ),
+    ("cron", "Scheduled cron jobs", &["cron_jobs"]),
+    ("email", "Pending email queue", &["email_pending"]),
 ];
 
 // ─── Stats ──────────────────────────────────────────────────────
@@ -89,7 +81,9 @@ struct TableStats {
     rows: i64,
 }
 
-async fn db_stats(State(state): State<Arc<AppState>>) -> Result<Json<Vec<DomainStats>>, (axum::http::StatusCode, String)> {
+async fn db_stats(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<DomainStats>>, (axum::http::StatusCode, String)> {
     let db = state.db.as_ref().ok_or((
         axum::http::StatusCode::SERVICE_UNAVAILABLE,
         "Database not available".to_string(),

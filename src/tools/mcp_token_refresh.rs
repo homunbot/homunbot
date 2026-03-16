@@ -74,9 +74,7 @@ pub async fn try_refresh_for_server(
         return refresh_notion_token(&client_id, &token_endpoint, &refresh_token).await;
     }
 
-    anyhow::bail!(
-        "No supported OAuth refresh provider detected for MCP server '{server_name}'"
-    );
+    anyhow::bail!("No supported OAuth refresh provider detected for MCP server '{server_name}'");
 }
 
 /// Refresh a Google OAuth access token using the refresh_token grant.

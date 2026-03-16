@@ -4,8 +4,8 @@ use std::sync::OnceLock;
 use anyhow::Result;
 
 use super::types::{
-    BackendProbe, LinuxNativeRuntimeSupport, MacosSeatbeltRuntimeSupport,
-    ResolvedSandboxBackend, SandboxBackendAvailability, SandboxBackendCapability,
+    BackendProbe, LinuxNativeRuntimeSupport, MacosSeatbeltRuntimeSupport, ResolvedSandboxBackend,
+    SandboxBackendAvailability, SandboxBackendCapability,
 };
 use crate::config::ExecutionSandboxConfig;
 

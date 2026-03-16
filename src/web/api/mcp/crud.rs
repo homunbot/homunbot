@@ -427,7 +427,12 @@ pub(super) async fn list_mcp_server_tools(
             .iter()
             .filter(|d| d.function.name.starts_with(&prefix))
             .map(|d| crate::tools::mcp::McpToolInfo {
-                name: d.function.name.strip_prefix(&prefix).unwrap_or(&d.function.name).to_string(),
+                name: d
+                    .function
+                    .name
+                    .strip_prefix(&prefix)
+                    .unwrap_or(&d.function.name)
+                    .to_string(),
                 description: d.function.description.clone(),
                 parameters: Some(d.function.parameters.clone()),
             })

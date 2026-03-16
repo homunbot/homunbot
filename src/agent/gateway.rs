@@ -1236,8 +1236,7 @@ async fn dispatch_to_agent(
     let (response, processing_error) = if channel_name == "web" {
         if let Some(bus_stream_tx) = stream_tx {
             let chat_id_for_stream = chat_id.clone();
-            let (chunk_tx, mut chunk_rx) =
-                mpsc::channel::<crate::provider::StreamChunk>(128);
+            let (chunk_tx, mut chunk_rx) = mpsc::channel::<crate::provider::StreamChunk>(128);
 
             let bridge = tokio::spawn(async move {
                 while let Some(chunk) = chunk_rx.recv().await {
@@ -1372,8 +1371,7 @@ async fn dispatch_to_agent(
             .map(|v| v.len())
             .unwrap_or(1);
 
-        let formatted =
-            EmailApprovalHandler::format_draft_notification(&row, total, total);
+        let formatted = EmailApprovalHandler::format_draft_notification(&row, total, total);
 
         OutboundMessage {
             channel: notify_ch,
@@ -1394,17 +1392,13 @@ async fn dispatch_to_agent(
     let mut trigger_note: Option<String> = None;
 
     if processing_error.is_none() {
-        if let (Some(run_id), Some(automation_id)) =
-            (ctx.automation_run_id.as_deref(), ctx.automation_id.as_deref())
-        {
-            if let Ok(Some(automation)) =
-                task_db.load_automation(automation_id).await
-            {
+        if let (Some(run_id), Some(automation_id)) = (
+            ctx.automation_run_id.as_deref(),
+            ctx.automation_id.as_deref(),
+        ) {
+            if let Ok(Some(automation)) = task_db.load_automation(automation_id).await {
                 let previous_result = task_db
-                    .load_last_successful_automation_result(
-                        automation_id,
-                        Some(run_id),
-                    )
+                    .load_last_successful_automation_result(automation_id, Some(run_id))
                     .await
                     .ok()
                     .flatten();
@@ -1457,10 +1451,7 @@ async fn dispatch_to_agent(
             let latest_result = if processing_error.is_some() {
                 truncate_for_status(&run_result, 500)
             } else if let Some(note) = trigger_note.as_deref() {
-                format!(
-                    "{note} | output: {}",
-                    truncate_for_status(&run_result, 300)
-                )
+                format!("{note} | output: {}", truncate_for_status(&run_result, 300))
             } else {
                 truncate_for_status(&run_result, 500)
             };

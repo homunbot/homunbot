@@ -1,0 +1,130 @@
+- generic [ref=e2]:
+  - navigation [ref=e3]:
+    - link "HOMUN" [ref=e5] [cursor=pointer]:
+      - /url: /
+      - generic "HOMUN" [ref=e6]
+    - generic [ref=e7]:
+      - link "Chat" [ref=e9] [cursor=pointer]:
+        - /url: /chat
+        - img [ref=e11]
+        - text: Chat
+      - link "Dashboard" [ref=e13] [cursor=pointer]:
+        - /url: /dashboard
+        - img [ref=e15]
+        - text: Dashboard
+      - link "Tools" [ref=e20] [cursor=pointer]:
+        - /url: /automations
+        - img [ref=e22]
+        - text: Tools
+      - button "Stop" [ref=e24] [cursor=pointer]:
+        - img [ref=e26]
+        - text: Stop
+    - generic [ref=e29]:
+      - link "Account" [ref=e30] [cursor=pointer]:
+        - /url: /account
+        - img [ref=e32]
+        - text: Account
+      - link "Settings" [ref=e35] [cursor=pointer]:
+        - /url: /setup
+        - img [ref=e37]
+        - text: Settings
+      - button "Logout" [ref=e40]:
+        - img [ref=e42]
+        - text: Logout
+  - main [ref=e45]:
+    - generic [ref=e47]:
+      - complementary [ref=e48]:
+        - generic [ref=e49]:
+          - generic [ref=e50]: Conversations
+          - generic [ref=e51]:
+            - button "Search" [ref=e52] [cursor=pointer]:
+              - img [ref=e53]
+            - button "New conversation" [ref=e56] [cursor=pointer]:
+              - img [ref=e57]
+        - generic [ref=e58]:
+          - generic [ref=e59]: Oggi
+          - generic [ref=e60]:
+            - button "Session smoke marker two. Reply briefly. 19:51" [ref=e61] [cursor=pointer]:
+              - generic [ref=e62]: Session smoke marker two. Reply briefly.
+              - generic [ref=e63]: 19:51
+            - button "Conversation actions" [ref=e64] [cursor=pointer]:
+              - img [ref=e65]
+          - generic [ref=e69]:
+            - button "Session smoke marker one. Reply briefly. 19:51" [ref=e70] [cursor=pointer]:
+              - generic [ref=e71]: Session smoke marker one. Reply briefly.
+              - generic [ref=e72]: 19:51
+            - button "Conversation actions" [ref=e73] [cursor=pointer]:
+              - img [ref=e74]
+          - generic [ref=e78]:
+            - button "Session smoke marker two. Reply briefly. 19:50" [ref=e79] [cursor=pointer]:
+              - generic [ref=e80]: Session smoke marker two. Reply briefly.
+              - generic [ref=e81]: 19:50
+            - button "Conversation actions" [ref=e82] [cursor=pointer]:
+              - img [ref=e83]
+          - generic [ref=e87]:
+            - button "Session smoke marker one. Reply briefly. 19:48" [ref=e88] [cursor=pointer]:
+              - generic [ref=e89]: Session smoke marker one. Reply briefly.
+              - generic [ref=e90]: 19:48
+            - button "Conversation actions" [ref=e91] [cursor=pointer]:
+              - img [ref=e92]
+          - generic [ref=e96]:
+            - button "Session smoke marker two. Reply briefly. 19:46" [ref=e97] [cursor=pointer]:
+              - generic [ref=e98]: Session smoke marker two. Reply briefly.
+              - generic [ref=e99]: 19:46
+            - button "Conversation actions" [ref=e100] [cursor=pointer]:
+              - img [ref=e101]
+          - generic [ref=e105]:
+            - button "Session smoke marker two. Reply briefly. 19:45" [ref=e106] [cursor=pointer]:
+              - generic [ref=e107]: Session smoke marker two. Reply briefly.
+              - generic [ref=e108]: 19:45
+            - button "Conversation actions" [ref=e109] [cursor=pointer]:
+              - img [ref=e110]
+          - generic [ref=e114]:
+            - button "Produce exactly 120 numbered lines. Keep writing… 19:42" [ref=e115] [cursor=pointer]:
+              - generic [ref=e116]: Produce exactly 120 numbered lines. Keep writing…
+              - generic [ref=e117]: 19:42
+            - button "Conversation actions" [ref=e118] [cursor=pointer]:
+              - img [ref=e119]
+          - generic [ref=e123]:
+            - button "Session smoke marker two. Reply briefly. 19:41" [ref=e124] [cursor=pointer]:
+              - generic [ref=e125]: Session smoke marker two. Reply briefly.
+              - generic [ref=e126]: 19:41
+            - button "Conversation actions" [ref=e127] [cursor=pointer]:
+              - img [ref=e128]
+          - generic [ref=e132]:
+            - button "Mi leggi i dati della mia patente 00:16" [ref=e133] [cursor=pointer]:
+              - generic [ref=e134]: Mi leggi i dati della mia patente
+              - generic [ref=e135]: 00:16
+            - button "Conversation actions" [ref=e136] [cursor=pointer]:
+              - img [ref=e137]
+          - generic [ref=e141]: Ieri
+          - generic [ref=e142]:
+            - button "Crea un workflow in cui mi trovi 3 barzellette n… Ieri" [ref=e143] [cursor=pointer]:
+              - generic [ref=e144]: Crea un workflow in cui mi trovi 3 barzellette n…
+              - generic [ref=e145]: Ieri
+            - button "Conversation actions" [ref=e146] [cursor=pointer]:
+              - img [ref=e147]
+      - generic [ref=e151]:
+        - generic [ref=e152]:
+          - generic [ref=e154]:
+            - generic [ref=e155]: Session smoke marker one. Reply briefly.
+            - generic [ref=e157]: Live
+          - generic [ref=e158]:
+            - button "New conversation" [ref=e159] [cursor=pointer]:
+              - img [ref=e160]
+            - button "Clear screen" [ref=e161] [cursor=pointer]:
+              - img [ref=e162]
+            - button "Toggle sidebar" [ref=e165] [cursor=pointer]:
+              - img [ref=e166]
+        - generic [ref=e169]:
+          - generic [ref=e171]: Session smoke marker one. Reply briefly.
+          - paragraph [ref=e174]: Session smoke marker one acknowledged ✅
+        - generic [ref=e176]:
+          - textbox "Reply to Homun…" [active] [ref=e177]
+          - generic [ref=e179]:
+            - combobox "Model" [ref=e182] [cursor=pointer]:
+              - option "ollama/qwen3.5:397b-cloud" [selected]
+            - generic [ref=e183]:
+              - button "+" [ref=e185] [cursor=pointer]
+              - button "Send message" [ref=e186] [cursor=pointer]:
+                - img [ref=e187]
