@@ -1549,6 +1549,8 @@ Implicazioni:
 | AUD-2 | **Feature gating RAG/embeddings** | Default build esclude `local-embeddings`. Chi fa `cargo run` non ha memory search ne' RAG. Documentare chiaramente nel setup wizard e README. | 1 giorno |
 | AUD-4 | **Browser E2E in CI** | 40+ test unitari, flow completo solo manuale. Promuovere il `data:` URL flow a CI. | 2-3 giorni |
 | AUD-5 | **Integration test RAG pipeline** | `rag/engine.rs` ha zero test. Aggiungere test ingest→chunk→embed→search round-trip. | 1-2 giorni |
+| AUD-11 | **Feature gating web-ui → mcp** | ✅ DONE (2026-03-16) — `web-ui` feature non includeva `mcp`, causando build failure con `--features web-ui` isolato. Aggiunto `mcp` alla feature chain in Cargo.toml. | ~~0.5 giorni~~ |
+| AUD-12 | **Flaky sandbox tests (PoisonError)** | 6 test in `tools::sandbox::tests` falliscono in CI per `PoisonError` — test paralleli condividono mutex per env vars. Serve `#[serial]` o refactor del test harness. | 1 giorno |
 
 ---
 
