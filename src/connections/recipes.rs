@@ -14,11 +14,6 @@ use super::{ConnectionRecipe, ConnectionStatus, RecipeMcpConfig};
 
 const BUNDLED_RECIPES: &[(&str, &str)] = &[
     ("github", include_str!("../../recipes/github.toml")),
-    ("gmail", include_str!("../../recipes/gmail.toml")),
-    (
-        "google-calendar",
-        include_str!("../../recipes/google-calendar.toml"),
-    ),
     (
         "google-workspace",
         include_str!("../../recipes/google-workspace.toml"),
@@ -171,16 +166,14 @@ mod tests {
     fn bundled_recipes_parse_successfully() {
         let recipes = load_all_recipes();
         assert!(
-            recipes.len() >= 6,
-            "Expected at least 6 bundled recipes, got {}",
+            recipes.len() >= 4,
+            "Expected at least 4 bundled recipes, got {}",
             recipes.len()
         );
 
         // Verify all required ids exist
         let ids: Vec<&str> = recipes.iter().map(|r| r.id.as_str()).collect();
         assert!(ids.contains(&"github"), "Missing github recipe");
-        assert!(ids.contains(&"gmail"), "Missing gmail recipe");
-        assert!(ids.contains(&"google-calendar"), "Missing google-calendar");
         assert!(ids.contains(&"google-workspace"), "Missing google-workspace");
         assert!(ids.contains(&"notion"), "Missing notion recipe");
         assert!(ids.contains(&"slack"), "Missing slack recipe");
@@ -240,17 +233,20 @@ mod tests {
 
     #[test]
     fn recipe_instances_finds_by_recipe_id() {
-        let recipe = find_recipe("gmail").unwrap();
+        let recipe = find_recipe("google-workspace").unwrap();
         let mut config = Config::default();
 
         // Add two instances with explicit recipe_id
         let mut s1 = crate::config::McpServerConfig::default();
-        s1.recipe_id = Some("gmail".to_string());
-        config.mcp.servers.insert("gmail".to_string(), s1);
+        s1.recipe_id = Some("google-workspace".to_string());
+        config.mcp.servers.insert("google-workspace".to_string(), s1);
 
         let mut s2 = crate::config::McpServerConfig::default();
-        s2.recipe_id = Some("gmail".to_string());
-        config.mcp.servers.insert("gmail-work".to_string(), s2);
+        s2.recipe_id = Some("google-workspace".to_string());
+        config
+            .mcp
+            .servers
+            .insert("google-work".to_string(), s2);
 
         let instances = recipe_instances(&recipe, &config);
         assert_eq!(instances.len(), 2);

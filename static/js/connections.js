@@ -57,8 +57,6 @@
     function oauthConfigForRecipe(recipe) {
         if (recipe.auth_mode !== 'oauth') return null;
         var map = {
-            'gmail':             { provider: 'google', service: 'gmail', tokenField: 'refresh_token', tokenKey: 'refresh_token', providerLabel: 'Google' },
-            'google-calendar':   { provider: 'google', service: 'google-calendar', tokenField: 'refresh_token', tokenKey: 'refresh_token', providerLabel: 'Google' },
             'google-workspace':  { provider: 'google', service: 'google-workspace', tokenField: 'refresh_token', tokenKey: 'refresh_token', providerLabel: 'Google' },
         };
         return map[recipe.id] || null;
