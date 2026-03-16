@@ -1,6 +1,6 @@
 # Homun — Development Roadmap
 
-> Last updated: 2026-03-16 (macOS Seatbelt sandbox + Always-On, MCP tool count fix + OAuth refresh)
+> Last updated: 2026-03-16 (MCP hot-reload, Google Workspace recipe, Notion OAuth refresh, registry-first tool discovery)
 > Basato su: Audit completo (`docs/AUDIT-2026-03.md`)
 > Gap analysis: Homun vs OpenClaw vs ZeroClaw
 > Source of truth: questo documento e' la roadmap/status operativa del progetto
@@ -11,10 +11,10 @@
 
 | Metrica | Valore |
 |---------|--------|
-| LOC Rust | ~78,500 |
-| LOC Frontend | ~17,650 |
-| Test | 617 passing (verificato con `cargo test` il 2026-03-16) |
-| Binary (full) | ~50MB |
+| LOC Rust | ~84,800 |
+| LOC Frontend | ~19,000 (JS) + ~10,000 (CSS) |
+| Test | 633 passing (verificato con `cargo test` il 2026-03-16) |
+| Binary (release) | ~35MB |
 | Provider LLM | 14 |
 | Canali | 7 (CLI, Telegram✅, Discord⚠️, WhatsApp⚠️, Slack⚠️, Email✅, Web) |
 | Tool built-in | ~20 (incl. knowledge, workflow, business, browser, approval, read_email) |
@@ -367,6 +367,25 @@ pub async fn llm_one_shot(config: &Config, req: OneShotRequest) -> Result<OneSho
     - Vault `vault://` reference resolution automatica
     - Retry trasparente in `start_with_sandbox()` su errori `AuthRequired`/`invalid_token`/`401`
   - DRY fix: `chat.js` e `mcp.js` ora usano `McpLoader` (shared utility) invece di fetch dirette
+- ✅ Google Workspace recipe unificata (2026-03-16):
+  - Recipe `google-workspace.toml` sostituisce `gmail.toml` + `google-calendar.toml`
+  - Un singolo processo MCP (`mcp-server-google-workspace`) per entrambi i servizi
+  - Scopes OAuth combinati (Gmail + Calendar + email) in `google_mcp_scopes()`
+  - Supporto comma-separated services (es. `gmail,calendar`)
+  - Rimossi recipe legacy da `BUNDLED_RECIPES` + frontend OAuth config
+- ✅ Notion OAuth token refresh (2026-03-16):
+  - `refresh_token` + `client_id` + `token_endpoint` salvati in vault durante exchange
+  - Branch Notion in `try_refresh_for_server()`: detect `transport == "http"` + `NOTION_TOKEN`
+  - `refresh_notion_token()` — public client (PKCE, no client_secret)
+  - `persist_refreshed_tokens()` — aggiorna vault dopo refresh riuscito (access_token + refresh_token rotato)
+- ✅ MCP hot-reload dopo connessione (2026-03-16):
+  - `McpManager::connect_single()` — connette un singolo server MCP e restituisce tool
+  - Connect endpoint (`/v1/connections/recipes/{id}/connect`) inietta tool nella `ToolRegistry` condivisa via `tokio::spawn`
+  - Tool disponibili in chat immediatamente senza restart del gateway
+- ✅ Registry-first tool discovery nelle automations (2026-03-16):
+  - `list_mcp_server_tools` ora controlla prima la `ToolRegistry` condivisa (zero-cost)
+  - Fallback a on-demand connection solo per server non ancora nel registry
+  - Elimina riconnessioni ridondanti nel builder automations
 
 ### 5.5 Stato Dettagliato (Skill Shield)
 
@@ -1693,10 +1712,10 @@ Sprint 9+: Future (P3)
   Voice, Extended thinking, Prometheus, distribuzione
 ```
 
-**Completato: Sprint 1-8 + SBX-1..7 (tutti validati CI cross-platform, macOS Seatbelt + Always-On) + CHAT-1..6 + smoke manuali CHAT-7/Browser + core Browser + Design System + Workflow Engine + Automations Builder v2 (visual flow + guided inspector + NLP + edit mode + multi-step prompt fix + flow tooltips) + AUTO-1+ (schema-driven forms, smart API overrides, 6 template, presets, approve/2FA gates, builder edit) + AUTO-2 (real-time validation: field/node/flow, cron validator, error badges) + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4, SEC-6..9) + Unified LLM Engine + Smart web_fetch routing (search-first + JS detection + browser hints) + Connection Recipes (multi-instance, Notion OAuth 2.1, Google auto-naming, HTTP/SSE transport, tool count caching, OAuth token auto-refresh) + DB maintenance page (Settings > Database) + DASH-1 (dashboard redesign: operational view con automations/activity/health/usage) + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
+**Completato: Sprint 1-8 + SBX-1..7 (tutti validati CI cross-platform, macOS Seatbelt + Always-On) + CHAT-1..6 + smoke manuali CHAT-7/Browser + core Browser + Design System + Workflow Engine + Automations Builder v2 (visual flow + guided inspector + NLP + edit mode + multi-step prompt fix + flow tooltips) + AUTO-1+ (schema-driven forms, smart API overrides, 6 template, presets, approve/2FA gates, builder edit) + AUTO-2 (real-time validation: field/node/flow, cron validator, error badges) + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4, SEC-6..9) + Unified LLM Engine + Smart web_fetch routing (search-first + JS detection + browser hints) + Connection Recipes (multi-instance, Notion OAuth 2.1, Google Workspace unificata, HTTP/SSE transport, tool count caching, OAuth token auto-refresh Google+Notion, MCP hot-reload, registry-first tool discovery) + DB maintenance page (Settings > Database) + DASH-1 (dashboard redesign: operational view con automations/activity/health/usage) + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
 **Rimanente: AUTO-4 (wizard step-by-step), formalizzazione release-grade CHAT-7 e Browser E2E, Mobile App, Sprint 9+**
 **Deferred: BIZ-2..5 (Business Autopilot avanzato — core engine BIZ-1 done, resto rimandato)**
-**CI: 11/11 check verdi (check&lint, test, 4 feature matrix, 5 build cross-platform + sandbox validation) — 617 test**
+**CI: 11/11 check verdi (check&lint, test, 4 feature matrix, 5 build cross-platform + sandbox validation) — 633 test**
 
 ---
 

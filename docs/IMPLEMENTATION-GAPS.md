@@ -1,6 +1,6 @@
 # Implementation Gaps
 
-Updated: March 13, 2026 (deep audit + connection recipes, automations builder edit, OAuth flows)
+Updated: March 16, 2026 (MCP hot-reload, Google Workspace unification, OAuth refresh Google+Notion, registry-first tool discovery)
 
 This document is the operational backlog derived from the real codebase and the current roadmap.
 
@@ -22,7 +22,7 @@ Use it after `docs/services/README.md`. The service docs explain how things work
 1. ~~Memory→reasoning wiring~~: ✅ **VERIFICATO FUNZIONANTE** (`agent_loop.rs` righe 592-623)
 2. **RAG feature gating**: documentare chiaramente nel setup wizard e README
 3. **AUTO-1: Form guidato parametri tool** — Oggi i parametri tool nell'automation builder sono textarea JSON. Serve form field-by-field da JSON Schema.
-4. **DASH-1: Dashboard redesign** — Attualmente mostra vanity metrics. Serve: prossime automazioni, errori recenti, stato canali, alert budget.
+4. ~~**DASH-1: Dashboard redesign**~~ — ✅ DONE. Operational hub con automations, activity feed, system health, usage analytics.
 5. Web chat/browser hardening (`CHAT-7`, browser E2E in CI)
 6. Channel hardening — solo Discord, Slack, WhatsApp (Telegram/Email production-ready)
 
@@ -103,7 +103,7 @@ Status: mostly solid
 Main gaps:
 
 - feature-gated product shape is still easy to misunderstand from the outside
-- some runtime changes hot-reload while channel/runtime topology changes still require restart
+- some runtime changes hot-reload (MCP connections now hot-reload tools) while channel/runtime topology changes still require restart
 
 Next work:
 
@@ -132,7 +132,11 @@ Related docs:
 
 ## Web Control Plane
 
-Status: solid core, partial hardening
+Status: solid core, partial hardening (20 pages, updated 2026-03-14)
+
+What's new:
+
+- ✅ Database maintenance page (`/maintenance`) — domain-grouped table stats, purge by domain with FK-safe ordering, FTS index cleanup
 
 Main gaps:
 
@@ -244,25 +248,30 @@ Related docs:
 
 ## Skills And MCP
 
-Status: strong core, Connection Recipes complete (2026-03-13)
+Status: strong core, Connection Recipes + OAuth refresh + hot-reload complete (2026-03-16)
 
 What exists:
 
 - MCP catalog (Official Registry + MCPMarket + presets)
 - Connection Recipes: multi-instance support (`recipe_id` tracking, instance name scoping)
-- OAuth flows: Google (Gmail, Calendar), GitHub, Notion (OAuth 2.1 PKCE + Dynamic Client Registration)
+- OAuth flows: Google (Workspace), GitHub, Notion (OAuth 2.1 PKCE + Dynamic Client Registration)
 - HTTP/SSE transport via rmcp StreamableHTTP (Notion hosted MCP)
+- Google Workspace unified recipe (replaces separate gmail + google-calendar)
 - Google multi-account auto-naming with email from userinfo API
 - Connection test robustness: no sandbox overhead, error detail propagation, no double Bearer prefix
+- OAuth token auto-refresh: Google (`refresh_token` grant) + Notion (public client PKCE)
+- Vault persistence after refresh: updates access_token + rotated refresh_token
+- MCP hot-reload: tools registered into running agent immediately after connecting (no restart needed)
+- Registry-first tool discovery: automations builder uses ToolRegistry cache before on-demand connection
 
 Main gaps:
 
 - auto-discovery (suggest MCP when task context requires it) is in prompt but not proactive
-- no auto-refresh of OAuth tokens at runtime (tokens stored, refresh on reconnect)
 
 Next work:
 
 - keep stable; monitor token refresh behavior in production use
+- evaluate proactive MCP suggestions during agent reasoning
 
 Related docs:
 
@@ -270,7 +279,7 @@ Related docs:
 
 ## Automation And Workflows
 
-Status: strong core, Builder edit mode fixed (2026-03-13)
+Status: strong core, critical runtime fix applied (2026-03-14)
 
 What exists:
 
@@ -279,16 +288,18 @@ What exists:
 - Builder supports both create (POST) and edit (PATCH) with `editingId` tracking
 - `flow_json` persisted and restored on edit (visual graph roundtrip)
 - Workflow engine with persistent multi-step execution, approval gates, retry, resume-on-boot
+- ✅ Multi-step prompt reconstruction (`build_effective_prompt_from_row()`) — both manual run and cron use effective prompt from workflow_steps_json
+- ✅ Flow mini-dot tooltips showing step name + instruction on hover
 
 Main gaps:
 
-- **AUTO-2**: no real-time validation in builder (errors only after save)
+- ~~**AUTO-2**: no real-time validation in builder~~ ✅ DONE (2026-03-14) — 3-layer validation (field/node/flow), cron validator, SchemaForm hooks, error badges on canvas, graceful degradation. `auto-validate.js` (370 LOC).
 - **AUTO-4**: no wizard alternative for non-technical users (only builder)
 - reliability depends on release discipline (no automated E2E tests for automations)
 
 Next work:
 
-- AUTO-2 (inline validation) and AUTO-4 (step-by-step wizard) are next UX improvements
+- AUTO-4 (step-by-step wizard) is the next UX improvement
 
 Related docs:
 
@@ -368,7 +379,7 @@ Next work:
 
 ## Automations UX
 
-Status: solid, most critical gaps resolved (updated 2026-03-13)
+Status: solid, most critical gaps resolved (updated 2026-03-14)
 
 ### What works
 - Visual flow builder with n8n-style SVG canvas, 13 node kinds (incl. approve, require_2fa)
@@ -378,41 +389,42 @@ Status: solid, most critical gaps resolved (updated 2026-03-13)
 - ✅ 6 template automations (AUTO-3) — Daily Email Digest, Web Monitor, Standup, News, Security, File Organizer
 - ✅ Builder edit mode (AUTO-1c) — edit opens Builder, PATCH with flow_json roundtrip
 - ✅ Automations loading fix (AUTO-1d) — guard check + Builder schedule format
+- ✅ Multi-step prompt fix (AUTO-1e) — `build_effective_prompt_from_row()` ricostruisce prompt da workflow_steps_json; Builder compone prompt dagli step; sia manual run che cron aggiornati
+- ✅ Flow mini-dot tooltips — hover mostra nome + istruzione di ogni step (`enrichFlowWithSteps()` + CSS tooltip custom)
 
 ### Remaining UX gaps
 
-1. **No real-time validation** (AUTO-2): Errors appear only after save. No inline warnings for missing trigger, missing deliver, or required parameters not filled.
+1. ~~**No real-time validation** (AUTO-2)~~ ✅ DONE (2026-03-14): 3-layer validation (field/node/flow). `auto-validate.js` provides field-level blur/change validation with inline errors, node-level error badges on canvas, and flow-level pre-save checks. Cron field validator. SchemaForm enhanced with required/type/range checks. Graceful degradation fallback.
 
 2. **No wizard for non-technical users** (AUTO-4): Visual builder has 13 node kinds, requires understanding of flow logic. No step-by-step wizard alternative for simple automations.
 
 Next work:
 
-- **P1**: Real-time validation in builder (AUTO-2)
 - **P1**: Step-by-step wizard for simple automations (AUTO-4)
 
 ## Dashboard
 
-Status: data-rich but not actionable (deep audit 2026-03-13)
+Status: operational hub (DASH-1 complete 2026-03-14)
 
 ### What exists
-- Uptime counter (vanity metric)
-- Usage analytics: date range, daily chart, models table, cost estimate
-- E-Stop button with confirmation
-- Inline config editing (rare use case)
+- **Stat cards**: Model (server-rendered), Uptime (live counter), Next Automation (countdown), Workflows (running/paused)
+- **Upcoming Automations**: top 5 enabled + Run Now button + status badge
+- **Recent Activity**: merged feed from automation runs + error logs (8 most recent)
+- **System Health**: 3-card grid — Providers (status dot + latency), Channels (connected/disabled), Data (memory chunks + knowledge docs)
+- **Usage analytics**: daily token chart (SVG), estimated cost, prompt/completion split, date range presets
+- **E-Stop button** with confirmation dialog
+- JS split: dashboard.js (426 LOC) + dash-usage.js (207 LOC)
+- ~80 lines new CSS with design tokens, responsive health grid
 
 ### What's missing
-- No prossime automazioni scheduled (only visible in automation cards)
-- No error rate tracking (automation success/failure)
-- No channel status (connected, errors, last message)
 - No cost budget alerts (approaching monthly limit)
-- No memory/RAG stats
-- No actionable suggestions
+- No actionable suggestions based on system state
+- No real-time updates (data loaded on page load only, no WebSocket push)
 
 Next work:
 
-- **P1**: Complete dashboard redesign with actionable information (DASH-1)
 - **P1**: Alert widget with configurable thresholds (DASH-2)
-- **P2**: Channel status cards (DASH-3)
+- **P2**: Live data push via WebSocket for real-time dashboard updates
 
 ## Prompt Injection & Social Engineering
 
@@ -493,7 +505,11 @@ Related docs:
 
 ## Storage And Sessions
 
-Status: solid
+Status: solid, DB maintenance page added (2026-03-14)
+
+What's new:
+
+- ✅ Database maintenance page (`/maintenance`) — view per-domain row counts (8 domains, ~25 tables), purge data by domain with FK-safe reverse ordering and FTS cleanup
 
 Main gaps:
 
@@ -575,10 +591,11 @@ Next work:
 7. ~~Memory→reasoning wiring~~ ✅ VERIFIED WORKING
 8. ~~Sandbox~~ ✅ (all SBX-1..6 complete)
 9. ~~**AUTO-1**: Form guidato parametri tool~~ ✅ DONE (schema-form.js + smart overrides)
-10. **DASH-1**: Dashboard redesign con informazioni actionable
+9b. ~~**AUTO-1e**: Multi-step prompt fix + flow tooltips~~ ✅ DONE (2026-03-14)
+10. ~~**DASH-1**: Dashboard redesign con informazioni actionable~~ ✅ DONE (2026-03-14)
 11. **AUD-2**: Feature gating RAG/embeddings — documentare chiaramente
 12. Web chat/browser E2E in CI
-13. **AUTO-2**: Validazione real-time nel builder
+13. ~~**AUTO-2**: Validazione real-time nel builder~~ ✅ DONE (2026-03-14)
 14. **AUTO-4**: Wizard step-by-step per automazioni semplici
 
 ### Phase 3: Espansione
