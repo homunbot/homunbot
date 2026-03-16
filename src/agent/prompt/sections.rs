@@ -179,7 +179,9 @@ impl PromptSection for ToolsSection {
                 prompt.push_str(
                     "- **ALWAYS** use **web_search** first for any web information need. \
                      Do not call web_fetch on a URL unless (a) the user explicitly provided \
-                     that URL, or (b) you found it via a prior web_search.\n",
+                     that URL, or (b) you found it via a prior web_search.\n\
+                     - When adding a year to a search query, use ONLY the current year (see System section). \
+                     Never default to 2024 or 2025. If the year is irrelevant, omit it.\n",
                 );
             }
             if has_web_fetch {
@@ -531,9 +533,12 @@ impl PromptSection for RuntimeSection {
         prompt.push_str(&format!("Time: {}\n", now.format("%Y-%m-%d %H:%M (%A) %Z")));
         prompt.push_str(&format!("Current year: {}\n", now.format("%Y")));
         prompt.push_str(
-            "When the user asks about recent events, news, rankings, or anything time-sensitive \
-             without specifying a year, ALWAYS assume they mean the current year. \
-             Include the current year in your search queries.\n",
+            "**Date/year rules for search queries:**\n\
+             - When the user asks about recent events, news, or anything time-sensitive \
+             without specifying a year, ALWAYS assume the current year.\n\
+             - When you include a year in a search query, it MUST be the current year shown above. \
+             NEVER insert an older year (2024, 2025, etc.) unless the user explicitly requested it.\n\
+             - If the year is not relevant to the query, omit it entirely.\n",
         );
 
         Ok(prompt)

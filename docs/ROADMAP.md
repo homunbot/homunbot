@@ -1583,8 +1583,10 @@ Implicazioni:
 
 | # | Task | Descrizione | Effort |
 |---|------|-------------|--------|
-| AB-1 | **Anno corrente nelle ricerche** | Quando l'agent fa ricerche web, deve usare l'anno corrente (2026) o ometterlo. Mai inserire un anno arbitrario. | 1 giorno |
+| AB-1 | **Anno corrente nelle ricerche** | ✅ DONE (2026-03-16) — Regola esplicita in System section + Tool Routing Rules: anno corrente obbligatorio, mai 2024/2025, omettere se irrilevante. | ~~1 giorno~~ |
 | AB-2 | **Timezone per cron/automazioni** | Aggiungere gestione fuso orario in Settings. Usato da: cron scheduler, automazioni, log timestamps, visualizzazione orari nella UI. | 2-3 giorni |
+| AB-3 | **Loop detection enhancement** | ✅ DONE (2026-03-16) — Rolling window cycle detection (period 1-3) in `agent_loop.rs`. Fuzzy matching coarsens `web_search`/`web_fetch` to tool name. Budget contraction on cycle + stall. Cycle-break hint injection + status event. Config: `loop_detection_window` (default 8). 10 unit tests. | ~~1 giorno~~ |
+| AB-4 | **Token budget per session** | ✅ DONE (2026-03-16) — `max_session_tokens` config (default 0 = unlimited). 80% wrap-up hint, 100% graceful break with clear message. Budget-aware finalization. | ~~0.5 giorni~~ |
 
 ### Cosa NON fare adesso
 

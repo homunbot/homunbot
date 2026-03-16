@@ -351,6 +351,14 @@ pub struct AgentConfig {
     /// Prevents unbounded buffering if messages keep arriving rapidly.
     /// Default: 10.
     pub debounce_max_batch: usize,
+    /// Rolling window size for loop/cycle detection.
+    /// The agent tracks the last N tool-call signatures and detects repeating
+    /// patterns (period 1–3). Set to 0 to disable. Default: 8.
+    pub loop_detection_window: u8,
+    /// Maximum tokens (prompt + completion) allowed per agent session.
+    /// When reached the agent gracefully stops. At 80% a wrap-up hint is
+    /// injected. Set to 0 for unlimited (backward-compatible default).
+    pub max_session_tokens: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -396,6 +404,8 @@ impl Default for AgentConfig {
             xml_fallback_delay_ms: 1000,
             debounce_window_ms: 2000,
             debounce_max_batch: 10,
+            loop_detection_window: 8,
+            max_session_tokens: 0,
         }
     }
 }
