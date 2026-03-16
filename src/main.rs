@@ -520,8 +520,8 @@ fn create_tool_registry(
     // Web fetch tool
     registry.register(Box::new(WebFetchTool::new()));
 
-    // Vault tool (encrypted secrets storage)
-    registry.register(Box::new(VaultTool::new()));
+    // Vault tool (encrypted secrets storage, with audit logging via VLT-4)
+    registry.register(Box::new(VaultTool::with_db(db.clone())));
 
     // Automation creation tool (shared storage with scheduler + web API)
     registry.register(Box::new(CreateAutomationTool::new(db)));

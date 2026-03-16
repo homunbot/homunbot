@@ -632,10 +632,26 @@ impl AgentLoop {
                     let knowledge_text = results
                         .iter()
                         .map(|r| {
-                            format!(
-                                "- [RAG: {} (chunk {})] {}",
-                                r.source_file, r.chunk.chunk_index, r.chunk.content
-                            )
+                            // SEC-11: scan for prompt injection in RAG chunks
+                            if let Some(pattern) =
+                                crate::rag::sensitive::detect_injection(&r.chunk.content)
+                            {
+                                tracing::warn!(
+                                    source = %r.source_file,
+                                    chunk = r.chunk.chunk_index,
+                                    pattern = %pattern,
+                                    "Prompt injection detected in RAG chunk — redacted"
+                                );
+                                format!(
+                                    "- [RAG: {} (chunk {})] [REDACTED — prompt injection detected]",
+                                    r.source_file, r.chunk.chunk_index
+                                )
+                            } else {
+                                format!(
+                                    "- [RAG: {} (chunk {})] {}",
+                                    r.source_file, r.chunk.chunk_index, r.chunk.content
+                                )
+                            }
                         })
                         .collect::<Vec<_>>()
                         .join("\n");

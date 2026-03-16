@@ -1,4 +1,4 @@
-use axum::extract::Path;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use axum::routing::get;
@@ -19,6 +19,8 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             "/v1/vault/{key}",
             axum::routing::delete(delete_vault_secret),
         )
+        // VLT-4: Vault access audit log
+        .route("/v1/vault/audit", get(get_vault_audit_log))
         // --- Vault 2FA ---
         .route("/v1/vault/2fa/status", get(get_2fa_status))
         .route("/v1/vault/2fa/setup", axum::routing::post(setup_2fa))
@@ -51,7 +53,10 @@ struct VaultKeysResponse {
     keys: Vec<String>,
 }
 
-async fn list_vault_keys() -> Result<Json<VaultKeysResponse>, StatusCode> {
+async fn list_vault_keys(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<VaultKeysResponse>, StatusCode> {
+    audit_log(&state, "*", "list", true);
     let secrets =
         crate::storage::global_secrets().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let all = secrets
@@ -74,6 +79,7 @@ struct SetVaultRequest {
 }
 
 async fn set_vault_secret(
+    State(state): State<Arc<AppState>>,
     Json(req): Json<SetVaultRequest>,
 ) -> Result<Json<OkResponse>, StatusCode> {
     // Validate key: lowercase alphanumeric + underscore only
@@ -95,6 +101,8 @@ async fn set_vault_secret(
     secrets
         .set(&secret_key, &req.value)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    audit_log(&state, &req.key, "store", true);
 
     Ok(Json(OkResponse {
         ok: true,
@@ -124,6 +132,7 @@ struct RevealRequest {
 
 #[cfg(feature = "vault-2fa")]
 async fn reveal_vault_secret(
+    State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
     Json(req): Json<RevealRequest>,
 ) -> Result<Json<RevealResponse>, StatusCode> {
@@ -135,6 +144,7 @@ async fn reveal_vault_secret(
         Err(_) => {
             // If we can't load 2FA config, allow access (fail open for availability)
             tracing::warn!("Could not load 2FA config, allowing vault access");
+            audit_log(&state, &key, "reveal", true);
             return do_reveal_secret(&key).await;
         }
     };
@@ -143,12 +153,14 @@ async fn reveal_vault_secret(
         Ok(c) => c,
         Err(_) => {
             tracing::warn!("Could not load 2FA config, allowing vault access");
+            audit_log(&state, &key, "reveal", true);
             return do_reveal_secret(&key).await;
         }
     };
 
     if !config.enabled {
         // 2FA not enabled, allow access
+        audit_log(&state, &key, "reveal", true);
         return do_reveal_secret(&key).await;
     }
 
@@ -169,6 +181,7 @@ async fn reveal_vault_secret(
     };
 
     if !authenticated {
+        audit_log(&state, &key, "reveal", false);
         return Ok(Json(RevealResponse {
             ok: false,
             key: key.clone(),
@@ -180,15 +193,18 @@ async fn reveal_vault_secret(
         }));
     }
 
+    audit_log(&state, &key, "reveal", true);
     do_reveal_secret(&key).await
 }
 
 #[cfg(not(feature = "vault-2fa"))]
 async fn reveal_vault_secret(
+    State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
     _req: Json<RevealRequest>,
 ) -> Result<Json<RevealResponse>, StatusCode> {
     // 2FA feature not enabled, allow direct access
+    audit_log(&state, &key, "reveal", true);
     do_reveal_secret(&key).await
 }
 
@@ -216,7 +232,10 @@ async fn do_reveal_secret(key: &str) -> Result<Json<RevealResponse>, StatusCode>
     }
 }
 
-async fn delete_vault_secret(Path(key): Path<String>) -> Result<Json<OkResponse>, StatusCode> {
+async fn delete_vault_secret(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+) -> Result<Json<OkResponse>, StatusCode> {
     let secrets =
         crate::storage::global_secrets().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let secret_key = crate::storage::SecretKey::custom(&format!("vault.{key}"));
@@ -225,10 +244,53 @@ async fn delete_vault_secret(Path(key): Path<String>) -> Result<Json<OkResponse>
         .delete(&secret_key)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    audit_log(&state, &key, "delete", true);
+
     Ok(Json(OkResponse {
         ok: true,
         message: None,
     }))
+}
+
+// ─── VLT-4: Vault Audit Logging ─────────────────────────────────
+
+/// Fire-and-forget audit log for web API vault operations.
+fn audit_log(state: &Arc<AppState>, key: &str, action: &str, success: bool) {
+    if let Some(db) = &state.db {
+        let db = db.clone();
+        let key = key.to_string();
+        let action = action.to_string();
+        tokio::spawn(async move {
+            if let Err(e) = db
+                .insert_vault_access(&key, &action, "web_api", success, None)
+                .await
+            {
+                tracing::warn!(error = ?e, "Failed to write vault audit log");
+            }
+        });
+    }
+}
+
+#[derive(Deserialize)]
+struct AuditQuery {
+    #[serde(default = "default_audit_limit")]
+    limit: i64,
+}
+
+fn default_audit_limit() -> i64 {
+    50
+}
+
+async fn get_vault_audit_log(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<AuditQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let rows = db
+        .list_vault_access_log(q.limit)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({ "entries": rows })))
 }
 
 // ─── Vault 2FA ──────────────────────────────────────────────────

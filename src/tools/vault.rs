@@ -20,7 +20,7 @@ use serde_json::Value;
 
 #[cfg(feature = "vault-2fa")]
 use crate::security::{global_session_manager, TotpManager, TwoFactorConfig, TwoFactorStorage};
-use crate::storage::{global_secrets, SecretKey};
+use crate::storage::{global_secrets, Database, SecretKey};
 
 use super::registry::{get_optional_string, get_string_param, Tool, ToolContext, ToolResult};
 
@@ -32,11 +32,34 @@ const VAULT_PREFIX: &str = "vault.";
 /// When the user mentions passwords, tokens, or other secrets in conversation,
 /// the consolidation system (or the LLM directly) can store them here.
 /// Memory files only ever contain `vault://key_name` references.
-pub struct VaultTool;
+pub struct VaultTool {
+    db: Option<Database>,
+}
 
 impl VaultTool {
     pub fn new() -> Self {
-        Self
+        Self { db: None }
+    }
+
+    pub fn with_db(db: Database) -> Self {
+        Self { db: Some(db) }
+    }
+
+    /// Fire-and-forget audit log (VLT-4).
+    fn log_access(&self, key: &str, action: &str, success: bool) {
+        if let Some(db) = &self.db {
+            let db = db.clone();
+            let key = key.to_string();
+            let action = action.to_string();
+            tokio::spawn(async move {
+                if let Err(e) = db
+                    .insert_vault_access(&key, &action, "tool", success, None)
+                    .await
+                {
+                    tracing::warn!(error = ?e, "Failed to write vault audit log");
+                }
+            });
+        }
     }
 
     fn vault_key(name: &str) -> SecretKey {
@@ -215,6 +238,7 @@ impl Tool for VaultTool {
                 let secrets = global_secrets()
                     .map_err(|e| anyhow::anyhow!("Failed to access vault: {e}"))?;
                 secrets.set(&Self::vault_key(&key), &value)?;
+                self.log_access(&key, "store", true);
 
                 tracing::info!(key = %key, "Stored secret in vault");
                 Ok(ToolResult::success(format!(
@@ -264,6 +288,7 @@ impl Tool for VaultTool {
 
                 match secrets.get(&Self::vault_key(&key))? {
                     Some(value) => {
+                        self.log_access(&key, "retrieve", true);
                         tracing::info!(key = %key, "Retrieved secret from vault");
                         Ok(ToolResult::success(format!(
                             "**Secret value:**\n```\n{value}\n```\n\n\
@@ -271,9 +296,12 @@ impl Tool for VaultTool {
                              but NEVER store this value in memory, history, or conversation summaries."
                         )))
                     }
-                    None => Ok(ToolResult::error(format!(
-                        "Secret '{key}' not found in vault."
-                    ))),
+                    None => {
+                        self.log_access(&key, "retrieve", false);
+                        Ok(ToolResult::error(format!(
+                            "Secret '{key}' not found in vault."
+                        )))
+                    }
                 }
             }
             "confirm" => {
@@ -296,6 +324,7 @@ impl Tool for VaultTool {
                 }
             }
             "list" => {
+                self.log_access("*", "list", true);
                 let secrets = global_secrets()
                     .map_err(|e| anyhow::anyhow!("Failed to access vault: {e}"))?;
 
@@ -333,6 +362,7 @@ impl Tool for VaultTool {
                 }
 
                 secrets.delete(&Self::vault_key(&key))?;
+                self.log_access(&key, "delete", true);
                 tracing::info!(key = %key, "Deleted secret from vault");
                 Ok(ToolResult::success(format!(
                     "Secret '{key}' deleted from vault."

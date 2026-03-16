@@ -2100,6 +2100,58 @@ impl Database {
         .context("Failed to list skill audits")?;
         Ok(rows)
     }
+
+    // ── VLT-4: Vault Access Audit Logging ─────────────────────────
+
+    /// Insert a vault access audit record.
+    pub async fn insert_vault_access(
+        &self,
+        key_name: &str,
+        action: &str,
+        source: &str,
+        success: bool,
+        user_agent: Option<&str>,
+    ) -> Result<i64> {
+        let row = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO vault_access_log (key_name, action, source, success, user_agent)
+             VALUES (?, ?, ?, ?, ?)
+             RETURNING id",
+        )
+        .bind(key_name)
+        .bind(action)
+        .bind(source)
+        .bind(success as i32)
+        .bind(user_agent)
+        .fetch_one(&self.pool)
+        .await
+        .context("Failed to insert vault access log")?;
+        Ok(row)
+    }
+
+    /// List recent vault access log entries.
+    pub async fn list_vault_access_log(&self, limit: i64) -> Result<Vec<VaultAccessLogRow>> {
+        let rows = sqlx::query_as::<_, VaultAccessLogRow>(
+            "SELECT id, timestamp, key_name, action, source, success, user_agent
+             FROM vault_access_log ORDER BY id DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to list vault access log")?;
+        Ok(rows)
+    }
+
+    /// Count access log entries for a specific key.
+    pub async fn count_vault_access_for_key(&self, key_name: &str) -> Result<i64> {
+        let count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM vault_access_log WHERE key_name = ?",
+        )
+        .bind(key_name)
+        .fetch_one(&self.pool)
+        .await
+        .context("Failed to count vault access")?;
+        Ok(count)
+    }
 }
 
 /// Skill audit log row.
@@ -2112,6 +2164,18 @@ pub struct SkillAuditRow {
     pub query: Option<String>,
     pub activation_type: String,
     pub success: i64,
+}
+
+/// Vault access log row (VLT-4).
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct VaultAccessLogRow {
+    pub id: i64,
+    pub timestamp: String,
+    pub key_name: String,
+    pub action: String,
+    pub source: String,
+    pub success: i64,
+    pub user_agent: Option<String>,
 }
 
 /// Result of memory cleanup operation.

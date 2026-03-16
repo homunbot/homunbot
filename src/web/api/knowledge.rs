@@ -296,39 +296,46 @@ mod inner {
                 .into_response();
         };
 
-        // If 2FA is enabled, verify TOTP code
+        // VLT-2: If 2FA is enabled, verify TOTP code or session_id
         #[cfg(feature = "vault-2fa")]
         {
-            use crate::security::{TotpManager, TwoFactorStorage};
+            use crate::security::{global_session_manager, TotpManager, TwoFactorStorage};
 
             if let Ok(storage) = TwoFactorStorage::new() {
                 if let Ok(config) = storage.load() {
                     if config.enabled {
+                        let session_id = req["session_id"].as_str().unwrap_or("");
                         let code = req["code"].as_str().unwrap_or("");
-                        if code.is_empty() {
-                            return (
-                                StatusCode::UNAUTHORIZED,
-                                Json(serde_json::json!({"error": "2FA code required", "requires_2fa": true})),
-                            )
-                                .into_response();
-                        }
-                        match TotpManager::new(&config.totp_secret, &config.account) {
-                            Ok(manager) => {
-                                if !manager.verify(code) {
+
+                        let authenticated = if !session_id.is_empty() {
+                            // Verify via session
+                            let sm = global_session_manager();
+                            sm.verify_session(session_id).await
+                        } else if !code.is_empty() {
+                            // Verify TOTP code directly
+                            match TotpManager::new(&config.totp_secret, &config.account) {
+                                Ok(manager) => manager.verify(code),
+                                Err(_) => {
                                     return (
-                                        StatusCode::FORBIDDEN,
-                                        Json(serde_json::json!({"error": "Invalid 2FA code"})),
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        Json(serde_json::json!({"error": "2FA configuration error"})),
                                     )
                                         .into_response();
                                 }
                             }
-                            Err(_) => {
-                                return (
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    Json(serde_json::json!({"error": "2FA configuration error"})),
-                                )
-                                    .into_response();
-                            }
+                        } else {
+                            false
+                        };
+
+                        if !authenticated {
+                            return (
+                                StatusCode::UNAUTHORIZED,
+                                Json(serde_json::json!({
+                                    "error": "2FA required. Provide 'code' or 'session_id'.",
+                                    "requires_2fa": true
+                                })),
+                            )
+                                .into_response();
                         }
                     }
                 }
