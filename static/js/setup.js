@@ -2306,6 +2306,27 @@ if (btnRunCleanup) {
     var actionTimeout = document.getElementById('browser-action-timeout');
     var navTimeout = document.getElementById('browser-nav-timeout');
     var snapshotLimit = document.getElementById('browser-snapshot-limit');
+    var browserVisionSelect = document.getElementById('browser-vision-model');
+    var browserVisionValue = document.getElementById('browser-vision-value');
+
+    // Load vision model dropdown (reuses fetchAllModels + buildModelOptions)
+    (async function loadBrowserVisionDropdown() {
+        if (!browserVisionSelect) return;
+        try {
+            var data = await fetchAllModels();
+            var fullData = allModelsIncludingHidden(data);
+            buildModelOptions(browserVisionSelect, fullData, {
+                specialOptions: [{ value: '', label: '(Same as chat model)' }],
+                includeCustom: true,
+                selectedValue: browserVisionValue ? browserVisionValue.value : (data.vision_model || ''),
+            });
+            browserVisionSelect.addEventListener('change', function() {
+                if (browserVisionValue) browserVisionValue.value = browserVisionSelect.value;
+            });
+        } catch (err) {
+            console.warn('[Browser] Failed to load vision models:', err);
+        }
+    })();
 
     function validateBrowserForm() {
         var ok = true;
@@ -2350,6 +2371,7 @@ if (btnRunCleanup) {
                 { key: 'browser.action_timeout_secs', value: actionTimeout ? (actionTimeout.value || '10') : '10' },
                 { key: 'browser.navigation_timeout_secs', value: navTimeout ? (navTimeout.value || '30') : '30' },
                 { key: 'browser.snapshot_limit', value: snapshotLimit ? (snapshotLimit.value || '50') : '50' },
+                { key: 'agent.vision_model', value: browserVisionSelect ? browserVisionSelect.value : '' },
             ];
 
             try {

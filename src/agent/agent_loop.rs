@@ -3156,6 +3156,8 @@ For sports schedules, fixtures, standings, events, or current news, use web_sear
         "use the browser",
         "apri il browser",
         "open the browser",
+        "chiudi il browser",
+        "close the browser",
         "clicca",
         "click",
         "login",

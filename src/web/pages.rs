@@ -164,26 +164,26 @@ fn sidebar(active: &str) -> String {
             </div>
             <div class="sidebar-subnav{tools_open}" id="tools-subnav">
                 <div class="sidebar-subnav-header">Tools</div>
-                <a href="/automations" class="sidebar-subnav-link{automations_a}">Automations</a>
-                <a href="/workflows" class="sidebar-subnav-link{workflows_a}">Workflows</a>
-                <a href="/skills" class="sidebar-subnav-link{skills_a}">Skills</a>
-                <a href="/mcp" class="sidebar-subnav-link{mcp_a}">MCP Servers</a>
-                <a href="/memory" class="sidebar-subnav-link{memory_a}">Memory</a>
-                <a href="/knowledge" class="sidebar-subnav-link{knowledge_a}">Knowledge</a>
-                <a href="/vault" class="sidebar-subnav-link{vault_a}">Vault</a>
+                <a href="/automations" class="sidebar-subnav-link{automations_a}"><span class="subnav-icon">⚡</span> Automations</a>
+                <a href="/workflows" class="sidebar-subnav-link{workflows_a}"><span class="subnav-icon">🔀</span> Workflows</a>
+                <a href="/skills" class="sidebar-subnav-link{skills_a}"><span class="subnav-icon">🧩</span> Skills</a>
+                <a href="/mcp" class="sidebar-subnav-link{mcp_a}"><span class="subnav-icon">🔌</span> MCP Servers</a>
+                <a href="/memory" class="sidebar-subnav-link{memory_a}"><span class="subnav-icon">🧠</span> Memory</a>
+                <a href="/knowledge" class="sidebar-subnav-link{knowledge_a}"><span class="subnav-icon">📚</span> Knowledge</a>
+                <a href="/vault" class="sidebar-subnav-link{vault_a}"><span class="subnav-icon">🔐</span> Vault</a>
             </div>
             <div class="sidebar-subnav{settings_open}" id="settings-subnav">
                 <div class="sidebar-subnav-header">Settings</div>
-                <a href="/setup" class="sidebar-subnav-link{setup_a}">Model &amp; Providers</a>
-                <a href="/appearance" class="sidebar-subnav-link{appearance_a}">Appearance</a>
-                <a href="/channels" class="sidebar-subnav-link{channels_a}">Channels</a>
-                <a href="/browser" class="sidebar-subnav-link{browser_a}">Browser</a>
-                <a href="/file-access" class="sidebar-subnav-link{file_access_a}">File Access</a>
-                <a href="/shell" class="sidebar-subnav-link{shell_a}">Shell</a>
-                <a href="/sandbox" class="sidebar-subnav-link{sandbox_a}">Sandbox</a>
-                <a href="/approvals" class="sidebar-subnav-link{approvals_a}">Approvals</a>
-                <a href="/maintenance" class="sidebar-subnav-link{maintenance_a}">Database</a>
-                <a href="/logs" class="sidebar-subnav-link{logs_a}">Logs</a>
+                <a href="/setup" class="sidebar-subnav-link{setup_a}"><span class="subnav-icon">🤖</span> Model &amp; Providers</a>
+                <a href="/appearance" class="sidebar-subnav-link{appearance_a}"><span class="subnav-icon">🎨</span> Appearance</a>
+                <a href="/channels" class="sidebar-subnav-link{channels_a}"><span class="subnav-icon">📡</span> Channels</a>
+                <a href="/browser" class="sidebar-subnav-link{browser_a}"><span class="subnav-icon">🌐</span> Browser</a>
+                <a href="/file-access" class="sidebar-subnav-link{file_access_a}"><span class="subnav-icon">📁</span> File Access</a>
+                <a href="/shell" class="sidebar-subnav-link{shell_a}"><span class="subnav-icon">⌨️</span> Shell</a>
+                <a href="/sandbox" class="sidebar-subnav-link{sandbox_a}"><span class="subnav-icon">📦</span> Sandbox</a>
+                <a href="/approvals" class="sidebar-subnav-link{approvals_a}"><span class="subnav-icon">✅</span> Approvals</a>
+                <a href="/maintenance" class="sidebar-subnav-link{maintenance_a}"><span class="subnav-icon">🗄️</span> Database</a>
+                <a href="/logs" class="sidebar-subnav-link{logs_a}"><span class="subnav-icon">📋</span> Logs</a>
             </div>
         </nav>"##,
         logo = LOGO_ICON,
@@ -1055,6 +1055,12 @@ async fn browser_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <input type="text" id="browser-executable" name="executable_path" value="{executable_path}" class="input" placeholder="Auto-detect (leave empty)">
                             <div class="form-hint">Leave empty to auto-detect. Override if Chrome is in a custom location.</div>
                         </div>
+                        <div class="form-group">
+                            <label for="browser-vision-model">Vision Model</label>
+                            <select id="browser-vision-model" class="input"></select>
+                            <input type="hidden" name="vision_model" id="browser-vision-value" value="{vision_model}">
+                            <div class="form-hint">Model for screenshot/image analysis. Empty = same as chat model.</div>
+                        </div>
                         <div class="form-hint" style="margin-top:10px;">Timeouts and snapshot settings are managed by the Playwright MCP server.</div>
                         <div class="form-actions">
                             <button type="submit" class="btn btn-primary">Save Browser Config</button>
@@ -1105,6 +1111,7 @@ async fn browser_page(State(state): State<Arc<AppState>>) -> Html<String> {
             ""
         },
         executable_path = config.browser.executable_path,
+        vision_model = config.agent.vision_model,
         search_brave = if config.tools.web_search.provider == "brave" {
             "selected"
         } else {

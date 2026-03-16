@@ -507,6 +507,13 @@ html, body {
     color: var(--accent);
     font-weight: 600;
 }
+.subnav-icon {
+    display: inline-flex;
+    width: 18px;
+    font-size: 13px;
+    flex-shrink: 0;
+    margin-right: 4px;
+}
 
 /* ─── Theme toggle ─── */
 .theme-toggle {
