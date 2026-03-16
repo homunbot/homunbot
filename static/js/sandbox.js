@@ -113,30 +113,39 @@ function renderDockerStatus() {
 
     if (!currentSandboxStatus) {
         iconEl.textContent = '⏳';
-        textEl.textContent = 'Checking Docker availability...';
+        textEl.textContent = 'Detecting available backends...';
         if (detailEl) detailEl.textContent = '';
         return;
     }
 
-    if (currentSandboxStatus.docker_available) {
+    const resolved = currentSandboxStatus.resolved_backend || 'none';
+    const anyAvailable = currentSandboxStatus.any_backend_available;
+
+    if (anyAvailable && resolved !== 'none') {
         iconEl.textContent = '✅';
-        textEl.textContent = 'Docker Desktop is running';
+        textEl.textContent = currentSandboxStatus.message || `Backend active: ${resolved}`;
+        if (detailEl) {
+            detailEl.textContent = currentSandboxStatus.availability_summary || '';
+        }
+    } else if (anyAvailable) {
+        iconEl.textContent = '⚠️';
+        textEl.textContent = currentSandboxStatus.message || 'Backend available but not active';
         if (detailEl) {
             detailEl.textContent = currentSandboxStatus.availability_summary || '';
         }
     } else {
         iconEl.textContent = '❌';
-        textEl.textContent = 'Docker Desktop is not running';
+        textEl.textContent = 'No isolation backend available';
         if (detailEl) {
-            detailEl.textContent = 'Start Docker Desktop and click Refresh to re-check.';
+            detailEl.textContent = currentSandboxStatus.availability_summary || '';
         }
     }
 
-    // Disable Safe/Strict cards when Docker is unavailable
+    // Disable Safe/Strict cards only when no backend is available at all
     document.querySelectorAll('[data-sandbox-profile="safe"], [data-sandbox-profile="strict"]').forEach(card => {
-        if (!currentSandboxStatus.docker_available) {
+        if (!anyAvailable) {
             card.classList.add('disabled');
-            card.title = 'Docker is not available';
+            card.title = 'No isolation backend available';
         } else {
             card.classList.remove('disabled');
             card.title = '';
@@ -166,10 +175,11 @@ function renderRecommendation() {
     }
 
     const presetLabel = currentSandboxPresets[recommended]?.label || recommended;
-    const dockerNote = currentSandboxStatus.docker_available
-        ? 'Docker is available'
-        : 'Docker is unavailable';
-    textEl.textContent = `Recommended: ${presetLabel} \u00b7 ${dockerNote}`;
+    const resolved = currentSandboxStatus.resolved_backend || 'none';
+    const backendNote = resolved !== 'none'
+        ? `Active backend: ${resolved}`
+        : (currentSandboxStatus.any_backend_available ? 'Backends available' : 'No backend available');
+    textEl.textContent = `Recommended: ${presetLabel} \u00b7 ${backendNote}`;
     section.style.display = '';
 }
 
@@ -211,10 +221,12 @@ function renderImageStatus() {
         if (pullBtn) pullBtn.disabled = false;
     }
 
-    // Show/hide image section based on sandbox being enabled
+    // Show image section only for Docker backend
     if (section) {
-        const enabled = document.getElementById('sandbox-enabled')?.checked;
-        section.style.display = enabled ? '' : 'none';
+        const resolved = currentSandboxStatus?.resolved_backend || '';
+        const configured = currentSandboxStatus?.configured_backend || '';
+        const isDocker = resolved === 'docker' || (configured === 'auto' && currentSandboxStatus?.docker_available);
+        section.style.display = isDocker ? '' : 'none';
     }
 }
 
@@ -239,7 +251,7 @@ function setupSandboxControls() {
             await loadSandboxImage();
             refreshBtn.disabled = false;
             refreshBtn.textContent = 'Refresh';
-            showToast('Docker status refreshed', 'success');
+            showToast('Backend status refreshed', 'success');
         });
     }
 
@@ -354,6 +366,22 @@ function updateSandboxDockerVisibility() {
     const wrapper = document.getElementById('sandbox-docker-fields');
     if (!wrapper) return;
     wrapper.style.display = backend === 'none' ? 'none' : 'block';
+
+    // Hide Docker-only fields for native backends
+    const nativeBackend = ['macos_seatbelt', 'linux_native', 'windows_native'].includes(backend);
+    const dockerOnlyIds = [
+        'sandbox-docker-image',
+        'sandbox-docker-memory',
+        'sandbox-docker-cpus',
+        'sandbox-docker-readonly',
+        'sandbox-docker-mount-workspace',
+    ];
+    for (const id of dockerOnlyIds) {
+        const el = document.getElementById(id);
+        if (el?.closest('.form-group')) {
+            el.closest('.form-group').style.display = nativeBackend ? 'none' : '';
+        }
+    }
 }
 
 // ─── Preset Logic ───
@@ -370,7 +398,7 @@ function getRecommendedPresetName() {
         const normalized = currentSandboxStatus.recommended_preset.trim().toLowerCase();
         if (normalized === 'strict' || normalized === 'safe') return normalized;
     }
-    if (currentSandboxStatus && currentSandboxStatus.docker_available) {
+    if (currentSandboxStatus && currentSandboxStatus.any_backend_available) {
         return 'strict';
     }
     return 'safe';

@@ -29,10 +29,13 @@ pub struct McpServerInfo {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct McpToolInfo {
     pub name: String,
     pub description: String,
+    /// JSON Schema for the tool's input parameters (if available).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<serde_json::Value>,
 }
 
 /// A single MCP tool exposed as a Homun Tool.
@@ -307,7 +310,10 @@ impl McpManager {
         Self::start_with_sandbox(servers, None, None).await
     }
 
-    /// Connect to all enabled MCP servers using optional execution sandbox config.
+    /// Connect to all enabled MCP servers **in parallel** with per-server timeout.
+    ///
+    /// Each server gets its own `tokio::spawn` + 30s timeout so a slow/broken
+    /// server (e.g. expired OAuth) doesn't block others — especially Playwright.
     pub async fn start_with_sandbox(
         servers: &HashMap<String, McpServerConfig>,
         sandbox_config: Option<ExecutionSandboxConfig>,
@@ -319,6 +325,8 @@ impl McpManager {
         let sandbox_config = sandbox_config.unwrap_or_default();
         let runtime_hot_reload = runtime_config.is_some();
 
+        // Collect disabled servers first (no async work needed)
+        let mut enabled: Vec<(String, McpServerConfig)> = Vec::new();
         for (name, config) in servers {
             if !config.enabled {
                 tracing::debug!(server = %name, "MCP server disabled, skipping");
@@ -330,20 +338,51 @@ impl McpManager {
                     connected: false,
                     error: None,
                 });
-                continue;
+            } else {
+                enabled.push((name.clone(), config.clone()));
             }
+        }
 
-            match connect_server(name, config, &sandbox_config).await {
+        // Connect all enabled servers in parallel with per-server timeout
+        const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+        let mut handles = Vec::new();
+        for (name, config) in enabled {
+            let sb = sandbox_config.clone();
+            handles.push(tokio::spawn(async move {
+                let t0 = std::time::Instant::now();
+                let result = tokio::time::timeout(CONNECT_TIMEOUT, connect_server(&name, &config, &sb)).await;
+                let elapsed = t0.elapsed();
+                match result {
+                    Ok(inner) => (name, elapsed, inner),
+                    Err(_) => (
+                        name.clone(),
+                        elapsed,
+                        Err(anyhow::anyhow!("Connection timed out after {CONNECT_TIMEOUT:?}")),
+                    ),
+                }
+            }));
+        }
+
+        // Collect results
+        for handle in handles {
+            let (name, elapsed, result) = match handle.await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(error = %e, "MCP connection task panicked");
+                    continue;
+                }
+            };
+            match result {
                 Ok((peer, discovered_tools, info)) => {
                     let peer = Arc::new(peer);
                     tracing::info!(
                         server = %name,
                         tools = discovered_tools.len(),
+                        elapsed_ms = elapsed.as_millis(),
                         server_name = %info.server_name,
                         "MCP server connected"
                     );
 
-                    // Create Tool wrappers for each discovered MCP tool
                     for mcp_tool in discovered_tools {
                         let tool_name = format!("{}__{}", name, mcp_tool.name);
                         let description = mcp_tool
@@ -351,8 +390,6 @@ impl McpManager {
                             .as_deref()
                             .unwrap_or("No description")
                             .to_string();
-                        // input_schema is Arc<JsonObject> (Arc<Map<String, Value>>)
-                        // Convert to Value::Object for our Tool trait
                         let input_schema = Value::Object(mcp_tool.input_schema.as_ref().clone());
 
                         tools.push(Box::new(McpClientTool {
@@ -366,14 +403,17 @@ impl McpManager {
                         }));
                     }
 
+                    // Cache discovered tool count in runtime config for catalog display
+                    if let Some(ref rc) = runtime_config {
+                        let mut cfg = rc.write().await;
+                        if let Some(srv) = cfg.mcp.servers.get_mut(&name) {
+                            srv.discovered_tool_count = Some(info.tool_count);
+                        }
+                    }
+
                     server_infos.push(info);
-                    // Stateful servers (e.g. browser) need a persistent connection —
-                    // their peer must survive across tool calls to keep state (page, DOM).
-                    // Stateless servers in hot-reload mode reconnect on each call.
                     let needs_persistent = name == crate::browser::BROWSER_MCP_SERVER_NAME;
                     if runtime_hot_reload && !needs_persistent {
-                        // Stateless hot-reload: reconnect on each tool call via call_tool_once(),
-                        // so we can immediately release the startup discovery connection.
                         peer.shutdown().await;
                     } else {
                         peers.push((name.clone(), peer));
@@ -381,7 +421,80 @@ impl McpManager {
                 }
                 Err(e) => {
                     let err_detail = format!("{e:#}");
-                    tracing::warn!(server = %name, error = %err_detail, "Failed to connect MCP server");
+                    let is_auth_error = err_detail.contains("AuthRequired")
+                        || err_detail.contains("invalid_token")
+                        || err_detail.contains("401");
+
+                    // Try OAuth token refresh + reconnect for auth failures
+                    if is_auth_error {
+                        if let Some(server_cfg) = servers.get(&name) {
+                            match super::mcp_token_refresh::try_refresh_for_server(&name, server_cfg).await {
+                                Ok(refresh) => {
+                                    tracing::info!(server = %name, "OAuth token refreshed, retrying connection");
+
+                                    // Persist refreshed tokens to vault
+                                    persist_refreshed_tokens(&name, server_cfg, &refresh);
+
+                                    // Update env with fresh access token if server uses auth_env_key
+                                    let mut retry_cfg = server_cfg.clone();
+                                    if let Some(ref auth_key) = retry_cfg.auth_env_key {
+                                        retry_cfg.env.insert(auth_key.clone(), refresh.access_token.clone());
+                                    }
+                                    match connect_server(&name, &retry_cfg, &sandbox_config).await {
+                                        Ok((peer, discovered_tools, info)) => {
+                                            let peer = Arc::new(peer);
+                                            tracing::info!(
+                                                server = %name,
+                                                tools = discovered_tools.len(),
+                                                "MCP server reconnected after token refresh"
+                                            );
+                                            for mcp_tool in discovered_tools {
+                                                let tool_name = format!("{}__{}", name, mcp_tool.name);
+                                                let description = mcp_tool.description.as_deref().unwrap_or("No description").to_string();
+                                                let input_schema = Value::Object(mcp_tool.input_schema.as_ref().clone());
+                                                tools.push(Box::new(McpClientTool {
+                                                    tool_name,
+                                                    mcp_tool_name: mcp_tool.name.to_string(),
+                                                    tool_description: description,
+                                                    input_schema,
+                                                    peer: peer.clone(),
+                                                    server_name: name.clone(),
+                                                    runtime_config: runtime_config.clone(),
+                                                }));
+                                            }
+                                            if let Some(ref rc) = runtime_config {
+                                                let mut cfg = rc.write().await;
+                                                if let Some(srv) = cfg.mcp.servers.get_mut(&name) {
+                                                    srv.discovered_tool_count = Some(info.tool_count);
+                                                }
+                                            }
+                                            server_infos.push(info);
+                                            let needs_persistent = name == crate::browser::BROWSER_MCP_SERVER_NAME;
+                                            if runtime_hot_reload && !needs_persistent {
+                                                peer.shutdown().await;
+                                            } else {
+                                                peers.push((name.clone(), peer));
+                                            }
+                                            continue;
+                                        }
+                                        Err(retry_err) => {
+                                            tracing::warn!(server = %name, error = %retry_err, "Retry after token refresh also failed");
+                                        }
+                                    }
+                                }
+                                Err(refresh_err) => {
+                                    tracing::warn!(server = %name, error = %refresh_err, "OAuth token refresh failed");
+                                }
+                            }
+                        }
+                    }
+
+                    tracing::warn!(
+                        server = %name,
+                        elapsed_ms = elapsed.as_millis(),
+                        error = %err_detail,
+                        "Failed to connect MCP server"
+                    );
                     server_infos.push(McpServerInfo {
                         name: name.clone(),
                         server_name: String::new(),
@@ -531,6 +644,9 @@ pub async fn list_tools_once(
         .map(|tool| McpToolInfo {
             name: tool.name.to_string(),
             description: tool.description.unwrap_or_default().to_string(),
+            parameters: Some(serde_json::Value::Object(
+                tool.input_schema.as_ref().clone(),
+            )),
         })
         .collect();
     peer.shutdown().await;
@@ -541,7 +657,7 @@ pub async fn list_tools_once(
 async fn connect_stdio(
     name: &str,
     config: &McpServerConfig,
-    sandbox_config: &ExecutionSandboxConfig,
+    _sandbox_config: &ExecutionSandboxConfig,
 ) -> Result<(McpPeer, Vec<rmcp::model::Tool>, McpServerInfo)> {
     let cmd = config
         .command
@@ -562,18 +678,14 @@ async fn connect_stdio(
     let workspace_dir = crate::config::Config::workspace_dir();
     let _ = std::fs::create_dir_all(&workspace_dir);
 
-    // Browser MCP (Playwright) must bypass the sandbox: it needs native access
-    // to launch browser processes, display libs, and user data dirs.
-    // Docker/bubblewrap containers lack these — Playwright would fail to start.
-    let effective_sandbox = if name == crate::browser::BROWSER_MCP_SERVER_NAME {
-        tracing::debug!(
-            server = %name,
-            "Browser MCP server bypasses execution sandbox (needs native browser access)"
-        );
-        ExecutionSandboxConfig::disabled()
-    } else {
-        sandbox_config.clone()
-    };
+    // MCP stdio servers bypass the execution sandbox because:
+    // - They are user-configured external services (trusted at config time)
+    // - They need full network access (API calls to GitHub, Google, npm, etc.)
+    // - They need user-local paths (npm cache, node_modules, fnm, etc.)
+    // - Seatbelt/bubblewrap profiles would block network + home dir access
+    // Sandbox enforcement applies to tool CALL results (shell commands),
+    // not to the MCP server processes themselves.
+    let effective_sandbox = ExecutionSandboxConfig::disabled();
 
     let process_cmd = build_process_command(
         "mcp",
@@ -625,6 +737,50 @@ async fn connect_stdio(
 
 /// Recursively resolve `vault://` references in MCP tool arguments.
 ///
+/// Persist refreshed OAuth tokens to vault so they survive restarts.
+///
+/// For HTTP servers (e.g. Notion): updates the access_token vault key.
+/// For Google servers: updates the refresh_token if it was rotated.
+/// For Notion specifically: also updates the refresh_token in vault.
+fn persist_refreshed_tokens(
+    server_name: &str,
+    server_cfg: &McpServerConfig,
+    refresh: &super::mcp_token_refresh::TokenRefreshResult,
+) {
+    let Ok(secrets) = global_secrets() else {
+        return;
+    };
+
+    // Notion / HTTP — update the access_token vault key
+    if server_cfg.transport == "http" {
+        if let Some(raw) = server_cfg.env.get("NOTION_TOKEN") {
+            if let Some(vault_key) = raw.strip_prefix("vault://") {
+                let key = SecretKey::custom(&format!("vault.{}", vault_key.trim()));
+                if secrets.set(&key, &refresh.access_token).is_ok() {
+                    tracing::debug!(server = %server_name, "Updated Notion access_token in vault");
+                }
+            }
+        }
+        // Update Notion refresh_token if rotated
+        if let Some(ref new_rt) = refresh.new_refresh_token {
+            let rt_key = SecretKey::custom(&format!("vault.mcp.{server_name}.notion_refresh_token"));
+            let _ = secrets.set(&rt_key, new_rt);
+        }
+    }
+
+    // Google — update refresh_token if rotated (rare but possible)
+    if let Some(ref new_rt) = refresh.new_refresh_token {
+        if let Some(raw) = server_cfg.env.get("GOOGLE_REFRESH_TOKEN") {
+            if let Some(vault_key) = raw.strip_prefix("vault://") {
+                let key = SecretKey::custom(&format!("vault.{}", vault_key.trim()));
+                if secrets.set(&key, new_rt).is_ok() {
+                    tracing::debug!(server = %server_name, "Updated Google refresh_token in vault");
+                }
+            }
+        }
+    }
+}
+
 /// Walks the JSON argument tree and replaces any string value starting
 /// with `vault://` with the corresponding secret from the vault.
 /// This enables secure form filling via browser MCP tools and any
@@ -729,6 +885,7 @@ mod tests {
                 enabled: false,
                 recipe_id: None,
                 auth_env_key: None,
+                discovered_tool_count: None,
             },
         );
         let (manager, tools) = McpManager::start(&servers).await;

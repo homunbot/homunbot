@@ -605,6 +605,7 @@ mod tests {
                 enabled: true,
                 recipe_id: None,
                 auth_env_key: None,
+                discovered_tool_count: None,
             },
         );
         config.mcp.servers.insert(
@@ -619,6 +620,7 @@ mod tests {
                 enabled: true,
                 recipe_id: None,
                 auth_env_key: None,
+                discovered_tool_count: None,
             },
         );
 

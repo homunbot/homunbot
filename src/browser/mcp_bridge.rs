@@ -66,6 +66,7 @@ pub fn browser_mcp_server_config(browser: &BrowserConfig) -> Option<McpServerCon
         enabled: true,
         recipe_id: None,
         auth_env_key: None,
+        discovered_tool_count: None,
     })
 }
 

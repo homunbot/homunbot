@@ -1,6 +1,6 @@
 # Homun — Development Roadmap
 
-> Last updated: 2026-03-13 (Code audit: channel maturity, browser assessment, memory/RAG gaps)
+> Last updated: 2026-03-16 (macOS Seatbelt sandbox + Always-On, MCP tool count fix + OAuth refresh)
 > Basato su: Audit completo (`docs/AUDIT-2026-03.md`)
 > Gap analysis: Homun vs OpenClaw vs ZeroClaw
 > Source of truth: questo documento e' la roadmap/status operativa del progetto
@@ -13,14 +13,14 @@
 |---------|--------|
 | LOC Rust | ~78,500 |
 | LOC Frontend | ~17,650 |
-| Test | 595 passing (verificato con `cargo test` il 2026-03-13) |
+| Test | 617 passing (verificato con `cargo test` il 2026-03-16) |
 | Binary (full) | ~50MB |
 | Provider LLM | 14 |
 | Canali | 7 (CLI, Telegram✅, Discord⚠️, WhatsApp⚠️, Slack⚠️, Email✅, Web) |
 | Tool built-in | ~20 (incl. knowledge, workflow, business, browser, approval, read_email) |
-| Pagine Web UI | 19 (/chat, /dashboard, /setup, /channels, /browser, /automations, /workflows, /business, /skills, /mcp, /memory, /knowledge, /vault, /permissions, /approvals, /account, /logs, /login, /setup-wizard) |
+| Pagine Web UI | 20 (/chat, /dashboard, /setup, /channels, /browser, /automations, /workflows, /business, /skills, /mcp, /memory, /knowledge, /vault, /permissions, /approvals, /account, /logs, /maintenance, /login, /setup-wizard) |
 | Feature flags | 12 |
-| Automations Builder | Visual flow canvas (n8n-style) + schema-driven forms + smart API overrides + 6 templates + approve/2FA gates + NLP generation |
+| Automations Builder | Visual flow canvas (n8n-style) + schema-driven forms + smart API overrides + 6 templates + approve/2FA gates + NLP generation + flow tooltips |
 
 *✅ = production-ready, ⚠️ = funzionale ma da hardening (code-audit 2026-03-13)*
 
@@ -276,6 +276,8 @@ pub async fn llm_one_shot(config: &Config, req: OneShotRequest) -> Result<OneSho
 - **`input` vs `change` DOM event**: i `<select>` emettono `change`, non `input`. L'inspector ascoltava solo `input`, quindi tutti i dropdown non salvavano. Fix: doppio listener.
 - **Extended thinking vuoto**: `think: None` su Claude Sonnet 4+ causava risposte vuote. Fix: `think: Some(false)` esplicito in `one_shot.rs`.
 - **Generate-flow prompt MCP vs Deliver**: il prompt LLM generava nodi MCP per Telegram (sbagliato). Fix: regola CRITICAL che distingue delivery channels (Telegram/Discord/CLI → `deliver`) da external APIs (Gmail/GitHub → `mcp`).
+- **Multi-step automation prompt perso** (2026-03-14): Builder `save()` impostava `prompt = 'Multi-step automation'` per flow con 2+ nodi, perdendo le istruzioni reali. Fix: (1) Builder compone prompt descrittivo dagli step, (2) `build_effective_prompt_from_row()` ricostruisce il prompt da `workflow_steps_json` a runtime. Sia manual run che cron scheduler aggiornati.
+- **Flow mini-dot tooltips** (2026-03-14): hover sui dot del flow nella lista mostra nome e istruzioni di ogni step. `enrichFlowWithSteps()` cross-referenzia `workflow_steps_json` con `flow_json` nodes. CSS tooltip custom (no native SVG `<title>` delay).
 
 ---
 
@@ -357,6 +359,14 @@ pub async fn llm_one_shot(config: &Config, req: OneShotRequest) -> Result<OneSho
   - Fix double Bearer prefix in HTTP transport (`Bearer Bearer <token>` → `Bearer <token>`)
   - Skip sandbox entirely for connection tests (solo initialize + list_tools)
   - Propagate error detail to UI (non piu' generic "Connection test failed")
+- ✅ Fix MCP tool count "0 tools" + OAuth token refresh (2026-03-16):
+  - Root cause: `recipe_instances()` usava `capabilities.len()` (attachment routing, sempre vuoto) → ora usa `discovered_tool_count`
+  - `discovered_tool_count: Option<usize>` cached in `McpServerConfig` (TOML) da: connection test, API test, gateway startup
+  - OAuth token refresh module `src/tools/mcp_token_refresh.rs` (~130 LOC):
+    - Google `refresh_token` grant → `https://oauth2.googleapis.com/token`
+    - Vault `vault://` reference resolution automatica
+    - Retry trasparente in `start_with_sandbox()` su errori `AuthRequired`/`invalid_token`/`401`
+  - DRY fix: `chat.js` e `mcp.js` ora usano `McpLoader` (shared utility) invece di fetch dirette
 
 ### 5.5 Stato Dettagliato (Skill Shield)
 
@@ -415,7 +425,7 @@ pub async fn llm_one_shot(config: &Config, req: OneShotRequest) -> Result<OneSho
 ### Stato ad oggi (2026-03-12)
 
 - ✅ **Fondazioni implementate (milestone 1, macOS-first)**
-  - Config unica sandbox (`security.execution_sandbox`) con backend `auto|docker|linux_native|windows_native|none` + `strict`.
+  - Config unica sandbox (`security.execution_sandbox`) con backend `auto|docker|macos_seatbelt|linux_native|windows_native|none` + `strict`.
   - Runtime wrapper condiviso come modulo `src/tools/sandbox/` (11 file, ~2,200 LOC) usato da:
     - Shell tool (`src/tools/shell.rs`)
     - MCP stdio (`src/tools/mcp.rs`)
@@ -438,7 +448,8 @@ pub async fn llm_one_shot(config: &Config, req: OneShotRequest) -> Result<OneSho
     - `events.rs` — event log I/O
     - `resolve.rs` — probe backend e risoluzione
     - `runtime_image.rs` — lifecycle immagine runtime (~600 LOC)
-    - `backends/{mod,native,docker,linux_native,windows_native}.rs` — builder per backend
+    - `backends/{mod,native,docker,linux_native,windows_native,macos_seatbelt}.rs` — builder per backend
+    - `profiles/{default,network,strict}.sbpl` — macOS Seatbelt sandbox profiles
   - Tutti i caller aggiornati, 31 unit test passanti, nessuna modifica API/UI.
 - ✅ **Comportamento attuale robusto su macOS**
   - Se Docker non e' disponibile e backend=`auto`, fallback controllato a native.
@@ -458,6 +469,16 @@ pub async fn llm_one_shot(config: &Config, req: OneShotRequest) -> Result<OneSho
   - Build baseline runtime `homun/runtime-core:2026.03` validata via test CI (node, python, bash, tsx).
   - Docker tests con skip automatico su Windows (no Linux container support su Windows Docker).
   - Resta parity browser-complete della runtime image oltre il core baseline.
+- ✅ **macOS Seatbelt backend nativo + Sandbox Always-On** (2026-03-16)
+  - Nuovo backend `macos_seatbelt` in `src/tools/sandbox/backends/macos_seatbelt.rs` (~190 LOC):
+    - `sandbox-exec` con profili `.sbpl` (network deny, file read-only, workspace scoped, process limits)
+    - Profili dedicati: `default.sbpl`, `network.sbpl`, `strict.sbpl` in `src/tools/sandbox/profiles/`
+    - Probe automatico via `sandbox-exec -n '(version 1)(allow default)' /usr/bin/true`
+  - Resolve chain aggiornata: `auto` → Docker → macOS Seatbelt → Linux Bubblewrap → Windows Job → native fallback
+  - **Sandbox always-on di default** (`enabled: true` in `SandboxConfig::default()`):
+    - Docker non piu' richiesto — ogni OS ha un backend nativo (macOS Seatbelt, Linux bwrap, Windows Job)
+    - UI Sandbox rimossa dalla richiesta all'utente — attiva automaticamente
+    - `ExecutionSandboxConfig::disabled()` per contesti che non vogliono sandbox (tests, skill scripts)
 
 ### Milestone Sandbox — Dove siamo
 
@@ -469,6 +490,7 @@ pub async fn llm_one_shot(config: &Config, req: OneShotRequest) -> Result<OneSho
 | SBX-4 | Runtime image gestita (baseline core + policy/versioning + build/pull + test CI) | ✅ DONE |
 | SBX-5 | UX finale Permissions/Sandbox semplificata (onboarding guidato + spiegazioni contestuali) | ✅ DONE |
 | SBX-6 | Test E2E cross-platform (macOS/Linux/Windows) + CI workflow sandbox-validation.yml | ✅ DONE |
+| SBX-7 | macOS Seatbelt backend nativo + Always-On default (sandbox attiva su tutti gli OS senza Docker) | ✅ DONE 2026-03-16 |
 
 ### Cosa manca per completare il Sandbox
 
@@ -682,6 +704,13 @@ agent_loop.rs ─── browser_task_plan (veto/guard), execution_plan, supersed
   - Smoke `/browser` via Playwright MCP CLI per prerequisiti e test connessione.
   - Flow deterministico browser via chat su fixture locale self-contained (`data:` URL) che forza l'uso del tool `browser` e verifica token finale + activity card browser.
   - Workflow manuale GitHub Actions dedicato per eseguire gli smoke on-demand.
+
+- ✅ **Connessioni MCP parallele con timeout** (2026-03-15)
+  - `start_with_sandbox()` ora usa `tokio::spawn` per ogni server → connessioni in parallelo
+  - Timeout 30s per-server: un server lento/rotto non blocca gli altri
+  - Prima: sequenziale → se 4 server timeout = 120s prima che Playwright parta
+  - Dopo: parallelo → tutti partono insieme, caso peggiore 30s totali
+  - Log include `elapsed_ms` per diagnosi performance
 
 ### Cosa manca / miglioramenti futuri
 
@@ -1010,8 +1039,13 @@ Homun: "La fattura e' di 1.250€ da Fornitore XYZ per servizi consulenza,
 | 8.5 | **Service install** | `service/launchd.rs`, `service/systemd.rs` | ~200 | ✅ DONE |
 | | `homun service install` (macOS/Linux) | | | |
 | | Auto-start on boot | | | |
+| 8.6 | **Database maintenance page** | `web/api/maintenance.rs` (nuovo), `web/pages.rs`, `static/js/maintenance.js` (nuovo), `static/css/style.css` | ~350 | ✅ DONE 2026-03-14 |
+| | Pagina `/maintenance` in Settings con stats DB per dominio (8 domini, ~25 tabelle) | | | |
+| | API: `GET /v1/maintenance/db-stats`, `POST /v1/maintenance/purge` | | | |
+| | Purge per dominio con rispetto FK (reverse order) + clear FTS indexes | | | |
+| | UI DOM-based (no innerHTML) con summary bar, card grid, per-table row counts | | | |
 
-**Stima totale Sprint 8: ~540 LOC**
+**Stima totale Sprint 8: ~890 LOC**
 
 ---
 
@@ -1474,7 +1508,8 @@ Implicazioni:
 | AUTO-1b | **Inspector guidato completo tutti i nodi** | ✅ DONE (2026-03-13) — Condition/loop/transform: preset buttons cliccabili. Subprocess: async dropdown automazioni salvate. LLM model: async dropdown da `/v1/providers/models`. Nodi approve (gate approvazione con canale) e require_2fa (gate 2FA). 13 node kinds totali. | ~~incluso~~ |
 | AUTO-1c | **Builder edit mode** | ✅ DONE (2026-03-13) — Click "Edit" su automation apre il Builder (non piu' inline editor). `editingId` traccia create vs edit. `save()` usa PATCH per update, POST per create. `flow_json` supportato in PATCH endpoint. Ricostruzione flow da schedule+prompt se `flow_json` assente. | ~~incluso~~ |
 | AUTO-1d | **Fix automations loading** | ✅ DONE (2026-03-13) — `initializeAutomationsPage()` faceva early return perche' controllava ID di un form inline rimosso. Guard ora richiede solo `automations-list`. Fix format schedule nel Builder (`daily 09:00` → `cron:0 9 * * *`). | ~~incluso~~ |
-| AUTO-2 | **Validazione real-time nel builder** | Errori appaiono solo dopo il save. Serve: validazione inline durante l'editing (trigger mancante, deliver mancante, parametri required non compilati). | 3-5 giorni |
+| AUTO-2 | **Validazione real-time nel builder** | 3 livelli: field (blur/change con bordo rosso + hint inline), node (badge errore su canvas), flow (struttura pre-save). Cron validator, SchemaForm required/type/range check, graceful degradation. Nuovo `auto-validate.js` (370 LOC). Fix: proactive `validateNode()` in `renderNodes()`, blur handler con re-render, MCP tool condizionale su server. | ✅ DONE |
+| AUTO-DRY | **Utility condivise builder (DRY)** | Estratte 2 utility condivise: `model-loader.js` (~135 LOC, fetch modelli LLM da tutti i provider con caching, usato da chat+automations+setup), `mcp-loader.js` (~140 LOC, discovery on-demand server/tool MCP con caching). Nuovo endpoint `GET /v1/mcp/servers/{name}/tools` per discovery tool a runtime senza connessione startup. Fix Ollama Cloud "undefined" (`m.id` vs `m.name`). Rimosso codice duplicato in 3 file. | ✅ DONE 2026-03-15 |
 | AUTO-3 | **Template automazioni pronte** | ✅ DONE (2026-03-13) — 6 template preconfigurati (Daily Email Digest, Web Monitor, Daily Standup, News Briefing, Security Check, File Organizer). Gallery visibile su canvas vuoto, click carica flow. Template include nodi + edges completi. | ~~3-5 giorni~~ |
 | AUTO-4 | **Wizard step-by-step per automazioni semplici** | Il visual builder e' intimidatorio per utenti non-tecnici. Serve: wizard alternativo per automazioni semplici (1. Cosa vuoi fare? 2. Quando? 3. Dove ricevere il risultato?). | 1 settimana |
 
@@ -1484,9 +1519,9 @@ Implicazioni:
 
 | # | Task | Problema trovato | Effort |
 |---|------|-----------------|--------|
-| DASH-1 | **Dashboard redesign completo** | Attualmente mostra: uptime (vanity metric), usage analytics (utile), e-stop (utile), config editing (raro). Mancano: prossime automazioni, errori recenti, stato canali, stato memoria/RAG, alert budget. | 1 settimana |
+| DASH-1 | **Dashboard redesign completo** | Rimosso vanity metrics (temperature, channels/skills count, models table). Aggiunto: Next Automation countdown, Workflow stats, Upcoming Automations (top 5 + Run Now), Recent Activity (automation runs + error logs merged), System Health (providers latency, channels status, memory/knowledge counts). Split JS in dashboard.js (426) + dash-usage.js (207). ~80 righe CSS nuove. | ✅ DONE |
 | DASH-2 | **Alert e budget tracking** | Nessun sistema di alert quando il costo supera una soglia o un'automazione fallisce ripetutamente. Serve: widget alert con soglie configurabili. | 3-5 giorni |
-| DASH-3 | **Stato canali live** | La dashboard non mostra lo stato dei canali (connessi, errori, ultimo messaggio). Serve: card per canale con status real-time. | 2-3 giorni |
+| DASH-3 | **Stato canali live** | ~~La dashboard non mostra lo stato dei canali~~ → DASH-1 ha aggiunto status dot per canale nella System Health card. Per real-time push serve WebSocket integration. | 1-2 giorni |
 
 ### P1 — CONSOLIDAMENTO
 
@@ -1555,6 +1590,7 @@ Programma Sandbox Trasversale (P0/P1)      ✅ DONE
   ✅ SBX-4 Runtime image core + lifecycle/build + test CI validazione
   ✅ SBX-5 UX finale Permissions/Sandbox
   ✅ SBX-6 E2E cross-platform + CI workflow sandbox-validation.yml (5 job)
+  ✅ SBX-7 macOS Seatbelt backend nativo + Always-On default (sandbox attiva senza Docker)
     |
 Programma Chat Web UI (P1)                 ⚠️ PARTIAL
   ✅ CHAT-1 Refresh UI/UX base
@@ -1605,12 +1641,13 @@ Sprint 7: Canali Phase 2 (P2)              ✅ DONE (~478 LOC)
   ✅ 7.3 Email (MIME attachment, In-Reply-To/References reply threading)
   ✅ 7.4 WhatsApp (reconnect backoff, group mention gating, media download)
     |
-Sprint 8: Hardening (P2)                   ✅ COMPLETE (~360 LOC)
+Sprint 8: Hardening (P2)                   ✅ COMPLETE (~890 LOC)
   ✅ 8.1 CI Pipeline
   ✅ 8.2 Tool timeout (generic wrapper in agent loop)
   ✅ 8.3 Provider health monitoring (circuit breaker + REST API)
   ✅ 8.4 E-Stop (kill switch + Web UI button)
   ✅ 8.5 Service install
+  ✅ 8.6 Database maintenance page (Settings > Database, purge per dominio, 8 domini)
     |
 BIZ: Business Autopilot (P1)               ⚠️ PARTIAL
   ✅ BIZ-1 Core Engine (DB, tipi, engine, tool, config, wiring, web UI, API, JS)
@@ -1643,6 +1680,7 @@ Programma AUTO-1+ UX Automazioni (P1)   ✅ DONE (~700 LOC)
   ✅ AUTO-1b Inspector completo tutti nodi (presets, async dropdown, approve/2FA)
   ✅ AUTO-1c Builder edit mode (edit apre Builder, PATCH con flow_json)
   ✅ AUTO-1d Fix automations loading + Builder schedule format
+  ✅ AUTO-1e Fix multi-step prompt (build_effective_prompt_from_row) + flow mini-dot tooltips
   ✅ AUTO-3 Template gallery (6 template su canvas vuoto)
   ✅ NLP generate-flow aggiornato con approve/require_2fa
     |
@@ -1655,10 +1693,10 @@ Sprint 9+: Future (P3)
   Voice, Extended thinking, Prometheus, distribuzione
 ```
 
-**Completato: Sprint 1-8 + SBX-1..6 (tutti validati CI cross-platform) + CHAT-1..6 + smoke manuali CHAT-7/Browser + core Browser + Design System + Workflow Engine + Automations Builder v2 (visual flow + guided inspector + NLP + edit mode) + AUTO-1+ (schema-driven forms, smart API overrides, 6 template, presets, approve/2FA gates, builder edit) + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4, SEC-6..9) + Unified LLM Engine + Smart web_fetch routing (search-first + JS detection + browser hints) + Connection Recipes (multi-instance, Notion OAuth 2.1, Google auto-naming, HTTP/SSE transport) + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
-**Rimanente: AUTO-2 (validazione real-time builder), AUTO-4 (wizard step-by-step), formalizzazione release-grade CHAT-7 e Browser E2E, Mobile App, Sprint 9+**
+**Completato: Sprint 1-8 + SBX-1..7 (tutti validati CI cross-platform, macOS Seatbelt + Always-On) + CHAT-1..6 + smoke manuali CHAT-7/Browser + core Browser + Design System + Workflow Engine + Automations Builder v2 (visual flow + guided inspector + NLP + edit mode + multi-step prompt fix + flow tooltips) + AUTO-1+ (schema-driven forms, smart API overrides, 6 template, presets, approve/2FA gates, builder edit) + AUTO-2 (real-time validation: field/node/flow, cron validator, error badges) + BIZ-1 + SKL-1..7 + Security Web (SEC-1..4, SEC-6..9) + Unified LLM Engine + Smart web_fetch routing (search-first + JS detection + browser hints) + Connection Recipes (multi-instance, Notion OAuth 2.1, Google auto-naming, HTTP/SSE transport, tool count caching, OAuth token auto-refresh) + DB maintenance page (Settings > Database) + DASH-1 (dashboard redesign: operational view con automations/activity/health/usage) + feature orfane (approval, 2FA, account, e-stop, health, TUI, etc.)**
+**Rimanente: AUTO-4 (wizard step-by-step), formalizzazione release-grade CHAT-7 e Browser E2E, Mobile App, Sprint 9+**
 **Deferred: BIZ-2..5 (Business Autopilot avanzato — core engine BIZ-1 done, resto rimandato)**
-**CI: 11/11 check verdi (check&lint, test, 4 feature matrix, 5 build cross-platform + sandbox validation) — 595 test**
+**CI: 11/11 check verdi (check&lint, test, 4 feature matrix, 5 build cross-platform + sandbox validation) — 617 test**
 
 ---
 

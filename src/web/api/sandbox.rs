@@ -83,15 +83,13 @@ fn normalize_execution_sandbox(
     } else {
         backend
     };
-    if backend != "none"
-        && backend != "auto"
-        && backend != "docker"
-        && backend != "linux_native"
-        && backend != "windows_native"
-    {
+    if !matches!(
+        backend.as_str(),
+        "none" | "auto" | "docker" | "linux_native" | "windows_native" | "macos_seatbelt"
+    ) {
         return Err((
             StatusCode::BAD_REQUEST,
-            "Invalid sandbox backend. Expected one of: auto, docker, linux_native, windows_native, none.".to_string(),
+            "Invalid sandbox backend. Expected one of: auto, docker, linux_native, windows_native, macos_seatbelt, none.".to_string(),
         ));
     }
 
@@ -174,6 +172,7 @@ struct ExecutionSandboxStatusResponse {
     resolved_backend: String,
     strict: bool,
     docker_available: bool,
+    any_backend_available: bool,
     valid: bool,
     fallback_to_native: bool,
     recommended_preset: String,
@@ -272,6 +271,8 @@ async fn get_execution_sandbox_status(
         };
     }
 
+    let any_backend_available = capabilities.iter().any(|cap| cap.available);
+
     Json(ExecutionSandboxStatusResponse {
         enabled: sandbox.enabled,
         host_os: host_os_label().to_string(),
@@ -279,6 +280,7 @@ async fn get_execution_sandbox_status(
         resolved_backend,
         strict: sandbox.strict,
         docker_available,
+        any_backend_available,
         valid,
         fallback_to_native,
         recommended_preset: recommended_preset.to_string(),
@@ -429,6 +431,17 @@ mod sandbox_config_tests {
         };
         let normalized = normalize_execution_sandbox(cfg).expect("valid linux native backend");
         assert_eq!(normalized.backend, "linux_native");
+    }
+
+    #[test]
+    fn normalize_sandbox_accepts_macos_seatbelt_backend() {
+        let cfg = ExecutionSandboxConfig {
+            backend: "MacOS_Seatbelt".to_string(),
+            ..ExecutionSandboxConfig::default()
+        };
+        let normalized =
+            normalize_execution_sandbox(cfg).expect("valid macos seatbelt backend");
+        assert_eq!(normalized.backend, "macos_seatbelt");
     }
 
     #[test]

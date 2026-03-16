@@ -223,3 +223,10 @@ panic = "abort"        # Reduce binary size
 inherits = "release"
 codegen-units = 8      # Parallel codegen for faster builds
 opt-level = 3          # Speed over size
+lto = "thin"           # Much faster than fat LTO
+
+# Dev-test: fast compile, reasonable runtime speed (for manual testing)
+[profile.dev-test]
+inherits = "dev"
+opt-level = 1          # Basic optimizations (crypto/network usable)
+debug = "line-tables-only"  # Minimal debug info, faster linking

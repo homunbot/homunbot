@@ -1178,6 +1178,9 @@ pub struct McpServerConfig {
     /// For HTTP transport: env key whose resolved value is used as Bearer token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_env_key: Option<String>,
+    /// Cached tool count from last successful connection test or gateway startup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discovered_tool_count: Option<usize>,
 }
 
 impl Default for McpServerConfig {
@@ -1192,6 +1195,7 @@ impl Default for McpServerConfig {
             enabled: true,
             recipe_id: None,
             auth_env_key: None,
+            discovered_tool_count: None,
         }
     }
 }
@@ -1731,7 +1735,7 @@ impl ExecutionSandboxConfig {
 impl Default for ExecutionSandboxConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             backend: "auto".to_string(),
             strict: false,
             docker_image: "node:22-alpine".to_string(),
@@ -1740,7 +1744,7 @@ impl Default for ExecutionSandboxConfig {
             docker_network: "none".to_string(),
             docker_memory_mb: 512,
             docker_cpus: 1.0,
-            docker_read_only_rootfs: false,
+            docker_read_only_rootfs: true,
             docker_mount_workspace: true,
         }
     }

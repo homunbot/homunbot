@@ -27,7 +27,7 @@ pub async fn execute_skill_script(
         script_name,
         args,
         timeout_secs,
-        &ExecutionSandboxConfig::default(),
+        &ExecutionSandboxConfig::disabled(),
         false,
     )
     .await

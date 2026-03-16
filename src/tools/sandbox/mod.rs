@@ -14,7 +14,8 @@ use tokio::process::Command;
 use crate::config::ExecutionSandboxConfig;
 
 use self::backends::{
-    build_command_for_backend, linux_native_reason_fragments, windows_native_reason_fragments,
+    build_command_for_backend, linux_native_reason_fragments, macos_seatbelt_reason_fragments,
+    windows_native_reason_fragments,
 };
 use self::events::log_sandbox_event;
 use self::resolve::{linux_native_runtime_support, normalize_backend};
@@ -89,6 +90,10 @@ pub fn build_process_command(
                 ResolvedSandboxBackend::WindowsNative => {
                     let details = windows_native_reason_fragments(sandbox).join(", ");
                     format!("Windows native sandbox prepared via Job Objects ({details}).")
+                }
+                ResolvedSandboxBackend::MacosSeatbelt => {
+                    let details = macos_seatbelt_reason_fragments(sandbox).join(", ");
+                    format!("macOS Seatbelt sandbox prepared via sandbox-exec ({details}).")
                 }
             };
             log_sandbox_event(&request, sandbox, backend.as_str(), "prepared", reason);
@@ -232,6 +237,7 @@ mod tests {
                     docker: false,
                     linux_native: false,
                     windows_native: false,
+                    macos_seatbelt: false,
                 }
             )
             .unwrap(),
@@ -253,6 +259,7 @@ mod tests {
                 docker: false,
                 linux_native: false,
                 windows_native: false,
+                macos_seatbelt: false,
             }
         )
         .is_err());
@@ -541,4 +548,213 @@ mod tests {
 
     // --- parse_docker_inspect_fields is now in runtime_image.rs ---
     // We test it indirectly via get_docker_image_status/get_runtime_image_status
+
+    // --- macOS Seatbelt tests ---
+
+    #[test]
+    fn macos_seatbelt_command_spec_sets_profile_and_workspace() {
+        use crate::tools::sandbox::backends::build_macos_seatbelt_command_spec;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workdir = temp.path().join("workspace");
+        fs::create_dir_all(&workdir).expect("workspace");
+
+        let args = vec!["-lc".to_string(), "pwd".to_string()];
+        let request = SandboxExecutionRequest {
+            execution_kind: "shell",
+            program: "bash",
+            args: &args,
+            working_dir: &workdir,
+            extra_env: &HashMap::new(),
+            sanitize_env: true,
+        };
+        let sandbox = ExecutionSandboxConfig {
+            enabled: true,
+            backend: "macos_seatbelt".to_string(),
+            docker_network: "none".to_string(),
+            ..ExecutionSandboxConfig::default()
+        };
+
+        let spec = build_macos_seatbelt_command_spec(&request, &sandbox).unwrap();
+        assert_eq!(spec.program, "/usr/bin/sandbox-exec");
+        assert!(spec.args.contains(&"-p".to_string()));
+        assert!(spec.args.iter().any(|a| a.starts_with("WORKSPACE=")));
+        assert!(spec.args.contains(&"--".to_string()));
+        assert!(spec.args.contains(&"bash".to_string()));
+        assert!(spec.args.contains(&"-lc".to_string()));
+        // Network-blocked profile should NOT contain "network-outbound"
+        let profile_arg = &spec.args[1]; // -p is at [0], profile at [1]
+        assert!(!profile_arg.contains("network-outbound"));
+    }
+
+    #[test]
+    fn macos_seatbelt_command_spec_uses_net_local_profile_for_host_network() {
+        use crate::tools::sandbox::backends::build_macos_seatbelt_command_spec;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workdir = temp.path().join("workspace");
+        fs::create_dir_all(&workdir).expect("workspace");
+
+        let args = vec!["-c".to_string(), "curl localhost".to_string()];
+        let request = SandboxExecutionRequest {
+            execution_kind: "shell",
+            program: "sh",
+            args: &args,
+            working_dir: &workdir,
+            extra_env: &HashMap::new(),
+            sanitize_env: true,
+        };
+        let sandbox = ExecutionSandboxConfig {
+            enabled: true,
+            backend: "macos_seatbelt".to_string(),
+            docker_network: "bridge".to_string(),
+            ..ExecutionSandboxConfig::default()
+        };
+
+        let spec = build_macos_seatbelt_command_spec(&request, &sandbox).unwrap();
+        let profile_arg = &spec.args[1];
+        assert!(profile_arg.contains("network-outbound"));
+    }
+
+    #[test]
+    fn macos_seatbelt_command_spec_sanitizes_env() {
+        use crate::tools::sandbox::backends::build_macos_seatbelt_command_spec;
+
+        let _guard = TEST_ENV_LOCK.lock().expect("test env lock");
+        unsafe { std::env::set_var("PATH", "/usr/bin:/bin") };
+        unsafe { std::env::set_var("SECRET_KEY", "do_not_leak") };
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workdir = temp.path().join("workspace");
+        fs::create_dir_all(&workdir).expect("workspace");
+
+        let args = vec!["echo".to_string(), "hi".to_string()];
+        let mut extra = HashMap::new();
+        extra.insert("MY_TOKEN".to_string(), "abc".to_string());
+        let request = SandboxExecutionRequest {
+            execution_kind: "shell",
+            program: "echo",
+            args: &args,
+            working_dir: &workdir,
+            extra_env: &extra,
+            sanitize_env: true,
+        };
+        let sandbox = ExecutionSandboxConfig {
+            enabled: true,
+            backend: "macos_seatbelt".to_string(),
+            ..ExecutionSandboxConfig::default()
+        };
+
+        let spec = build_macos_seatbelt_command_spec(&request, &sandbox).unwrap();
+        // PATH should be present
+        assert!(spec.env.iter().any(|(k, _)| k == "PATH"));
+        // Extra env should be present
+        assert!(spec.env.iter().any(|(k, v)| k == "MY_TOKEN" && v == "abc"));
+        // SECRET_KEY should NOT be present (sanitized)
+        assert!(!spec.env.iter().any(|(k, _)| k == "SECRET_KEY"));
+
+        unsafe { std::env::remove_var("SECRET_KEY") };
+    }
+
+    #[test]
+    fn macos_seatbelt_requested_without_support_non_strict_falls_back() {
+        let cfg = ExecutionSandboxConfig {
+            enabled: true,
+            backend: "macos_seatbelt".to_string(),
+            strict: false,
+            ..ExecutionSandboxConfig::default()
+        };
+        assert_eq!(
+            resolve_sandbox_backend_with_capabilities(
+                &cfg,
+                SandboxBackendAvailability {
+                    docker: false,
+                    linux_native: false,
+                    windows_native: false,
+                    macos_seatbelt: false,
+                }
+            )
+            .unwrap(),
+            ResolvedSandboxBackend::None
+        );
+    }
+
+    #[test]
+    fn macos_seatbelt_requested_without_support_strict_fails() {
+        let cfg = ExecutionSandboxConfig {
+            enabled: true,
+            backend: "macos_seatbelt".to_string(),
+            strict: true,
+            ..ExecutionSandboxConfig::default()
+        };
+        assert!(resolve_sandbox_backend_with_capabilities(
+            &cfg,
+            SandboxBackendAvailability {
+                docker: false,
+                linux_native: false,
+                windows_native: false,
+                macos_seatbelt: false,
+            }
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn macos_seatbelt_reason_fragments_reports_capabilities() {
+        use crate::tools::sandbox::backends::macos_seatbelt_reason_fragments;
+
+        let sandbox_blocked = ExecutionSandboxConfig {
+            docker_network: "none".to_string(),
+            ..ExecutionSandboxConfig::default()
+        };
+        let fragments = macos_seatbelt_reason_fragments(&sandbox_blocked);
+        assert!(fragments.iter().any(|f| f.contains("network=blocked")));
+        assert!(fragments.iter().any(|f| f.contains("memory=not-enforced")));
+
+        let sandbox_local = ExecutionSandboxConfig {
+            docker_network: "bridge".to_string(),
+            ..ExecutionSandboxConfig::default()
+        };
+        let fragments = macos_seatbelt_reason_fragments(&sandbox_local);
+        assert!(fragments
+            .iter()
+            .any(|f| f.contains("network=localhost-only")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_seatbelt_probe_detects_sandbox_exec() {
+        use crate::tools::sandbox::resolve::macos_seatbelt_runtime_support;
+
+        let support = macos_seatbelt_runtime_support();
+        // On macOS, sandbox-exec should be available
+        assert!(
+            support.sandbox_exec.available,
+            "sandbox-exec should be available on macOS: {}",
+            support.sandbox_exec.reason
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn auto_on_macos_with_seatbelt_resolves_to_macos_seatbelt() {
+        let cfg = ExecutionSandboxConfig {
+            enabled: true,
+            backend: "auto".to_string(),
+            ..ExecutionSandboxConfig::default()
+        };
+        assert_eq!(
+            resolve_sandbox_backend_with_capabilities(
+                &cfg,
+                SandboxBackendAvailability {
+                    docker: true,
+                    linux_native: false,
+                    windows_native: false,
+                    macos_seatbelt: true,
+                }
+            )
+            .unwrap(),
+            ResolvedSandboxBackend::MacosSeatbelt
+        );
+    }
 }

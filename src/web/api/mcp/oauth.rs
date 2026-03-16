@@ -116,19 +116,51 @@ async fn fetch_google_email(client: &reqwest::Client, access_token: &str) -> Opt
 
 // ── Scope helpers ────────────────────────────────────────────────
 
-fn google_mcp_scopes(service: &str) -> Option<&'static [&'static str]> {
+fn google_mcp_scopes(service: &str) -> Option<Vec<&'static str>> {
     let normalized = service.trim().to_ascii_lowercase();
     // "email" scope lets us fetch the user's email for instance naming.
     match normalized.as_str() {
-        "gmail" => Some(&[
+        "gmail" => Some(vec![
             "https://www.googleapis.com/auth/gmail.readonly",
             "email",
         ]),
-        "google-calendar" | "gcal" | "calendar" => Some(&[
+        "google-calendar" | "gcal" | "calendar" => Some(vec![
             "https://www.googleapis.com/auth/calendar",
             "email",
         ]),
-        _ => None,
+        // Unified google-workspace: combine Gmail + Calendar scopes.
+        // Comma-separated services can be passed (e.g. "gmail,calendar").
+        "google-workspace" => Some(vec![
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/calendar",
+            "email",
+        ]),
+        _ => {
+            // Support comma-separated service list (e.g. "gmail,calendar")
+            if normalized.contains(',') {
+                let mut scopes = vec!["email"];
+                let mut found_any = false;
+                for svc in normalized.split(',') {
+                    let svc = svc.trim();
+                    match svc {
+                        "gmail" => {
+                            scopes.push("https://www.googleapis.com/auth/gmail.readonly");
+                            found_any = true;
+                        }
+                        "calendar" | "google-calendar" | "gcal" => {
+                            scopes.push("https://www.googleapis.com/auth/calendar");
+                            found_any = true;
+                        }
+                        _ => {}
+                    }
+                }
+                if found_any {
+                    scopes.dedup();
+                    return Some(scopes);
+                }
+            }
+            None
+        }
     }
 }
 
@@ -487,6 +519,9 @@ pub(crate) struct NotionMcpOauthExchangeRequest {
     /// client_id returned from /start (Dynamic Client Registration).
     client_id: String,
     redirect_uri: String,
+    /// Instance name for vault-scoped refresh token storage (e.g. "notion", "notion-work").
+    #[serde(default)]
+    instance_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -677,6 +712,26 @@ pub(super) async fn exchange_notion_mcp_oauth_code(
         ));
     }
 
+    // Store refresh metadata in vault for automatic token refresh later.
+    let inst = req.instance_name.as_deref().unwrap_or("notion");
+    if let Ok(secrets) = crate::storage::global_secrets() {
+        if let Some(rt) = body.refresh_token.as_deref() {
+            let _ = secrets.set(
+                &crate::storage::SecretKey::custom(&format!("vault.mcp.{inst}.notion_refresh_token")),
+                rt,
+            );
+        }
+        let _ = secrets.set(
+            &crate::storage::SecretKey::custom(&format!("vault.mcp.{inst}.notion_client_id")),
+            req.client_id.trim(),
+        );
+        let _ = secrets.set(
+            &crate::storage::SecretKey::custom(&format!("vault.mcp.{inst}.notion_token_endpoint")),
+            "https://mcp.notion.com/token",
+        );
+        tracing::info!("Stored Notion OAuth refresh metadata in vault for instance '{inst}'");
+    }
+
     Ok(Json(NotionMcpOauthExchangeResponse {
         ok: true,
         access_token: body.access_token,
@@ -699,18 +754,32 @@ mod google_oauth_tests {
     fn google_oauth_scopes_support_known_services() {
         assert_eq!(
             google_mcp_scopes("gmail"),
-            Some(
-                &[
-                    "https://www.googleapis.com/auth/gmail.readonly",
-                    "email"
-                ][..]
-            )
+            Some(vec![
+                "https://www.googleapis.com/auth/gmail.readonly",
+                "email"
+            ])
         );
         assert_eq!(
             google_mcp_scopes("google-calendar"),
-            Some(&["https://www.googleapis.com/auth/calendar", "email"][..])
+            Some(vec!["https://www.googleapis.com/auth/calendar", "email"])
         );
         assert!(google_mcp_scopes("github").is_none());
+    }
+
+    #[test]
+    fn google_workspace_scopes_combine_services() {
+        let scopes = google_mcp_scopes("google-workspace").unwrap();
+        assert!(scopes.contains(&"https://www.googleapis.com/auth/gmail.readonly"));
+        assert!(scopes.contains(&"https://www.googleapis.com/auth/calendar"));
+        assert!(scopes.contains(&"email"));
+    }
+
+    #[test]
+    fn comma_separated_services_build_combined_scopes() {
+        let scopes = google_mcp_scopes("gmail,calendar").unwrap();
+        assert!(scopes.contains(&"https://www.googleapis.com/auth/gmail.readonly"));
+        assert!(scopes.contains(&"https://www.googleapis.com/auth/calendar"));
+        assert!(scopes.contains(&"email"));
     }
 
     #[test]

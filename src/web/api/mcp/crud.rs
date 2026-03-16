@@ -244,6 +244,7 @@ pub(super) async fn upsert_mcp_server(
         enabled: req.enabled.unwrap_or(true),
         recipe_id: None,
         auth_env_key: None,
+        discovered_tool_count: None,
     };
 
     config.mcp.servers.insert(req.name.clone(), server);
@@ -336,6 +337,15 @@ pub(super) async fn test_mcp_server(
 
     let report = crate::mcp_setup::test_mcp_server_connection(&name, &server, Some(sandbox)).await;
 
+    // Cache discovered tool count in config for catalog display
+    if report.connected && report.tool_count > 0 {
+        let mut config = state.config.read().await.clone();
+        if let Some(srv) = config.mcp.servers.get_mut(&name) {
+            srv.discovered_tool_count = Some(report.tool_count);
+        }
+        let _ = state.save_config(config).await;
+    }
+
     Ok(Json(McpTestResponse {
         ok: true,
         connected: report.connected,
@@ -389,4 +399,36 @@ pub(super) async fn delete_mcp_server(
         ok: true,
         message: Some(format!("MCP server '{}' removed", name)),
     }))
+}
+
+// ── Discover tools (on-demand connection) ────────────────────────
+
+/// Connect to an MCP server and return its discovered tools.
+/// Used by the automations builder to populate tool dropdowns
+/// without requiring the server to be connected at gateway startup.
+pub(super) async fn list_mcp_server_tools(
+    Path(name): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let config = state.config.read().await;
+    let Some(server) = config.mcp.servers.get(&name) else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+    let server = server.clone();
+    let sandbox = config.security.execution_sandbox.clone();
+    drop(config);
+
+    match crate::tools::mcp::list_tools_once(&name, &server, &sandbox).await {
+        Ok(tools) => Ok(Json(serde_json::json!({
+            "ok": true,
+            "server": name,
+            "tools": tools,
+        }))),
+        Err(e) => Ok(Json(serde_json::json!({
+            "ok": false,
+            "server": name,
+            "tools": [],
+            "error": format!("{e:#}"),
+        }))),
+    }
 }

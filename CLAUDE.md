@@ -130,7 +130,7 @@ src/
 │   ├── helpers.rs                   # Compact snapshot utilities
 │   └── mod.rs                       # Browser manager
 │
-├── web/                             # Web UI (Axum, 19 pages)
+├── web/                             # Web UI (Axum, 20 pages)
 │   ├── server.rs                    # Axum + TLS + session + rust-embed
 │   ├── auth.rs                      # PBKDF2 auth, rate limiting, API keys
 │   ├── api/                         # 50+ REST endpoints (v1/)
@@ -169,10 +169,14 @@ src/
 ```
 static/
 ├── css/style.css                    # Design System "Olive Moss Console"
-└── js/                              # 21 files, ~17K LOC
+└── js/                              # 28 files, ~19K LOC
     ├── chat.js                      # Chat with streaming, markdown, tool timeline
     ├── automations.js               # Visual flow builder (n8n-style SVG canvas)
+    ├── auto-validate.js             # Builder real-time validation engine
     ├── flow-renderer.js             # Flow rendering engine
+    ├── model-loader.js              # Shared LLM model fetcher (DRY utility)
+    ├── mcp-loader.js                # Shared MCP server/tool discovery (DRY utility)
+    ├── schema-form.js               # JSON Schema → form fields for tool params
     ├── workflows.js                 # Workflow builder + approval UI
     ├── business.js                  # Business dashboard
     ├── skills.js                    # Skill marketplace + install
@@ -181,7 +185,8 @@ static/
     ├── vault.js                     # Secret management + 2FA setup
     ├── mcp.js                       # MCP server discovery + OAuth
     ├── approvals.js                 # Approval queue
-    ├── dashboard.js                 # Stats + charts
+    ├── dashboard.js                 # Operational dashboard
+    ├── dash-usage.js                # Dashboard usage analytics + charts
     ├── logs.js                      # Log streaming + filtering
     ├── setup.js                     # Config wizard
     ├── account.js                   # User settings + API tokens
@@ -257,7 +262,7 @@ static/
 
 ### Web UI
 - **Axum** server with TLS + rust-embed for static assets.
-- **19 pages**: dashboard, chat, login, setup-wizard, channels, browser, automations, workflows, business, skills, mcp, memory, knowledge, vault, permissions, approvals, account, logs, setup.
+- **20 pages**: dashboard, chat, login, setup-wizard, channels, browser, automations, workflows, business, skills, mcp, memory, knowledge, vault, permissions, approvals, account, logs, maintenance, setup.
 - **50+ REST API endpoints** under `/api/v1/`.
 - Debug mode: CSS/JS served from filesystem (hot reload), HTML templates require recompile.
 

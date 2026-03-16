@@ -9,6 +9,8 @@ pub mod email_inbox;
 pub mod file;
 #[cfg(feature = "mcp")]
 pub mod mcp;
+#[cfg(feature = "mcp")]
+pub mod mcp_token_refresh;
 pub mod message;
 pub mod registry;
 pub mod sandbox;

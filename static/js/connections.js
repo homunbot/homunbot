@@ -57,8 +57,9 @@
     function oauthConfigForRecipe(recipe) {
         if (recipe.auth_mode !== 'oauth') return null;
         var map = {
-            'gmail':            { provider: 'google', service: 'gmail', tokenField: 'refresh_token', tokenKey: 'refresh_token', providerLabel: 'Google' },
-            'google-calendar':  { provider: 'google', service: 'google-calendar', tokenField: 'refresh_token', tokenKey: 'refresh_token', providerLabel: 'Google' },
+            'gmail':             { provider: 'google', service: 'gmail', tokenField: 'refresh_token', tokenKey: 'refresh_token', providerLabel: 'Google' },
+            'google-calendar':   { provider: 'google', service: 'google-calendar', tokenField: 'refresh_token', tokenKey: 'refresh_token', providerLabel: 'Google' },
+            'google-workspace':  { provider: 'google', service: 'google-workspace', tokenField: 'refresh_token', tokenKey: 'refresh_token', providerLabel: 'Google' },
         };
         return map[recipe.id] || null;
     }
@@ -280,6 +281,12 @@
                 btn.textContent = 'Test';
                 if (res.ok && res.body && res.body.connected) {
                     showToast(btn.dataset.name + ': OK \u2014 ' + res.body.tool_count + ' tools', 'success');
+                    // Update tool count display in the instance row
+                    var row = btn.closest('.conn-instance-row');
+                    if (row) {
+                        var toolsSpan = row.querySelector('.conn-instance-tools');
+                        if (toolsSpan) toolsSpan.textContent = res.body.tool_count + ' tools';
+                    }
                 } else {
                     showToast(btn.dataset.name + ': ' + ((res.body && res.body.error) || 'Test failed'), 'error');
                 }
@@ -612,6 +619,7 @@
                     code_verifier: _codeVerifier,
                     client_id: _clientId,
                     redirect_uri: redirectUri,
+                    instance_name: instanceName || recipe.id,
                 }),
             });
 

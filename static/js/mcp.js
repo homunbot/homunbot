@@ -1128,12 +1128,12 @@
     }
 
     async function loadServers() {
-        var res = await api('/api/v1/mcp/servers');
-        if (!res.ok || !Array.isArray(res.body)) {
+        var servers = await McpLoader.fetchServers({ fresh: true });
+        if (!Array.isArray(servers)) {
             showToast('Failed to load MCP servers', 'error');
             return;
         }
-        renderServers(res.body);
+        renderServers(servers);
     }
 
     async function refreshAll(query) {

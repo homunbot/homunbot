@@ -1686,11 +1686,7 @@ async function uploadChatFiles(kind, fileList) {
 }
 
 async function ensureMcpServersLoaded() {
-    const res = await fetch('/api/v1/mcp/servers');
-    if (!res.ok) {
-        throw new Error('Failed to load MCP servers');
-    }
-    const servers = await res.json();
+    var servers = await McpLoader.fetchServers();
     availableMcpServers = Array.isArray(servers) ? servers : [];
     return availableMcpServers;
 }
@@ -2530,47 +2526,13 @@ async function loadChatModelDropdown() {
     }
 
     try {
-        const resp = await fetch('/api/v1/providers/models');
-        const data = await resp.json();
+        // Use shared ModelLoader for fetching (DRY: single source of truth)
+        const result = window.ModelLoader
+            ? await ModelLoader.fetchGrouped({ fresh: true })
+            : { groups: {}, raw: {} };
+        const groups = result.groups;
 
-        // Group models by provider
-        const groups = {};
-
-        // Add static cloud models
-        if (data.ok && data.models.length > 0) {
-            data.models.forEach(function(m) {
-                if (!groups[m.provider]) groups[m.provider] = [];
-                groups[m.provider].push({ value: m.model, label: m.label });
-            });
-        }
-
-        // If Ollama is configured, fetch live models
-        if (data.ollama_configured) {
-            try {
-                const ollamaResp = await fetch('/api/v1/providers/ollama/models');
-                const ollamaData = await ollamaResp.json();
-                if (ollamaData.ok && ollamaData.models.length > 0) {
-                    groups['ollama'] = ollamaData.models.map(function(m) {
-                        return { value: 'ollama/' + m.name, label: m.name + ' (' + m.size + ')' };
-                    });
-                }
-            } catch (_) { /* Ollama might not be running */ }
-        }
-
-        // If Ollama Cloud is configured, fetch live models
-        if (data.ollama_cloud_configured) {
-            try {
-                const cloudResp = await fetch('/api/v1/providers/ollama-cloud/models');
-                const cloudData = await cloudResp.json();
-                if (cloudData.ok && cloudData.models.length > 0) {
-                    groups['ollama_cloud'] = cloudData.models.map(function(m) {
-                        return { value: 'ollama_cloud/' + m.id, label: m.id };
-                    });
-                }
-            } catch (_) { /* Ollama Cloud might not be reachable */ }
-        }
-
-        await hydrateChatModelCapabilities(data);
+        await hydrateChatModelCapabilities(result.raw);
 
         // Clear existing options
         while (chatModelSelect.firstChild) {
@@ -2594,7 +2556,7 @@ async function loadChatModelDropdown() {
         // Add model groups
         Object.keys(groups).forEach(function(provider) {
             const optgroup = document.createElement('optgroup');
-            optgroup.label = providerDisplayName(provider);
+            optgroup.label = (window.ModelLoader && ModelLoader.PROVIDER_NAMES[provider]) || provider;
 
             groups[provider].forEach(function(m) {
                 const option = document.createElement('option');
@@ -2619,17 +2581,7 @@ async function loadChatModelDropdown() {
     }
 }
 
-function providerDisplayName(name) {
-    const map = {
-        anthropic: 'Anthropic', openai: 'OpenAI', openrouter: 'OpenRouter',
-        gemini: 'Gemini', deepseek: 'DeepSeek', groq: 'Groq',
-        ollama: 'Ollama', ollama_cloud: 'Ollama Cloud',
-        mistral: 'Mistral', xai: 'xAI', together: 'Together',
-        fireworks: 'Fireworks', perplexity: 'Perplexity', cohere: 'Cohere',
-        venice: 'Venice', aihubmix: 'AiHubMix', vllm: 'vLLM', custom: 'Custom',
-    };
-    return map[name] || name;
-}
+// providerDisplayName removed — now uses ModelLoader.PROVIDER_NAMES (DRY)
 
 function toolStatusLabel(toolName, args) {
     if (toolName === 'web_search') return 'Ricerca web in corso';

@@ -19,6 +19,10 @@ const BUNDLED_RECIPES: &[(&str, &str)] = &[
         "google-calendar",
         include_str!("../../recipes/google-calendar.toml"),
     ),
+    (
+        "google-workspace",
+        include_str!("../../recipes/google-workspace.toml"),
+    ),
     ("notion", include_str!("../../recipes/notion.toml")),
     ("slack", include_str!("../../recipes/slack.toml")),
 ];
@@ -103,7 +107,7 @@ pub fn recipe_instances(
         })
         .map(|(name, server)| super::ConnectionInstance {
             name: name.clone(),
-            tool_count: server.capabilities.len(),
+            tool_count: server.discovered_tool_count.unwrap_or(0),
             enabled: server.enabled,
         })
         .collect()
@@ -167,8 +171,8 @@ mod tests {
     fn bundled_recipes_parse_successfully() {
         let recipes = load_all_recipes();
         assert!(
-            recipes.len() >= 5,
-            "Expected at least 5 bundled recipes, got {}",
+            recipes.len() >= 6,
+            "Expected at least 6 bundled recipes, got {}",
             recipes.len()
         );
 
@@ -177,6 +181,7 @@ mod tests {
         assert!(ids.contains(&"github"), "Missing github recipe");
         assert!(ids.contains(&"gmail"), "Missing gmail recipe");
         assert!(ids.contains(&"google-calendar"), "Missing google-calendar");
+        assert!(ids.contains(&"google-workspace"), "Missing google-workspace");
         assert!(ids.contains(&"notion"), "Missing notion recipe");
         assert!(ids.contains(&"slack"), "Missing slack recipe");
     }

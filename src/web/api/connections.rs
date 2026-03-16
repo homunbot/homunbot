@@ -146,6 +146,15 @@ async fn test_connection(
 
     let report = crate::mcp_setup::test_mcp_server_connection(&name, &server, Some(sandbox)).await;
 
+    // Cache discovered tool count in config for catalog display
+    if report.connected && report.tool_count > 0 {
+        let mut config = state.config.read().await.clone();
+        if let Some(srv) = config.mcp.servers.get_mut(&name) {
+            srv.discovered_tool_count = Some(report.tool_count);
+        }
+        let _ = state.save_config(config).await;
+    }
+
     Ok(Json(serde_json::json!({
         "ok": true,
         "connected": report.connected,

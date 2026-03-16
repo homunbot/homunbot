@@ -89,6 +89,7 @@ pub enum ResolvedSandboxBackend {
     Docker,
     LinuxNative,
     WindowsNative,
+    MacosSeatbelt,
 }
 
 impl ResolvedSandboxBackend {
@@ -98,6 +99,7 @@ impl ResolvedSandboxBackend {
             Self::Docker => "docker",
             Self::LinuxNative => "linux_native",
             Self::WindowsNative => "windows_native",
+            Self::MacosSeatbelt => "macos_seatbelt",
         }
     }
 
@@ -107,6 +109,7 @@ impl ResolvedSandboxBackend {
             Self::Docker => "Docker",
             Self::LinuxNative => "Linux Native",
             Self::WindowsNative => "Windows Native",
+            Self::MacosSeatbelt => "macOS Seatbelt",
         }
     }
 }
@@ -126,6 +129,11 @@ pub(crate) struct LinuxNativeRuntimeSupport {
     pub network_namespace: bool,
     pub prlimit_available: bool,
     pub cgroup_v2_available: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct MacosSeatbeltRuntimeSupport {
+    pub sandbox_exec: BackendProbe,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,4 +182,5 @@ pub(crate) struct SandboxBackendAvailability {
     pub docker: bool,
     pub linux_native: bool,
     pub windows_native: bool,
+    pub macos_seatbelt: bool,
 }

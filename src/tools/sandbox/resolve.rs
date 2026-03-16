@@ -4,8 +4,8 @@ use std::sync::OnceLock;
 use anyhow::Result;
 
 use super::types::{
-    BackendProbe, LinuxNativeRuntimeSupport, ResolvedSandboxBackend, SandboxBackendAvailability,
-    SandboxBackendCapability,
+    BackendProbe, LinuxNativeRuntimeSupport, MacosSeatbeltRuntimeSupport,
+    ResolvedSandboxBackend, SandboxBackendAvailability, SandboxBackendCapability,
 };
 use crate::config::ExecutionSandboxConfig;
 
@@ -235,6 +235,80 @@ fn probe_bubblewrap<const N: usize>(args: [&str; N]) -> BackendProbe {
     }
 }
 
+fn macos_seatbelt_backend_available() -> bool {
+    macos_seatbelt_runtime_support().sandbox_exec.available
+}
+
+pub(crate) fn macos_seatbelt_backend_probe() -> BackendProbe {
+    macos_seatbelt_runtime_support().sandbox_exec
+}
+
+pub(crate) fn macos_seatbelt_runtime_support() -> MacosSeatbeltRuntimeSupport {
+    #[cfg(target_os = "macos")]
+    {
+        static CACHED: OnceLock<MacosSeatbeltRuntimeSupport> = OnceLock::new();
+        CACHED
+            .get_or_init(|| {
+                let sandbox_exec = probe_sandbox_exec();
+                MacosSeatbeltRuntimeSupport { sandbox_exec }
+            })
+            .clone()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        MacosSeatbeltRuntimeSupport {
+            sandbox_exec: BackendProbe {
+                available: false,
+                reason: "macOS Seatbelt isolation only applies on macOS hosts.".to_string(),
+            },
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn probe_sandbox_exec() -> BackendProbe {
+    let path = std::path::Path::new("/usr/bin/sandbox-exec");
+    if !path.exists() {
+        return BackendProbe {
+            available: false,
+            reason: "/usr/bin/sandbox-exec is not present on this system.".to_string(),
+        };
+    }
+
+    // Minimal probe: deny-all + allow reads + allow process, run /usr/bin/true
+    let profile =
+        "(version 1)(deny default)(allow process-exec)(allow process-fork)(allow file-read*)";
+    let output = std::process::Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", profile, "--", "/usr/bin/true"])
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => BackendProbe {
+            available: true,
+            reason: "sandbox-exec probe succeeded.".to_string(),
+        },
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            BackendProbe {
+                available: false,
+                reason: format!(
+                    "sandbox-exec is present but probe failed: {}",
+                    if stderr.is_empty() {
+                        "no diagnostic output"
+                    } else {
+                        &stderr
+                    }
+                ),
+            }
+        }
+        Err(err) => BackendProbe {
+            available: false,
+            reason: format!("sandbox-exec probe failed: {err}"),
+        },
+    }
+}
+
 // --- Backend resolution ---
 
 impl SandboxBackendAvailability {
@@ -243,6 +317,7 @@ impl SandboxBackendAvailability {
             docker: docker_available(),
             linux_native: linux_native_backend_available(),
             windows_native: windows_native_backend_available(),
+            macos_seatbelt: macos_seatbelt_backend_available(),
         }
     }
 
@@ -252,6 +327,7 @@ impl SandboxBackendAvailability {
             ResolvedSandboxBackend::Docker => self.docker,
             ResolvedSandboxBackend::LinuxNative => self.linux_native,
             ResolvedSandboxBackend::WindowsNative => self.windows_native,
+            ResolvedSandboxBackend::MacosSeatbelt => self.macos_seatbelt,
         }
     }
 
@@ -266,6 +342,11 @@ impl SandboxBackendAvailability {
             return Some(ResolvedSandboxBackend::WindowsNative);
         }
 
+        #[cfg(target_os = "macos")]
+        if self.macos_seatbelt {
+            return Some(ResolvedSandboxBackend::MacosSeatbelt);
+        }
+
         if self.docker {
             Some(ResolvedSandboxBackend::Docker)
         } else {
@@ -278,6 +359,7 @@ impl SandboxBackendAvailability {
             self.capability_for(ResolvedSandboxBackend::Docker),
             self.capability_for(ResolvedSandboxBackend::LinuxNative),
             self.capability_for(ResolvedSandboxBackend::WindowsNative),
+            self.capability_for(ResolvedSandboxBackend::MacosSeatbelt),
         ]
     }
 
@@ -341,6 +423,7 @@ pub(crate) fn resolve_sandbox_backend_with_availability(
             docker: docker_is_available,
             linux_native: false,
             windows_native: false,
+            macos_seatbelt: false,
         },
     )
 }
@@ -362,6 +445,9 @@ pub(crate) fn resolve_sandbox_backend_with_capabilities(
         }
         "windows_native" => {
             resolve_requested_backend(config, availability, ResolvedSandboxBackend::WindowsNative)
+        }
+        "macos_seatbelt" => {
+            resolve_requested_backend(config, availability, ResolvedSandboxBackend::MacosSeatbelt)
         }
         "auto" => {
             if let Some(auto_backend) = availability.preferred_auto_backend() {
@@ -444,6 +530,14 @@ fn backend_capability_metadata(
             (
                 cfg!(target_os = "windows"),
                 cfg!(target_os = "windows"),
+                probe.reason,
+            )
+        }
+        ResolvedSandboxBackend::MacosSeatbelt => {
+            let probe = macos_seatbelt_backend_probe();
+            (
+                cfg!(target_os = "macos"),
+                cfg!(target_os = "macos"),
                 probe.reason,
             )
         }

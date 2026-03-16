@@ -146,7 +146,12 @@ pub struct ShellTool {
 
 impl ShellTool {
     pub fn new(timeout_secs: u64, restrict_to_workspace: bool) -> Self {
-        Self::with_permissions_and_sandbox(timeout_secs, restrict_to_workspace, None, None)
+        Self::with_permissions_and_sandbox(
+            timeout_secs,
+            restrict_to_workspace,
+            None,
+            Some(ExecutionSandboxConfig::disabled()),
+        )
     }
 
     /// Create ShellTool with OS-specific permissions

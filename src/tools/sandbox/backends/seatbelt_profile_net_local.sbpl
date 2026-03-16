@@ -1,0 +1,155 @@
+(version 1)
+(deny default)
+
+;; --- Process ---
+(allow process-exec)
+(allow process-fork)
+(allow process-info* (target same-sandbox))
+(allow signal (target same-sandbox))
+
+;; --- PTY/TTY (needed for interactive shells) ---
+(allow pseudo-tty)
+(allow file-ioctl (literal "/dev/ptmx"))
+(allow file-ioctl (regex #"^/dev/ttys[0-9]+$"))
+(allow file-read* file-write* (literal "/dev/ptmx"))
+(allow file-read* file-write* (regex #"^/dev/ttys[0-9]+$"))
+
+;; --- Sysctl reads (CPU, kernel, memory info) ---
+(allow sysctl-read
+  (sysctl-name "hw.activecpu")
+  (sysctl-name "hw.memsize")
+  (sysctl-name "hw.ncpu")
+  (sysctl-name "hw.logicalcpu")
+  (sysctl-name "hw.logicalcpu_max")
+  (sysctl-name "hw.physicalcpu")
+  (sysctl-name "hw.physicalcpu_max")
+  (sysctl-name "hw.pagesize")
+  (sysctl-name "hw.cputype")
+  (sysctl-name "hw.cpufamily")
+  (sysctl-name "hw.machine")
+  (sysctl-name "kern.osrelease")
+  (sysctl-name "kern.ostype")
+  (sysctl-name "kern.osversion")
+  (sysctl-name "kern.osproductversion")
+  (sysctl-name "kern.hostname")
+  (sysctl-name "kern.version")
+  (sysctl-name "kern.argmax")
+  (sysctl-name "kern.maxfilesperproc")
+  (sysctl-name "kern.maxproc")
+  (sysctl-name "kern.usrstack64")
+  (sysctl-name "machdep.cpu.brand_string")
+  (sysctl-name "sysctl.proc_cputype")
+  (sysctl-name "vm.loadavg")
+  (sysctl-name-prefix "hw.optional.arm.")
+  (sysctl-name-prefix "hw.perflevel")
+  (sysctl-name-prefix "kern.proc.pid."))
+
+;; --- IPC ---
+(allow ipc-posix-shm)
+(allow ipc-posix-sem)
+(allow mach-lookup
+  (global-name "com.apple.system.opendirectoryd.libinfo")
+  (global-name "com.apple.system.opendirectoryd.membership")
+  (global-name "com.apple.logd")
+  (global-name "com.apple.system.logger")
+  (global-name "com.apple.system.notification_center")
+  (global-name "com.apple.bsd.dirhelper")
+  (global-name "com.apple.PowerManagement.control")
+  (global-name "com.apple.cfprefsd.agent")
+  (global-name "com.apple.cfprefsd.daemon")
+  (global-name "com.apple.SecurityServer")
+  (global-name "com.apple.securityd.xpc")
+  (global-name "com.apple.trustd.agent")
+  (global-name "com.apple.networkd")
+  (global-name "com.apple.SystemConfiguration.DNSConfiguration")
+  (global-name "com.apple.SystemConfiguration.configd"))
+
+;; --- IOKit ---
+(allow iokit-open (iokit-registry-entry-class "RootDomainUserClient"))
+(allow iokit-get-properties)
+
+;; --- System read access ---
+(allow file-read*
+  (subpath "/bin")
+  (subpath "/sbin")
+  (subpath "/usr/bin")
+  (subpath "/usr/sbin")
+  (subpath "/usr/lib")
+  (subpath "/usr/libexec")
+  (subpath "/usr/share")
+  (subpath "/usr/local/lib")
+  (subpath "/opt/homebrew")
+  (subpath "/System/Library")
+  (subpath "/Library/Apple")
+  (subpath "/Library/Preferences")
+  (subpath "/etc")
+  (subpath "/private/etc")
+  (subpath "/private/var/db")
+  (subpath "/var/db")
+  (subpath "/var/select")
+  (subpath "/var/run")
+  (subpath "/private/var/run"))
+
+;; --- Symlink/metadata resolution ---
+(allow file-read-metadata
+  (literal "/")
+  (literal "/etc")
+  (literal "/tmp")
+  (literal "/var")
+  (literal "/private")
+  (literal "/private/etc/localtime")
+  (literal "/dev"))
+(allow file-read-metadata (regex #"^/dev/.*$"))
+
+;; --- Executable mapping (dylib loading) ---
+(allow file-map-executable
+  (subpath "/usr/lib")
+  (subpath "/System/Library/Frameworks")
+  (subpath "/System/Library/PrivateFrameworks")
+  (subpath "/System/Library/SubFrameworks")
+  (subpath "/System/Library/Extensions")
+  (subpath "/Library/Apple/System/Library/Frameworks")
+  (subpath "/Library/Apple/System/Library/PrivateFrameworks")
+  (subpath "/Library/Apple/usr/lib")
+  (subpath "/opt/homebrew/lib"))
+
+;; --- Device files ---
+(allow file-read*
+  (literal "/dev/null")
+  (literal "/dev/zero")
+  (literal "/dev/random")
+  (literal "/dev/urandom")
+  (literal "/dev/autofs_nowait")
+  (literal "/dev/tty")
+  (subpath "/dev/fd"))
+
+;; --- Writable: device files ---
+(allow file-write*
+  (literal "/dev/null")
+  (literal "/dev/zero")
+  (subpath "/dev/fd"))
+(allow file-ioctl
+  (literal "/dev/null")
+  (literal "/dev/zero")
+  (literal "/dev/random")
+  (literal "/dev/urandom")
+  (literal "/dev/tty"))
+
+;; --- Writable: temp directories ---
+(allow file-read* file-write* (subpath "/tmp"))
+(allow file-read* file-write* (subpath "/private/tmp"))
+(allow file-read* file-write* (subpath "/var/tmp"))
+(allow file-read* file-write* (subpath "/private/var/tmp"))
+
+;; --- Writable: workspace (parameterized) ---
+(allow file-read* (subpath (param "WORKSPACE")))
+(allow file-write* (subpath (param "WORKSPACE")))
+
+;; --- Network: localhost only ---
+;; Use "*:*" instead of "localhost:*" for IPv4-mapped IPv6 compatibility
+(allow network-outbound (remote ip "localhost:*"))
+(allow network-inbound (local ip "localhost:*"))
+(allow network-outbound (literal "/private/var/run/syslog"))
+(allow network-outbound (remote unix-socket (subpath "/tmp")))
+(allow network-outbound (remote unix-socket (subpath "/private/tmp")))
+(allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))

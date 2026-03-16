@@ -137,6 +137,7 @@ pub fn apply_mcp_preset_setup(
         enabled: true,
         recipe_id: None,
         auth_env_key: preset.auth_env_key.clone(),
+        discovered_tool_count: None,
     };
     config
         .mcp
@@ -231,6 +232,7 @@ mod tests {
             enabled: true,
             recipe_id: None,
             auth_env_key: None,
+            discovered_tool_count: None,
         }
     }
 
