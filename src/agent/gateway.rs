@@ -18,6 +18,10 @@ use crate::workflows::engine::WorkflowEngine;
 use crate::workflows::WorkflowEvent;
 use tokio::sync::RwLock;
 
+use super::debounce::{
+    aggregate, get_session_lock, should_skip_debounce, DebounceConfig, DispatchContext,
+    MessageDebouncer, PreparedMessage, SessionLocks,
+};
 use super::email_approval::{ApprovalAction, EmailApprovalHandler};
 
 #[cfg(feature = "web-ui")]
@@ -543,6 +547,13 @@ impl Gateway {
         #[cfg(feature = "local-embeddings")]
         let routing_rag_engine = self.agent.rag_engine_handle();
 
+        // --- Debounce + per-session lock infrastructure ---
+        let debounce_config = DebounceConfig::from_agent_config(
+            config.agent.debounce_window_ms,
+            config.agent.debounce_max_batch,
+        );
+        let session_locks: SessionLocks = Arc::new(std::sync::Mutex::new(HashMap::new()));
+
         // --- Main message routing loop ---
         let agent = self.agent.clone();
         let senders_for_routing = outbound_senders.clone();
@@ -552,6 +563,33 @@ impl Gateway {
 
         let routing_loop = tokio::spawn(async move {
             let approval_handler = std::sync::Arc::new(approval_handler);
+
+            // Debounce pipeline: routing loop → debounce_tx → debouncer → dispatch
+            let (debounce_tx, debounce_rx) = mpsc::channel::<PreparedMessage>(100);
+            {
+                let agent = agent.clone();
+                let senders = senders_for_routing.clone();
+                let stream_tx = web_stream_tx.clone();
+                let db = routing_db.clone();
+                let locks = session_locks.clone();
+
+                tokio::spawn(async move {
+                    MessageDebouncer::new(debounce_config, debounce_rx)
+                        .run(move |prepared| {
+                            let agent = agent.clone();
+                            let senders = senders.clone();
+                            let stream_tx = stream_tx.clone();
+                            let db = db.clone();
+                            let locks = locks.clone();
+
+                            tokio::spawn(async move {
+                                dispatch_to_agent(prepared, agent, senders, stream_tx, db, locks)
+                                    .await;
+                            });
+                        })
+                        .await;
+                });
+            }
             #[allow(unused_mut)] // `inbound` is mutated inside #[cfg(feature = "local-embeddings")]
             while let Some(mut inbound) = inbound_rx.recv().await {
                 let session_key = inbound
@@ -925,6 +963,7 @@ impl Gateway {
                 } else {
                     None
                 };
+                // Build dispatch context + send through debounce pipeline
                 let inbound_metadata = inbound.metadata.clone();
                 let is_automation_context = inbound_metadata
                     .as_ref()
@@ -945,268 +984,28 @@ impl Gateway {
                 };
                 let thinking_override = inbound_metadata.as_ref().and_then(|m| m.thinking_override);
 
-                // Process through agent loop (spawned per-message)
-                let agent = agent.clone();
-                let senders = senders_for_routing.clone();
-                let stream_tx = web_stream_tx.clone();
-                let task_db = routing_db.clone();
+                let prepared = PreparedMessage {
+                    inbound,
+                    session_key: session_key.clone(),
+                    channel_name: channel_name.clone(),
+                    chat_id: chat_id.clone(),
+                    ctx: DispatchContext {
+                        is_system,
+                        is_automation: is_automation_context,
+                        email_notify,
+                        email_meta,
+                        email_from,
+                        email_body_preview,
+                        automation_run_id,
+                        automation_id,
+                        suppress_outbound: base_suppress_outbound,
+                        blocked_tools,
+                        thinking_override,
+                        inbound_metadata,
+                    },
+                };
 
-                tokio::spawn(async move {
-                    // For the web channel, use streaming mode
-                    let (response, processing_error) = if channel_name == "web" {
-                        if let Some(bus_stream_tx) = stream_tx {
-                            let chat_id_for_stream = chat_id.clone();
-                            let (chunk_tx, mut chunk_rx) =
-                                mpsc::channel::<crate::provider::StreamChunk>(128);
-
-                            let bridge = tokio::spawn(async move {
-                                while let Some(chunk) = chunk_rx.recv().await {
-                                    let _ = bus_stream_tx
-                                        .send(StreamMessage {
-                                            chat_id: chat_id_for_stream.clone(),
-                                            delta: chunk.delta,
-                                            done: chunk.done,
-                                            event_type: chunk.event_type,
-                                            tool_call_data: chunk.tool_call_data,
-                                        })
-                                        .await;
-                                }
-                            });
-
-                            let result = agent
-                                .process_message_streaming_with_options(
-                                    &inbound.content,
-                                    &session_key,
-                                    &channel_name,
-                                    &chat_id,
-                                    chunk_tx,
-                                    blocked_tools,
-                                    thinking_override,
-                                )
-                                .await;
-
-                            bridge.abort();
-                            match result {
-                                Ok(text) => (text, None),
-                                Err(e) => {
-                                    tracing::error!(error = ?e, "Agent error (streaming)");
-                                    (
-                                        format!("Sorry, I encountered an error: {e}"),
-                                        Some(e.to_string()),
-                                    )
-                                }
-                            }
-                        } else {
-                            match agent
-                                .process_message_with_blocked_tools(
-                                    &inbound.content,
-                                    &session_key,
-                                    &channel_name,
-                                    &chat_id,
-                                    blocked_tools,
-                                )
-                                .await
-                            {
-                                Ok(text) => (text, None),
-                                Err(e) => {
-                                    tracing::error!(error = ?e, "Agent error");
-                                    (
-                                        format!("Sorry, I encountered an error: {e}"),
-                                        Some(e.to_string()),
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        match agent
-                            .process_message_with_blocked_tools(
-                                &inbound.content,
-                                &session_key,
-                                &channel_name,
-                                &chat_id,
-                                blocked_tools,
-                            )
-                            .await
-                        {
-                            Ok(text) => (text, None),
-                            Err(e) => {
-                                tracing::error!(error = %e, "Agent error");
-                                (
-                                    format!("Sorry, I encountered an error: {e}"),
-                                    Some(e.to_string()),
-                                )
-                            }
-                        }
-                    };
-
-                    tracing::info!(
-                        channel = %channel_name,
-                        response_len = response.len(),
-                        "Agent response ready, routing to channel"
-                    );
-
-                    // Strip reasoning/thinking blocks for non-web channels
-                    let content = if channel_name == "web" {
-                        response
-                    } else {
-                        strip_reasoning(&response)
-                    };
-                    let run_output = content.clone();
-
-                    // If email with approval, save draft + format notification
-                    let outbound = if let Some((notify_ch, notify_cid)) = email_notify {
-                        tracing::info!(
-                            email_channel = %channel_name,
-                            notify_channel = %notify_ch,
-                            "Saving email draft and routing to notify channel"
-                        );
-
-                        // Save draft in email_pending
-                        let notify_key = format!("{notify_ch}:{notify_cid}");
-                        let pending_id = uuid::Uuid::new_v4().to_string();
-
-                        let (account_name, subject, message_id) = email_meta.unwrap_or_default();
-                        let from_address = email_from.unwrap_or_default();
-                        let body_preview = email_body_preview;
-
-                        let row = EmailPendingRow {
-                            id: pending_id,
-                            account_name,
-                            from_address,
-                            subject,
-                            body_preview,
-                            message_id,
-                            draft_response: Some(content),
-                            status: "pending".to_string(),
-                            notify_session_key: Some(notify_key.clone()),
-                            created_at: String::new(), // Set by DB
-                            updated_at: None,
-                        };
-
-                        if let Err(e) = task_db.insert_email_pending(&row).await {
-                            tracing::error!(error = %e, "Failed to save email draft");
-                        }
-
-                        // Count total pending for this notify target
-                        let total = task_db
-                            .load_pending_for_notify(&notify_key)
-                            .await
-                            .map(|v| v.len())
-                            .unwrap_or(1);
-
-                        let formatted =
-                            EmailApprovalHandler::format_draft_notification(&row, total, total);
-
-                        OutboundMessage {
-                            channel: notify_ch,
-                            chat_id: notify_cid,
-                            content: formatted,
-                            metadata: None,
-                        }
-                    } else {
-                        OutboundMessage {
-                            channel: channel_name.clone(),
-                            chat_id: chat_id.clone(),
-                            content,
-                            metadata: build_outbound_meta(inbound.metadata.as_ref()),
-                        }
-                    };
-
-                    let mut suppress_outbound = base_suppress_outbound;
-                    let mut trigger_note: Option<String> = None;
-
-                    if processing_error.is_none() {
-                        if let (Some(run_id), Some(automation_id)) =
-                            (automation_run_id.as_deref(), automation_id.as_deref())
-                        {
-                            if let Ok(Some(automation)) =
-                                task_db.load_automation(automation_id).await
-                            {
-                                let previous_result = task_db
-                                    .load_last_successful_automation_result(
-                                        automation_id,
-                                        Some(run_id),
-                                    )
-                                    .await
-                                    .ok()
-                                    .flatten();
-                                let (should_notify, note) = evaluate_automation_trigger(
-                                    &automation.trigger_kind,
-                                    automation.trigger_value.as_deref(),
-                                    previous_result.as_deref(),
-                                    &run_output,
-                                );
-                                if !should_notify {
-                                    suppress_outbound = true;
-                                    trigger_note = note;
-                                }
-                            }
-                        }
-                    }
-
-                    if !suppress_outbound {
-                        route_outbound(outbound, &senders).await;
-                    }
-
-                    if let Some(run_id) = automation_run_id {
-                        let run_result = match processing_error.as_deref() {
-                            Some(e) => format!("Run failed: {e}"),
-                            None => run_output.clone(),
-                        };
-                        let run_status = if processing_error.is_some() {
-                            "error"
-                        } else {
-                            "success"
-                        };
-                        let automation_status = if processing_error.is_some() {
-                            "error"
-                        } else {
-                            "active"
-                        };
-
-                        if let Err(e) = task_db
-                            .complete_automation_run(&run_id, run_status, Some(&run_result))
-                            .await
-                        {
-                            tracing::error!(
-                                error = %e,
-                                run_id = %run_id,
-                                "Failed to complete automation run"
-                            );
-                        }
-
-                        if let Some(automation_id) = automation_id {
-                            let latest_result = if processing_error.is_some() {
-                                truncate_for_status(&run_result, 500)
-                            } else if let Some(note) = trigger_note.as_deref() {
-                                format!(
-                                    "{note} | output: {}",
-                                    truncate_for_status(&run_result, 300)
-                                )
-                            } else {
-                                truncate_for_status(&run_result, 500)
-                            };
-                            if let Err(e) = task_db
-                                .update_automation(
-                                    &automation_id,
-                                    AutomationUpdate {
-                                        status: Some(automation_status.to_string()),
-                                        last_result: Some(Some(latest_result)),
-                                        touch_last_run: true,
-                                        ..Default::default()
-                                    },
-                                )
-                                .await
-                            {
-                                tracing::error!(
-                                    error = %e,
-                                    automation_id = %automation_id,
-                                    "Failed to update automation status after run"
-                                );
-                            }
-                        }
-                    }
-                });
+                let _ = debounce_tx.send(prepared).await;
             }
         });
 
@@ -1402,6 +1201,288 @@ impl Gateway {
         println!("Goodbye! 🧪");
 
         Ok(())
+    }
+}
+
+/// Dispatch a debounced/aggregated message to the agent loop.
+///
+/// Acquires the per-session lock so only one agent call runs per session
+/// at a time.  Handles streaming (web) vs. non-streaming paths, email
+/// approval routing, and automation run tracking.
+async fn dispatch_to_agent(
+    prepared: PreparedMessage,
+    agent: Arc<AgentLoop>,
+    senders: Vec<(String, mpsc::Sender<OutboundMessage>)>,
+    stream_tx: Option<mpsc::Sender<StreamMessage>>,
+    task_db: Database,
+    session_locks: SessionLocks,
+) {
+    // Per-session serialisation: wait if another batch is still processing.
+    let lock = get_session_lock(&session_locks, &prepared.session_key);
+    let _guard = lock.lock().await;
+
+    let PreparedMessage {
+        inbound,
+        session_key,
+        channel_name,
+        chat_id,
+        ctx,
+    } = prepared;
+
+    let blocked_tools = ctx.blocked_tools;
+    let thinking_override = ctx.thinking_override;
+
+    // For the web channel, use streaming mode
+    let (response, processing_error) = if channel_name == "web" {
+        if let Some(bus_stream_tx) = stream_tx {
+            let chat_id_for_stream = chat_id.clone();
+            let (chunk_tx, mut chunk_rx) =
+                mpsc::channel::<crate::provider::StreamChunk>(128);
+
+            let bridge = tokio::spawn(async move {
+                while let Some(chunk) = chunk_rx.recv().await {
+                    let _ = bus_stream_tx
+                        .send(StreamMessage {
+                            chat_id: chat_id_for_stream.clone(),
+                            delta: chunk.delta,
+                            done: chunk.done,
+                            event_type: chunk.event_type,
+                            tool_call_data: chunk.tool_call_data,
+                        })
+                        .await;
+                }
+            });
+
+            let result = agent
+                .process_message_streaming_with_options(
+                    &inbound.content,
+                    &session_key,
+                    &channel_name,
+                    &chat_id,
+                    chunk_tx,
+                    blocked_tools,
+                    thinking_override,
+                )
+                .await;
+
+            bridge.abort();
+            match result {
+                Ok(text) => (text, None),
+                Err(e) => {
+                    tracing::error!(error = ?e, "Agent error (streaming)");
+                    (
+                        format!("Sorry, I encountered an error: {e}"),
+                        Some(e.to_string()),
+                    )
+                }
+            }
+        } else {
+            match agent
+                .process_message_with_blocked_tools(
+                    &inbound.content,
+                    &session_key,
+                    &channel_name,
+                    &chat_id,
+                    blocked_tools,
+                )
+                .await
+            {
+                Ok(text) => (text, None),
+                Err(e) => {
+                    tracing::error!(error = ?e, "Agent error");
+                    (
+                        format!("Sorry, I encountered an error: {e}"),
+                        Some(e.to_string()),
+                    )
+                }
+            }
+        }
+    } else {
+        match agent
+            .process_message_with_blocked_tools(
+                &inbound.content,
+                &session_key,
+                &channel_name,
+                &chat_id,
+                blocked_tools,
+            )
+            .await
+        {
+            Ok(text) => (text, None),
+            Err(e) => {
+                tracing::error!(error = %e, "Agent error");
+                (
+                    format!("Sorry, I encountered an error: {e}"),
+                    Some(e.to_string()),
+                )
+            }
+        }
+    };
+
+    tracing::info!(
+        channel = %channel_name,
+        response_len = response.len(),
+        "Agent response ready, routing to channel"
+    );
+
+    // Strip reasoning/thinking blocks for non-web channels
+    let content = if channel_name == "web" {
+        response
+    } else {
+        strip_reasoning(&response)
+    };
+    let run_output = content.clone();
+
+    // If email with approval, save draft + format notification
+    let outbound = if let Some((notify_ch, notify_cid)) = ctx.email_notify {
+        tracing::info!(
+            email_channel = %channel_name,
+            notify_channel = %notify_ch,
+            "Saving email draft and routing to notify channel"
+        );
+
+        let notify_key = format!("{notify_ch}:{notify_cid}");
+        let pending_id = uuid::Uuid::new_v4().to_string();
+
+        let (account_name, subject, message_id) = ctx.email_meta.unwrap_or_default();
+        let from_address = ctx.email_from.unwrap_or_default();
+        let body_preview = ctx.email_body_preview;
+
+        let row = EmailPendingRow {
+            id: pending_id,
+            account_name,
+            from_address,
+            subject,
+            body_preview,
+            message_id,
+            draft_response: Some(content),
+            status: "pending".to_string(),
+            notify_session_key: Some(notify_key.clone()),
+            created_at: String::new(),
+            updated_at: None,
+        };
+
+        if let Err(e) = task_db.insert_email_pending(&row).await {
+            tracing::error!(error = %e, "Failed to save email draft");
+        }
+
+        let total = task_db
+            .load_pending_for_notify(&notify_key)
+            .await
+            .map(|v| v.len())
+            .unwrap_or(1);
+
+        let formatted =
+            EmailApprovalHandler::format_draft_notification(&row, total, total);
+
+        OutboundMessage {
+            channel: notify_ch,
+            chat_id: notify_cid,
+            content: formatted,
+            metadata: None,
+        }
+    } else {
+        OutboundMessage {
+            channel: channel_name.clone(),
+            chat_id: chat_id.clone(),
+            content,
+            metadata: build_outbound_meta(inbound.metadata.as_ref()),
+        }
+    };
+
+    let mut suppress_outbound = ctx.suppress_outbound;
+    let mut trigger_note: Option<String> = None;
+
+    if processing_error.is_none() {
+        if let (Some(run_id), Some(automation_id)) =
+            (ctx.automation_run_id.as_deref(), ctx.automation_id.as_deref())
+        {
+            if let Ok(Some(automation)) =
+                task_db.load_automation(automation_id).await
+            {
+                let previous_result = task_db
+                    .load_last_successful_automation_result(
+                        automation_id,
+                        Some(run_id),
+                    )
+                    .await
+                    .ok()
+                    .flatten();
+                let (should_notify, note) = evaluate_automation_trigger(
+                    &automation.trigger_kind,
+                    automation.trigger_value.as_deref(),
+                    previous_result.as_deref(),
+                    &run_output,
+                );
+                if !should_notify {
+                    suppress_outbound = true;
+                    trigger_note = note;
+                }
+            }
+        }
+    }
+
+    if !suppress_outbound {
+        route_outbound(outbound, &senders).await;
+    }
+
+    if let Some(run_id) = ctx.automation_run_id {
+        let run_result = match processing_error.as_deref() {
+            Some(e) => format!("Run failed: {e}"),
+            None => run_output.clone(),
+        };
+        let run_status = if processing_error.is_some() {
+            "error"
+        } else {
+            "success"
+        };
+        let automation_status = if processing_error.is_some() {
+            "error"
+        } else {
+            "active"
+        };
+
+        if let Err(e) = task_db
+            .complete_automation_run(&run_id, run_status, Some(&run_result))
+            .await
+        {
+            tracing::error!(
+                error = %e,
+                run_id = %run_id,
+                "Failed to complete automation run"
+            );
+        }
+
+        if let Some(automation_id) = ctx.automation_id {
+            let latest_result = if processing_error.is_some() {
+                truncate_for_status(&run_result, 500)
+            } else if let Some(note) = trigger_note.as_deref() {
+                format!(
+                    "{note} | output: {}",
+                    truncate_for_status(&run_result, 300)
+                )
+            } else {
+                truncate_for_status(&run_result, 500)
+            };
+            if let Err(e) = task_db
+                .update_automation(
+                    &automation_id,
+                    AutomationUpdate {
+                        status: Some(automation_status.to_string()),
+                        last_result: Some(Some(latest_result)),
+                        touch_last_run: true,
+                        ..Default::default()
+                    },
+                )
+                .await
+            {
+                tracing::error!(
+                    error = %e,
+                    automation_id = %automation_id,
+                    "Failed to update automation status after run"
+                );
+            }
+        }
     }
 }
 

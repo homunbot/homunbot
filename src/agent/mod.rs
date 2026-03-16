@@ -3,6 +3,7 @@ mod attachment_router;
 pub mod bootstrap_watcher;
 mod browser_task_plan;
 mod context;
+pub mod debounce;
 pub mod email_approval;
 mod execution_plan;
 pub mod gateway;

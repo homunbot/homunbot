@@ -343,6 +343,14 @@ pub struct AgentConfig {
     /// and retries — this delay prevents hitting rate limits (especially on free-tier models).
     /// Default: 1000ms. Set to 0 to disable.
     pub xml_fallback_delay_ms: u64,
+    /// Message debounce window in milliseconds. When multiple messages arrive
+    /// for the same session within this window, they are aggregated into one.
+    /// Set to 0 to disable debounce. Default: 2000.
+    pub debounce_window_ms: u64,
+    /// Maximum messages to aggregate before force-flushing the debounce buffer.
+    /// Prevents unbounded buffering if messages keep arriving rapidly.
+    /// Default: 10.
+    pub debounce_max_batch: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -386,6 +394,8 @@ impl Default for AgentConfig {
             fallback_models: Vec::new(),
             model_overrides: HashMap::new(),
             xml_fallback_delay_ms: 1000,
+            debounce_window_ms: 2000,
+            debounce_max_batch: 10,
         }
     }
 }
