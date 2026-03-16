@@ -120,9 +120,46 @@ async fn connect(
 
     // Persist config if setup succeeded (even if test failed — server is configured)
     state
-        .save_config(config)
+        .save_config(config.clone())
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Hot-reload: register new MCP tools into the running agent's registry
+    // so they're available immediately without restarting the gateway.
+    #[cfg(feature = "mcp")]
+    if result.ok {
+        if let (Some(registry), Some(server_cfg)) =
+            (&state.tool_registry, config.mcp.servers.get(&instance_name))
+        {
+            let name = instance_name.clone();
+            let server = server_cfg.clone();
+            let sandbox = config.security.execution_sandbox.clone();
+            let runtime_cfg = Arc::clone(&state.config);
+            let registry = Arc::clone(registry);
+            tokio::spawn(async move {
+                match crate::tools::McpManager::connect_single(
+                    &name,
+                    &server,
+                    Some(sandbox),
+                    Some(runtime_cfg),
+                )
+                .await
+                {
+                    Ok(tools) => {
+                        let count = tools.len();
+                        let mut reg = registry.write().await;
+                        for tool in tools {
+                            reg.register(tool);
+                        }
+                        tracing::info!(server = %name, tools = count, "Hot-reloaded MCP tools into registry");
+                    }
+                    Err(e) => {
+                        tracing::warn!(server = %name, error = %e, "Hot-reload MCP connect failed (tools available on restart)");
+                    }
+                }
+            });
+        }
+    }
 
     Ok(Json(serde_json::to_value(&result).unwrap_or_default()))
 }

@@ -547,6 +547,58 @@ impl McpManager {
             peer.shutdown().await;
         }
     }
+
+    /// Connect a single MCP server and return its tools for registry injection.
+    ///
+    /// Used for hot-reload after connecting a new service via the UI —
+    /// tools become available immediately without restarting the gateway.
+    pub async fn connect_single(
+        name: &str,
+        server_config: &McpServerConfig,
+        sandbox_config: Option<ExecutionSandboxConfig>,
+        runtime_config: Option<Arc<RwLock<Config>>>,
+    ) -> Result<Vec<Box<dyn Tool>>> {
+        let sb = sandbox_config.unwrap_or_default();
+        let (peer, discovered_tools, info) = connect_server(name, server_config, &sb).await?;
+        let peer = Arc::new(peer);
+        tracing::info!(
+            server = %name,
+            tools = discovered_tools.len(),
+            server_name = %info.server_name,
+            "MCP server hot-connected"
+        );
+
+        let runtime_hot_reload = runtime_config.is_some();
+        let mut tools: Vec<Box<dyn Tool>> = Vec::new();
+
+        for mcp_tool in discovered_tools {
+            let tool_name = format!("{}__{}", name, mcp_tool.name);
+            let description = mcp_tool
+                .description
+                .as_deref()
+                .unwrap_or("No description")
+                .to_string();
+            let input_schema = Value::Object(mcp_tool.input_schema.as_ref().clone());
+
+            tools.push(Box::new(McpClientTool {
+                tool_name,
+                mcp_tool_name: mcp_tool.name.to_string(),
+                tool_description: description,
+                input_schema,
+                peer: peer.clone(),
+                server_name: name.to_string(),
+                runtime_config: runtime_config.clone(),
+            }));
+        }
+
+        // Stateless servers (hot-reload mode): shut down peer after discovery.
+        // Tools will spawn fresh connections per call via `call_tool_once`.
+        if runtime_hot_reload {
+            peer.shutdown().await;
+        }
+
+        Ok(tools)
+    }
 }
 
 /// Connect to a single MCP server and discover its tools
