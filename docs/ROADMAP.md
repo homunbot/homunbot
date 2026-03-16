@@ -1570,11 +1570,11 @@ Implicazioni:
 | UX-1 | **Rivedere dashboard** | Layout/info da rivalutare dopo DASH-1. | 1-2 giorni |
 | UX-2 | **Chat: messaggi plan non corrispondono** | Quando l'agent usa plan mode, i messaggi mostrati nella chat non riflettono il piano. | 2-3 giorni |
 | UX-3 | **Chat: reasoning sparisce al ritorno** | Tornando su una chat precedente, le parti di reasoning/thinking scompaiono. Serve persistenza dei blocchi thinking. | 1-2 giorni |
-| UX-4 | **Sidebar: distinguere chat da workflow** | Le chat normali e le sessioni workflow appaiono uguali nella sidebar. Aggiungere icona/badge per tipo. | 1 giorno |
-| UX-5 | **Settings browser: scelta modello vision** | In Settings > Browser, aggiungere dropdown per scegliere il `vision_model`. | 1 giorno |
+| UX-4 | **Sidebar: distinguere chat da workflow** | ✅ DONE (2026-03-16) — Emoji icons aggiunte a tutte le 17 voci sub-nav sidebar (Tools + Settings). CSS `.subnav-icon` class. Chat/workflow già su pagine separate, icone rendono la distinzione visiva immediata. | ~~1 giorno~~ |
+| UX-5 | **Settings browser: scelta modello vision** | ✅ DONE (2026-03-16) — Dropdown vision model in Browser Settings. Riusa `fetchAllModels()` + `buildModelOptions()` da setup wizard. Patch `agent.vision_model` nel submit. Hidden input sync. | ~~1 giorno~~ |
 | UX-6 | **Edit inline messaggio** | L'edit inline dei messaggi nella chat non funziona correttamente. Da sistemare. | 1-2 giorni |
 | UX-7 | **Sandbox: capirla e testarla** | Verificare che la sandbox (macOS Seatbelt, Docker, etc.) funzioni end-to-end dall'UI. | 1 giorno |
-| UX-8 | **Browser: chiusura su richiesta** | Quando l'utente dice "chiudi il browser", l'agent dovrebbe effettivamente chiuderlo. | 1 giorno |
+| UX-8 | **Browser: chiusura su richiesta** | ✅ DONE (2026-03-16) — `action_close()` già esistente in browser.rs. Aggiunto "chiudi il browser" e "close the browser" alla keyword list `explicit_browser_intent` per bypassare il veto system. | ~~1 giorno~~ |
 | UX-9 | **Ricerca web strutturata** | L'agent dovrebbe: 1) cercare su Google, 2) analizzare i risultati, 3) creare uno schema di navigazione, 4) approfondire sistematicamente. Non saltare direttamente al primo link. | 2-3 giorni |
 | UX-10 | **Ollama Cloud: test fallisce in Settings** | Il test connessione in Settings fallisce per modelli Ollama Cloud, ma il modello funziona se usato. Problema nel test endpoint, non nel modello. | 1 giorno |
 | UX-11 | **Telegram: messaggi consecutivi** | ✅ DONE (2026-03-16) — Gateway debounce module (`agent/debounce.rs`): per-chat buffering with configurable window (default 2s, max 10s). Messages coalesced before dispatch. Config: `[agent] debounce_ms`, `debounce_max_ms`. Works on all channels. | ~~2-3 giorni~~ |
