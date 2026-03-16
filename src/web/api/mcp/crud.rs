@@ -403,18 +403,49 @@ pub(super) async fn delete_mcp_server(
 
 // ── Discover tools (on-demand connection) ────────────────────────
 
-/// Connect to an MCP server and return its discovered tools.
-/// Used by the automations builder to populate tool dropdowns
-/// without requiring the server to be connected at gateway startup.
+/// Return tools for an MCP server.
+///
+/// First checks the running agent's tool registry (zero-cost if already
+/// connected at gateway startup or hot-reloaded). Falls back to on-demand
+/// connection if the server isn't in the registry yet.
 pub(super) async fn list_mcp_server_tools(
     Path(name): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let config = state.config.read().await;
-    let Some(server) = config.mcp.servers.get(&name) else {
+    if !config.mcp.servers.contains_key(&name) {
         return Err(StatusCode::NOT_FOUND);
-    };
-    let server = server.clone();
+    }
+
+    // Fast path: check the shared tool registry for already-loaded tools.
+    // MCP tool names follow the pattern "{server}__{tool_name}".
+    let prefix = format!("{name}__");
+    if let Some(registry) = &state.tool_registry {
+        let reg = registry.read().await;
+        let cached: Vec<crate::tools::mcp::McpToolInfo> = reg
+            .get_definitions()
+            .iter()
+            .filter(|d| d.function.name.starts_with(&prefix))
+            .map(|d| crate::tools::mcp::McpToolInfo {
+                name: d.function.name.strip_prefix(&prefix).unwrap_or(&d.function.name).to_string(),
+                description: d.function.description.clone(),
+                parameters: Some(d.function.parameters.clone()),
+            })
+            .collect();
+
+        if !cached.is_empty() {
+            return Ok(Json(serde_json::json!({
+                "ok": true,
+                "server": name,
+                "tools": cached,
+            })));
+        }
+    }
+    drop(config);
+
+    // Slow path: on-demand connection for servers not yet in the registry.
+    let config = state.config.read().await;
+    let server = config.mcp.servers.get(&name).cloned().unwrap();
     let sandbox = config.security.execution_sandbox.clone();
     drop(config);
 
