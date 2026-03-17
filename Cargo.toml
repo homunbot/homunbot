@@ -169,7 +169,7 @@ lru = { version = "0.16", optional = true }
 
 # --- Advanced document parsers (feature-gated under embeddings) ---
 pdf-extract = { version = "0.10", optional = true }
-calamine = { version = "0.32", optional = true }
+calamine = { version = "0.34", optional = true }
 zip = { version = "2", optional = true, default-features = false, features = ["deflate"] }
 quick-xml = { version = "0.37", optional = true }
 
