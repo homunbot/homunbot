@@ -64,7 +64,7 @@
 | REL-4 | **.env.example + cleanup** | Template .env con tutte le variabili documentate. Rimuovere credenziali test dalla git history. | 1 giorno | ✅ DONE (2026-03-17) |
 | REL-4b | **Ollama embeddings Docker** | Ollama sidecar per embeddings gratuite in Docker (no ONNX/glibc). Provider configurabile (ollama/openai/local). `ApiEmbeddingProvider` generico. `--profile with-ollama`. | 1 giorno | ✅ DONE (2026-03-17) |
 | REL-4c | **Embedding Settings UI** | Settings page: filtro modelli embedding Ollama, auto-pull on save, custom model support. IndexMeta sidecar per tracking provider/model/dims. Mismatch detection + "Rebuild Vector Indices" button per ricostruzione in-place degli indici HNSW. | 1 giorno | ✅ DONE (2026-03-17) |
-| REL-5 | **Health check completo** | `/health/components` — stato DB, provider LLM, canali, MCP, disk space. Readiness probe per orchestrator. | 2 giorni | TODO |
+| REL-5 | **Health check completo** | `GET /api/v1/health/components` — 6 component checks: database (SELECT 1), LLM providers (circuit breaker snapshots), channels (enabled count), tools (count), knowledge/RAG (stats), data dir. Overall status worst-case derivation. | 2 giorni | ✅ DONE (2026-03-17) |
 | REL-6 | **README utente** | Riscrivere README in ottica utente: prerequisiti, quick start (Docker), config minima, screenshot. Non dev-oriented. | 2 giorni | TODO |
 | REL-7 | **Getting Started guide** | Guida step-by-step: installazione → primo messaggio → prima automazione → primo canale. Con screenshot. | 3 giorni | TODO |
 | REL-8 | **Graceful shutdown completo** | Timeout enforcement (30s), finalization (flush logs, close DB, stop channels), progress indication. | 2 giorni | TODO |
