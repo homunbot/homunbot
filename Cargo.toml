@@ -59,6 +59,11 @@ gateway = ["cli", "web-ui", "file-tools", "shell-tool", "web-tools", "cron-tool"
 
 full = ["gateway", "browser", "vault-2fa"]
 
+# Docker: full minus local-embeddings (ONNX Runtime requires newer glibc than Debian Bookworm)
+docker = ["cli", "web-ui", "file-tools", "shell-tool", "web-tools", "cron-tool", "message-tool",
+          "channel-telegram", "channel-discord", "channel-whatsapp", "channel-email", "channel-webhook",
+          "providers-openai-compat", "mcp", "browser", "vault-2fa"]
+
 [dependencies]
 # =============================================================================
 # CORE DEPENDENCIES (always required)

@@ -6,14 +6,15 @@
 # =============================================================================
 
 # === Stage 1: Build ===
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.93-bookworm AS builder
 
 WORKDIR /build
 
 # Cache dependency build (layer reused unless Cargo.toml/Cargo.lock change)
+# Use release-fast profile: thin LTO + 8 codegen units = much less RAM than fat LTO
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src && echo 'fn main() { println!("placeholder"); }' > src/main.rs \
-    && cargo build --release --features full 2>/dev/null ; true
+    && cargo build --profile release-fast --features docker 2>/dev/null ; true
 RUN rm -rf src
 
 # Copy real source and build
@@ -21,9 +22,10 @@ COPY src/ src/
 COPY migrations/ migrations/
 COPY static/ static/
 COPY skills/ skills/
+COPY recipes/ recipes/
 RUN touch src/main.rs \
-    && cargo build --release --features full \
-    && strip target/release/homun
+    && cargo build --profile release-fast --features docker \
+    && strip target/release-fast/homun
 
 # === Stage 2: Runtime ===
 # node:22-bookworm-slim provides Node.js for browser automation (npx @playwright/mcp)
@@ -47,7 +49,7 @@ RUN apt-get update \
 RUN useradd -m -s /bin/bash homun
 
 # Copy binary from builder
-COPY --from=builder /build/target/release/homun /usr/local/bin/homun
+COPY --from=builder /build/target/release-fast/homun /usr/local/bin/homun
 
 # Create data directory structure
 RUN mkdir -p /home/homun/.homun/memory \
