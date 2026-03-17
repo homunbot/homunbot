@@ -532,7 +532,7 @@ dependencies = [
  "log",
  "quick-xml 0.38.4",
  "serde",
- "zip 4.6.1",
+ "zip",
 ]
 
 [[package]]
@@ -2032,7 +2032,7 @@ dependencies = [
  "whoami",
  "windows-sys 0.52.0",
  "zeroize",
- "zip 2.4.2",
+ "zip",
 ]
 
 [[package]]
@@ -7087,23 +7087,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "zip"
-version = "2.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fabe6324e908f85a1c52063ce7aa26b68dcb7eb6dbc83a2d148403c9bc3eba50"
-dependencies = [
- "arbitrary",
- "crc32fast",
- "crossbeam-utils",
- "displaydoc",
- "flate2",
- "indexmap",
- "memchr",
- "thiserror 2.0.18",
- "zopfli",
 ]
 
 [[package]]
