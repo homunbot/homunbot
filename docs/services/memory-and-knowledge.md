@@ -60,7 +60,7 @@ The RAG subsystem is document-centric and source-attributed.
 - sensitive-content redaction on retrieval
 - reindexing/reingestion
 
-Supported ingestion is gated by parser support and the `local-embeddings` build path.
+Supported ingestion is gated by parser support and the `embeddings` build path.
 
 ## Watchers And Cloud Sync
 

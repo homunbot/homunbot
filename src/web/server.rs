@@ -45,10 +45,10 @@ pub struct AppState {
     pub db: Option<Database>,
     /// Shared memory searcher for hybrid vector + FTS5 search.
     /// Shared with the AgentLoop — both use the same HNSW index.
-    #[cfg(feature = "local-embeddings")]
+    #[cfg(feature = "embeddings")]
     pub memory_searcher: Option<Arc<tokio::sync::Mutex<crate::agent::MemorySearcher>>>,
     /// Shared RAG knowledge base engine.
-    #[cfg(feature = "local-embeddings")]
+    #[cfg(feature = "embeddings")]
     pub rag_engine: Option<Arc<tokio::sync::Mutex<crate::rag::RagEngine>>>,
     /// Provider health tracker for circuit breaker metrics.
     pub health_tracker: Option<Arc<ProviderHealthTracker>>,
@@ -85,9 +85,9 @@ pub struct WebServer {
     outbound_rx: Option<mpsc::Receiver<OutboundMessage>>,
     stream_rx: Option<mpsc::Receiver<StreamMessage>>,
     db: Option<Database>,
-    #[cfg(feature = "local-embeddings")]
+    #[cfg(feature = "embeddings")]
     memory_searcher: Option<Arc<tokio::sync::Mutex<crate::agent::MemorySearcher>>>,
-    #[cfg(feature = "local-embeddings")]
+    #[cfg(feature = "embeddings")]
     rag_engine: Option<Arc<tokio::sync::Mutex<crate::rag::RagEngine>>>,
     health_tracker: Option<Arc<ProviderHealthTracker>>,
     workflow_engine: Option<Arc<WorkflowEngine>>,
@@ -110,9 +110,9 @@ impl WebServer {
             outbound_rx: Some(outbound_rx),
             stream_rx: None,
             db: Some(db),
-            #[cfg(feature = "local-embeddings")]
+            #[cfg(feature = "embeddings")]
             memory_searcher: None,
-            #[cfg(feature = "local-embeddings")]
+            #[cfg(feature = "embeddings")]
             rag_engine: None,
             health_tracker: None,
             workflow_engine: None,
@@ -123,7 +123,7 @@ impl WebServer {
     }
 
     /// Set the shared memory searcher for hybrid search in the web API.
-    #[cfg(feature = "local-embeddings")]
+    #[cfg(feature = "embeddings")]
     pub fn set_memory_searcher(
         &mut self,
         searcher: Arc<tokio::sync::Mutex<crate::agent::MemorySearcher>>,
@@ -132,7 +132,7 @@ impl WebServer {
     }
 
     /// Set the shared RAG engine for knowledge base API endpoints.
-    #[cfg(feature = "local-embeddings")]
+    #[cfg(feature = "embeddings")]
     pub fn set_rag_engine(&mut self, engine: Arc<tokio::sync::Mutex<crate::rag::RagEngine>>) {
         self.rag_engine = Some(engine);
     }
@@ -182,9 +182,9 @@ impl WebServer {
             outbound_rx: None,
             stream_rx: None,
             db: None,
-            #[cfg(feature = "local-embeddings")]
+            #[cfg(feature = "embeddings")]
             memory_searcher: None,
-            #[cfg(feature = "local-embeddings")]
+            #[cfg(feature = "embeddings")]
             rag_engine: None,
             health_tracker: None,
             workflow_engine: None,
@@ -243,9 +243,9 @@ impl WebServer {
             ws_sessions: tokio::sync::RwLock::new(std::collections::HashMap::new()),
             stream_sessions: tokio::sync::RwLock::new(std::collections::HashMap::new()),
             db: self.db,
-            #[cfg(feature = "local-embeddings")]
+            #[cfg(feature = "embeddings")]
             memory_searcher: self.memory_searcher,
-            #[cfg(feature = "local-embeddings")]
+            #[cfg(feature = "embeddings")]
             rag_engine: self.rag_engine,
             health_tracker: self.health_tracker,
             workflow_engine: self.workflow_engine,

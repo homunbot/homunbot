@@ -24,10 +24,10 @@ use super::memory::MemoryConsolidator;
 use super::verifier::{verify_actions, VerificationResult};
 
 // Conditional memory searcher type - dummy when feature not enabled
-#[cfg(feature = "local-embeddings")]
+#[cfg(feature = "embeddings")]
 use super::memory_search::MemorySearcher;
 
-#[cfg(not(feature = "local-embeddings"))]
+#[cfg(not(feature = "embeddings"))]
 struct MemorySearcher;
 
 /// Core agent loop — full ReAct pattern with tool calling:
@@ -59,11 +59,11 @@ pub struct AgentLoop {
     skill_registry: Option<Arc<RwLock<SkillRegistry>>>,
     /// Optional memory searcher for retrieving relevant past context.
     /// Arc-wrapped so it can be shared with background consolidation tasks.
-    /// Only functional with `local-embeddings` feature - dummy otherwise.
+    /// Only functional with `embeddings` feature - dummy otherwise.
     memory_searcher: Option<Arc<tokio::sync::Mutex<MemorySearcher>>>,
     /// Optional RAG engine for knowledge base search.
     /// Shared with KnowledgeTool and web API.
-    #[cfg(feature = "local-embeddings")]
+    #[cfg(feature = "embeddings")]
     rag_engine: Option<Arc<tokio::sync::Mutex<crate::rag::RagEngine>>>,
     /// Set to true when the model doesn't support native function calling.
     /// Auto-detected on first error — tools are then injected into the system
@@ -231,7 +231,7 @@ impl AgentLoop {
             message_tx: None,
             skill_registry: None,
             memory_searcher: None,
-            #[cfg(feature = "local-embeddings")]
+            #[cfg(feature = "embeddings")]
             rag_engine: None,
             use_xml_dispatch: AtomicBool::new(use_xml_dispatch),
             db,
@@ -320,27 +320,27 @@ impl AgentLoop {
     /// Set the memory searcher for vector + FTS5 hybrid search.
     /// When set, each user message triggers a search for relevant past memories
     /// that are injected into the system prompt as Layer 3.5.
-    /// Only available with `local-embeddings` feature.
-    #[cfg(feature = "local-embeddings")]
+    /// Only available with `embeddings` feature.
+    #[cfg(feature = "embeddings")]
     pub fn set_memory_searcher(&mut self, searcher: MemorySearcher) {
         self.memory_searcher = Some(Arc::new(tokio::sync::Mutex::new(searcher)));
     }
 
     /// Get a clone of the shared memory searcher handle (for sharing with the web server).
-    #[cfg(feature = "local-embeddings")]
+    #[cfg(feature = "embeddings")]
     pub fn memory_searcher_handle(&self) -> Option<Arc<tokio::sync::Mutex<MemorySearcher>>> {
         self.memory_searcher.clone()
     }
 
     /// Set the RAG knowledge base engine.
     /// When set, each user message triggers a search for relevant knowledge base content.
-    #[cfg(feature = "local-embeddings")]
+    #[cfg(feature = "embeddings")]
     pub fn set_rag_engine(&mut self, engine: Arc<tokio::sync::Mutex<crate::rag::RagEngine>>) {
         self.rag_engine = Some(engine);
     }
 
     /// Get a clone of the shared RAG engine handle (for sharing with the web server).
-    #[cfg(feature = "local-embeddings")]
+    #[cfg(feature = "embeddings")]
     pub fn rag_engine_handle(&self) -> Option<Arc<tokio::sync::Mutex<crate::rag::RagEngine>>> {
         self.rag_engine.clone()
     }
@@ -595,8 +595,8 @@ impl AgentLoop {
             .await?;
 
         // Search for relevant past memories and inject into context (Layer 3.5)
-        // Only available with local-embeddings feature
-        #[cfg(feature = "local-embeddings")]
+        // Only available with embeddings feature
+        #[cfg(feature = "embeddings")]
         if let Some(ref searcher_mutex) = self.memory_searcher {
             let mut searcher = searcher_mutex.lock().await;
             match searcher.search(&prompt_content, 5).await {
@@ -628,7 +628,7 @@ impl AgentLoop {
         }
 
         // Search RAG knowledge base and inject into context
-        #[cfg(feature = "local-embeddings")]
+        #[cfg(feature = "embeddings")]
         if let Some(ref rag_mutex) = self.rag_engine {
             let results_per_query = config.knowledge.results_per_query;
             let mut rag = rag_mutex.lock().await;
@@ -2079,7 +2079,7 @@ impl AgentLoop {
         drop(cfg);
         let provider = self.provider.read().await.clone();
         let session_key = session_key.to_string();
-        #[cfg(feature = "local-embeddings")]
+        #[cfg(feature = "embeddings")]
         let searcher = self.memory_searcher.clone();
 
         // Check if consolidation is needed (quick DB query)
@@ -2106,8 +2106,8 @@ impl AgentLoop {
                             );
 
                             // Index new chunks in HNSW vector index (with deduplication)
-                            // Only available with local-embeddings feature
-                            #[cfg(feature = "local-embeddings")]
+                            // Only available with embeddings feature
+                            #[cfg(feature = "embeddings")]
                             if !result.new_chunks.is_empty() {
                                 if let Some(searcher_mutex) = searcher {
                                     let mut s = searcher_mutex.lock().await;

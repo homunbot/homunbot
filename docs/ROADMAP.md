@@ -991,7 +991,7 @@ agent_loop.rs ─── browser_task_plan (veto/guard), execution_plan, supersed
 | 6.6 | **Wiring startup** | `main.rs`, `lib.rs` | ~60 | ✅ DONE |
 | | `try_create_rag_engine()` — crea engine + auto-reindex | | | |
 | | Registrazione KnowledgeTool + passaggio handle a agent/web | | | |
-| | Feature-gated sotto `local-embeddings` (nel feature set `gateway`) | | | |
+| | Feature-gated sotto `embeddings` (nel feature set `gateway`) | | | |
 | 6.7 | **Integrazione agent loop** | `agent/agent_loop.rs`, `agent/context.rs` | ~50 | ✅ DONE |
 | | RAG search automatica ad ogni messaggio (inietta chunk nel system prompt) | | | |
 | | Formato: `[RAG: filename (chunk N)] contenuto` | | | |
@@ -1624,7 +1624,7 @@ App (Flutter / Dart)
 
 | Claim precedente | Realta' dal codice | Azione |
 |---|---|---|
-| "Memory search non wired nel reasoning" | ✅ **E' wired** — `agent_loop.rs` righe 592-623, chiama `searcher.search()` e inietta via `context.set_relevant_memories()`. Feature-gated `local-embeddings`. | AUD-1 chiuso come DONE |
+| "Memory search non wired nel reasoning" | ✅ **E' wired** — `agent_loop.rs` righe 592-623, chiama `searcher.search()` e inietta via `context.set_relevant_memories()`. Feature-gated `embeddings`. | AUD-1 chiuso come DONE |
 | "Docker scaricato ma non usato" | ✅ **Funziona** — `build_process_command()` crea real `docker run`, wrappa shell + skill + MCP. Tracciato end-to-end. | Nessuna azione |
 | "Vault API senza auth" | ✅ **FALSO POSITIVO** — Le route vault sono dentro `api::router()` che e' `.nest("/api", ...)` nel router `protected`, che ha `auth::auth_middleware` come layer. Tutti gli endpoint vault sono dietro autenticazione. I singoli handler non chiamano `require_auth()` perche' il middleware layer lo gestisce automaticamente. | ~~SEC-5~~ chiuso |
 | "Vault retrieve senza 2FA" | ✅ **GIA' IMPLEMENTATO** — `vault.rs` tool controlla `is_2fa_enabled()` e richiede `session_id` o `code` prima di restituire valori. L'API web ha `reveal_vault_secret()` con flusso 2FA. | ~~VLT-1~~ chiuso |
@@ -1697,7 +1697,7 @@ Implicazioni:
 
 | # | Task | Perche' | Effort |
 |---|------|---------|--------|
-| AUD-2 | **Feature gating RAG/embeddings** | Default build esclude `local-embeddings`. Chi fa `cargo run` non ha memory search ne' RAG. Documentare chiaramente nel setup wizard e README. | 1 giorno |
+| AUD-2 | **Feature gating RAG/embeddings** | Default build esclude `embeddings`. Chi fa `cargo run` non ha memory search ne' RAG. Documentare chiaramente nel setup wizard e README. | 1 giorno |
 | AUD-4 | **Browser E2E in CI** | 40+ test unitari, flow completo solo manuale. Promuovere il `data:` URL flow a CI. | 2-3 giorni |
 | AUD-5 | **Integration test RAG pipeline** | `rag/engine.rs` ha zero test. Aggiungere test ingest→chunk→embed→search round-trip. | 1-2 giorni |
 | AUD-11 | **Feature gating web-ui → mcp** | ✅ DONE (2026-03-16) — `web-ui` feature non includeva `mcp`, causando build failure con `--features web-ui` isolato. Aggiunto `mcp` alla feature chain in Cargo.toml. | ~~0.5 giorni~~ |

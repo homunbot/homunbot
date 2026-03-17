@@ -19,7 +19,7 @@ Homun is a single Rust binary whose actual shape depends on compile-time feature
 - `web-ui`
 - `mcp`
 - `browser`
-- `local-embeddings`
+- `embeddings`
 - `channel-telegram`
 - `channel-discord`
 - `channel-whatsapp`

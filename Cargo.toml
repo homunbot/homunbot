@@ -47,7 +47,7 @@ channel-webhook = []  # Built-in, uses axum
 providers-openai-compat = ["dep:eventsource-stream", "dep:pin-project-lite"]
 
 # === Advanced Features ===
-local-embeddings = ["dep:fastembed", "dep:usearch", "dep:lru", "dep:pdf-extract", "dep:calamine", "dep:zip", "dep:quick-xml"]
+embeddings = ["dep:usearch", "dep:lru", "dep:pdf-extract", "dep:calamine", "dep:zip", "dep:quick-xml"]
 browser = ["mcp"]
 mcp = ["dep:rmcp"]
 vault-2fa = ["dep:totp-rs"]
@@ -55,14 +55,11 @@ vault-2fa = ["dep:totp-rs"]
 # === Meta Features ===
 gateway = ["cli", "web-ui", "file-tools", "shell-tool", "web-tools", "cron-tool", "message-tool",
            "channel-telegram", "channel-discord", "channel-whatsapp", "channel-email", "channel-webhook",
-           "providers-openai-compat", "local-embeddings", "mcp"]
+           "providers-openai-compat", "embeddings", "mcp"]
 
 full = ["gateway", "browser", "vault-2fa"]
 
-# Docker: full minus local-embeddings (ONNX Runtime requires newer glibc than Debian Bookworm)
-docker = ["cli", "web-ui", "file-tools", "shell-tool", "web-tools", "cron-tool", "message-tool",
-          "channel-telegram", "channel-discord", "channel-whatsapp", "channel-email", "channel-webhook",
-          "providers-openai-compat", "mcp", "browser", "vault-2fa"]
+docker = ["gateway", "browser", "vault-2fa"]
 
 [dependencies]
 # =============================================================================
@@ -166,12 +163,11 @@ wa-rs-core = { git = "https://github.com/homunbot/wa-rs", rev = "d369582", optio
 wa-rs-proto = { git = "https://github.com/homunbot/wa-rs", rev = "d369582", optional = true }
 futures-util = { version = "0.3", optional = true }
 
-# --- Local embeddings ---
-fastembed = { version = "5", optional = true }
+# --- Embeddings (HNSW vector index + cache) ---
 usearch = { version = "2", optional = true }
 lru = { version = "0.16", optional = true }
 
-# --- Advanced document parsers (feature-gated under local-embeddings) ---
+# --- Advanced document parsers (feature-gated under embeddings) ---
 pdf-extract = { version = "0.10", optional = true }
 calamine = { version = "0.32", optional = true }
 zip = { version = "2", optional = true, default-features = false, features = ["deflate"] }

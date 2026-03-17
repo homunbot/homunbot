@@ -1,4 +1,4 @@
-#[cfg(feature = "local-embeddings")]
+#[cfg(feature = "embeddings")]
 mod inner {
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -366,5 +366,5 @@ mod inner {
     }
 }
 
-#[cfg(feature = "local-embeddings")]
+#[cfg(feature = "embeddings")]
 pub(super) use inner::routes;

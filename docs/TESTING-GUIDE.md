@@ -395,7 +395,7 @@ curl "https://localhost/api/v1/memory/search?q=preferenze&limit=5"
 ```toml
 # ~/.homun/config.toml
 [memory]
-embedding_provider = "local"   # fastembed ONNX (default, offline)
+embedding_provider = "ollama"   # Ollama (default, free, local)
 # embedding_provider = "openai"  # OpenAI API (richiede api_key)
 ```
 
@@ -737,7 +737,7 @@ cargo build --release --features full
 | `channel-discord` | Bot Discord |
 | `channel-whatsapp` | Client WhatsApp nativo |
 | `channel-email` | IMAP/SMTP |
-| `local-embeddings` | Vector search (fastembed + USearch) |
+| `embeddings` | Vector search (Ollama/OpenAI + USearch) |
 | `browser` | Browser automation (CDP) |
 | `mcp` | Model Context Protocol |
 | `vault-2fa` | 2FA per il vault |

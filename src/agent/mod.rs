@@ -14,10 +14,10 @@ pub mod stop;
 pub mod subagent; // Make public so spawn.rs can access it
 mod verifier;
 
-#[cfg(feature = "local-embeddings")]
+#[cfg(feature = "embeddings")]
 pub mod embeddings;
 
-#[cfg(feature = "local-embeddings")]
+#[cfg(feature = "embeddings")]
 pub mod memory_search;
 
 pub use agent_loop::AgentLoop;
@@ -33,8 +33,8 @@ pub use memory::MemoryConsolidator;
 pub use prompt::{PromptContext, PromptMode, PromptSection, SystemPromptBuilder, ToolInfo};
 pub use subagent::SubagentManager;
 
-#[cfg(feature = "local-embeddings")]
+#[cfg(feature = "embeddings")]
 pub use embeddings::{create_embedding_provider, EmbeddingEngine};
 
-#[cfg(feature = "local-embeddings")]
+#[cfg(feature = "embeddings")]
 pub use memory_search::MemorySearcher;

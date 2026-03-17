@@ -85,7 +85,7 @@ Includes:
 | `channel-telegram` | Telegram bot | `teloxide` |
 | `channel-discord` | Discord bot | `serenity` |
 | `channel-whatsapp` | WhatsApp native client | `wa-rs` crates |
-| `local-embeddings` | Local vector embeddings | `fastembed`, `usearch` |
+| `embeddings` | Vector search (Ollama/OpenAI + HNSW) | `usearch`, `lru` |
 | `browser` | Browser automation | `chromiumoxide` |
 
 ### Meta Features
@@ -111,7 +111,7 @@ cargo build --release --features gateway
 cargo build --release --features full
 
 # Custom combination
-cargo build --release --features "cli,channel-telegram,local-embeddings"
+cargo build --release --features "cli,channel-telegram,embeddings"
 ```
 
 ## Testing

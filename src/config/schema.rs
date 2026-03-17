@@ -1263,11 +1263,10 @@ pub struct MemoryConfig {
     pub daily_archive_months: u32,
     /// Enable automatic memory cleanup on startup
     pub auto_cleanup: bool,
-    /// Embedding provider: "local" (fastembed ONNX), "openai" (API), or "ollama".
-    /// Falls back to local if API key is missing or init fails.
+    /// Embedding provider: "ollama" (default, free) or "openai" (API).
     pub embedding_provider: String,
     /// Embedding model name. Empty = provider default.
-    /// Local: AllMiniLML6V2Q, OpenAI: text-embedding-3-small, Ollama: nomic-embed-text.
+    /// Ollama: nomic-embed-text, OpenAI: text-embedding-3-small.
     pub embedding_model: String,
     /// Embedding API base URL. Empty = provider default.
     /// E.g., "http://ollama:11434/v1" for Ollama in Docker.
@@ -1284,7 +1283,7 @@ impl Default for MemoryConfig {
             history_retention_days: 365,     // Keep history for 1 year
             daily_archive_months: 3,         // Archive daily files after 3 months
             auto_cleanup: false,             // Don't auto-cleanup by default
-            embedding_provider: "local".to_string(),
+            embedding_provider: "ollama".to_string(),
             embedding_model: String::new(),
             embedding_api_base: String::new(),
             embedding_dimensions: 384,

@@ -21,9 +21,9 @@ pub mod vault;
 pub mod web;
 pub mod workflow;
 
-#[cfg(feature = "local-embeddings")]
+#[cfg(feature = "embeddings")]
 pub mod knowledge;
-#[cfg(feature = "local-embeddings")]
+#[cfg(feature = "embeddings")]
 pub mod remember;
 
 pub use approval::{
@@ -49,7 +49,7 @@ pub use vault::VaultTool;
 pub use web::{WebFetchTool, WebSearchTool};
 pub use workflow::WorkflowTool;
 
-#[cfg(feature = "local-embeddings")]
+#[cfg(feature = "embeddings")]
 pub use knowledge::KnowledgeTool;
-#[cfg(feature = "local-embeddings")]
+#[cfg(feature = "embeddings")]
 pub use remember::RememberTool;

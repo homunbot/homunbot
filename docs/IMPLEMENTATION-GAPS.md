@@ -316,9 +316,9 @@ Status: strong core with hidden gaps (code-audit verified 2026-03-13)
 
 ### Gaps found during audit
 
-1. ~~Memory search wiring needs E2E verification~~: **VERIFIED WORKING (2026-03-13 deep audit)** — `agent_loop.rs` lines 592-623 calls `searcher.search()` on every message, injects results via `context.set_relevant_memories()`, rendered as "Relevant Past Context" in MemorySection. Feature-gated `local-embeddings`. Only missing: integration test confirming full round-trip.
+1. ~~Memory search wiring needs E2E verification~~: **VERIFIED WORKING (2026-03-13 deep audit)** — `agent_loop.rs` lines 592-623 calls `searcher.search()` on every message, injects results via `context.set_relevant_memories()`, rendered as "Relevant Past Context" in MemorySection. Feature-gated `embeddings`. Only missing: integration test confirming full round-trip.
 
-2. **Feature gating hides capability**: default build (`cargo run`) does NOT include `local-embeddings` feature. Memory consolidation, vector search, and RAG are compiled in but non-functional without `--features gateway` or `--features local-embeddings`. Users trying Homun for the first time may not realize this.
+2. **Feature gating hides capability**: default build (`cargo run`) does NOT include `embeddings` feature. Memory consolidation, vector search, and RAG are compiled in but non-functional without `--features gateway` or `--features embeddings`. Users trying Homun for the first time may not realize this.
 
 3. **RAG format coverage oversold**: chunker lists 33 extensions but only ~8 have real parsing logic:
    - Real parsing: Markdown (heading-based), HTML (tag strip), PDF (pdf-extract + OCR), DOCX (XML), XLSX/XLS (calamine), code (double-blank-line split)

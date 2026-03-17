@@ -44,7 +44,7 @@ mod logs;
 mod mcp_setup;
 mod provider;
 mod queue;
-#[cfg(feature = "local-embeddings")]
+#[cfg(feature = "embeddings")]
 mod rag;
 mod scheduler;
 mod security;
@@ -78,7 +78,7 @@ use crate::tools::{
 #[cfg(feature = "mcp")]
 use crate::tools::McpManager;
 
-#[cfg(feature = "local-embeddings")]
+#[cfg(feature = "embeddings")]
 use crate::tools::RememberTool;
 
 #[cfg(feature = "cli")]
@@ -142,7 +142,7 @@ enum Commands {
         command: MemoryCommands,
     },
     /// Manage knowledge base (RAG)
-    #[cfg(feature = "local-embeddings")]
+    #[cfg(feature = "embeddings")]
     Knowledge {
         #[command(subcommand)]
         command: KnowledgeCommands,
@@ -348,7 +348,7 @@ enum MemoryCommands {
     },
 }
 
-#[cfg(feature = "local-embeddings")]
+#[cfg(feature = "embeddings")]
 #[derive(Subcommand)]
 enum KnowledgeCommands {
     /// Add a file or directory to the knowledge base
@@ -533,8 +533,8 @@ fn create_tool_registry(
     #[cfg(feature = "channel-email")]
     registry.register(Box::new(ReadEmailInboxTool::new()));
 
-    // Remember tool (save personal information - requires local-embeddings feature)
-    #[cfg(feature = "local-embeddings")]
+    // Remember tool (save personal information - requires embeddings feature)
+    #[cfg(feature = "embeddings")]
     registry.register(Box::new(tools::RememberTool::new()));
 
     // Browser automation is now handled by the Playwright MCP server.
@@ -551,8 +551,8 @@ fn create_tool_registry(
 /// Returns `None` if the embedding engine fails to initialize (e.g. ONNX model
 /// download fails). This keeps the agent functional without vector search.
 ///
-/// Only available when `local-embeddings` feature is enabled.
-#[cfg(feature = "local-embeddings")]
+/// Only available when `embeddings` feature is enabled.
+#[cfg(feature = "embeddings")]
 fn try_create_memory_searcher(db: Database, config: &Config) -> Option<agent::MemorySearcher> {
     match agent::EmbeddingEngine::new(config) {
         Ok(engine) => {
@@ -570,8 +570,8 @@ fn try_create_memory_searcher(db: Database, config: &Config) -> Option<agent::Me
 /// Try to create a RAG engine (embedding engine + vector index for knowledge base).
 ///
 /// Returns `None` if the embedding engine fails to initialize or knowledge is disabled.
-/// Only available when `local-embeddings` feature is enabled.
-#[cfg(feature = "local-embeddings")]
+/// Only available when `embeddings` feature is enabled.
+#[cfg(feature = "embeddings")]
 fn try_create_rag_engine(
     db: Database,
     config: &Config,
@@ -828,13 +828,13 @@ async fn main() -> Result<()> {
             }
 
             let session_manager = SessionManager::new(db.clone());
-            #[cfg(feature = "local-embeddings")]
+            #[cfg(feature = "embeddings")]
             let db_for_searcher = db.clone();
-            #[cfg(not(feature = "local-embeddings"))]
+            #[cfg(not(feature = "embeddings"))]
             let _db_for_searcher = db.clone();
 
             // Register RAG knowledge tool (before tool_registry is moved)
-            #[cfg(feature = "local-embeddings")]
+            #[cfg(feature = "embeddings")]
             let _rag_engine_chat = {
                 let rag = try_create_rag_engine(db.clone(), &config);
                 if let Some(ref engine) = rag {
@@ -871,7 +871,7 @@ async fn main() -> Result<()> {
             }
 
             // Initialize memory searcher (vector + FTS5 hybrid search)
-            #[cfg(feature = "local-embeddings")]
+            #[cfg(feature = "embeddings")]
             {
                 let cfg = shared_config.read().await;
                 if let Some(searcher) = try_create_memory_searcher(db_for_searcher, &cfg) {
@@ -1067,14 +1067,14 @@ async fn main() -> Result<()> {
             let (tool_msg_tx, tool_msg_rx) = tokio::sync::mpsc::channel(100);
 
             // Create agent only if provider is available
-            #[cfg(feature = "local-embeddings")]
+            #[cfg(feature = "embeddings")]
             let db_for_searcher = db.clone();
-            #[cfg(not(feature = "local-embeddings"))]
+            #[cfg(not(feature = "embeddings"))]
             let _db_for_searcher = db.clone();
             let db_for_web = db.clone();
 
             // Register RAG knowledge tool (before tool_registry is moved)
-            #[cfg(feature = "local-embeddings")]
+            #[cfg(feature = "embeddings")]
             let rag_engine = {
                 let rag = try_create_rag_engine(db.clone(), &config);
                 if let Some(ref engine) = rag {
@@ -1086,7 +1086,7 @@ async fn main() -> Result<()> {
                 }
                 rag
             };
-            #[cfg(not(feature = "local-embeddings"))]
+            #[cfg(not(feature = "embeddings"))]
             let _rag_engine: Option<()> = None;
             tracing::info!(
                 elapsed_ms = startup_t0.elapsed().as_millis(),
@@ -1112,7 +1112,7 @@ async fn main() -> Result<()> {
                 a.set_registered_tool_names(tool_names).await;
 
                 // Initialize memory searcher (vector + FTS5 hybrid search)
-                #[cfg(feature = "local-embeddings")]
+                #[cfg(feature = "embeddings")]
                 {
                     let cfg = shared_config.read().await;
                     if let Some(searcher) = try_create_memory_searcher(db_for_searcher, &cfg) {
@@ -1272,7 +1272,7 @@ async fn main() -> Result<()> {
             let _bootstrap_watcher_handle = bootstrap_watcher.start();
 
             // Start RAG directory watcher (auto-ingest files from configured directories)
-            #[cfg(feature = "local-embeddings")]
+            #[cfg(feature = "embeddings")]
             let _rag_watcher_handle = {
                 if let Some(ref rag) = rag_engine {
                     let watch_dirs: Vec<std::path::PathBuf> = config
@@ -2438,7 +2438,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        #[cfg(feature = "local-embeddings")]
+        #[cfg(feature = "embeddings")]
         Commands::Knowledge { command } => {
             let data_dir = Config::data_dir();
             let db_path = data_dir.join("homun.db");

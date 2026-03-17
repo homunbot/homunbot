@@ -338,9 +338,9 @@ impl Gateway {
             let web_estop_handles = self.estop_handles.clone();
             let web_tool_registry = self.agent.tool_registry_handle();
             // Share the memory searcher with the web server for hybrid search API
-            #[cfg(feature = "local-embeddings")]
+            #[cfg(feature = "embeddings")]
             let web_memory_searcher = self.agent.memory_searcher_handle();
-            #[cfg(feature = "local-embeddings")]
+            #[cfg(feature = "embeddings")]
             let web_rag_engine = self.agent.rag_engine_handle();
 
             let handle = tokio::spawn(async move {
@@ -358,11 +358,11 @@ impl Gateway {
                 }
                 server.set_estop_handles(web_estop_handles);
                 server.set_tool_registry(web_tool_registry);
-                #[cfg(feature = "local-embeddings")]
+                #[cfg(feature = "embeddings")]
                 if let Some(searcher) = web_memory_searcher {
                     server.set_memory_searcher(searcher);
                 }
-                #[cfg(feature = "local-embeddings")]
+                #[cfg(feature = "embeddings")]
                 if let Some(rag) = web_rag_engine {
                     server.set_rag_engine(rag);
                 }
@@ -544,7 +544,7 @@ impl Gateway {
         let approval_handler = EmailApprovalHandler::new(self.db.clone(), &email_notify_routes);
 
         // --- RAG engine handle for file ingestion ---
-        #[cfg(feature = "local-embeddings")]
+        #[cfg(feature = "embeddings")]
         let routing_rag_engine = self.agent.rag_engine_handle();
 
         // --- Debounce + per-session lock infrastructure ---
@@ -590,7 +590,7 @@ impl Gateway {
                         .await;
                 });
             }
-            #[allow(unused_mut)] // `inbound` is mutated inside #[cfg(feature = "local-embeddings")]
+            #[allow(unused_mut)] // `inbound` is mutated inside #[cfg(feature = "embeddings")]
             while let Some(mut inbound) = inbound_rx.recv().await {
                 let session_key = inbound
                     .metadata
@@ -835,7 +835,7 @@ impl Gateway {
                 // and notify the user.  When the user sends a file without a caption we
                 // skip the agent loop (the confirmation is enough).  When a caption is
                 // present we rewrite the message to hint the agent to use the knowledge tool.
-                #[cfg(feature = "local-embeddings")]
+                #[cfg(feature = "embeddings")]
                 {
                     let mut rag_skip_agent = false;
                     if let Some(ref path) = inbound

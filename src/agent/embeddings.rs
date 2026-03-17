@@ -1,20 +1,18 @@
 //! Embedding engine — pluggable provider + HNSW vector index.
 //!
 //! The provider is selected via `config.memory.embedding_provider`:
-//! - `"local"` (default): fastembed AllMiniLML6V2Q, 384-dim, ~30MB ONNX model.
+//! - `"ollama"` (default): Ollama-served model via OpenAI-compatible `/v1/embeddings`.
 //! - `"openai"`: OpenAI text-embedding-3-small via API.
-//! - `"ollama"`: Ollama-served model via OpenAI-compatible `/v1/embeddings`.
+//! - Any other value defaults to Ollama.
 //!
 //! All providers produce vectors of `config.memory.embedding_dimensions` (default 384).
 //! An LRU cache (512 entries) prevents redundant embedding calls.
 
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use lru::LruCache;
 use usearch::ffi::{IndexOptions, MetricKind, ScalarKind};
 
@@ -28,7 +26,7 @@ const CACHE_CAPACITY: usize = 512;
 
 // ─── Provider Trait ────────────────────────────────────────────
 
-/// Abstraction over embedding backends (local ONNX vs. API).
+/// Abstraction over embedding backends.
 #[async_trait]
 pub trait EmbeddingProvider: Send + Sync {
     /// Generate embeddings for one or more texts.
@@ -39,57 +37,6 @@ pub trait EmbeddingProvider: Send + Sync {
 
     /// Provider name for logging.
     fn name(&self) -> &str;
-}
-
-// ─── Local Provider (fastembed ONNX) ───────────────────────────
-
-/// Local embedding via fastembed — runs the AllMiniLML6V2Q ONNX model on CPU.
-/// Model is downloaded (~30MB) on first use, then cached.
-pub struct LocalEmbeddingProvider {
-    /// Mutex because `TextEmbedding::embed()` takes `&mut self`.
-    /// Only locked inside `spawn_blocking` — no async contention.
-    model: Arc<std::sync::Mutex<TextEmbedding>>,
-}
-
-impl LocalEmbeddingProvider {
-    pub fn new() -> Result<Self> {
-        let model = TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::AllMiniLML6V2Q).with_show_download_progress(true),
-        )
-        .context("Failed to initialize local embedding model")?;
-
-        Ok(Self {
-            model: Arc::new(std::sync::Mutex::new(model)),
-        })
-    }
-}
-
-#[async_trait]
-impl EmbeddingProvider for LocalEmbeddingProvider {
-    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        let model = self.model.clone();
-        let texts = texts.to_vec();
-
-        tokio::task::spawn_blocking(move || {
-            let str_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-            let mut model = model
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Model lock poisoned: {e}"))?;
-            model
-                .embed(str_refs, None)
-                .context("fastembed embedding failed")
-        })
-        .await
-        .context("Blocking embedding task panicked")?
-    }
-
-    fn dimensions(&self) -> usize {
-        DEFAULT_EMBEDDING_DIM
-    }
-
-    fn name(&self) -> &str {
-        "local"
-    }
 }
 
 // ─── API Provider (OpenAI-compatible) ─────────────────────────
@@ -193,8 +140,7 @@ pub struct EmbeddingEngine {
 impl EmbeddingEngine {
     /// Create a new embedding engine with the configured provider.
     ///
-    /// Selects local (fastembed) or OpenAI based on `config.memory.embedding_provider`.
-    /// Falls back to local if OpenAI API key is missing.
+    /// Selects Ollama or OpenAI based on `config.memory.embedding_provider`.
     pub fn new(config: &Config) -> Result<Self> {
         let provider = create_embedding_provider(config)?;
 
@@ -408,9 +354,9 @@ impl Drop for EmbeddingEngine {
 
 /// Create the appropriate embedding provider based on config.
 ///
-/// - `"local"` (default) → fastembed ONNX model (384-dim).
+/// - `"ollama"` (default) → Ollama via OpenAI-compatible `/v1/embeddings`.
 /// - `"openai"` → OpenAI API (text-embedding-3-small).
-/// - `"ollama"` → Ollama via OpenAI-compatible endpoint.
+/// - Any other value defaults to Ollama.
 pub fn create_embedding_provider(config: &Config) -> Result<Box<dyn EmbeddingProvider>> {
     let mem = &config.memory;
     let dims = if mem.embedding_dimensions > 0 {
@@ -420,33 +366,13 @@ pub fn create_embedding_provider(config: &Config) -> Result<Box<dyn EmbeddingPro
     };
 
     match mem.embedding_provider.as_str() {
-        "ollama" => {
-            let api_base = if mem.embedding_api_base.is_empty() {
-                "http://localhost:11434/v1".to_string()
-            } else {
-                mem.embedding_api_base.clone()
-            };
-            let model = if mem.embedding_model.is_empty() {
-                "nomic-embed-text".to_string()
-            } else {
-                mem.embedding_model.clone()
-            };
-            tracing::info!(
-                %api_base, %model, dims,
-                "Using Ollama embedding provider"
-            );
-            Ok(Box::new(ApiEmbeddingProvider::new(
-                String::new(), // Ollama doesn't need an API key
-                api_base, model, dims, "ollama".into(),
-            )))
-        }
         "openai" => {
             let api_key = config.providers.openai.api_key.clone();
             if api_key.is_empty() {
-                tracing::warn!(
-                    "OpenAI embedding requested but no API key configured, falling back to local"
+                anyhow::bail!(
+                    "OpenAI embedding requested but no API key configured. \
+                     Set OPENAI_API_KEY or switch to embedding_provider = \"ollama\"."
                 );
-                return Ok(Box::new(LocalEmbeddingProvider::new()?));
             }
             let api_base = if mem.embedding_api_base.is_empty() {
                 config.providers.openai.api_base.clone()
@@ -467,9 +393,26 @@ pub fn create_embedding_provider(config: &Config) -> Result<Box<dyn EmbeddingPro
                 api_key, api_base, model, dims, "openai".into(),
             )))
         }
+        // Default: Ollama (free, local, no API key needed)
         _ => {
-            tracing::info!("Using local embedding provider (fastembed AllMiniLML6V2Q)");
-            Ok(Box::new(LocalEmbeddingProvider::new()?))
+            let api_base = if mem.embedding_api_base.is_empty() {
+                "http://localhost:11434/v1".to_string()
+            } else {
+                mem.embedding_api_base.clone()
+            };
+            let model = if mem.embedding_model.is_empty() {
+                "nomic-embed-text".to_string()
+            } else {
+                mem.embedding_model.clone()
+            };
+            tracing::info!(
+                %api_base, %model, dims,
+                "Using Ollama embedding provider"
+            );
+            Ok(Box::new(ApiEmbeddingProvider::new(
+                String::new(), // Ollama doesn't need an API key
+                api_base, model, dims, "ollama".into(),
+            )))
         }
     }
 }

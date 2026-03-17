@@ -262,7 +262,7 @@ async fn search_memory(
     }
 
     // Try hybrid search (vector + FTS5) if memory searcher is available
-    #[cfg(feature = "local-embeddings")]
+    #[cfg(feature = "embeddings")]
     if let Some(ref searcher_mutex) = state.memory_searcher {
         let mut searcher = searcher_mutex.lock().await;
         match searcher.search(&q.q, q.limit).await {

@@ -68,7 +68,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .merge(business::routes());
 
     // --- Knowledge Base (RAG) ---
-    #[cfg(feature = "local-embeddings")]
+    #[cfg(feature = "embeddings")]
     let api_router = api_router.merge(knowledge::routes());
 
     // --- Browser (optional) ---
