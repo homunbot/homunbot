@@ -108,13 +108,27 @@ impl EmbeddingProvider for ApiEmbeddingProvider {
             req = req.header("Authorization", format!("Bearer {}", self.api_key));
         }
 
-        let resp = req
+        let url = format!("{}/embeddings", self.api_base);
+        let response = req
             .json(&body)
             .send()
             .await
-            .context("Embedding API request failed")?
-            .error_for_status()
-            .context("Embedding API error")?
+            .with_context(|| format!(
+                "Embedding API request to {} failed (provider={}, model={})",
+                url, self.provider_name, self.model
+            ))?;
+
+        // Read body before status check — error responses often contain useful messages
+        let status = response.status();
+        if !status.is_success() {
+            let error_body = response.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "Embedding API {} returned {}: {} (provider={}, model={})",
+                url, status, error_body, self.provider_name, self.model
+            );
+        }
+
+        let resp = response
             .json::<EmbeddingResponse>()
             .await
             .context("Failed to parse embedding API response")?;
@@ -485,15 +499,26 @@ pub fn create_embedding_provider(config: &Config) -> Result<Box<dyn EmbeddingPro
         resolve_provider_api_key(config, provider_name)
     };
 
-    // Resolve API base: embedding field → LLM provider → default
+    // Resolve API base: embedding field → LLM provider (with /v1) → default
+    //
+    // LLM provider configs store base URLs without /v1 (e.g. "http://localhost:11434")
+    // because each provider appends its own path (/api/chat, /v1/chat/completions, etc.).
+    // But the embedding protocol always uses /v1/embeddings, so we must ensure /v1 is present.
     let api_base = if !mem.embedding_api_base.is_empty() {
         mem.embedding_api_base.clone()
     } else {
-        config
+        let base = config
             .providers
             .get(provider_name)
             .and_then(|p| p.api_base.clone())
-            .unwrap_or_else(|| default_base.to_string())
+            .unwrap_or_else(|| default_base.to_string());
+
+        // Append /v1 if the base doesn't already end with it
+        if !base.ends_with("/v1") && !base.contains("/v1/") {
+            format!("{}/v1", base.trim_end_matches('/'))
+        } else {
+            base
+        }
     };
 
     let model = if !mem.embedding_model.is_empty() {
