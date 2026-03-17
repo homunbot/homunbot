@@ -1,0 +1,33 @@
+# Build artifacts
+target/
+
+# Version control
+.git/
+.github/
+
+# IDE / tooling
+.claude/
+.factory/
+.playwright-mcp/
+.playwright-cli/
+.fastembed_cache/
+.vscode/
+.idea/
+
+# Documentation (not needed in image)
+docs/
+tests/
+
+# Development files
+mobile-app/
+vendor/
+output/
+screenshot/
+
+# Runtime data (should not leak into image)
+*.db
+*.db-shm
+*.db-wal
+*.log
+.env
+.DS_Store

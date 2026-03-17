@@ -394,13 +394,22 @@ impl WebServer {
             .layer(TraceLayer::new_for_http())
             .layer(
                 CorsLayer::new()
-                    .allow_origin(tower_http::cors::AllowOrigin::predicate(|origin, _| {
-                        let s = origin.as_bytes();
-                        s.starts_with(b"https://localhost")
-                            || s.starts_with(b"https://127.0.0.1")
-                            || s.starts_with(b"http://localhost")
-                            || s.starts_with(b"http://127.0.0.1")
-                            || s.starts_with(b"https://ui.homun.bot")
+                    .allow_origin(tower_http::cors::AllowOrigin::predicate({
+                        let cors_domain = domain.clone();
+                        move |origin, _| {
+                            let s = origin.as_bytes();
+                            s.starts_with(b"https://localhost")
+                                || s.starts_with(b"https://127.0.0.1")
+                                || s.starts_with(b"http://localhost")
+                                || s.starts_with(b"http://127.0.0.1")
+                                || s.starts_with(b"https://ui.homun.bot")
+                                || (!cors_domain.is_empty()
+                                    && (s.starts_with(
+                                        format!("https://{cors_domain}").as_bytes(),
+                                    ) || s.starts_with(
+                                        format!("http://{cors_domain}").as_bytes(),
+                                    )))
+                        }
                     }))
                     .allow_methods([
                         axum::http::Method::GET,

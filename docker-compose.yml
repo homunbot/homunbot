@@ -1,0 +1,60 @@
+# Homun — Docker Compose stack
+#
+# Quick start:
+#   1. cp .env.example .env
+#   2. Edit .env (set HOMUN_DOMAIN for production HTTPS)
+#   3. docker compose up -d
+#   4. Open https://your-domain (or http://localhost for dev)
+#   5. Complete the setup wizard to create admin account
+
+services:
+  homun:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: homun
+    restart: unless-stopped
+    volumes:
+      - homun-data:/home/homun/.homun
+    env_file:
+      - .env
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:18080/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    env_file:
+      - .env
+    networks:
+      - internal
+    depends_on:
+      homun:
+        condition: service_healthy
+
+volumes:
+  homun-data:
+    name: homun-data
+  caddy-data:
+    name: caddy-data
+  caddy-config:
+    name: caddy-config
+
+networks:
+  internal:
+    driver: bridge

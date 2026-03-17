@@ -1,0 +1,27 @@
+# Homun — Caddy reverse proxy configuration
+#
+# Set HOMUN_DOMAIN in .env to your domain (e.g., homun.example.com)
+# for automatic Let's Encrypt HTTPS certificates.
+# Default: localhost (local development with Caddy's internal CA).
+
+{$HOMUN_DOMAIN:localhost} {
+	reverse_proxy homun:18080
+
+	# Security headers
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		X-XSS-Protection "1; mode=block"
+		-Server
+	}
+
+	# Response compression
+	encode gzip zstd
+
+	# Access logging
+	log {
+		output stdout
+		format console
+	}
+}
