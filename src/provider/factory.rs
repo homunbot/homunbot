@@ -156,7 +156,7 @@ pub fn create_single_provider(config: &Config, model: &str) -> Result<(String, A
             provider_config.extra_headers.clone(),
         );
         Ok((name, Arc::new(provider)))
-    } else if provider_name == "ollama" || provider_name == "ollama_cloud" {
+    } else if provider_name == "ollama" {
         let provider = OllamaProvider::new(&api_key, provider_config.api_base.as_deref());
         Ok((name, Arc::new(provider)))
     } else {
