@@ -1325,7 +1325,7 @@ async fn list_embedding_models(
                 None => false,
             };
             let pc = config.providers.get(name);
-            has_encrypted || pc.map_or(false, |p| !p.api_key.is_empty() || p.api_base.is_some())
+            has_encrypted || pc.is_some_and(|p| !p.api_key.is_empty() || p.api_base.is_some())
         };
 
         // Default model and API base per provider
@@ -1416,7 +1416,7 @@ async fn list_embedding_models(
                                 .details
                                 .as_ref()
                                 .and_then(|d| d.families.as_ref())
-                                .map(|f| f.clone())
+                                .cloned()
                                 .unwrap_or_default();
                             is_embedding_model(&m.name, &families)
                         })
