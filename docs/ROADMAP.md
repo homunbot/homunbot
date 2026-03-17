@@ -62,6 +62,7 @@
 | REL-2 | **docker-compose.yml** | Stack completo: homun + Caddy (reverse proxy + HTTPS auto). Volumi per persistenza (~/.homun). .env template. Health checks. | 3 giorni | ✅ DONE (2026-03-17) |
 | REL-3 | **Caddy reverse proxy** | Caddyfile con HTTPS automatico (Let's Encrypt), WebSocket proxy, security headers. | 1 giorno | ✅ DONE (2026-03-17) |
 | REL-4 | **.env.example + cleanup** | Template .env con tutte le variabili documentate. Rimuovere credenziali test dalla git history. | 1 giorno | ✅ DONE (2026-03-17) |
+| REL-4b | **Ollama embeddings Docker** | Ollama sidecar per embeddings gratuite in Docker (no ONNX/glibc). Provider configurabile (ollama/openai/local). `ApiEmbeddingProvider` generico. `--profile with-ollama`. | 1 giorno | ✅ DONE (2026-03-17) |
 | REL-5 | **Health check completo** | `/health/components` — stato DB, provider LLM, canali, MCP, disk space. Readiness probe per orchestrator. | 2 giorni | TODO |
 | REL-6 | **README utente** | Riscrivere README in ottica utente: prerequisiti, quick start (Docker), config minima, screenshot. Non dev-oriented. | 2 giorni | TODO |
 | REL-7 | **Getting Started guide** | Guida step-by-step: installazione → primo messaggio → prima automazione → primo canale. Con screenshot. | 3 giorni | TODO |

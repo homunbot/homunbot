@@ -1263,10 +1263,18 @@ pub struct MemoryConfig {
     pub daily_archive_months: u32,
     /// Enable automatic memory cleanup on startup
     pub auto_cleanup: bool,
-    /// Embedding provider: "local" (fastembed ONNX) or "openai" (API).
-    /// OpenAI uses text-embedding-3-small with dimensions=384 for HNSW compatibility.
-    /// Falls back to local if OpenAI API key is missing or init fails.
+    /// Embedding provider: "local" (fastembed ONNX), "openai" (API), or "ollama".
+    /// Falls back to local if API key is missing or init fails.
     pub embedding_provider: String,
+    /// Embedding model name. Empty = provider default.
+    /// Local: AllMiniLML6V2Q, OpenAI: text-embedding-3-small, Ollama: nomic-embed-text.
+    pub embedding_model: String,
+    /// Embedding API base URL. Empty = provider default.
+    /// E.g., "http://ollama:11434/v1" for Ollama in Docker.
+    pub embedding_api_base: String,
+    /// Embedding vector dimensions. Must match HNSW index.
+    /// Default 384. Change requires re-indexing all vectors.
+    pub embedding_dimensions: usize,
 }
 
 impl Default for MemoryConfig {
@@ -1277,6 +1285,9 @@ impl Default for MemoryConfig {
             daily_archive_months: 3,         // Archive daily files after 3 months
             auto_cleanup: false,             // Don't auto-cleanup by default
             embedding_provider: "local".to_string(),
+            embedding_model: String::new(),
+            embedding_api_base: String::new(),
+            embedding_dimensions: 384,
         }
     }
 }

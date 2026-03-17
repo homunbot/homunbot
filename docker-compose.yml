@@ -4,8 +4,11 @@
 #   1. cp .env.example .env
 #   2. Edit .env (set HOMUN_DOMAIN for production HTTPS)
 #   3. docker compose up -d
-#   4. Open https://your-domain (or http://localhost for dev)
+#   4. Open https://your-domain (or https://localhost for dev)
 #   5. Complete the setup wizard to create admin account
+#
+# With local embeddings (free, no API key):
+#   docker compose --profile with-ollama up -d
 
 services:
   homun:
@@ -47,6 +50,18 @@ services:
       homun:
         condition: service_healthy
 
+  # Optional: Ollama for free local embeddings (and local LLMs)
+  # Activate with: docker compose --profile with-ollama up -d
+  ollama:
+    image: ollama/ollama
+    container_name: ollama
+    profiles: ["with-ollama"]
+    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - internal
+
 volumes:
   homun-data:
     name: homun-data
@@ -54,6 +69,8 @@ volumes:
     name: caddy-data
   caddy-config:
     name: caddy-config
+  ollama-data:
+    name: ollama-data
 
 networks:
   internal:

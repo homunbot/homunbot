@@ -1,10 +1,11 @@
-//! Embedding engine — pluggable provider (local ONNX or OpenAI API) + HNSW vector index.
+//! Embedding engine — pluggable provider + HNSW vector index.
 //!
 //! The provider is selected via `config.memory.embedding_provider`:
 //! - `"local"` (default): fastembed AllMiniLML6V2Q, 384-dim, ~30MB ONNX model.
-//! - `"openai"`: OpenAI text-embedding-3-small with `dimensions=384` for HNSW compatibility.
+//! - `"openai"`: OpenAI text-embedding-3-small via API.
+//! - `"ollama"`: Ollama-served model via OpenAI-compatible `/v1/embeddings`.
 //!
-//! Both produce 384-dimensional vectors, so the HNSW index is provider-agnostic.
+//! All providers produce vectors of `config.memory.embedding_dimensions` (default 384).
 //! An LRU cache (512 entries) prevents redundant embedding calls.
 
 use std::num::NonZeroUsize;
@@ -19,9 +20,8 @@ use usearch::ffi::{IndexOptions, MetricKind, ScalarKind};
 
 use crate::config::Config;
 
-/// Dimensionality of all embedding vectors (both local and OpenAI).
-/// OpenAI supports Matryoshka dimension reduction to match this.
-const EMBEDDING_DIM: usize = 384;
+/// Default dimensionality — used when config doesn't specify.
+const DEFAULT_EMBEDDING_DIM: usize = 384;
 
 /// LRU cache capacity — balances memory vs. hit rate.
 const CACHE_CAPACITY: usize = 512;
@@ -84,7 +84,7 @@ impl EmbeddingProvider for LocalEmbeddingProvider {
     }
 
     fn dimensions(&self) -> usize {
-        EMBEDDING_DIM
+        DEFAULT_EMBEDDING_DIM
     }
 
     fn name(&self) -> &str {
@@ -92,24 +92,34 @@ impl EmbeddingProvider for LocalEmbeddingProvider {
     }
 }
 
-// ─── OpenAI Provider (API) ─────────────────────────────────────
+// ─── API Provider (OpenAI-compatible) ─────────────────────────
 
-/// OpenAI embedding via POST /v1/embeddings.
-/// Uses text-embedding-3-small with `dimensions=384` for HNSW compatibility.
-pub struct OpenAiEmbeddingProvider {
+/// Embedding via any OpenAI-compatible `/v1/embeddings` endpoint.
+/// Works with OpenAI, Ollama, HuggingFace TEI, and other compatible APIs.
+pub struct ApiEmbeddingProvider {
     client: reqwest::Client,
     api_key: String,
     api_base: String,
     model: String,
+    dimensions: usize,
+    provider_name: String,
 }
 
-impl OpenAiEmbeddingProvider {
-    pub fn new(api_key: String, api_base: Option<String>) -> Self {
+impl ApiEmbeddingProvider {
+    pub fn new(
+        api_key: String,
+        api_base: String,
+        model: String,
+        dimensions: usize,
+        provider_name: String,
+    ) -> Self {
         Self {
             client: reqwest::Client::new(),
             api_key,
-            api_base: api_base.unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
-            model: "text-embedding-3-small".to_string(),
+            api_base,
+            model,
+            dimensions,
+            provider_name,
         }
     }
 }
@@ -126,37 +136,43 @@ struct EmbeddingData {
 }
 
 #[async_trait]
-impl EmbeddingProvider for OpenAiEmbeddingProvider {
+impl EmbeddingProvider for ApiEmbeddingProvider {
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         let body = serde_json::json!({
             "model": self.model,
             "input": texts,
-            "dimensions": EMBEDDING_DIM,
+            "dimensions": self.dimensions,
         });
 
-        let resp = self
+        let mut req = self
             .client
-            .post(format!("{}/embeddings", self.api_base))
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .post(format!("{}/embeddings", self.api_base));
+
+        // Only send Authorization header if an API key is set (Ollama doesn't need one)
+        if !self.api_key.is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", self.api_key));
+        }
+
+        let resp = req
             .json(&body)
             .send()
             .await
-            .context("OpenAI embedding request failed")?
+            .context("Embedding API request failed")?
             .error_for_status()
-            .context("OpenAI embedding API error")?
+            .context("Embedding API error")?
             .json::<EmbeddingResponse>()
             .await
-            .context("Failed to parse OpenAI embedding response")?;
+            .context("Failed to parse embedding API response")?;
 
         Ok(resp.data.into_iter().map(|d| d.embedding).collect())
     }
 
     fn dimensions(&self) -> usize {
-        EMBEDDING_DIM
+        self.dimensions
     }
 
     fn name(&self) -> &str {
-        "openai"
+        &self.provider_name
     }
 }
 
@@ -207,7 +223,7 @@ impl EmbeddingEngine {
     ) -> Result<Self> {
         // Create or load the USearch HNSW index
         let options = IndexOptions {
-            dimensions: EMBEDDING_DIM,
+            dimensions: provider.dimensions(),
             metric: MetricKind::Cos,
             quantization: ScalarKind::F32,
             connectivity: 16,     // HNSW connectivity parameter (M)
@@ -392,25 +408,64 @@ impl Drop for EmbeddingEngine {
 
 /// Create the appropriate embedding provider based on config.
 ///
-/// - `"openai"` → OpenAI API with fallback to local if API key missing.
-/// - `"local"` (default) → fastembed ONNX model.
+/// - `"local"` (default) → fastembed ONNX model (384-dim).
+/// - `"openai"` → OpenAI API (text-embedding-3-small).
+/// - `"ollama"` → Ollama via OpenAI-compatible endpoint.
 pub fn create_embedding_provider(config: &Config) -> Result<Box<dyn EmbeddingProvider>> {
-    match config.memory.embedding_provider.as_str() {
+    let mem = &config.memory;
+    let dims = if mem.embedding_dimensions > 0 {
+        mem.embedding_dimensions
+    } else {
+        DEFAULT_EMBEDDING_DIM
+    };
+
+    match mem.embedding_provider.as_str() {
+        "ollama" => {
+            let api_base = if mem.embedding_api_base.is_empty() {
+                "http://localhost:11434/v1".to_string()
+            } else {
+                mem.embedding_api_base.clone()
+            };
+            let model = if mem.embedding_model.is_empty() {
+                "nomic-embed-text".to_string()
+            } else {
+                mem.embedding_model.clone()
+            };
+            tracing::info!(
+                %api_base, %model, dims,
+                "Using Ollama embedding provider"
+            );
+            Ok(Box::new(ApiEmbeddingProvider::new(
+                String::new(), // Ollama doesn't need an API key
+                api_base, model, dims, "ollama".into(),
+            )))
+        }
         "openai" => {
             let api_key = config.providers.openai.api_key.clone();
             if api_key.is_empty() {
                 tracing::warn!(
                     "OpenAI embedding requested but no API key configured, falling back to local"
                 );
-                Ok(Box::new(LocalEmbeddingProvider::new()?))
-            } else {
-                let api_base = config.providers.openai.api_base.clone();
-                tracing::info!(
-                    api_base = api_base.as_deref().unwrap_or("https://api.openai.com/v1"),
-                    "Using OpenAI embedding provider (text-embedding-3-small, 384-dim)"
-                );
-                Ok(Box::new(OpenAiEmbeddingProvider::new(api_key, api_base)))
+                return Ok(Box::new(LocalEmbeddingProvider::new()?));
             }
+            let api_base = if mem.embedding_api_base.is_empty() {
+                config.providers.openai.api_base.clone()
+                    .unwrap_or_else(|| "https://api.openai.com/v1".to_string())
+            } else {
+                mem.embedding_api_base.clone()
+            };
+            let model = if mem.embedding_model.is_empty() {
+                "text-embedding-3-small".to_string()
+            } else {
+                mem.embedding_model.clone()
+            };
+            tracing::info!(
+                %api_base, %model, dims,
+                "Using OpenAI embedding provider"
+            );
+            Ok(Box::new(ApiEmbeddingProvider::new(
+                api_key, api_base, model, dims, "openai".into(),
+            )))
         }
         _ => {
             tracing::info!("Using local embedding provider (fastembed AllMiniLML6V2Q)");
@@ -425,7 +480,7 @@ mod tests {
 
     #[test]
     fn test_embedding_dim() {
-        assert_eq!(EMBEDDING_DIM, 384);
+        assert_eq!(DEFAULT_EMBEDDING_DIM, 384);
     }
 
     #[test]

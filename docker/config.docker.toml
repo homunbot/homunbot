@@ -8,3 +8,11 @@ host = "0.0.0.0"
 port = 18080
 auto_tls = false
 domain = ""
+
+[memory]
+# Use Ollama for embeddings in Docker (free, local, no API key needed).
+# Requires: docker compose --profile with-ollama up -d
+# Or set to "openai" and provide OPENAI_API_KEY in .env.
+embedding_provider = "ollama"
+embedding_api_base = "http://ollama:11434/v1"
+embedding_model = "nomic-embed-text"
