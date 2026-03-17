@@ -1,9 +1,10 @@
 # Homun — Development Roadmap
 
-> Last updated: 2026-03-16 (MCP hot-reload, Google Workspace recipe, Notion OAuth refresh, registry-first tool discovery)
-> Basato su: Audit completo (`docs/AUDIT-2026-03.md`)
+> Last updated: 2026-03-17 (Release Plan v2 — da progetto a prodotto consumer-ready)
+> Basato su: Audit completo (`docs/AUDIT-2026-03.md`) + Gap analysis prodotto (2026-03-17)
 > Gap analysis: Homun vs OpenClaw vs ZeroClaw
 > Source of truth: questo documento e' la roadmap/status operativa del progetto
+> **Release Plan**: Alpha (v0.2) → Beta (v0.5) → v1.0 — vedi sezione dedicata
 
 ---
 
@@ -26,7 +27,156 @@
 
 ---
 
-## Priorita
+## Release Plan — Da Progetto a Prodotto (2026-03-17)
+
+> Il codice core e' feature-complete (~85K LOC, 646+ test, 7 canali, 20+ tool, 20 pagine web).
+> Ma un prodotto e' **codice + distribuzione + documentazione + app + UX + ops**.
+> Stima: **8-12 mesi** per consumer-ready. Rilasci incrementali per validare early.
+
+### Milestone Overview
+
+```
+     ALPHA (v0.2)              BETA (v0.5)                 v1.0
+     Self-hosted               Wider audience              Consumer-ready
+     ──────────────────────    ──────────────────────      ──────────────────────
+  ✦  Docker + compose          Installer nativi            App mobile (Flutter)
+  ✦  Docs essenziali           UX overhaul                 Sito web prodotto
+  ✦  Fix critici               Channel hardening           Full docs site
+  ✦  .env cleanup              Onboarding consumer         PWA / desktop
+  ✦  Health checks             E2E test suite              Monitoring / APM
+  ✦  README utente             Setup wizard polish         Localizzazione i18n
+                               Error states UI             Community / support
+     ~6-8 settimane            ~12-16 settimane            ~12-16 settimane
+```
+
+---
+
+### ALPHA (v0.2) — Self-hosted per early adopters (~6-8 settimane)
+
+> Target: sviluppatori / sysadmin che sanno usare Docker e il terminale.
+> Criterio: una persona puo' partire da zero con `docker compose up` e avere Homun funzionante.
+
+| # | Task | Descrizione | Effort | Stato |
+|---|------|-------------|--------|-------|
+| REL-1 | **Dockerfile principale** | Multi-stage build (builder + runtime), immagine finale ~100MB. Include: binary, static assets, migrations. | 3 giorni | TODO |
+| REL-2 | **docker-compose.yml** | Stack completo: homun + Caddy (reverse proxy + HTTPS auto). Volumi per persistenza (~/.homun). .env template. Health checks. | 3 giorni | TODO |
+| REL-3 | **Caddy reverse proxy** | Caddyfile con HTTPS automatico (Let's Encrypt), WebSocket proxy, security headers. | 1 giorno | TODO |
+| REL-4 | **.env.example + cleanup** | Template .env con tutte le variabili documentate. Rimuovere credenziali test dalla git history. | 1 giorno | TODO |
+| REL-5 | **Health check completo** | `/health/components` — stato DB, provider LLM, canali, MCP, disk space. Readiness probe per orchestrator. | 2 giorni | TODO |
+| REL-6 | **README utente** | Riscrivere README in ottica utente: prerequisiti, quick start (Docker), config minima, screenshot. Non dev-oriented. | 2 giorni | TODO |
+| REL-7 | **Getting Started guide** | Guida step-by-step: installazione → primo messaggio → prima automazione → primo canale. Con screenshot. | 3 giorni | TODO |
+| REL-8 | **Graceful shutdown completo** | Timeout enforcement (30s), finalization (flush logs, close DB, stop channels), progress indication. | 2 giorni | TODO |
+| REL-9 | **Fix flaky CI tests** | AUD-12: sandbox tests PoisonError. Aggiungere `#[serial]` o refactor test harness. CI deve essere verde. | 1 giorno | TODO |
+| REL-10 | **Error states UI base** | Toast/notification system globale. Error state component riusabile. Retry button. Timeout handling con spinner. | 3 giorni | TODO |
+| REL-11 | **Pre-built binaries** | GitHub Actions: release workflow con build cross-platform (linux-x64, linux-arm64, macos-x64, macos-arm64, windows-x64). | 2 giorni | TODO |
+| REL-12 | **CHANGELOG** | Generare changelog dalla git history. Formato Keep a Changelog. Aggiornare ad ogni release. | 1 giorno | TODO |
+
+---
+
+### BETA (v0.5) — Wider audience (~12-16 settimane)
+
+> Target: utenti tecnici curiosi, tolleranti ai rough edges ma che si aspettano un'esperienza guidata.
+> Criterio: una persona puo' installare Homun, configurarlo senza leggere codice, e usarlo quotidianamente.
+
+| # | Task | Descrizione | Effort | Stato |
+|---|------|-------------|--------|-------|
+| **Installer nativi** | | | | |
+| INST-1 | **macOS .dmg** | App bundle con installer grafico. Launchd integration per avvio automatico. Code signing (Apple Developer). | 1 settimana | TODO |
+| INST-2 | **Windows .msi** | MSI installer con WiX o Inno Setup. Windows Service integration. | 1 settimana | TODO |
+| INST-3 | **Linux packages** | .deb (Ubuntu/Debian), .rpm (Fedora/RHEL), systemd unit file. | 3 giorni | TODO |
+| INST-4 | **Homebrew formula** | `brew install homun`. Tap repository. Auto-update. | 2 giorni | TODO |
+| INST-5 | **AUR package** | Arch Linux AUR. PKGBUILD. | 1 giorno | TODO |
+| **Onboarding consumer** | | | | |
+| ONB-1 | **Setup wizard v2** | Flusso guidato: 1) Scegli provider (locale vs cloud), 2) API key con link "dove la trovo?", 3) Test connessione, 4) Primo messaggio di prova. Resume se browser chiuso. | 1 settimana | TODO |
+| ONB-2 | **Flusso Ollama locale** | Path dedicato: "Vuoi usare AI locale senza API key?" → installa Ollama → pull modello → pronto. Zero config cloud. | 3 giorni | TODO |
+| ONB-3 | **OAuth per provider** | OAuth flow per Google (Gemini), GitHub (Copilot). Invece di incollare API key manualmente. | 1 settimana | TODO |
+| ONB-4 | **First-run tutorial** | Tour interattivo dopo il setup: "Ecco la chat", "Prova a chiedere...", "Qui trovi le automazioni". Dismissable, non riappare. | 3 giorni | TODO |
+| **UX overhaul** | | | | |
+| UXO-1 | **Toast/notification system** | Componente globale per success/error/warning/info. Auto-dismiss configurabile. Stack multiplo. | 2 giorni | TODO |
+| UXO-2 | **Error states everywhere** | Ogni pagina: stato errore con messaggio chiaro + retry button. Pattern riusabile `.error-state`. | 3 giorni | TODO |
+| UXO-3 | **Progress indicators** | Operazioni lunghe (browser, RAG ingest, skill install): progress bar o spinner con messaggio. | 2 giorni | TODO |
+| UXO-4 | **Chat: fix reasoning persistence** | UX-3: blocchi thinking/reasoning persistenti quando si torna su una chat. | 2 giorni | TODO |
+| UXO-5 | **Chat: fix plan mode display** | UX-2: messaggi plan devono corrispondere al piano reale. | 2-3 giorni | TODO |
+| UXO-6 | **Chat: fix edit inline** | UX-6: edit inline messaggi rotto. | 1-2 giorni | TODO |
+| UXO-7 | **Responsive polish** | Verificare 375, 390, 768, 1024, 1280px su tutte le 20 pagine. Fix breakpoint issues. | 1 settimana | TODO |
+| UXO-8 | **Keyboard shortcuts** | Cmd/Ctrl+K command palette. Shortcuts per azioni comuni. Help overlay. | 3 giorni | TODO |
+| **Channel hardening** | | | | |
+| CHH-1 | **Circuit breaker tutti i canali** | Pattern comune: open → half-open → closed. Backoff esponenziale. Health reporting. | 3 giorni | TODO |
+| CHH-2 | **Reconnect robusto Discord** | Serenity ha reconnect base, ma serve monitoring + logging + alerting. | 2 giorni | TODO |
+| CHH-3 | **Slack Events API** | AUD-7: da polling 3s a Events API push. Rate limit handling (429). | 1 settimana | TODO |
+| CHH-4 | **WhatsApp re-pairing** | AUD-8: re-pairing da gateway senza TUI. QR code via web UI. | 3 giorni | TODO |
+| CHH-5 | **Email robustness** | IMAP idle, reconnect su timeout, attachment MIME handling migliorato. | 3 giorni | TODO |
+| CHH-6 | **Channel health API** | Endpoint per stato real-time di ogni canale. Dashboard widget con status live. | 2 giorni | TODO |
+| **Testing** | | | | |
+| TST-1 | **E2E Playwright CI** | CHAT-7 + AUD-4: smoke suite completa per Web UI (chat, automations, settings). In CI. | 1 settimana | TODO |
+| TST-2 | **Integration test RAG** | AUD-5: ingest → chunk → embed → search round-trip. | 2 giorni | TODO |
+| TST-3 | **Channel integration tests** | Mock server per ogni canale. Test send/receive/reconnect. | 1 settimana | TODO |
+
+---
+
+### v1.0 — Consumer-Ready (~12-16 settimane)
+
+> Target: utente non-tecnico. One-click install, help contestuale, docs complete, app mobile.
+> Criterio: una persona non-tecnica puo' installare e usare Homun senza assistenza.
+
+| # | Task | Descrizione | Effort | Stato |
+|---|------|-------------|--------|-------|
+| **Sito web prodotto** | | | | |
+| WEB-1 | **Landing page** | Hero section, features showcase, demo video/GIF, CTA download. Design coerente col design system. | 1 settimana | TODO |
+| WEB-2 | **Pagina download** | Detect OS automatico. Link a installer, Docker, source. Istruzioni per ogni piattaforma. | 3 giorni | TODO |
+| WEB-3 | **Pagina features** | Una sezione per ogni macro-feature con screenshot/GIF animate: chat, automations, browser, skills, MCP, business. | 1 settimana | TODO |
+| WEB-4 | **Pagina pricing** | Se commercial: tier free/pro/enterprise. Se open-source: sponsorship/donation. Licenza PolyForm chiarita. | 2 giorni | TODO |
+| WEB-5 | **Blog** | Static blog (Hugo/Astro). Post di lancio, tutorial, changelog. RSS feed. | 3 giorni | TODO |
+| WEB-6 | **SEO + analytics** | Meta tags, OG images, sitemap, robots.txt. Analytics privacy-friendly (Plausible/Umami). | 2 giorni | TODO |
+| WEB-7 | **Dominio + hosting** | homun.dev o simile. Cloudflare Pages / Vercel per il sito statico. | 1 giorno | TODO |
+| **Docs site completo** | | | | |
+| DOC-1 | **Infrastruttura docs** | MkDocs Material o Docusaurus. Deployed su docs.homun.dev. Search integrato. Versioning. | 2 giorni | TODO |
+| DOC-2 | **Guida installazione** | Per ogni piattaforma: macOS, Windows, Linux, Docker, source. Con troubleshooting. | 3 giorni | TODO |
+| DOC-3 | **Guida configurazione** | Ogni sezione config.toml documentata. Esempi. Valori default. | 3 giorni | TODO |
+| DOC-4 | **Guida canali** | Setup per ogni canale (Telegram bot, Discord app, Slack app, WhatsApp, Email). Con screenshot. | 1 settimana | TODO |
+| DOC-5 | **Guida automazioni** | Come creare automazioni: UI builder + NLP. Template gallery. Esempi reali. | 3 giorni | TODO |
+| DOC-6 | **Guida skills/MCP** | Installare skill, creare skill custom, configurare MCP server. | 3 giorni | TODO |
+| DOC-7 | **API reference** | OpenAPI/Swagger per tutti i 50+ endpoint. Generato o scritto a mano. Hosted su docs site. | 1 settimana | TODO |
+| DOC-8 | **Troubleshooting/FAQ** | Top 20 problemi comuni con soluzioni. Error code reference. | 3 giorni | TODO |
+| DOC-9 | **Contributing guide** | Per chi vuole contribuire: setup dev, architettura, convenzioni, PR process. | 2 giorni | TODO |
+| **App mobile** | | | | |
+| APP-1 | **Flutter: fondazioni** | APP-1.1..1.4: pairing sicuro, channel "app", chat base, push notifications. | 3-4 settimane | TODO |
+| APP-2 | **Flutter: esperienza ricca** | APP-2.1..2.4: vault mobile, dashboard, approval inline, allegati nativi. | 2-3 settimane | TODO |
+| APP-3 | **Flutter: polish** | APP-3.1..3.3: offline cache, biometric lock, widget iOS/Android. | 2 settimane | TODO |
+| APP-4 | **App Store / Play Store** | Pubblicazione, screenshots, descrizione, review process. | 1 settimana | TODO |
+| **PWA / Desktop** | | | | |
+| PWA-1 | **Service worker + manifest** | Web UI come PWA installabile. Offline cache per chat recenti. | 3 giorni | TODO |
+| PWA-2 | **Push notifications web** | Web Push API per notifiche browser (desktop + mobile). | 2 giorni | TODO |
+| PWA-3 | **Desktop wrapper (opzionale)** | Tauri o Electron per app desktop nativa da Web UI. Auto-update. | 1 settimana | TODO |
+| **Osservabilita** | | | | |
+| OBS-1 | **Metrics base** | Contatori: messaggi processati, errori, tool calls, token usage. Endpoint `/metrics` (Prometheus). | 3 giorni | TODO |
+| OBS-2 | **Correlation IDs** | Request tracing attraverso gateway → agent → tool → provider. | 2 giorni | TODO |
+| OBS-3 | **Crash reporting** | Panic handler che salva report prima di uscire. Opzionale: invio a Sentry. | 2 giorni | TODO |
+| **Localizzazione** | | | | |
+| I18N-1 | **Framework i18n** | Sistema di traduzione per Web UI (JS) + prompt agent. Almeno EN + IT. | 1 settimana | TODO |
+| I18N-2 | **Traduzioni EN** | Tutta la UI attualmente mix IT/EN. Uniformare a EN come lingua base. | 3 giorni | TODO |
+| I18N-3 | **Traduzioni IT** | Localizzazione italiana completa. | 2 giorni | TODO |
+| **Auto-update** | | | | |
+| UPD-1 | **Update checker** | Check periodico nuova versione su GitHub Releases. Notifica in UI. | 2 giorni | TODO |
+| UPD-2 | **Auto-update (desktop)** | Download + replace binary. Per installer nativi e Docker (watchtower). | 3 giorni | TODO |
+
+---
+
+### Stima Totale Release Plan
+
+| Milestone | Task | Effort | Target |
+|-----------|------|--------|--------|
+| **ALPHA v0.2** | 12 task | 6-8 settimane | ~Maggio 2026 |
+| **BETA v0.5** | 25 task | 12-16 settimane | ~Settembre 2026 |
+| **v1.0** | 30+ task | 12-16 settimane | ~Gennaio 2027 |
+| **Totale** | ~67 task | 30-40 settimane | |
+
+> **Nota**: i file split (FS-1..44, FS-JS-1..12) sono refactoring interno e vengono fatti incrementalmente
+> durante lo sviluppo delle feature sopra, non come sprint dedicato.
+
+---
+
+## Priorita (legacy — vedi Release Plan sopra per piano corrente)
 
 - **P0 — Critico**: Affidabilita e robustezza in produzione
 - **P1 — Alto**: Feature competitive, production viability
