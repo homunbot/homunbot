@@ -1,11 +1,14 @@
 //! Embedding engine — pluggable provider + HNSW vector index.
 //!
 //! The provider is selected via `config.memory.embedding_provider`:
-//! - `"ollama"` (default): Ollama-served model via OpenAI-compatible `/v1/embeddings`.
-//! - `"openai"`: OpenAI text-embedding-3-small via API.
+//! - `"ollama"` (default): local Ollama via OpenAI-compatible `/v1/embeddings`.
+//! - `"openai"`: OpenAI text-embedding-3-small.
+//! - `"mistral"`: Mistral mistral-embed.
 //! - Any other value defaults to Ollama.
 //!
-//! All providers produce vectors of `config.memory.embedding_dimensions` (default 384).
+//! All providers use the OpenAI-compatible `/v1/embeddings` protocol.
+//! API key resolution: `embedding_api_key` → matching LLM provider key → empty.
+//! Vectors are `config.memory.embedding_dimensions` (default 384).
 //! An LRU cache (512 entries) prevents redundant embedding calls.
 
 use std::num::NonZeroUsize;
@@ -354,9 +357,9 @@ impl Drop for EmbeddingEngine {
 
 /// Create the appropriate embedding provider based on config.
 ///
-/// - `"ollama"` (default) → Ollama via OpenAI-compatible `/v1/embeddings`.
-/// - `"openai"` → OpenAI API (text-embedding-3-small).
-/// - Any other value defaults to Ollama.
+/// All providers use `ApiEmbeddingProvider` (OpenAI-compatible `/v1/embeddings`).
+/// Named providers (ollama, openai, mistral) supply sensible defaults;
+/// API key resolution: `embedding_api_key` → matching LLM provider key → empty.
 pub fn create_embedding_provider(config: &Config) -> Result<Box<dyn EmbeddingProvider>> {
     let mem = &config.memory;
     let dims = if mem.embedding_dimensions > 0 {
@@ -365,56 +368,74 @@ pub fn create_embedding_provider(config: &Config) -> Result<Box<dyn EmbeddingPro
         DEFAULT_EMBEDDING_DIM
     };
 
-    match mem.embedding_provider.as_str() {
-        "openai" => {
-            let api_key = config.providers.openai.api_key.clone();
-            if api_key.is_empty() {
-                anyhow::bail!(
-                    "OpenAI embedding requested but no API key configured. \
-                     Set OPENAI_API_KEY or switch to embedding_provider = \"ollama\"."
-                );
-            }
-            let api_base = if mem.embedding_api_base.is_empty() {
-                config.providers.openai.api_base.clone()
-                    .unwrap_or_else(|| "https://api.openai.com/v1".to_string())
-            } else {
-                mem.embedding_api_base.clone()
-            };
-            let model = if mem.embedding_model.is_empty() {
-                "text-embedding-3-small".to_string()
-            } else {
-                mem.embedding_model.clone()
-            };
-            tracing::info!(
-                %api_base, %model, dims,
-                "Using OpenAI embedding provider"
-            );
-            Ok(Box::new(ApiEmbeddingProvider::new(
-                api_key, api_base, model, dims, "openai".into(),
-            )))
-        }
-        // Default: Ollama (free, local, no API key needed)
-        _ => {
-            let api_base = if mem.embedding_api_base.is_empty() {
-                "http://localhost:11434/v1".to_string()
-            } else {
-                mem.embedding_api_base.clone()
-            };
-            let model = if mem.embedding_model.is_empty() {
-                "nomic-embed-text".to_string()
-            } else {
-                mem.embedding_model.clone()
-            };
-            tracing::info!(
-                %api_base, %model, dims,
-                "Using Ollama embedding provider"
-            );
-            Ok(Box::new(ApiEmbeddingProvider::new(
-                String::new(), // Ollama doesn't need an API key
-                api_base, model, dims, "ollama".into(),
-            )))
-        }
+    // Provider-specific defaults: (provider_name, default_model, default_api_base, llm_provider)
+    let (provider_name, default_model, default_base, llm_provider) =
+        match mem.embedding_provider.as_str() {
+            "openai" => (
+                "openai",
+                "text-embedding-3-small",
+                "https://api.openai.com/v1",
+                Some(&config.providers.openai),
+            ),
+            "mistral" => (
+                "mistral",
+                "mistral-embed",
+                "https://api.mistral.ai/v1",
+                Some(&config.providers.mistral),
+            ),
+            // Default: Ollama (free, local, no API key needed)
+            _ => (
+                "ollama",
+                "nomic-embed-text",
+                "http://localhost:11434/v1",
+                None, // Ollama doesn't need an API key
+            ),
+        };
+
+    // 3-level fallback: embedding field → LLM provider field → default
+    let api_key = if !mem.embedding_api_key.is_empty() {
+        mem.embedding_api_key.clone()
+    } else if let Some(prov) = llm_provider {
+        prov.api_key.clone()
+    } else {
+        String::new()
+    };
+
+    let api_base = if !mem.embedding_api_base.is_empty() {
+        mem.embedding_api_base.clone()
+    } else if let Some(prov) = llm_provider {
+        prov.api_base.clone().unwrap_or_else(|| default_base.to_string())
+    } else {
+        default_base.to_string()
+    };
+
+    let model = if !mem.embedding_model.is_empty() {
+        mem.embedding_model.clone()
+    } else {
+        default_model.to_string()
+    };
+
+    // Require API key for providers that need one
+    if api_key.is_empty() && llm_provider.is_some() {
+        anyhow::bail!(
+            "{provider_name} embedding requires an API key. \
+             Set memory.embedding_api_key or providers.{provider_name}.api_key, \
+             or switch to embedding_provider = \"ollama\"."
+        );
     }
+
+    tracing::info!(
+        provider = provider_name, %api_base, %model, dims,
+        "Embedding provider initialized"
+    );
+
+    Ok(Box::new(ApiEmbeddingProvider::new(
+        api_key,
+        api_base,
+        model,
+        dims,
+        provider_name.into(),
+    )))
 }
 
 #[cfg(test)]

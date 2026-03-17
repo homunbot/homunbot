@@ -1263,14 +1263,19 @@ pub struct MemoryConfig {
     pub daily_archive_months: u32,
     /// Enable automatic memory cleanup on startup
     pub auto_cleanup: bool,
-    /// Embedding provider: "ollama" (default, free) or "openai" (API).
+    /// Embedding provider: "ollama" (default, free), "openai", "mistral", or any
+    /// OpenAI-compatible provider name. The factory auto-detects API key from the
+    /// matching LLM provider config if `embedding_api_key` is empty.
     pub embedding_provider: String,
     /// Embedding model name. Empty = provider default.
-    /// Ollama: nomic-embed-text, OpenAI: text-embedding-3-small.
+    /// Ollama: nomic-embed-text, OpenAI: text-embedding-3-small, Mistral: mistral-embed.
     pub embedding_model: String,
     /// Embedding API base URL. Empty = provider default.
     /// E.g., "http://ollama:11434/v1" for Ollama in Docker.
     pub embedding_api_base: String,
+    /// Dedicated API key for embedding provider. Empty = auto-detect from
+    /// the matching LLM provider config (e.g., providers.openai.api_key).
+    pub embedding_api_key: String,
     /// Embedding vector dimensions. Must match HNSW index.
     /// Default 384. Change requires re-indexing all vectors.
     pub embedding_dimensions: usize,
@@ -1286,6 +1291,7 @@ impl Default for MemoryConfig {
             embedding_provider: "ollama".to_string(),
             embedding_model: String::new(),
             embedding_api_base: String::new(),
+            embedding_api_key: String::new(),
             embedding_dimensions: 384,
         }
     }

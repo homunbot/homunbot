@@ -2294,6 +2294,76 @@ if (btnRunCleanup) {
     });
 }
 
+// ═══ Embeddings Configuration Form ═══
+
+(function() {
+    var EMBEDDING_DEFAULTS = {
+        ollama:  { model: 'nomic-embed-text',      api_base: 'http://localhost:11434/v1' },
+        openai:  { model: 'text-embedding-3-small', api_base: 'https://api.openai.com/v1' },
+        mistral: { model: 'mistral-embed',          api_base: 'https://api.mistral.ai/v1' },
+    };
+
+    var embForm = document.getElementById('embeddings-form');
+    var embResult = document.getElementById('embeddings-result');
+    var embProviderSelect = document.getElementById('embedding-provider-select');
+
+    if (!embForm) return;
+
+    // Update placeholders when provider changes
+    if (embProviderSelect) {
+        embProviderSelect.addEventListener('change', function() {
+            var defaults = EMBEDDING_DEFAULTS[this.value] || EMBEDDING_DEFAULTS.ollama;
+            var modelInput = embForm.querySelector('[name="embedding_model"]');
+            var baseInput = embForm.querySelector('[name="embedding_api_base"]');
+            if (modelInput) modelInput.placeholder = defaults.model;
+            if (baseInput) baseInput.placeholder = defaults.api_base;
+        });
+        // Set initial placeholders
+        embProviderSelect.dispatchEvent(new Event('change'));
+    }
+
+    embForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var btn = embForm.querySelector('button[type="submit"]');
+        var originalText = btn.textContent;
+        btn.textContent = 'Saving…';
+        btn.disabled = true;
+        embResult.textContent = '';
+        embResult.className = 'form-hint';
+
+        var form = new FormData(embForm);
+        var patches = [
+            { key: 'memory.embedding_provider', value: form.get('embedding_provider') || 'ollama' },
+            { key: 'memory.embedding_model', value: form.get('embedding_model') || '' },
+            { key: 'memory.embedding_api_base', value: form.get('embedding_api_base') || '' },
+            { key: 'memory.embedding_api_key', value: form.get('embedding_api_key') || '' },
+            { key: 'memory.embedding_dimensions', value: String(form.get('embedding_dimensions') || '384') },
+        ];
+
+        try {
+            for (var i = 0; i < patches.length; i++) {
+                var resp = await fetch('/api/v1/config', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(patches[i]),
+                });
+                if (!resp.ok) {
+                    throw new Error('Failed to save ' + patches[i].key);
+                }
+            }
+            embResult.textContent = '✓ Embeddings config saved. Restart gateway to apply.';
+            embResult.className = 'form-hint pairing-status success';
+            btn.textContent = 'Saved ✓';
+            setTimeout(function() { btn.textContent = originalText; btn.disabled = false; }, 2000);
+        } catch (err) {
+            embResult.textContent = '✗ ' + (err.message || 'Failed to save settings');
+            embResult.className = 'form-hint pairing-status error';
+            btn.textContent = 'Error!';
+            setTimeout(function() { btn.textContent = originalText; btn.disabled = false; }, 2000);
+        }
+    });
+})();
+
 // ─── Browser Form ─────────────────────────────────────────────────
 
 (function() {
