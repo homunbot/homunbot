@@ -124,14 +124,14 @@
 |------|-------------|--------|
 | ~~**REL-5**~~ | ~~Health check `/health/components`~~ | ✅ DONE |
 | ~~**REL-9**~~ | ~~Fix flaky CI test (`test_safe_python_version`)~~ | ✅ DONE |
-| **REL-8** | Graceful shutdown completo (timeout 30s, finalization, progress) | 2 giorni |
+| ~~**REL-8**~~ | ~~Graceful shutdown completo~~ | ✅ DONE |
 | **REL-6** | README utente (non dev-oriented, quick start Docker) | 2 giorni |
 | **REL-7** | Getting Started guide step-by-step con screenshot | 3 giorni |
 | **REL-10** | Error states UI (toast/notification system globale) | 3 giorni |
 | **REL-11** | Pre-built binaries (GitHub Actions: linux/mac/win x64+arm64) | 2 giorni |
 | **REL-12** | CHANGELOG (Keep a Changelog format) | 1 giorno |
 
-**Totale Alpha rimanente: ~13 giorni lavoro, 6 task**
+**Totale Alpha rimanente: ~11 giorni lavoro, 5 task**
 
 ### P1 — Consolidamento (pre-Beta)
 

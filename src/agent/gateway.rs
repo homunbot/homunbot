@@ -1151,13 +1151,16 @@ impl Gateway {
             None
         };
 
-        // Wait for Ctrl+C — first signal triggers graceful shutdown,
-        // second signal forces immediate exit.
-        tokio::signal::ctrl_c().await?;
+        // Wait for shutdown signal (Ctrl+C or SIGTERM).
+        // First signal triggers graceful shutdown, second forces immediate exit.
+        shutdown_signal().await;
         tracing::info!("Shutdown signal received — stopping gracefully...");
         println!("\n🧪 Shutting down gracefully (press Ctrl+C again to force)...");
 
-        // Stop accepting new messages
+        // 1. Signal the agent loop to stop current operation
+        crate::agent::stop::request_stop();
+
+        // 2. Stop accepting new messages
         routing_loop.abort();
         cron_loop.abort();
         if let Some(handle) = tool_msg_loop {
@@ -1167,10 +1170,11 @@ impl Gateway {
             handle.abort();
         }
 
-        // Give in-flight tasks a grace period to complete
+        // 3. Grace period — wait up to 30s for in-flight work to complete.
+        //    A second Ctrl+C forces immediate exit.
+        const GRACE_SECS: u64 = 30;
         let force_shutdown = Arc::new(AtomicBool::new(false));
         let force_flag = force_shutdown.clone();
-
         tokio::spawn(async move {
             if tokio::signal::ctrl_c().await.is_ok() {
                 force_flag.store(true, Ordering::SeqCst);
@@ -1178,22 +1182,35 @@ impl Gateway {
             }
         });
 
-        // Wait up to 5 seconds for in-flight work, unless force-quit
-        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+        let deadline = tokio::time::Instant::now()
+            + tokio::time::Duration::from_secs(GRACE_SECS);
+        let mut last_progress = GRACE_SECS;
         while tokio::time::Instant::now() < deadline {
             if force_shutdown.load(Ordering::SeqCst) {
                 break;
             }
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            let remaining = deadline
+                .saturating_duration_since(tokio::time::Instant::now())
+                .as_secs();
+            // Print progress every 5 seconds
+            if remaining < last_progress && remaining % 5 == 0 {
+                println!("🧪 Shutting down... {remaining}s remaining");
+                last_progress = remaining;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
         }
 
-        // Stop all channels
+        // 4. Stop all channels
         for ch in channels {
             ch.handle.abort();
             tracing::info!(channel = %ch.name, "Channel stopped");
         }
 
-        // Remove PID file so `homun stop` knows we're gone
+        // 5. Close database pool (drain in-flight queries)
+        self.db.pool().close().await;
+        tracing::info!("Database pool closed");
+
+        // 6. Remove PID file so `homun stop` knows we're gone
         let pid_file = crate::config::Config::data_dir().join("homun.pid");
         let _ = std::fs::remove_file(&pid_file);
 
@@ -1201,6 +1218,24 @@ impl Gateway {
         println!("Goodbye! 🧪");
 
         Ok(())
+    }
+}
+
+/// Wait for either Ctrl+C (SIGINT) or SIGTERM.
+/// On non-Unix platforms, only Ctrl+C is supported.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = sigterm.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await.ok();
     }
 }
 
