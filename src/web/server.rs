@@ -437,7 +437,11 @@ impl WebServer {
         if let Some(tls_cfg) = tls_config {
             // One-shot system setup: hosts entry + cert trust + port forward
             // All privileged operations are batched into a single admin prompt.
-            if !domain.is_empty() {
+            let is_local = domain.is_empty()
+                || domain == "localhost"
+                || domain.starts_with("127.");
+            if !is_local {
+                // Custom domain: set up /etc/hosts + cert trust, proxy port 443
                 let cert_path = if auto_tls && tls_cert.is_empty() {
                     Some(
                         dirs::home_dir()
@@ -448,14 +452,13 @@ impl WebServer {
                     None
                 };
                 setup_system(&domain, cert_path.as_deref());
-                // Spawn a TCP proxy on port 443 → actual port (clean URL)
                 if port != 443 {
                     let proxy_target_port = port;
                     tokio::spawn(start_port_proxy(443, proxy_target_port));
                 }
                 tracing::info!(%addr, url = %format!("https://{domain}"), "Web UI starting (HTTPS)");
             } else {
-                tracing::info!(%addr, "Web UI starting (HTTPS)");
+                tracing::info!(%addr, url = %format!("https://localhost:{port}"), "Web UI starting (HTTPS)");
             }
             let acceptor = tokio_rustls::TlsAcceptor::from(tls_cfg);
             let make_service = app.into_make_service_with_connect_info::<SocketAddr>();
