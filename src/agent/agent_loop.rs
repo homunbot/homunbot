@@ -851,6 +851,10 @@ impl AgentLoop {
 
         let mut final_content: Option<String> = None;
         let mut tools_used: Vec<String> = Vec::new();
+        // Track vault keys retrieved in this turn so the vault-leak filter
+        // doesn't redact values the user explicitly asked for (with 2FA).
+        let mut vault_retrieved_keys: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         let mut total_usage = Usage::default();
         let mut execution_plan = ExecutionPlanState::new(&prompt_content);
         let mut browser_task_plan = BrowserTaskPlanState::new(&prompt_content);
@@ -1564,6 +1568,20 @@ impl AgentLoop {
                         }
                     }
 
+                    // Track vault retrieve successes so the leak filter skips them
+                    if tool_call.name == "vault"
+                        && !result.is_error
+                        && result.output.contains("**Secret value:**")
+                    {
+                        if let Some(key) = tool_call
+                            .arguments
+                            .get("key")
+                            .and_then(|v| v.as_str())
+                        {
+                            vault_retrieved_keys.insert(key.to_string());
+                        }
+                    }
+
                     // For unified browser tool, output is already compacted by BrowserTool.
                     // For all other tools, apply model context formatting.
                     let tool_output =
@@ -1849,9 +1867,9 @@ impl AgentLoop {
         // and redacts them before returning to the user.
         let mut safe_response = redact(&response_text);
 
-        // Also redact any vault values that might have leaked into the response
-        // This ensures that even if the LLM retrieved a vault value and tries to
-        // output it, we catch it and replace with vault://key reference
+        // Also redact any vault values that might have leaked into the response.
+        // EXCEPT: values the user explicitly retrieved this turn (with 2FA verified)
+        // — those must pass through so the user can actually see them.
         if let Ok(secrets) = crate::storage::global_secrets() {
             let vault_entries: Vec<(String, String)> = secrets
                 .list_keys()
@@ -1859,6 +1877,10 @@ impl AgentLoop {
                 .filter(|k| k.starts_with("vault."))
                 .filter_map(|k| {
                     let short_key = k.strip_prefix("vault.")?.to_string();
+                    // Skip keys the user explicitly retrieved this turn
+                    if vault_retrieved_keys.contains(&short_key) {
+                        return None;
+                    }
                     let value = secrets.get(&crate::storage::SecretKey::custom(&k)).ok()??;
                     Some((short_key, value))
                 })
