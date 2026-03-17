@@ -609,7 +609,11 @@ mod tests {
     async fn test_remove_source() {
         let (mut rag, dir) = test_rag_engine().await;
 
-        let md = write_test_md(dir.path(), "removable.md", "# Remove\n\nThis will be removed.");
+        let md = write_test_md(
+            dir.path(),
+            "removable.md",
+            "# Remove\n\nThis will be removed.",
+        );
 
         let source_id = rag.ingest_file(&md, "test").await.unwrap().unwrap();
 
@@ -660,13 +664,19 @@ mod tests {
         rag.reset_engine(provider).unwrap();
 
         let stats_after_reset = rag.stats().await.unwrap();
-        assert_eq!(stats_after_reset.index_vectors, 0, "Index should be empty after reset");
+        assert_eq!(
+            stats_after_reset.index_vectors, 0,
+            "Index should be empty after reset"
+        );
 
         let reindexed = rag.reindex_all().await.unwrap();
         assert_eq!(
             reindexed as i64, chunk_count_before,
             "Reindex should process all chunks"
         );
-        assert!(rag.stats().await.unwrap().index_vectors > 0, "Index should have vectors after reindex");
+        assert!(
+            rag.stats().await.unwrap().index_vectors > 0,
+            "Index should have vectors after reindex"
+        );
     }
 }

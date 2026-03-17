@@ -55,8 +55,7 @@ impl IndexMeta {
                 .with_context(|| format!("Failed to create dir for {}", meta_path.display()))?;
         }
 
-        let json = serde_json::to_string_pretty(self)
-            .context("Failed to serialize IndexMeta")?;
+        let json = serde_json::to_string_pretty(self).context("Failed to serialize IndexMeta")?;
         std::fs::write(&meta_path, json)
             .with_context(|| format!("Failed to write {}", meta_path.display()))?;
 

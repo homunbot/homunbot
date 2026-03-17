@@ -564,9 +564,10 @@ mod tests {
     // --- parse_docker_inspect_fields is now in runtime_image.rs ---
     // We test it indirectly via get_docker_image_status/get_runtime_image_status
 
-    // --- macOS Seatbelt tests ---
+    // --- macOS Seatbelt tests (only run on macOS) ---
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn macos_seatbelt_command_spec_sets_profile_and_workspace() {
         use crate::tools::sandbox::backends::build_macos_seatbelt_command_spec;
 
@@ -603,6 +604,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn macos_seatbelt_command_spec_uses_net_local_profile_for_host_network() {
         use crate::tools::sandbox::backends::build_macos_seatbelt_command_spec;
 
@@ -633,6 +635,7 @@ mod tests {
 
     #[test]
     #[serial]
+    #[cfg(target_os = "macos")]
     fn macos_seatbelt_command_spec_sanitizes_env() {
         use crate::tools::sandbox::backends::build_macos_seatbelt_command_spec;
 

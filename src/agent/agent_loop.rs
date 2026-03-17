@@ -1573,11 +1573,7 @@ impl AgentLoop {
                         && !result.is_error
                         && result.output.contains("**Secret value:**")
                     {
-                        if let Some(key) = tool_call
-                            .arguments
-                            .get("key")
-                            .and_then(|v| v.as_str())
-                        {
+                        if let Some(key) = tool_call.arguments.get("key").and_then(|v| v.as_str()) {
                             vault_retrieved_keys.insert(key.to_string());
                         }
                     }

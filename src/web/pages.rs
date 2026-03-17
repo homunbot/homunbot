@@ -801,7 +801,12 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
         catalog_modal_html = catalog_modal_html,
     );
 
-    Html(page_html("Settings", "settings", &body, &["embedding-loader.js", "setup.js"]))
+    Html(page_html(
+        "Settings",
+        "settings",
+        &body,
+        &["embedding-loader.js", "setup.js"],
+    ))
 }
 
 // ─── Appearance ────────────────────────────────────────────────

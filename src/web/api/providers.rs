@@ -43,10 +43,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             "/v1/providers/ollama-cloud/models",
             get(list_ollama_cloud_models),
         )
-        .route(
-            "/v1/providers/embedding-models",
-            get(list_embedding_models),
-        )
+        .route("/v1/providers/embedding-models", get(list_embedding_models))
 }
 
 #[derive(Serialize)]
@@ -1151,15 +1148,23 @@ fn cloud_embedding_models_for(provider: &str) -> &'static [(&'static str, &'stat
         "cohere" => &[
             ("embed-english-v3.0", "embed-english-v3.0 (1024d)"),
             ("embed-multilingual-v3.0", "embed-multilingual-v3.0 (1024d)"),
-            ("embed-english-light-v3.0", "embed-english-light-v3.0 (384d)"),
-            ("embed-multilingual-light-v3.0", "embed-multilingual-light-v3.0 (384d)"),
+            (
+                "embed-english-light-v3.0",
+                "embed-english-light-v3.0 (384d)",
+            ),
+            (
+                "embed-multilingual-light-v3.0",
+                "embed-multilingual-light-v3.0 (384d)",
+            ),
         ],
-        "together" => &[
-            ("togethercomputer/m2-bert-80M-8k-retrieval", "M2-BERT 80M (768d)"),
-        ],
-        "fireworks" => &[
-            ("nomic-ai/nomic-embed-text-v1.5", "nomic-embed-text-v1.5 (768d)"),
-        ],
+        "together" => &[(
+            "togethercomputer/m2-bert-80M-8k-retrieval",
+            "M2-BERT 80M (768d)",
+        )],
+        "fireworks" => &[(
+            "nomic-ai/nomic-embed-text-v1.5",
+            "nomic-embed-text-v1.5 (768d)",
+        )],
         _ => &[],
     }
 }
@@ -1194,10 +1199,22 @@ const EMBEDDING_NAME_PATTERNS: &[&str] = &["embed", "bge", "minilm", "snowflake"
 /// Well-known Ollama embedding models to suggest when not yet pulled.
 /// (name, display_label, approximate_size_mb)
 const SUGGESTED_OLLAMA_EMBEDDING_MODELS: &[(&str, &str, u32)] = &[
-    ("nomic-embed-text", "nomic-embed-text (274 MB, 137M params)", 274),
-    ("mxbai-embed-large", "mxbai-embed-large (670 MB, 335M params)", 670),
+    (
+        "nomic-embed-text",
+        "nomic-embed-text (274 MB, 137M params)",
+        274,
+    ),
+    (
+        "mxbai-embed-large",
+        "mxbai-embed-large (670 MB, 335M params)",
+        670,
+    ),
     ("all-minilm", "all-minilm (46 MB, 23M params)", 46),
-    ("snowflake-arctic-embed", "snowflake-arctic-embed (670 MB, 335M params)", 670),
+    (
+        "snowflake-arctic-embed",
+        "snowflake-arctic-embed (670 MB, 335M params)",
+        670,
+    ),
     ("bge-m3", "bge-m3 (1.2 GB, 568M params)", 1200),
 ];
 
@@ -1273,15 +1290,13 @@ async fn list_embedding_models(
     let ollama_cloud_key = {
         let pc = config.providers.get("ollama_cloud");
         match pc {
-            Some(p) if p.api_key == "***ENCRYPTED***" => {
-                crate::storage::global_secrets()
-                    .ok()
-                    .and_then(|s| {
-                        let key = crate::storage::SecretKey::provider_api_key("ollama_cloud");
-                        s.get(&key).ok().flatten()
-                    })
-                    .unwrap_or_default()
-            }
+            Some(p) if p.api_key == "***ENCRYPTED***" => crate::storage::global_secrets()
+                .ok()
+                .and_then(|s| {
+                    let key = crate::storage::SecretKey::provider_api_key("ollama_cloud");
+                    s.get(&key).ok().flatten()
+                })
+                .unwrap_or_default(),
             Some(p) if !p.api_key.is_empty() => p.api_key.clone(),
             _ => String::new(),
         }
@@ -1310,8 +1325,7 @@ async fn list_embedding_models(
                 None => false,
             };
             let pc = config.providers.get(name);
-            has_encrypted
-                || pc.map_or(false, |p| !p.api_key.is_empty() || p.api_base.is_some())
+            has_encrypted || pc.map_or(false, |p| !p.api_key.is_empty() || p.api_base.is_some())
         };
 
         // Default model and API base per provider

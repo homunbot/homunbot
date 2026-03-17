@@ -1182,8 +1182,7 @@ impl Gateway {
             }
         });
 
-        let deadline = tokio::time::Instant::now()
-            + tokio::time::Duration::from_secs(GRACE_SECS);
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(GRACE_SECS);
         let mut last_progress = GRACE_SECS;
         while tokio::time::Instant::now() < deadline {
             if force_shutdown.load(Ordering::SeqCst) {

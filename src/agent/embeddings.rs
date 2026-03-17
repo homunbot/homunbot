@@ -99,9 +99,7 @@ impl EmbeddingProvider for ApiEmbeddingProvider {
             "dimensions": self.dimensions,
         });
 
-        let mut req = self
-            .client
-            .post(format!("{}/embeddings", self.api_base));
+        let mut req = self.client.post(format!("{}/embeddings", self.api_base));
 
         // Only send Authorization header if an API key is set (Ollama doesn't need one)
         if !self.api_key.is_empty() {
@@ -109,14 +107,12 @@ impl EmbeddingProvider for ApiEmbeddingProvider {
         }
 
         let url = format!("{}/embeddings", self.api_base);
-        let response = req
-            .json(&body)
-            .send()
-            .await
-            .with_context(|| format!(
+        let response = req.json(&body).send().await.with_context(|| {
+            format!(
                 "Embedding API request to {} failed (provider={}, model={})",
                 url, self.provider_name, self.model
-            ))?;
+            )
+        })?;
 
         // Read body before status check — error responses often contain useful messages
         let status = response.status();
@@ -124,7 +120,11 @@ impl EmbeddingProvider for ApiEmbeddingProvider {
             let error_body = response.text().await.unwrap_or_default();
             anyhow::bail!(
                 "Embedding API {} returned {}: {} (provider={}, model={})",
-                url, status, error_body, self.provider_name, self.model
+                url,
+                status,
+                error_body,
+                self.provider_name,
+                self.model
             );
         }
 
@@ -413,8 +413,9 @@ impl EmbeddingEngine {
     pub fn reset_with_provider(&mut self, provider: Box<dyn EmbeddingProvider>) -> Result<()> {
         // Delete existing index + meta files
         if self.index_path.exists() {
-            std::fs::remove_file(&self.index_path)
-                .with_context(|| format!("Failed to remove old index: {}", self.index_path.display()))?;
+            std::fs::remove_file(&self.index_path).with_context(|| {
+                format!("Failed to remove old index: {}", self.index_path.display())
+            })?;
         }
         IndexMeta::delete(&self.index_path);
 
@@ -431,7 +432,8 @@ impl EmbeddingEngine {
 
         let index = usearch::new_index(&options)
             .map_err(|e| anyhow::anyhow!("Failed to create new USearch index: {e}"))?;
-        index.reserve(1000)
+        index
+            .reserve(1000)
             .map_err(|e| anyhow::anyhow!("Failed to reserve capacity: {e}"))?;
 
         // Swap all internals
@@ -483,13 +485,48 @@ pub fn create_embedding_provider(config: &Config) -> Result<Box<dyn EmbeddingPro
     // Provider-specific defaults: (name, default_model, default_api_base, needs_key)
     let (provider_name, default_model, default_base, needs_key) =
         match mem.embedding_provider.as_str() {
-            "openai" => ("openai", "text-embedding-3-small", "https://api.openai.com/v1", true),
-            "mistral" => ("mistral", "mistral-embed", "https://api.mistral.ai/v1", true),
-            "cohere" => ("cohere", "embed-english-v3.0", "https://api.cohere.ai/v1", true),
-            "together" => ("together", "togethercomputer/m2-bert-80M-8k-retrieval", "https://api.together.xyz/v1", true),
-            "fireworks" => ("fireworks", "nomic-ai/nomic-embed-text-v1.5", "https://api.fireworks.ai/inference/v1", true),
-            "ollama_cloud" => ("ollama_cloud", "nomic-embed-text", "https://ollama.com/v1", true),
-            _ => ("ollama", "nomic-embed-text", "http://localhost:11434/v1", false),
+            "openai" => (
+                "openai",
+                "text-embedding-3-small",
+                "https://api.openai.com/v1",
+                true,
+            ),
+            "mistral" => (
+                "mistral",
+                "mistral-embed",
+                "https://api.mistral.ai/v1",
+                true,
+            ),
+            "cohere" => (
+                "cohere",
+                "embed-english-v3.0",
+                "https://api.cohere.ai/v1",
+                true,
+            ),
+            "together" => (
+                "together",
+                "togethercomputer/m2-bert-80M-8k-retrieval",
+                "https://api.together.xyz/v1",
+                true,
+            ),
+            "fireworks" => (
+                "fireworks",
+                "nomic-ai/nomic-embed-text-v1.5",
+                "https://api.fireworks.ai/inference/v1",
+                true,
+            ),
+            "ollama_cloud" => (
+                "ollama_cloud",
+                "nomic-embed-text",
+                "https://ollama.com/v1",
+                true,
+            ),
+            _ => (
+                "ollama",
+                "nomic-embed-text",
+                "http://localhost:11434/v1",
+                false,
+            ),
         };
 
     // Resolve API key: embedding field → LLM provider (vault-aware) → empty

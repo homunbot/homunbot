@@ -63,16 +63,36 @@ struct ComponentHealth {
 
 impl ComponentHealth {
     fn healthy(name: &'static str) -> Self {
-        Self { name, status: "healthy", message: None, details: None }
+        Self {
+            name,
+            status: "healthy",
+            message: None,
+            details: None,
+        }
     }
     fn degraded(name: &'static str, msg: impl Into<String>) -> Self {
-        Self { name, status: "degraded", message: Some(msg.into()), details: None }
+        Self {
+            name,
+            status: "degraded",
+            message: Some(msg.into()),
+            details: None,
+        }
     }
     fn unhealthy(name: &'static str, msg: impl Into<String>) -> Self {
-        Self { name, status: "unhealthy", message: Some(msg.into()), details: None }
+        Self {
+            name,
+            status: "unhealthy",
+            message: Some(msg.into()),
+            details: None,
+        }
     }
     fn unchecked(name: &'static str) -> Self {
-        Self { name, status: "unchecked", message: None, details: None }
+        Self {
+            name,
+            status: "unchecked",
+            message: None,
+            details: None,
+        }
     }
     fn with_details(mut self, details: serde_json::Value) -> Self {
         self.details = Some(details);
@@ -81,9 +101,7 @@ impl ComponentHealth {
 }
 
 /// GET /api/v1/health/components — detailed health for every subsystem.
-async fn components_health(
-    State(state): State<Arc<AppState>>,
-) -> Json<ComponentsHealthResponse> {
+async fn components_health(State(state): State<Arc<AppState>>) -> Json<ComponentsHealthResponse> {
     let mut components = Vec::with_capacity(6);
 
     // 1. Database
@@ -142,7 +160,10 @@ fn check_providers(state: &AppState) -> ComponentHealth {
     }
 
     use crate::provider::health::ProviderStatus;
-    let down_count = snapshots.iter().filter(|s| s.status == ProviderStatus::Down).count();
+    let down_count = snapshots
+        .iter()
+        .filter(|s| s.status == ProviderStatus::Down)
+        .count();
     let total = snapshots.len();
     let details = serde_json::json!(snapshots
         .iter()
@@ -171,20 +192,30 @@ async fn check_channels(state: &AppState) -> ComponentHealth {
     let config = state.config.read().await;
     let ch = &config.channels;
     let mut enabled = Vec::new();
-    if ch.telegram.enabled { enabled.push("telegram"); }
-    if ch.discord.enabled { enabled.push("discord"); }
-    if ch.slack.enabled { enabled.push("slack"); }
-    if ch.whatsapp.enabled { enabled.push("whatsapp"); }
-    if ch.web.enabled { enabled.push("web"); }
-    if ch.email.enabled || !ch.active_email_accounts().is_empty() { enabled.push("email"); }
+    if ch.telegram.enabled {
+        enabled.push("telegram");
+    }
+    if ch.discord.enabled {
+        enabled.push("discord");
+    }
+    if ch.slack.enabled {
+        enabled.push("slack");
+    }
+    if ch.whatsapp.enabled {
+        enabled.push("whatsapp");
+    }
+    if ch.web.enabled {
+        enabled.push("web");
+    }
+    if ch.email.enabled || !ch.active_email_accounts().is_empty() {
+        enabled.push("email");
+    }
 
     let details = serde_json::json!({ "enabled": enabled });
     if enabled.is_empty() {
-        ComponentHealth::degraded("channels", "No channels enabled")
-            .with_details(details)
+        ComponentHealth::degraded("channels", "No channels enabled").with_details(details)
     } else {
-        ComponentHealth::healthy("channels")
-            .with_details(details)
+        ComponentHealth::healthy("channels").with_details(details)
     }
 }
 
@@ -193,8 +224,7 @@ async fn check_tools(state: &AppState) -> ComponentHealth {
         return ComponentHealth::unchecked("tools");
     };
     let count = registry.read().await.len();
-    ComponentHealth::healthy("tools")
-        .with_details(serde_json::json!({ "count": count }))
+    ComponentHealth::healthy("tools").with_details(serde_json::json!({ "count": count }))
 }
 
 #[cfg(feature = "embeddings")]
@@ -221,10 +251,8 @@ fn check_data_dir() -> ComponentHealth {
     }
     // Verify writable by checking metadata
     match std::fs::metadata(&data_dir) {
-        Ok(meta) if meta.is_dir() => {
-            ComponentHealth::healthy("data_dir")
-                .with_details(serde_json::json!({ "path": data_dir.display().to_string() }))
-        }
+        Ok(meta) if meta.is_dir() => ComponentHealth::healthy("data_dir")
+            .with_details(serde_json::json!({ "path": data_dir.display().to_string() })),
         Ok(_) => ComponentHealth::unhealthy("data_dir", "Path exists but is not a directory"),
         Err(e) => ComponentHealth::unhealthy("data_dir", format!("Cannot access: {e}")),
     }

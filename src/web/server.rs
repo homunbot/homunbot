@@ -403,11 +403,10 @@ impl WebServer {
                                 || s.starts_with(b"http://localhost")
                                 || s.starts_with(b"http://127.0.0.1")
                                 || (!cors_domain.is_empty()
-                                    && (s.starts_with(
-                                        format!("https://{cors_domain}").as_bytes(),
-                                    ) || s.starts_with(
-                                        format!("http://{cors_domain}").as_bytes(),
-                                    )))
+                                    && (s.starts_with(format!("https://{cors_domain}").as_bytes())
+                                        || s.starts_with(
+                                            format!("http://{cors_domain}").as_bytes(),
+                                        )))
                         }
                     }))
                     .allow_methods([
@@ -437,9 +436,7 @@ impl WebServer {
         if let Some(tls_cfg) = tls_config {
             // One-shot system setup: hosts entry + cert trust + port forward
             // All privileged operations are batched into a single admin prompt.
-            let is_local = domain.is_empty()
-                || domain == "localhost"
-                || domain.starts_with("127.");
+            let is_local = domain.is_empty() || domain == "localhost" || domain.starts_with("127.");
             if !is_local {
                 // Custom domain: set up /etc/hosts + cert trust, proxy port 443
                 let cert_path = if auto_tls && tls_cert.is_empty() {
@@ -977,7 +974,12 @@ mod tests {
         let cert_path = dir.path().join("cert.pem");
         let key_path = dir.path().join("key.pem");
 
-        generate_self_signed(&cert_path, &key_path, &["homun.example.com", "my.custom.dev"]).unwrap();
+        generate_self_signed(
+            &cert_path,
+            &key_path,
+            &["homun.example.com", "my.custom.dev"],
+        )
+        .unwrap();
 
         let cert_data = std::fs::read(&cert_path).unwrap();
         let certs: Vec<_> = rustls_pemfile::certs(&mut cert_data.as_slice())
