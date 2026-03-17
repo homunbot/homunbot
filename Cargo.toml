@@ -174,7 +174,7 @@ zip = { version = "2", optional = true, default-features = false, features = ["d
 quick-xml = { version = "0.37", optional = true }
 
 # --- MCP client (also powers browser via @playwright/mcp) ---
-rmcp = { version = "0.16", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"], optional = true }
+rmcp = { version = "0.16", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest"], optional = true }
 
 # --- Vault 2FA ---
 totp-rs = { version = "5", features = ["qr"], optional = true }
