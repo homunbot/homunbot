@@ -21,7 +21,7 @@ if [[ -z "${PWCLI:-}" ]]; then
         PWCLI="$PLAYWRIGHT_E2E_ROOT_DIR/scripts/playwright_cli.sh"
     fi
 fi
-HOMUN_E2E_BASE_URL="${HOMUN_E2E_BASE_URL:-https://ui.homun.bot}"
+HOMUN_E2E_BASE_URL="${HOMUN_E2E_BASE_URL:-https://localhost}"
 HOMUN_E2E_SESSION="${HOMUN_E2E_SESSION:-homun-e2e-$$}"
 HOMUN_E2E_ARTIFACT_DIR="${HOMUN_E2E_ARTIFACT_DIR:-output/playwright}"
 HOMUN_E2E_WAIT_MS="${HOMUN_E2E_WAIT_MS:-15000}"

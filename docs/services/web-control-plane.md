@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This subsystem owns the authenticated web application, REST API, WebSocket chat streaming, setup/login flow, and the server-side state needed to operate Homun remotely at `https://ui.homun.bot`.
+This subsystem owns the authenticated web application, REST API, WebSocket chat streaming, setup/login flow, and the server-side state needed to operate Homun remotely.
 
 ## Primary Code
 
@@ -85,7 +85,7 @@ If the session store cannot be initialized, the server logs the problem; setup-o
 
 ## Deployment Notes
 
-The product-facing domain is `https://ui.homun.bot`. Internally the web server still binds to the configured host/port from `[channels.web]`, and TLS/domain forwarding are handled around that runtime.
+The web server binds to the configured host/port from `[channels.web]`. In Docker, Caddy handles TLS termination and reverse-proxies to Homun on port 18080. For standalone use, the server can auto-generate a self-signed cert (`auto_tls = true`).
 
 ## Manual E2E Coverage
 
@@ -117,4 +117,4 @@ Update this document when you change:
 - web chat run lifecycle
 - pages/API ownership
 - WebSocket event formats
-- deployment assumptions around `ui.homun.bot`
+- deployment assumptions (domain, TLS, reverse proxy)

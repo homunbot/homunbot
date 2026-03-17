@@ -69,7 +69,7 @@ Run the gateway:
 homun gateway
 ```
 
-With SEC-2 enabled as designed, the web app is exposed at `https://ui.homun.bot` without a port. Internally the service still uses the configured web port and local OS-level forwarding/TLS setup.
+The web UI is available at `https://localhost` by default. For production, set a custom domain in config or via `HOMUN_DOMAIN` env var with the Docker stack (Caddy handles HTTPS automatically via Let's Encrypt).
 
 On first boot, the UI redirects to the setup wizard/login flow.
 

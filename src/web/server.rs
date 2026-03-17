@@ -983,7 +983,7 @@ mod tests {
         assert_eq!(certs.len(), 1);
 
         // Parse the DER certificate to verify SANs
-        // The cert should be valid for localhost, ui.homun.bot, and my.custom.dev
+        // The cert should be valid for localhost, homun.example.com, and my.custom.dev
         // We just verify it parses and builds a valid TLS config
         let key_data = std::fs::read(&key_path).unwrap();
         let key = rustls_pemfile::private_key(&mut key_data.as_slice())

@@ -6,7 +6,7 @@ on:
       base_url:
         description: Web UI base URL
         required: true
-        default: https://ui.homun.bot
+        default: https://localhost
       script:
         description: Script to run
         required: true

@@ -1400,7 +1400,7 @@ Homun ha gia':
 ## Programma Security Web (P0) ✅
 
 > Obiettivo: proteggere la Web UI e le API da accesso non autorizzato.
-> **Completato**: auth PBKDF2, sessioni firmate HMAC, middleware su tutte le route, HTTPS con dominio custom (`ui.homun.bot`), rate limiting per-IP, API key con scope. Setup sistema automatizzato (hosts, cert trust, port forward) con singolo prompt admin su macOS/Linux/Windows.
+> **Completato**: auth PBKDF2, sessioni firmate HMAC, middleware su tutte le route, HTTPS con dominio custom (configurabile), rate limiting per-IP, API key con scope. Setup sistema automatizzato (hosts, cert trust, port forward) con singolo prompt admin su macOS/Linux/Windows.
 
 | # | Task | File principali | LOC | Stato |
 |---|------|----------------|-----|-------|
@@ -1418,13 +1418,13 @@ Homun ha gia':
 | SEC-2 | **HTTPS nativo con dominio custom** | `web/server.rs`, `config/schema.rs`, `Cargo.toml` | ~200 | ✅ DONE |
 | | TLS via `rustls` + `tokio-rustls` (accept loop manuale con `hyper_util::TowerToHyperService`) | | | |
 | | Auto-generazione cert self-signed via `rcgen` (SAN: localhost, domain custom, 127.0.0.1, 10yr) | | | |
-| | Dominio custom `ui.homun.bot` (configurabile in `[web] domain`) con `auto_tls = true` di default | | | |
+| | Dominio custom configurabile in `[channels.web] domain` (default: `localhost`) con `auto_tls = true` di default | | | |
 | | **Setup sistema automatizzato** (`setup_system()`): singolo prompt admin per OS | | | |
 | | — macOS: `osascript` (hosts + Keychain trust + pfctl port forward 443→18443) | | | |
 | | — Linux: `pkexec`/`sudo` (hosts + update-ca-certificates + iptables NAT) | | | |
 | | — Windows: PowerShell RunAs UAC (hosts + certutil + netsh portproxy) | | | |
 | | Idempotente: marker `.trusted`, grep hosts, pfctl/iptables check — no re-prompt ai riavvii | | | |
-| | URL pulito: `https://ui.homun.bot` (senza porta) grazie al port forwarding kernel-level | | | |
+| | URL pulito: `https://localhost` (senza porta) grazie al port forwarding kernel-level o Caddy reverse proxy | | | |
 | | Config: `[web] tls_cert`, `tls_key`, `auto_tls`, `domain`, `port = 18443` | | | |
 | | 5 unit test (cert generation, custom domain, permissions, build_tls_config) | | | |
 | SEC-3 | **Rate limiting API** | `web/auth.rs`, `web/server.rs` | ~100 | ✅ DONE |
@@ -1863,7 +1863,7 @@ Programma Skill Runtime Parity (P0/P1)   ✅ COMPLETE (~580 LOC)
     |
 Programma Security Web (P0)              ✅ DONE (~810 LOC, 23 test)
   ✅ SEC-1 Autenticazione Web UI (PBKDF2, session store, middleware, setup wizard)
-  ✅ SEC-2 HTTPS nativo (rustls, auto-cert, dominio custom ui.homun.bot, setup OS automatizzato)
+  ✅ SEC-2 HTTPS nativo (rustls, auto-cert, dominio custom configurabile, setup OS automatizzato)
   ✅ SEC-3 Rate limiting API (auth 5/min, API 60/min, per-IP sliding window)
   ✅ SEC-4 API key auth (Bearer token, scope read/admin)
   ✅ SEC-6 Instruction boundary (trust boundaries in system prompt)

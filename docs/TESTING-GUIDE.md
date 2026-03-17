@@ -22,7 +22,7 @@ homun chat -m "Ciao, come ti chiami?"
 
 # 5. Avviare il gateway (web UI + canali + cron)
 homun gateway
-# Dashboard: https://ui.homun.bot
+# Dashboard: https://localhost
 ```
 
 ---
@@ -114,10 +114,10 @@ Avviare il gateway e aprire il browser:
 
 ```bash
 homun gateway
-# Apri https://ui.homun.bot
+# Apri https://localhost
 ```
 
-Nota: la roadmap attuale considera `https://ui.homun.bot` l'entrypoint standard della Web UI. La porta resta interna al servizio.
+Nota: per default la Web UI è disponibile su `https://localhost`. Per domini custom, configurare `[channels.web] domain` o usare il Docker stack con `HOMUN_DOMAIN`.
 
 ### Pagine disponibili
 
@@ -295,22 +295,22 @@ Workflow GitHub Actions manuale/opzionale:
 
 ```bash
 # Health check
-curl https://ui.homun.bot/api/health
+curl https://localhost/api/health
 
 # Status completo
-curl https://ui.homun.bot/api/status
+curl https://localhost/api/status
 
 # Configurazione
-curl https://ui.homun.bot/api/config
+curl https://localhost/api/config
 
 # Ricerca memorie (hybrid search)
-curl "https://ui.homun.bot/api/v1/memory/search?q=test&limit=5"
+curl "https://localhost/api/v1/memory/search?q=test&limit=5"
 
 # Lista skills
-curl https://ui.homun.bot/api/v1/skills
+curl https://localhost/api/v1/skills
 
 # Lista provider
-curl https://ui.homun.bot/api/v1/providers
+curl https://localhost/api/v1/providers
 ```
 
 ---
@@ -387,7 +387,7 @@ In chat:
 
 Via API:
 ```bash
-curl "https://ui.homun.bot/api/v1/memory/search?q=preferenze&limit=5"
+curl "https://localhost/api/v1/memory/search?q=preferenze&limit=5"
 ```
 
 ### Configurazione embedding
