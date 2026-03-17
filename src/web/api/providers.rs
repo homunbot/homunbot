@@ -39,6 +39,10 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             "/v1/providers/ollama-cloud/models",
             get(list_ollama_cloud_models),
         )
+        .route(
+            "/v1/providers/embedding-models",
+            get(list_embedding_models),
+        )
 }
 
 #[derive(Serialize)]
@@ -1051,4 +1055,274 @@ async fn list_ollama_cloud_models(
             error: Some(format!("Connection failed: {}", e)),
         }),
     }
+}
+
+// ─── Embedding Models ────────────────────────────────────────────
+
+/// Known embedding models per cloud provider.
+fn cloud_embedding_models_for(provider: &str) -> &'static [(&'static str, &'static str)] {
+    match provider {
+        "openai" => &[
+            ("text-embedding-3-small", "text-embedding-3-small (1536d)"),
+            ("text-embedding-3-large", "text-embedding-3-large (3072d)"),
+            ("text-embedding-ada-002", "text-embedding-ada-002 (1536d)"),
+        ],
+        "mistral" => &[("mistral-embed", "mistral-embed (1024d)")],
+        "cohere" => &[
+            ("embed-english-v3.0", "embed-english-v3.0 (1024d)"),
+            ("embed-multilingual-v3.0", "embed-multilingual-v3.0 (1024d)"),
+            ("embed-english-light-v3.0", "embed-english-light-v3.0 (384d)"),
+            ("embed-multilingual-light-v3.0", "embed-multilingual-light-v3.0 (384d)"),
+        ],
+        "together" => &[
+            ("togethercomputer/m2-bert-80M-8k-retrieval", "M2-BERT 80M (768d)"),
+        ],
+        "fireworks" => &[
+            ("nomic-ai/nomic-embed-text-v1.5", "nomic-embed-text-v1.5 (768d)"),
+        ],
+        _ => &[],
+    }
+}
+
+/// Providers that support the OpenAI-compatible `/v1/embeddings` protocol.
+const EMBEDDING_CAPABLE_PROVIDERS: &[&str] = &[
+    "ollama",
+    "ollama_cloud",
+    "openai",
+    "mistral",
+    "cohere",
+    "together",
+    "fireworks",
+];
+
+const EMBEDDING_PROVIDER_DISPLAY: &[(&str, &str)] = &[
+    ("ollama", "Ollama (local)"),
+    ("ollama_cloud", "Ollama Cloud"),
+    ("openai", "OpenAI"),
+    ("mistral", "Mistral"),
+    ("cohere", "Cohere"),
+    ("together", "Together"),
+    ("fireworks", "Fireworks"),
+];
+
+#[derive(Serialize)]
+struct EmbeddingModelsResponse {
+    ok: bool,
+    providers: Vec<EmbeddingProviderInfo>,
+    current_provider: String,
+    current_model: String,
+}
+
+#[derive(Serialize)]
+struct EmbeddingProviderInfo {
+    name: String,
+    display_name: String,
+    configured: bool,
+    models: Vec<EmbeddingModelInfo>,
+    default_model: String,
+    default_api_base: String,
+    needs_api_key: bool,
+}
+
+#[derive(Serialize)]
+struct EmbeddingModelInfo {
+    id: String,
+    label: String,
+}
+
+async fn list_embedding_models(
+    State(state): State<Arc<AppState>>,
+) -> Json<EmbeddingModelsResponse> {
+    let config = state.config.read().await;
+    let secrets = crate::storage::global_secrets().ok();
+
+    let current_provider = config.memory.embedding_provider.clone();
+    let current_model = config.memory.embedding_model.clone();
+
+    // Collect Ollama URLs before dropping config lock (needed for live fetch)
+    let ollama_base = config
+        .providers
+        .get("ollama")
+        .and_then(|p| p.api_base.as_deref())
+        .unwrap_or("http://localhost:11434")
+        .trim_end_matches('/')
+        .trim_end_matches("/v1")
+        .to_string();
+
+    let ollama_cloud_base = config
+        .providers
+        .get("ollama_cloud")
+        .and_then(|p| p.api_base.as_deref())
+        .unwrap_or("https://ollama.com")
+        .trim_end_matches('/')
+        .to_string();
+
+    // Resolve Ollama Cloud API key (may be encrypted in vault)
+    let ollama_cloud_key = {
+        let pc = config.providers.get("ollama_cloud");
+        match pc {
+            Some(p) if p.api_key == "***ENCRYPTED***" => {
+                crate::storage::global_secrets()
+                    .ok()
+                    .and_then(|s| {
+                        let key = crate::storage::SecretKey::provider_api_key("ollama_cloud");
+                        s.get(&key).ok().flatten()
+                    })
+                    .unwrap_or_default()
+            }
+            Some(p) if !p.api_key.is_empty() => p.api_key.clone(),
+            _ => String::new(),
+        }
+    };
+
+    let mut providers = Vec::new();
+
+    for &name in EMBEDDING_CAPABLE_PROVIDERS {
+        let display_name = EMBEDDING_PROVIDER_DISPLAY
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, d)| d.to_string())
+            .unwrap_or_else(|| name.to_string());
+
+        let needs_api_key = name != "ollama";
+
+        // Check if provider is configured
+        let configured = if name == "ollama" {
+            true // Ollama local is always potentially available
+        } else {
+            let has_encrypted = match &secrets {
+                Some(s) => {
+                    let key = crate::storage::SecretKey::provider_api_key(name);
+                    matches!(s.get(&key), Ok(Some(_)))
+                }
+                None => false,
+            };
+            let pc = config.providers.get(name);
+            has_encrypted
+                || pc.map_or(false, |p| !p.api_key.is_empty() || p.api_base.is_some())
+        };
+
+        // Default model and API base per provider
+        let (default_model, default_api_base) = match name {
+            "ollama" => ("nomic-embed-text", "http://localhost:11434/v1"),
+            "ollama_cloud" => ("nomic-embed-text", "https://ollama.com/v1"),
+            "openai" => ("text-embedding-3-small", "https://api.openai.com/v1"),
+            "mistral" => ("mistral-embed", "https://api.mistral.ai/v1"),
+            "cohere" => ("embed-english-v3.0", "https://api.cohere.ai/v1"),
+            "together" => (
+                "togethercomputer/m2-bert-80M-8k-retrieval",
+                "https://api.together.xyz/v1",
+            ),
+            "fireworks" => (
+                "nomic-ai/nomic-embed-text-v1.5",
+                "https://api.fireworks.ai/inference/v1",
+            ),
+            _ => ("", ""),
+        };
+
+        // Get models: cloud = static list, ollama = live (fetched below)
+        let models: Vec<EmbeddingModelInfo> = if name == "ollama" || name == "ollama_cloud" {
+            vec![] // Populated below via live fetch
+        } else {
+            cloud_embedding_models_for(name)
+                .iter()
+                .map(|(id, label)| EmbeddingModelInfo {
+                    id: id.to_string(),
+                    label: label.to_string(),
+                })
+                .collect()
+        };
+
+        providers.push(EmbeddingProviderInfo {
+            name: name.to_string(),
+            display_name,
+            configured,
+            models,
+            default_model: default_model.to_string(),
+            default_api_base: default_api_base.to_string(),
+            needs_api_key,
+        });
+    }
+
+    // Drop config lock before network I/O
+    drop(config);
+
+    // Shared HTTP client for live model fetching
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .ok();
+
+    // Shared Ollama /api/tags response parser
+    #[derive(Deserialize)]
+    struct Tags {
+        models: Vec<TagModel>,
+    }
+    #[derive(Deserialize)]
+    struct TagModel {
+        name: String,
+        size: Option<u64>,
+    }
+
+    // Fetch live Ollama local models
+    if let (Some(info), Some(cl)) = (
+        providers.iter_mut().find(|p| p.name == "ollama"),
+        client.as_ref(),
+    ) {
+        let url = format!("{}/api/tags", ollama_base);
+        if let Ok(resp) = cl.get(&url).send().await {
+            if resp.status().is_success() {
+                if let Ok(tags) = resp.json::<Tags>().await {
+                    info.models = tags
+                        .models
+                        .into_iter()
+                        .map(|m| {
+                            let label = if let Some(s) = m.size {
+                                format!("{} ({:.0} MB)", m.name, s as f64 / 1e6)
+                            } else {
+                                m.name.clone()
+                            };
+                            EmbeddingModelInfo { id: m.name, label }
+                        })
+                        .collect();
+                }
+            }
+        }
+    }
+
+    // Fetch live Ollama Cloud models (same /api/tags format, with Bearer auth)
+    if let (Some(info), Some(cl)) = (
+        providers.iter_mut().find(|p| p.name == "ollama_cloud"),
+        client.as_ref(),
+    ) {
+        if info.configured && !ollama_cloud_key.is_empty() {
+            let url = format!("{}/api/tags", ollama_cloud_base);
+            if let Ok(resp) = cl
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", ollama_cloud_key))
+                .send()
+                .await
+            {
+                if resp.status().is_success() {
+                    if let Ok(tags) = resp.json::<Tags>().await {
+                        info.models = tags
+                            .models
+                            .into_iter()
+                            .map(|m| EmbeddingModelInfo {
+                                label: m.name.clone(),
+                                id: m.name,
+                            })
+                            .collect();
+                    }
+                }
+            }
+        }
+    }
+
+    Json(EmbeddingModelsResponse {
+        ok: true,
+        providers,
+        current_provider,
+        current_model,
+    })
 }

@@ -2297,46 +2297,95 @@ if (btnRunCleanup) {
 // ═══ Embeddings Configuration Form ═══
 
 (function() {
-    var EMBEDDING_DEFAULTS = {
-        ollama:  { model: 'nomic-embed-text',      api_base: 'http://localhost:11434/v1' },
-        openai:  { model: 'text-embedding-3-small', api_base: 'https://api.openai.com/v1' },
-        mistral: { model: 'mistral-embed',          api_base: 'https://api.mistral.ai/v1' },
-    };
-
     var embForm = document.getElementById('embeddings-form');
     var embResult = document.getElementById('embeddings-result');
-    var embProviderSelect = document.getElementById('embedding-provider-select');
+    var providerSelect = document.getElementById('embedding-provider-select');
+    var modelSelect = document.getElementById('embedding-model-select');
+    var customRow = document.getElementById('embedding-custom-model-row');
+    var customInput = document.getElementById('embedding-custom-model');
+    var customHint = document.getElementById('embedding-custom-hint');
+    var apiBaseInput = document.getElementById('embedding-api-base');
 
-    if (!embForm) return;
+    if (!embForm || !window.EmbeddingLoader) return;
 
-    // Update placeholders when provider changes
-    if (embProviderSelect) {
-        embProviderSelect.addEventListener('change', function() {
-            var defaults = EMBEDDING_DEFAULTS[this.value] || EMBEDDING_DEFAULTS.ollama;
-            var modelInput = embForm.querySelector('[name="embedding_model"]');
-            var baseInput = embForm.querySelector('[name="embedding_api_base"]');
-            if (modelInput) modelInput.placeholder = defaults.model;
-            if (baseInput) baseInput.placeholder = defaults.api_base;
-        });
-        // Set initial placeholders
-        embProviderSelect.dispatchEvent(new Event('change'));
+    var _embData = null; // Cached API response
+
+    // ── Initialize: fetch providers and populate selects ──
+    async function initEmbeddings() {
+        _embData = await EmbeddingLoader.fetchModels();
+        if (!_embData.ok) return;
+
+        EmbeddingLoader.populateProviderSelect(
+            providerSelect, _embData.providers, _embData.current_provider
+        );
+        updateModelSelect();
     }
 
+    // ── Update model select when provider changes ──
+    function updateModelSelect() {
+        if (!_embData) return;
+        var provName = providerSelect.value;
+        var prov = EmbeddingLoader.findProvider(_embData.providers, provName);
+        if (!prov) return;
+
+        EmbeddingLoader.populateModelSelect(
+            modelSelect, prov.models, _embData.current_model, prov.default_model
+        );
+
+        // Update API base placeholder
+        if (apiBaseInput) apiBaseInput.placeholder = prov.default_api_base || '(provider default)';
+
+        // Show/hide custom row
+        handleModelChange();
+    }
+
+    // ── Handle model select change ──
+    function handleModelChange() {
+        var isCustom = modelSelect.value === '__custom__';
+        customRow.style.display = isCustom ? '' : 'none';
+
+        if (isCustom && _embData.current_model) {
+            // Pre-fill custom input with current model if it was custom
+            var provName = providerSelect.value;
+            var prov = EmbeddingLoader.findProvider(_embData.providers, provName);
+            var inList = prov && prov.models.some(function(m) { return m.id === _embData.current_model; });
+            if (!inList) {
+                customInput.value = _embData.current_model;
+            }
+        }
+
+        // Ollama hint: if model not in downloaded list
+        if (customHint && provName === 'ollama' && isCustom) {
+            customHint.textContent = 'Ensure the model is pulled: ollama pull <model-name>';
+        } else if (customHint) {
+            customHint.textContent = '';
+        }
+    }
+
+    providerSelect.addEventListener('change', updateModelSelect);
+    modelSelect.addEventListener('change', handleModelChange);
+
+    // ── Form submit ──
     embForm.addEventListener('submit', async function(e) {
         e.preventDefault();
         var btn = embForm.querySelector('button[type="submit"]');
         var originalText = btn.textContent;
-        btn.textContent = 'Saving…';
+        btn.textContent = 'Saving\u2026';
         btn.disabled = true;
         embResult.textContent = '';
         embResult.className = 'form-hint';
 
+        // Resolve model: from select or custom input
+        var modelValue = modelSelect.value === '__custom__'
+            ? (customInput.value || '').trim()
+            : (modelSelect.value || '');
+
         var form = new FormData(embForm);
         var patches = [
-            { key: 'memory.embedding_provider', value: form.get('embedding_provider') || 'ollama' },
-            { key: 'memory.embedding_model', value: form.get('embedding_model') || '' },
-            { key: 'memory.embedding_api_base', value: form.get('embedding_api_base') || '' },
-            { key: 'memory.embedding_api_key', value: form.get('embedding_api_key') || '' },
+            { key: 'memory.embedding_provider', value: providerSelect.value || 'ollama' },
+            { key: 'memory.embedding_model', value: modelValue },
+            { key: 'memory.embedding_api_base', value: (form.get('embedding_api_base') || '').trim() },
+            { key: 'memory.embedding_api_key', value: (form.get('embedding_api_key') || '').trim() },
             { key: 'memory.embedding_dimensions', value: String(form.get('embedding_dimensions') || '384') },
         ];
 
@@ -2351,17 +2400,20 @@ if (btnRunCleanup) {
                     throw new Error('Failed to save ' + patches[i].key);
                 }
             }
-            embResult.textContent = '✓ Embeddings config saved. Restart gateway to apply.';
+            EmbeddingLoader.clearCache();
+            embResult.textContent = '\u2713 Embeddings config saved. Restart gateway to apply.';
             embResult.className = 'form-hint pairing-status success';
-            btn.textContent = 'Saved ✓';
+            btn.textContent = 'Saved \u2713';
             setTimeout(function() { btn.textContent = originalText; btn.disabled = false; }, 2000);
         } catch (err) {
-            embResult.textContent = '✗ ' + (err.message || 'Failed to save settings');
+            embResult.textContent = '\u2717 ' + (err.message || 'Failed to save settings');
             embResult.className = 'form-hint pairing-status error';
             btn.textContent = 'Error!';
             setTimeout(function() { btn.textContent = originalText; btn.disabled = false; }, 2000);
         }
     });
+
+    initEmbeddings();
 })();
 
 // ─── Browser Form ─────────────────────────────────────────────────

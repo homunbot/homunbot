@@ -358,8 +358,8 @@ impl Drop for EmbeddingEngine {
 /// Create the appropriate embedding provider based on config.
 ///
 /// All providers use `ApiEmbeddingProvider` (OpenAI-compatible `/v1/embeddings`).
-/// Named providers (ollama, openai, mistral) supply sensible defaults;
-/// API key resolution: `embedding_api_key` → matching LLM provider key → empty.
+/// Named providers supply sensible defaults; API key resolution handles encrypted
+/// vault keys (from Web UI config) via `global_secrets()`.
 pub fn create_embedding_provider(config: &Config) -> Result<Box<dyn EmbeddingProvider>> {
     let mem = &config.memory;
     let dims = if mem.embedding_dimensions > 0 {
@@ -368,45 +368,34 @@ pub fn create_embedding_provider(config: &Config) -> Result<Box<dyn EmbeddingPro
         DEFAULT_EMBEDDING_DIM
     };
 
-    // Provider-specific defaults: (provider_name, default_model, default_api_base, llm_provider)
-    let (provider_name, default_model, default_base, llm_provider) =
+    // Provider-specific defaults: (name, default_model, default_api_base, needs_key)
+    let (provider_name, default_model, default_base, needs_key) =
         match mem.embedding_provider.as_str() {
-            "openai" => (
-                "openai",
-                "text-embedding-3-small",
-                "https://api.openai.com/v1",
-                Some(&config.providers.openai),
-            ),
-            "mistral" => (
-                "mistral",
-                "mistral-embed",
-                "https://api.mistral.ai/v1",
-                Some(&config.providers.mistral),
-            ),
-            // Default: Ollama (free, local, no API key needed)
-            _ => (
-                "ollama",
-                "nomic-embed-text",
-                "http://localhost:11434/v1",
-                None, // Ollama doesn't need an API key
-            ),
+            "openai" => ("openai", "text-embedding-3-small", "https://api.openai.com/v1", true),
+            "mistral" => ("mistral", "mistral-embed", "https://api.mistral.ai/v1", true),
+            "cohere" => ("cohere", "embed-english-v3.0", "https://api.cohere.ai/v1", true),
+            "together" => ("together", "togethercomputer/m2-bert-80M-8k-retrieval", "https://api.together.xyz/v1", true),
+            "fireworks" => ("fireworks", "nomic-ai/nomic-embed-text-v1.5", "https://api.fireworks.ai/inference/v1", true),
+            "ollama_cloud" => ("ollama_cloud", "nomic-embed-text", "https://ollama.com/v1", true),
+            _ => ("ollama", "nomic-embed-text", "http://localhost:11434/v1", false),
         };
 
-    // 3-level fallback: embedding field → LLM provider field → default
+    // Resolve API key: embedding field → LLM provider (vault-aware) → empty
     let api_key = if !mem.embedding_api_key.is_empty() {
         mem.embedding_api_key.clone()
-    } else if let Some(prov) = llm_provider {
-        prov.api_key.clone()
     } else {
-        String::new()
+        resolve_provider_api_key(config, provider_name)
     };
 
+    // Resolve API base: embedding field → LLM provider → default
     let api_base = if !mem.embedding_api_base.is_empty() {
         mem.embedding_api_base.clone()
-    } else if let Some(prov) = llm_provider {
-        prov.api_base.clone().unwrap_or_else(|| default_base.to_string())
     } else {
-        default_base.to_string()
+        config
+            .providers
+            .get(provider_name)
+            .and_then(|p| p.api_base.clone())
+            .unwrap_or_else(|| default_base.to_string())
     };
 
     let model = if !mem.embedding_model.is_empty() {
@@ -415,8 +404,7 @@ pub fn create_embedding_provider(config: &Config) -> Result<Box<dyn EmbeddingPro
         default_model.to_string()
     };
 
-    // Require API key for providers that need one
-    if api_key.is_empty() && llm_provider.is_some() {
+    if api_key.is_empty() && needs_key {
         anyhow::bail!(
             "{provider_name} embedding requires an API key. \
              Set memory.embedding_api_key or providers.{provider_name}.api_key, \
@@ -436,6 +424,39 @@ pub fn create_embedding_provider(config: &Config) -> Result<Box<dyn EmbeddingPro
         dims,
         provider_name.into(),
     )))
+}
+
+/// Resolve the API key for a provider, handling encrypted vault keys.
+///
+/// When configured via the Web UI, keys are stored encrypted in the vault
+/// and `config.toml` contains the marker `"***ENCRYPTED***"`. This function
+/// resolves the real key from `global_secrets()`.
+fn resolve_provider_api_key(config: &Config, provider_name: &str) -> String {
+    let prov = match config.providers.get(provider_name) {
+        Some(p) => p,
+        None => return String::new(),
+    };
+
+    if prov.api_key.is_empty() {
+        return String::new();
+    }
+
+    // If the key is the encrypted marker, resolve from vault
+    if prov.api_key == "***ENCRYPTED***" {
+        if let Ok(secrets) = crate::storage::global_secrets() {
+            let key = crate::storage::SecretKey::provider_api_key(provider_name);
+            if let Ok(Some(real_key)) = secrets.get(&key) {
+                return real_key;
+            }
+        }
+        tracing::warn!(
+            provider = provider_name,
+            "Encrypted API key marker found but could not resolve from vault"
+        );
+        return String::new();
+    }
+
+    prov.api_key.clone()
 }
 
 #[cfg(test)]

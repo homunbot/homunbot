@@ -698,38 +698,48 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <div class="form-group">
                                 <label>Provider</label>
                                 <select name="embedding_provider" class="input" id="embedding-provider-select">
-                                    <option value="ollama" {emb_ollama_sel}>Ollama (local, free)</option>
-                                    <option value="openai" {emb_openai_sel}>OpenAI</option>
-                                    <option value="mistral" {emb_mistral_sel}>Mistral</option>
+                                    <option value="">Loading providers...</option>
                                 </select>
-                                <div class="form-hint">All providers use the OpenAI-compatible /v1/embeddings protocol.</div>
+                                <div class="form-hint">Only configured providers with embedding support are shown.</div>
                             </div>
                             <div class="form-group">
                                 <label>Model</label>
-                                <input type="text" name="embedding_model" value="{embedding_model}" placeholder="(provider default)" class="input">
-                                <div class="form-hint">Leave empty for provider default.</div>
+                                <select name="embedding_model" class="input" id="embedding-model-select">
+                                    <option value="">Loading models...</option>
+                                </select>
+                                <div class="form-hint" id="embedding-model-hint">Select a model or choose "Custom..."</div>
                             </div>
                         </div>
-                        <div class="form-row">
+                        <div class="form-row" id="embedding-custom-model-row" style="display:none;">
                             <div class="form-group">
-                                <label>API Base URL</label>
-                                <input type="text" name="embedding_api_base" value="{embedding_api_base}" placeholder="(provider default)" class="input">
-                                <div class="form-hint">Override the default API endpoint.</div>
-                            </div>
-                            <div class="form-group">
-                                <label>API Key</label>
-                                <input type="password" name="embedding_api_key" value="{embedding_api_key}" placeholder="(auto from LLM provider)" class="input">
-                                <div class="form-hint">Leave empty to use the matching LLM provider's key.</div>
+                                <label>Custom Model Name</label>
+                                <input type="text" name="embedding_custom_model" class="input" id="embedding-custom-model" placeholder="e.g. my-custom-embed-model">
+                                <div class="form-hint" id="embedding-custom-hint"></div>
                             </div>
                         </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Dimensions</label>
-                                <input type="number" name="embedding_dimensions" value="{embedding_dimensions}" min="64" max="4096" class="input">
-                                <div class="form-hint">Default 384. Changing requires re-indexing all vectors.</div>
+                        <details class="form-details">
+                            <summary>Advanced</summary>
+                            <div class="form-row" style="margin-top:12px;">
+                                <div class="form-group">
+                                    <label>API Base URL</label>
+                                    <input type="text" name="embedding_api_base" class="input" id="embedding-api-base" placeholder="(provider default)">
+                                    <div class="form-hint">Override the default API endpoint.</div>
+                                </div>
+                                <div class="form-group">
+                                    <label>API Key</label>
+                                    <input type="password" name="embedding_api_key" class="input" id="embedding-api-key" placeholder="(auto from LLM provider)">
+                                    <div class="form-hint">Leave empty to use the LLM provider's key.</div>
+                                </div>
                             </div>
-                        </div>
-                        <div class="form-row">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Dimensions</label>
+                                    <input type="number" name="embedding_dimensions" value="{embedding_dimensions}" min="64" max="4096" class="input">
+                                    <div class="form-hint">Default 384. Changing requires re-indexing all vectors.</div>
+                                </div>
+                            </div>
+                        </details>
+                        <div class="form-row" style="margin-top:12px;">
                             <button type="submit" class="btn btn-primary">Save Embeddings</button>
                         </div>
                         <div id="embeddings-result" class="form-hint" style="margin-top:10px;"></div>
@@ -767,18 +777,12 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
         } else {
             ""
         },
-        emb_ollama_sel = if config.memory.embedding_provider == "ollama" || config.memory.embedding_provider.is_empty() { "selected" } else { "" },
-        emb_openai_sel = if config.memory.embedding_provider == "openai" { "selected" } else { "" },
-        emb_mistral_sel = if config.memory.embedding_provider == "mistral" { "selected" } else { "" },
-        embedding_model = config.memory.embedding_model,
-        embedding_api_base = config.memory.embedding_api_base,
-        embedding_api_key = config.memory.embedding_api_key,
         embedding_dimensions = config.memory.embedding_dimensions,
         providers_html = providers_html,
         catalog_modal_html = catalog_modal_html,
     );
 
-    Html(page_html("Settings", "settings", &body, &["setup.js"]))
+    Html(page_html("Settings", "settings", &body, &["embedding-loader.js", "setup.js"]))
 }
 
 // ─── Appearance ────────────────────────────────────────────────
