@@ -402,7 +402,6 @@ impl WebServer {
                                 || s.starts_with(b"https://127.0.0.1")
                                 || s.starts_with(b"http://localhost")
                                 || s.starts_with(b"http://127.0.0.1")
-                                || s.starts_with(b"https://ui.homun.bot")
                                 || (!cors_domain.is_empty()
                                     && (s.starts_with(
                                         format!("https://{cors_domain}").as_bytes(),
@@ -613,7 +612,7 @@ fn generate_self_signed(cert_path: &Path, key_path: &Path, extra_domains: &[&str
         std::fs::create_dir_all(parent)?;
     }
 
-    // Build SAN list: localhost + any extra domains (e.g., "ui.homun.bot")
+    // Build SAN list: localhost + any extra domains (e.g., "homun.example.com")
     let mut dns_names = vec!["localhost".to_string()];
     for domain in extra_domains {
         if !domain.is_empty() && *domain != "localhost" {
@@ -835,7 +834,7 @@ async fn start_port_proxy(listen_port: u16, target_port: u16) {
             if e.kind() == std::io::ErrorKind::PermissionDenied {
                 tracing::info!(
                     listen_port,
-                    "Port {listen_port} requires admin — use https://ui.homun.bot:{target_port} or run with sudo"
+                    "Port {listen_port} requires admin — use https://localhost:{target_port} or run with sudo"
                 );
             } else {
                 tracing::debug!(listen_port, error = %e, "Could not bind port proxy");
@@ -937,7 +936,7 @@ mod tests {
         let cert_path = dir.path().join("cert.pem");
         let key_path = dir.path().join("key.pem");
 
-        generate_self_signed(&cert_path, &key_path, &["ui.homun.bot"]).unwrap();
+        generate_self_signed(&cert_path, &key_path, &["homun.example.com"]).unwrap();
 
         // Verify files exist and contain valid PEM
         let cert_data = std::fs::read_to_string(&cert_path).unwrap();
@@ -975,7 +974,7 @@ mod tests {
         let cert_path = dir.path().join("cert.pem");
         let key_path = dir.path().join("key.pem");
 
-        generate_self_signed(&cert_path, &key_path, &["ui.homun.bot", "my.custom.dev"]).unwrap();
+        generate_self_signed(&cert_path, &key_path, &["homun.example.com", "my.custom.dev"]).unwrap();
 
         let cert_data = std::fs::read(&cert_path).unwrap();
         let certs: Vec<_> = rustls_pemfile::certs(&mut cert_data.as_slice())
@@ -1031,13 +1030,13 @@ mod tests {
         let key_path = dir.path().join("key.pem");
 
         // Pre-generate certs in the temp dir
-        generate_self_signed(&cert_path, &key_path, &["ui.homun.bot"]).unwrap();
+        generate_self_signed(&cert_path, &key_path, &["homun.example.com"]).unwrap();
 
         let result = build_tls_config(
             cert_path.to_str().unwrap(),
             key_path.to_str().unwrap(),
             false,
-            "ui.homun.bot",
+            "homun.example.com",
         )
         .await;
         assert!(

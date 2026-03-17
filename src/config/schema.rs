@@ -751,8 +751,8 @@ pub struct WebConfig {
     pub enabled: bool,
     pub host: String,
     pub port: u16,
-    /// Custom domain for the web UI (default: "ui.homun.bot").
-    /// Used in self-signed cert SANs and /etc/hosts setup.
+    /// Custom domain for the web UI (default: "localhost").
+    /// Used in self-signed cert SANs and CORS origin matching.
     pub domain: String,
     /// Optional auth token for remote access. Empty = no auth (localhost only).
     pub auth_token: String,
@@ -774,7 +774,7 @@ impl Default for WebConfig {
             enabled: true,
             host: "127.0.0.1".to_string(),
             port: 18443,
-            domain: "ui.homun.bot".to_string(),
+            domain: "localhost".to_string(),
             auth_token: String::new(),
             rate_limit_per_minute: 60,
             auth_rate_limit_per_minute: 5,
