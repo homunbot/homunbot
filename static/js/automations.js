@@ -620,9 +620,11 @@ async function loadAutomations() {
     try {
         automations = await apiRequest('/v1/automations');
     } catch (err) {
-        showToast('Failed to load automations: ' + (err.message || err), 'error');
         automations = [];
+        showErrorState('automations-list', 'Could not load automations.', loadAutomations);
+        return;
     }
+    clearErrorState('automations-list');
     renderAutomations();
 }
 

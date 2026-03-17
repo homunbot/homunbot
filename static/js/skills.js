@@ -582,7 +582,7 @@
             }
             updateInstalledCount();
         } catch (err) {
-            // Silent
+            showErrorState('installed-grid', 'Could not load installed skills.', refreshInstalled);
         }
     }
 

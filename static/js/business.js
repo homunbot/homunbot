@@ -83,7 +83,7 @@ async function loadBusinesses() {
         renderList();
         updateStats();
     } catch (e) {
-        console.error('Failed to load businesses:', e);
+        showErrorState('biz-list', 'Could not load businesses.', loadBusinesses);
     }
 }
 

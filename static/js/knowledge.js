@@ -105,10 +105,7 @@ async function loadSources() {
         container.appendChild(table);
     } catch (e) {
         container.textContent = '';
-        const p = document.createElement('p');
-        p.className = 'empty-state';
-        p.textContent = 'Failed to load sources: ' + e.message;
-        container.appendChild(p);
+        showErrorState('sources-list', 'Could not load knowledge sources.', loadSources);
     }
 }
 

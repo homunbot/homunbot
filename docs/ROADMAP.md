@@ -95,7 +95,7 @@
 | ONB-4 | **First-run tutorial** | Tour interattivo dopo il setup: "Ecco la chat", "Prova a chiedere...", "Qui trovi le automazioni". Dismissable, non riappare. | 3 giorni | TODO |
 | **UX overhaul** | | | | |
 | UXO-1 | **Toast/notification system** | Completato con REL-10: `hm-toast` globale unificato, 17 implementazioni rimosse. | 2 giorni | ✅ DONE (2026-03-17) |
-| UXO-2 | **Error states everywhere** | Ogni pagina: stato errore con messaggio chiaro + retry button. Pattern riusabile `.error-state`. | 3 giorni | TODO |
+| UXO-2 | **Error states everywhere** | Pattern `.hm-error-state` (CSS + JS safe DOM). `showErrorState(id, msg, retryFn)` + `clearErrorState(id)` in toast.js. Applicato a 10 pagine: knowledge, skills, mcp, vault, automations, workflows, business, approvals, file-access, maintenance. Icona warning SVG + retry button. | 3 giorni | ✅ DONE (2026-03-17) |
 | UXO-3 | **Progress indicators** | Operazioni lunghe (browser, RAG ingest, skill install): progress bar o spinner con messaggio. | 2 giorni | TODO |
 | UXO-4 | **Chat: fix reasoning persistence** | UX-3: blocchi thinking/reasoning persistenti quando si torna su una chat. | 2 giorni | TODO |
 | UXO-5 | **Chat: fix plan mode display** | UX-2: messaggi plan devono corrispondere al piano reale. | 2-3 giorni | TODO |

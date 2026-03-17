@@ -2764,6 +2764,33 @@ html, body {
 .hm-toast--warning { border-left: 3px solid var(--warn); color: var(--warn); }
 .hm-toast--info    { border-left: 3px solid var(--info); color: var(--info); }
 
+/* ── Inline error state ── */
+.hm-error-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 48px 24px;
+    text-align: center;
+    color: var(--t3);
+}
+.hm-error-state svg { width: 48px; height: 48px; color: var(--err); opacity: 0.6; }
+.hm-error-state p { font-size: 14px; max-width: 360px; line-height: 1.5; margin: 0; }
+.hm-error-state .hm-retry-btn {
+    margin-top: 4px;
+    padding: 8px 20px;
+    font-size: 13px;
+    font-family: inherit;
+    border-radius: var(--r-md);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--t1);
+    cursor: pointer;
+    transition: background var(--fast) var(--ease);
+}
+.hm-error-state .hm-retry-btn:hover { background: var(--surface-hover); }
+
 /* Chat toast notifications (legacy — kept for reference, superseded by .hm-toast) */
 .chat-toast {
     position: fixed;

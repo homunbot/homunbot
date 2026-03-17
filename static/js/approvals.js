@@ -54,7 +54,7 @@ async function loadApprovals() {
         renderAuditLog();
         
     } catch (err) {
-        console.error('Failed to load approvals:', err);
+        showErrorState('pending-approvals-list', 'Could not load approvals.', loadApprovals);
     }
 }
 

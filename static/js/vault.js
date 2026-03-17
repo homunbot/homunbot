@@ -378,7 +378,7 @@ async function loadKeys() {
             vaultList.appendChild(row);
         });
     } catch (e) {
-        showToast('Failed to load vault keys', 'error');
+        showErrorState('vault-list', 'Could not load vault keys.', loadKeys);
     }
 }
 

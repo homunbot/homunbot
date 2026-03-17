@@ -49,14 +49,8 @@ async function loadStats() {
         domains = await apiRequest('/v1/maintenance/db-stats');
         render();
     } catch (e) {
-        const container = document.getElementById('maintenance-content');
-        container.textContent = '';
-        const div = document.createElement('div');
-        div.className = 'empty-state';
-        const p = document.createElement('p');
-        p.textContent = 'Failed to load stats: ' + e.message;
-        div.appendChild(p);
-        container.appendChild(div);
+        document.getElementById('maintenance-content').textContent = '';
+        showErrorState('maintenance-content', 'Could not load database stats.', loadStats);
     }
 }
 

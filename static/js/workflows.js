@@ -155,7 +155,7 @@ async function loadWorkflows() {
 
         renderWorkflows();
     } catch (e) {
-        console.error('Failed to load workflows:', e);
+        showErrorState('workflows-list', 'Could not load workflows.', loadWorkflows);
     }
 }
 

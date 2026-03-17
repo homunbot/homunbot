@@ -1116,9 +1116,10 @@
     async function loadServers() {
         var servers = await McpLoader.fetchServers({ fresh: true });
         if (!Array.isArray(servers)) {
-            showToast('Failed to load MCP servers', 'error');
+            showErrorState('mcp-servers-list', 'Could not load MCP servers.', loadServers);
             return;
         }
+        clearErrorState('mcp-servers-list');
         renderServers(servers);
     }
 

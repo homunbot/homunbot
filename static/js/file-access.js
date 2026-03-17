@@ -29,8 +29,7 @@ async function loadPermissions() {
         updateModeSelection();
         updateDefaultCheckboxes();
     } catch (e) {
-        console.error('Error loading permissions:', e);
-        showToast('Failed to load permissions', 'error');
+        showErrorState('acl-list', 'Could not load file permissions.', loadPermissions);
     }
 }
 
