@@ -2344,33 +2344,38 @@ if (btnRunCleanup) {
         var isCustom = modelSelect.value === '__custom__';
         customRow.style.display = isCustom ? '' : 'none';
 
-        if (isCustom && _embData.current_model) {
-            // Pre-fill custom input with current model if it was custom
+        if (isCustom && _embData && _embData.current_model) {
             var provName = providerSelect.value;
             var prov = EmbeddingLoader.findProvider(_embData.providers, provName);
             var inList = prov && prov.models.some(function(m) { return m.id === _embData.current_model; });
-            if (!inList) {
-                customInput.value = _embData.current_model;
-            }
+            if (!inList) customInput.value = _embData.current_model;
         }
 
-        // Ollama hint: if model not in downloaded list
-        if (customHint && provName === 'ollama' && isCustom) {
-            customHint.textContent = 'Ensure the model is pulled: ollama pull <model-name>';
-        } else if (customHint) {
-            customHint.textContent = '';
+        // Check if selected model needs pull
+        var selectedOpt = modelSelect.selectedOptions[0];
+        var needsPull = selectedOpt && selectedOpt.dataset.needsPull === 'true';
+        if (customHint) {
+            customHint.textContent = needsPull
+                ? 'This model will be downloaded automatically when you save.'
+                : (isCustom ? 'For Ollama: model must be pulled locally.' : '');
+            customHint.style.display = (needsPull || isCustom) ? '' : 'none';
         }
+    }
+
+    /** Check if selected Ollama model needs pulling. */
+    function selectedModelNeedsPull() {
+        var selectedOpt = modelSelect.selectedOptions[0];
+        return selectedOpt && selectedOpt.dataset.needsPull === 'true';
     }
 
     providerSelect.addEventListener('change', updateModelSelect);
     modelSelect.addEventListener('change', handleModelChange);
 
-    // ── Form submit ──
+    // ── Form submit with auto-pull ──
     embForm.addEventListener('submit', async function(e) {
         e.preventDefault();
         var btn = embForm.querySelector('button[type="submit"]');
         var originalText = btn.textContent;
-        btn.textContent = 'Saving\u2026';
         btn.disabled = true;
         embResult.textContent = '';
         embResult.className = 'form-hint';
@@ -2380,6 +2385,26 @@ if (btnRunCleanup) {
             ? (customInput.value || '').trim()
             : (modelSelect.value || '');
 
+        // Auto-pull if the selected Ollama model isn't downloaded yet
+        var isOllama = providerSelect.value === 'ollama';
+        if (isOllama && selectedModelNeedsPull() && modelValue) {
+            btn.textContent = 'Pulling model\u2026';
+            embResult.textContent = 'Downloading ' + modelValue + ' from Ollama\u2026 this may take a minute.';
+            embResult.className = 'form-hint';
+
+            var pullResult = await EmbeddingLoader.pullModel(modelValue);
+            if (!pullResult.ok) {
+                embResult.textContent = '\u2717 Pull failed: ' + pullResult.message;
+                embResult.className = 'form-hint pairing-status error';
+                btn.textContent = originalText;
+                btn.disabled = false;
+                return;
+            }
+            embResult.textContent = '\u2713 Model downloaded. Saving config\u2026';
+            embResult.className = 'form-hint pairing-status success';
+        }
+
+        btn.textContent = 'Saving\u2026';
         var form = new FormData(embForm);
         var patches = [
             { key: 'memory.embedding_provider', value: providerSelect.value || 'ollama' },
@@ -2396,14 +2421,15 @@ if (btnRunCleanup) {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(patches[i]),
                 });
-                if (!resp.ok) {
-                    throw new Error('Failed to save ' + patches[i].key);
-                }
+                if (!resp.ok) throw new Error('Failed to save ' + patches[i].key);
             }
             EmbeddingLoader.clearCache();
             embResult.textContent = '\u2713 Embeddings config saved. Restart gateway to apply.';
             embResult.className = 'form-hint pairing-status success';
             btn.textContent = 'Saved \u2713';
+            // Refresh model list to reflect pulled state
+            _embData = await EmbeddingLoader.fetchModels({ fresh: true });
+            updateModelSelect();
             setTimeout(function() { btn.textContent = originalText; btn.disabled = false; }, 2000);
         } catch (err) {
             embResult.textContent = '\u2717 ' + (err.message || 'Failed to save settings');

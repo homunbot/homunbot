@@ -79,8 +79,12 @@ window.EmbeddingLoader = {
         if (!currentModel) defOpt.selected = true;
         selectEl.appendChild(defOpt);
 
-        // Model options
-        (models || []).forEach(function(m) {
+        // Separate pulled and suggested models
+        var pulled = (models || []).filter(function(m) { return m.pulled !== false; });
+        var suggested = (models || []).filter(function(m) { return m.pulled === false; });
+
+        // Pulled models
+        pulled.forEach(function(m) {
             var opt = document.createElement('option');
             opt.value = m.id;
             opt.textContent = m.label || m.id;
@@ -88,15 +92,48 @@ window.EmbeddingLoader = {
             selectEl.appendChild(opt);
         });
 
+        // Suggested models (not yet pulled) — marked with data attribute
+        if (suggested.length > 0) {
+            var optgroup = document.createElement('optgroup');
+            optgroup.label = 'Available (needs download)';
+            suggested.forEach(function(m) {
+                var opt = document.createElement('option');
+                opt.value = m.id;
+                opt.textContent = m.label || m.id;
+                opt.dataset.needsPull = 'true';
+                if (m.id === currentModel) opt.selected = true;
+                optgroup.appendChild(opt);
+            });
+            selectEl.appendChild(optgroup);
+        }
+
         // Custom option
         var customOpt = document.createElement('option');
         customOpt.value = '__custom__';
         customOpt.textContent = 'Custom model...';
-        // If current model is set but not in the list, select custom
-        if (currentModel && !models.some(function(m) { return m.id === currentModel; })) {
+        if (currentModel && !(models || []).some(function(m) { return m.id === currentModel; })) {
             customOpt.selected = true;
         }
         selectEl.appendChild(customOpt);
+    },
+
+    /**
+     * Pull an Ollama model. Returns when download is complete.
+     *
+     * @param {string} modelName - Model to pull (e.g. "nomic-embed-text")
+     * @returns {Promise<{ok: boolean, message: string}>}
+     */
+    pullModel: async function(modelName) {
+        try {
+            var resp = await fetch('/api/v1/providers/ollama/pull', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: modelName }),
+            });
+            return await resp.json();
+        } catch (e) {
+            return { ok: false, message: 'Request failed: ' + e.message };
+        }
     },
 
     /**

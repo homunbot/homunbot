@@ -36,6 +36,10 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         )
         .route("/v1/providers/ollama/models", get(list_ollama_models))
         .route(
+            "/v1/providers/ollama/pull",
+            axum::routing::post(pull_ollama_model),
+        )
+        .route(
             "/v1/providers/ollama-cloud/models",
             get(list_ollama_cloud_models),
         )
@@ -914,6 +918,82 @@ async fn list_ollama_models(State(state): State<Arc<AppState>>) -> Json<OllamaMo
     }
 }
 
+// ─── Ollama Model Pull ────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct PullRequest {
+    name: String,
+}
+
+#[derive(Serialize)]
+struct PullResponse {
+    ok: bool,
+    message: String,
+}
+
+/// Pull (download) an Ollama model. Blocks until complete.
+/// Uses Ollama's POST /api/pull with stream=false for simplicity.
+async fn pull_ollama_model(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PullRequest>,
+) -> Json<PullResponse> {
+    let config = state.config.read().await;
+    let base_url = config
+        .providers
+        .get("ollama")
+        .and_then(|p| p.api_base.as_deref())
+        .unwrap_or("http://localhost:11434")
+        .trim_end_matches('/')
+        .trim_end_matches("/v1")
+        .to_string();
+    drop(config);
+
+    let url = format!("{}/api/pull", base_url);
+    tracing::info!(model = %req.name, "Pulling Ollama model");
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600)) // 10 min for large models
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return Json(PullResponse {
+                ok: false,
+                message: format!("HTTP client error: {e}"),
+            });
+        }
+    };
+
+    // Use stream=false so Ollama returns only when pull is complete
+    match client
+        .post(&url)
+        .json(&serde_json::json!({"name": req.name, "stream": false}))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            tracing::info!(model = %req.name, "Ollama model pull completed");
+            Json(PullResponse {
+                ok: true,
+                message: format!("Model '{}' pulled successfully", req.name),
+            })
+        }
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            tracing::warn!(model = %req.name, %status, %body, "Ollama pull failed");
+            Json(PullResponse {
+                ok: false,
+                message: format!("Ollama returned {status}: {body}"),
+            })
+        }
+        Err(e) => Json(PullResponse {
+            ok: false,
+            message: format!("Connection to Ollama failed: {e}"),
+        }),
+    }
+}
+
 /// List available models from Ollama Cloud (uses same /api/tags format as local Ollama)
 #[derive(Serialize)]
 struct OllamaCloudModelsResponse {
@@ -1105,6 +1185,36 @@ const EMBEDDING_PROVIDER_DISPLAY: &[(&str, &str)] = &[
     ("fireworks", "Fireworks"),
 ];
 
+/// Model families that indicate embedding architectures (encoder-only).
+const EMBEDDING_FAMILIES: &[&str] = &["bert", "nomic-bert", "xlm-roberta"];
+
+/// Name substrings that identify embedding models even without family info.
+const EMBEDDING_NAME_PATTERNS: &[&str] = &["embed", "bge", "minilm", "snowflake", "e5-", "gte-"];
+
+/// Well-known Ollama embedding models to suggest when not yet pulled.
+/// (name, display_label, approximate_size_mb)
+const SUGGESTED_OLLAMA_EMBEDDING_MODELS: &[(&str, &str, u32)] = &[
+    ("nomic-embed-text", "nomic-embed-text (274 MB, 137M params)", 274),
+    ("mxbai-embed-large", "mxbai-embed-large (670 MB, 335M params)", 670),
+    ("all-minilm", "all-minilm (46 MB, 23M params)", 46),
+    ("snowflake-arctic-embed", "snowflake-arctic-embed (670 MB, 335M params)", 670),
+    ("bge-m3", "bge-m3 (1.2 GB, 568M params)", 1200),
+];
+
+/// Check if an Ollama model is an embedding model based on families or name.
+fn is_embedding_model(name: &str, families: &[String]) -> bool {
+    // Check family
+    if families
+        .iter()
+        .any(|f| EMBEDDING_FAMILIES.contains(&f.as_str()))
+    {
+        return true;
+    }
+    // Fallback: check name patterns
+    let lower = name.to_lowercase();
+    EMBEDDING_NAME_PATTERNS.iter().any(|p| lower.contains(p))
+}
+
 #[derive(Serialize)]
 struct EmbeddingModelsResponse {
     ok: bool,
@@ -1128,6 +1238,8 @@ struct EmbeddingProviderInfo {
 struct EmbeddingModelInfo {
     id: String,
     label: String,
+    /// Whether this model is already pulled/available locally (Ollama only).
+    pulled: bool,
 }
 
 async fn list_embedding_models(
@@ -1229,6 +1341,7 @@ async fn list_embedding_models(
                 .map(|(id, label)| EmbeddingModelInfo {
                     id: id.to_string(),
                     label: label.to_string(),
+                    pulled: true, // Cloud models are always available
                 })
                 .collect()
         };
@@ -1253,7 +1366,7 @@ async fn list_embedding_models(
         .build()
         .ok();
 
-    // Shared Ollama /api/tags response parser
+    // Ollama /api/tags response with details for family filtering
     #[derive(Deserialize)]
     struct Tags {
         models: Vec<TagModel>,
@@ -1262,9 +1375,15 @@ async fn list_embedding_models(
     struct TagModel {
         name: String,
         size: Option<u64>,
+        details: Option<TagDetails>,
+    }
+    #[derive(Deserialize)]
+    struct TagDetails {
+        #[serde(default)]
+        families: Option<Vec<String>>,
     }
 
-    // Fetch live Ollama local models
+    // Fetch live Ollama local models — filter to embedding models + add suggested
     if let (Some(info), Some(cl)) = (
         providers.iter_mut().find(|p| p.name == "ollama"),
         client.as_ref(),
@@ -1273,18 +1392,49 @@ async fn list_embedding_models(
         if let Ok(resp) = cl.get(&url).send().await {
             if resp.status().is_success() {
                 if let Ok(tags) = resp.json::<Tags>().await {
-                    info.models = tags
+                    // Filter to embedding models only
+                    let mut pulled_names: Vec<String> = Vec::new();
+                    let mut models: Vec<EmbeddingModelInfo> = tags
                         .models
                         .into_iter()
+                        .filter(|m| {
+                            let families = m
+                                .details
+                                .as_ref()
+                                .and_then(|d| d.families.as_ref())
+                                .map(|f| f.clone())
+                                .unwrap_or_default();
+                            is_embedding_model(&m.name, &families)
+                        })
                         .map(|m| {
                             let label = if let Some(s) = m.size {
-                                format!("{} ({:.0} MB)", m.name, s as f64 / 1e6)
+                                format!("{} ({:.0} MB) ✓", m.name, s as f64 / 1e6)
                             } else {
-                                m.name.clone()
+                                format!("{} ✓", m.name)
                             };
-                            EmbeddingModelInfo { id: m.name, label }
+                            // Track base name (without tag) for dedup
+                            let base = m.name.split(':').next().unwrap_or(&m.name);
+                            pulled_names.push(base.to_string());
+                            EmbeddingModelInfo {
+                                id: m.name,
+                                label,
+                                pulled: true,
+                            }
                         })
                         .collect();
+
+                    // Add suggested models that aren't already pulled
+                    for &(name, label, _) in SUGGESTED_OLLAMA_EMBEDDING_MODELS {
+                        if !pulled_names.iter().any(|p| p == name) {
+                            models.push(EmbeddingModelInfo {
+                                id: name.to_string(),
+                                label: format!("{} ↓", label),
+                                pulled: false,
+                            });
+                        }
+                    }
+
+                    info.models = models;
                 }
             }
         }
@@ -1311,6 +1461,7 @@ async fn list_embedding_models(
                             .map(|m| EmbeddingModelInfo {
                                 label: m.name.clone(),
                                 id: m.name,
+                                pulled: true, // Cloud models are always available
                             })
                             .collect();
                     }
