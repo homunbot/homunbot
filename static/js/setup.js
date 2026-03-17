@@ -2354,10 +2354,17 @@ if (btnRunCleanup) {
         // Check if selected model needs pull
         var selectedOpt = modelSelect.selectedOptions[0];
         var needsPull = selectedOpt && selectedOpt.dataset.needsPull === 'true';
+        var isOllamaProvider = providerSelect.value === 'ollama';
         if (customHint) {
-            customHint.textContent = needsPull
-                ? 'This model will be downloaded automatically when you save.'
-                : (isCustom ? 'For Ollama: model must be pulled locally.' : '');
+            if (needsPull) {
+                customHint.textContent = 'This model will be downloaded automatically when you save.';
+            } else if (isCustom && isOllamaProvider) {
+                customHint.textContent = 'Model will be pulled automatically if not already downloaded.';
+            } else if (isCustom) {
+                customHint.textContent = '';
+            } else {
+                customHint.textContent = '';
+            }
             customHint.style.display = (needsPull || isCustom) ? '' : 'none';
         }
     }
@@ -2386,8 +2393,11 @@ if (btnRunCleanup) {
             : (modelSelect.value || '');
 
         // Auto-pull if the selected Ollama model isn't downloaded yet
+        // For custom models, always attempt pull (idempotent — instant if already present)
         var isOllama = providerSelect.value === 'ollama';
-        if (isOllama && selectedModelNeedsPull() && modelValue) {
+        var isCustomModel = modelSelect.value === '__custom__';
+        var needsPull = selectedModelNeedsPull() || isCustomModel;
+        if (isOllama && needsPull && modelValue) {
             btn.textContent = 'Pulling model\u2026';
             embResult.textContent = 'Downloading ' + modelValue + ' from Ollama\u2026 this may take a minute.';
             embResult.className = 'form-hint';
