@@ -12,7 +12,6 @@
     var searchCount = document.getElementById('search-count');
     var installedGrid = document.getElementById('installed-grid');
     var installedCount = document.getElementById('installed-count');
-    var toastEl = document.getElementById('skill-toast');
     var catalogStatsEl = document.getElementById('catalog-stats');
     var sandboxBadgeEl = document.getElementById('skills-sandbox-runtime-badge');
     var sandboxTextEl = document.getElementById('skills-sandbox-runtime-text');
@@ -177,19 +176,6 @@
             clearTimeout(debounceTimer);
             debounceTimer = setTimeout(function() { fn.apply(null, args); }, ms);
         };
-    }
-
-    // --- Toast ---
-    var toastTimeout = null;
-    function showToast(message, type) {
-        if (!toastEl) return;
-        toastEl.textContent = message;
-        toastEl.className = 'skill-toast skill-toast--' + (type || 'success');
-        toastEl.style.display = 'block';
-        clearTimeout(toastTimeout);
-        toastTimeout = setTimeout(function() {
-            toastEl.style.display = 'none';
-        }, 3000);
     }
 
     // --- Format numbers ---

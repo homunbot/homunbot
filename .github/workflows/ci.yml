@@ -179,8 +179,19 @@ jobs:
           path: artifacts
       
       - name: Display structure of downloaded files
-        run: ls -la artifacts/
-      
+        run: ls -laR artifacts/
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          for dir in */; do
+            file=$(ls "$dir")
+            sha256sum "$dir$file" | sed "s|$dir||" >> ../checksums.sha256
+          done
+          mv ../checksums.sha256 .
+          echo "=== SHA256 Checksums ==="
+          cat checksums.sha256
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -191,6 +202,7 @@ jobs:
             artifacts/homun-linux-x64/homun-linux-x64
             artifacts/homun-linux-arm64/homun-linux-arm64
             artifacts/homun-windows-x64.exe/homun-windows-x64.exe
+            artifacts/checksums.sha256
 
   # =============================================================================
   # FEATURE FLAGS TEST

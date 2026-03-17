@@ -19,22 +19,6 @@ async function apiRequest(path, options = {}) {
     return null;
 }
 
-function showToast(message, type = 'success') {
-    let el = document.getElementById('maint-toast');
-    if (!el) {
-        el = document.createElement('div');
-        el.id = 'maint-toast';
-        el.className = 'skill-toast';
-        el.style.cssText = 'position:fixed;bottom:1rem;right:1rem;padding:0.75rem 1rem;border-radius:0.5rem;z-index:1000;';
-        document.body.appendChild(el);
-    }
-    el.textContent = message;
-    el.className = `skill-toast skill-toast--${type}`;
-    el.style.display = 'block';
-    clearTimeout(el._timer);
-    el._timer = setTimeout(() => { el.style.display = 'none'; }, 3000);
-}
-
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;

@@ -1,16 +1,5 @@
 // Homun — Vault page interactivity
 
-// ─── Utilities ───
-function showToast(message, type = 'success') {
-    const el = document.getElementById('vault-toast');
-    if (!el) return;
-    el.textContent = message;
-    el.className = `skill-toast skill-toast--${type}`;
-    el.style.display = 'block';
-    clearTimeout(el._timer);
-    el._timer = setTimeout(() => { el.style.display = 'none'; }, 2500);
-}
-
 // ─── State ───
 const vaultList = document.getElementById('vault-list');
 const vaultCount = document.getElementById('vault-count');

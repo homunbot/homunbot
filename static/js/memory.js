@@ -1,16 +1,5 @@
 // Homun — Memory page interactivity
 
-// ─── Utilities ───
-function showToast(message, type = 'success') {
-    const el = document.getElementById('memory-toast');
-    if (!el) return;
-    el.textContent = message;
-    el.className = `skill-toast skill-toast--${type}`;
-    el.style.display = 'block';
-    clearTimeout(el._timer);
-    el._timer = setTimeout(() => { el.style.display = 'none'; }, 2500);
-}
-
 /** Escape HTML entities to prevent XSS — all dynamic content passes through this. */
 function esc(s) {
     const d = document.createElement('div');

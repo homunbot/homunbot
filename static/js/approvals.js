@@ -292,30 +292,6 @@ function formatTime(isoString) {
     return date.toLocaleString();
 }
 
-function showToast(message, type = 'info') {
-    // Create toast element
-    const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
-    toast.textContent = message;
-    toast.style.cssText = `
-        position: fixed;
-        bottom: 20px;
-        right: 20px;
-        padding: 12px 20px;
-        border-radius: 8px;
-        background: ${type === 'success' ? 'var(--success)' : type === 'error' ? 'var(--danger)' : 'var(--primary)'};
-        color: white;
-        z-index: 1000;
-        animation: slideIn 0.3s ease;
-    `;
-    document.body.appendChild(toast);
-    
-    setTimeout(() => {
-        toast.style.animation = 'slideOut 0.3s ease';
-        setTimeout(() => toast.remove(), 300);
-    }, 3000);
-}
-
 // ─── Init ───────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {

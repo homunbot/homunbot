@@ -87,12 +87,3 @@ async function saveShellProfile() {
     await savePermissions();
 }
 
-// ─── Toast ───
-
-function showToast(message, type = 'info') {
-    const toast = document.getElementById('shell-toast');
-    toast.textContent = message;
-    toast.className = `skill-toast toast-${type}`;
-    toast.style.display = 'block';
-    setTimeout(() => { toast.style.display = 'none'; }, 3000);
-}

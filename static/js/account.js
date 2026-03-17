@@ -5,23 +5,6 @@ let owner = null;
 let identities = [];
 let tokens = [];
 
-// ─── Utilities ───
-function showToast(message, type = 'success') {
-    let el = document.getElementById('account-toast');
-    if (!el) {
-        el = document.createElement('div');
-        el.id = 'account-toast';
-        el.className = 'skill-toast';
-        el.style.cssText = 'position:fixed;bottom:1rem;right:1rem;padding:0.75rem 1rem;border-radius:0.5rem;z-index:1000;';
-        document.body.appendChild(el);
-    }
-    el.textContent = message;
-    el.className = `skill-toast skill-toast--${type}`;
-    el.style.display = 'block';
-    clearTimeout(el._timer);
-    el._timer = setTimeout(() => { el.style.display = 'none'; }, 2500);
-}
-
 function formatDate(isoString) {
     if (!isoString) return '—';
     const d = new Date(isoString);

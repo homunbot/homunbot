@@ -237,21 +237,6 @@ function formatDependency(dep) {
     return `${kind}:${name}`;
 }
 
-function showToast(message, type = 'success') {
-    const existing = document.querySelector('.toast');
-    if (existing) existing.remove();
-
-    const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-
-    setTimeout(() => {
-        toast.classList.add('toast-out');
-        setTimeout(() => toast.remove(), 300);
-    }, 2600);
-}
-
 function getTargetLabel(value) {
     const found = automationTargets.find((t) => t.value === value);
     return found ? found.label : value;

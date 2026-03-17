@@ -117,7 +117,8 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::fs;
-    use std::sync::Mutex;
+
+    use serial_test::serial;
 
     use crate::tools::sandbox::backends::build_linux_native_command_spec;
     use crate::tools::sandbox::events::{append_sandbox_event, sandbox_events_path};
@@ -133,7 +134,25 @@ mod tests {
         SandboxRuntimeImageState,
     };
 
-    static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
+    /// RAII guard: sets env vars on creation, removes them on Drop (even on panic).
+    struct EnvGuard(Vec<String>);
+    impl EnvGuard {
+        fn set(key: &str, val: impl AsRef<std::ffi::OsStr>) -> Self {
+            unsafe { std::env::set_var(key, val) };
+            Self(vec![key.to_string()])
+        }
+        fn add(&mut self, key: &str, val: impl AsRef<std::ffi::OsStr>) {
+            unsafe { std::env::set_var(key, val) };
+            self.0.push(key.to_string());
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for key in &self.0 {
+                unsafe { std::env::remove_var(key) };
+            }
+        }
+    }
 
     #[test]
     fn disabled_sandbox_resolves_to_none() {
@@ -290,10 +309,10 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn sandbox_events_round_trip_from_custom_state_dir() {
-        let _guard = TEST_ENV_LOCK.lock().expect("test env lock");
         let temp = tempfile::tempdir().expect("tempdir");
-        unsafe { std::env::set_var("HOMUN_SANDBOX_STATE_DIR", temp.path()) };
+        let _env = EnvGuard::set("HOMUN_SANDBOX_STATE_DIR", temp.path());
 
         append_sandbox_event(&SandboxEvent {
             timestamp: "2026-03-06T10:00:00Z".to_string(),
@@ -332,17 +351,16 @@ mod tests {
         let path = sandbox_events_path();
         assert!(path.exists());
         fs::remove_file(&path).ok();
-        unsafe { std::env::remove_var("HOMUN_SANDBOX_STATE_DIR") };
     }
 
     #[test]
+    #[serial]
     fn resolved_sanitized_env_keeps_safe_keys_and_extra_env() {
         use crate::tools::sandbox::env::resolved_sanitized_env;
 
-        let _guard = TEST_ENV_LOCK.lock().expect("test env lock");
-        unsafe { std::env::set_var("PATH", "/usr/bin:/bin") };
-        unsafe { std::env::set_var("LANG", "en_US.UTF-8") };
-        unsafe { std::env::set_var("SHOULD_NOT_PASS", "secret") };
+        let mut _env = EnvGuard::set("PATH", "/usr/bin:/bin");
+        _env.add("LANG", "en_US.UTF-8");
+        _env.add("SHOULD_NOT_PASS", "secret");
 
         let mut extra = HashMap::new();
         extra.insert("CUSTOM_TOKEN".to_string(), "abc123".to_string());
@@ -352,8 +370,6 @@ mod tests {
         assert_eq!(env.get("LANG").map(String::as_str), Some("en_US.UTF-8"));
         assert_eq!(env.get("CUSTOM_TOKEN").map(String::as_str), Some("abc123"));
         assert!(!env.contains_key("SHOULD_NOT_PASS"));
-
-        unsafe { std::env::remove_var("SHOULD_NOT_PASS") };
     }
 
     #[test]
@@ -520,10 +536,10 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn runtime_image_state_round_trip_from_custom_state_dir() {
-        let _guard = TEST_ENV_LOCK.lock().expect("test env lock");
         let temp = tempfile::tempdir().expect("tempdir");
-        unsafe { std::env::set_var("HOMUN_SANDBOX_STATE_DIR", temp.path()) };
+        let _env = EnvGuard::set("HOMUN_SANDBOX_STATE_DIR", temp.path());
 
         save_runtime_image_state(&SandboxRuntimeImageState {
             last_pulled_at: Some("2026-03-10T10:00:00Z".to_string()),
@@ -543,7 +559,6 @@ mod tests {
         assert_eq!(loaded.last_pulled_image_id.as_deref(), Some("sha256:abc"));
 
         fs::remove_file(super::events::sandbox_runtime_image_state_path()).ok();
-        unsafe { std::env::remove_var("HOMUN_SANDBOX_STATE_DIR") };
     }
 
     // --- parse_docker_inspect_fields is now in runtime_image.rs ---
@@ -617,12 +632,12 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn macos_seatbelt_command_spec_sanitizes_env() {
         use crate::tools::sandbox::backends::build_macos_seatbelt_command_spec;
 
-        let _guard = TEST_ENV_LOCK.lock().expect("test env lock");
-        unsafe { std::env::set_var("PATH", "/usr/bin:/bin") };
-        unsafe { std::env::set_var("SECRET_KEY", "do_not_leak") };
+        let mut _env = EnvGuard::set("PATH", "/usr/bin:/bin");
+        _env.add("SECRET_KEY", "do_not_leak");
 
         let temp = tempfile::tempdir().expect("tempdir");
         let workdir = temp.path().join("workspace");
@@ -652,8 +667,6 @@ mod tests {
         assert!(spec.env.iter().any(|(k, v)| k == "MY_TOKEN" && v == "abc"));
         // SECRET_KEY should NOT be present (sanitized)
         assert!(!spec.env.iter().any(|(k, _)| k == "SECRET_KEY"));
-
-        unsafe { std::env::remove_var("SECRET_KEY") };
     }
 
     #[test]

@@ -2320,23 +2320,6 @@ btnSend?.addEventListener('click', () => {
 
 // ─── Chat actions (New / Compact / Clear) ─────────────────────────
 
-/** Show a temporary toast notification */
-function showToast(message, type = 'info') {
-    const existing = document.querySelector('.chat-toast');
-    if (existing) existing.remove();
-    
-    const toast = document.createElement('div');
-    toast.className = `chat-toast chat-toast--${type}`;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    
-    setTimeout(() => toast.classList.add('chat-toast--visible'), 10);
-    setTimeout(() => {
-        toast.classList.remove('chat-toast--visible');
-        setTimeout(() => toast.remove(), 200);
-    }, 2500);
-}
-
 /** Clear the screen (UI only, keeps DB history) */
 function handleClearChat() {
     messagesEl.textContent = '';

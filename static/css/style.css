@@ -2739,7 +2739,32 @@ html, body {
     height: 15px;
 }
 
-/* Chat toast notifications */
+/* ═══ UNIFIED TOAST (hm-toast) ═══ */
+.hm-toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    padding: 10px 20px;
+    border-radius: var(--r-md);
+    font-size: 13px;
+    font-weight: 500;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
+    z-index: 1000;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity var(--med) var(--ease), transform var(--med) var(--ease);
+    pointer-events: none;
+    max-width: 400px;
+}
+.hm-toast--visible { opacity: 1; transform: translateY(0); }
+.hm-toast--success { border-left: 3px solid var(--ok); color: var(--ok); }
+.hm-toast--error   { border-left: 3px solid var(--err); color: var(--err); }
+.hm-toast--warning { border-left: 3px solid var(--warn); color: var(--warn); }
+.hm-toast--info    { border-left: 3px solid var(--info); color: var(--info); }
+
+/* Chat toast notifications (legacy — kept for reference, superseded by .hm-toast) */
 .chat-toast {
     position: fixed;
     bottom: 80px;

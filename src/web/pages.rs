@@ -315,6 +315,7 @@ fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String 
             </div>
         </div>
     </div>
+    <script src="/static/js/toast.js"></script>
     {script_tags}
     <script>
     (function() {{
@@ -1834,8 +1835,6 @@ async fn skills_page() -> Html<String> {
                     <div class="skill-list" id="search-grid"></div>
                 </section>
 
-                <div id="skill-toast" class="skill-toast" style="display:none"></div>
-
                 <div class="skill-modal-overlay" id="skill-modal-overlay">
                     <div class="skill-modal" id="skill-modal">
                         <div class="skill-modal-header">
@@ -2357,7 +2356,6 @@ async fn memory_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     </div>
                 </section>
 
-                <div id="memory-toast" class="skill-toast" style="display:none"></div>
             </div>
         </main>"#,
         chunk_count = chunk_count,
@@ -2560,7 +2558,6 @@ async fn vault_page() -> Html<String> {
                     </div>
                 </div>
 
-                <div id="vault-toast" class="skill-toast" style="display:none"></div>
             </div>
         </main>"#;
 
@@ -2686,7 +2683,6 @@ async fn file_access_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     <div id="test-result" class="test-result" style="display:none"></div>
                 </section>
 
-                <div id="file-access-toast" class="skill-toast" style="display:none"></div>
             </div>
         </main>
 
@@ -2873,7 +2869,6 @@ async fn shell_page(State(_state): State<Arc<AppState>>) -> Html<String> {
                     </div>
                 </section>
 
-                <div id="shell-toast" class="skill-toast" style="display:none"></div>
             </div>
         </main>"#;
 
@@ -3024,7 +3019,6 @@ async fn sandbox_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     </details>
                 </section>
 
-                <div id="sandbox-toast" class="skill-toast" style="display:none"></div>
             </div>
         </main>"#,
         sandbox_badge_class = if config.security.execution_sandbox.enabled {

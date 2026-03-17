@@ -7,20 +7,6 @@
 
     // ── Helpers ──────────────────────────────────────────────────────
 
-    function showToast(message, type) {
-        var existing = document.querySelector('.toast-notification');
-        if (existing) existing.remove();
-        var toast = document.createElement('div');
-        toast.className = 'toast-notification toast-' + (type || 'info');
-        toast.textContent = message;
-        document.body.appendChild(toast);
-        setTimeout(function() { toast.classList.add('show'); }, 10);
-        setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() { toast.remove(); }, 250);
-        }, 3500);
-    }
-
     function escapeHtml(text) {
         return String(text || '')
             .replaceAll('&', '&amp;')

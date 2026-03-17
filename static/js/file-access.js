@@ -542,12 +542,3 @@ function selectCurrentPath() {
     document.getElementById('path-browser-modal').classList.remove('open');
 }
 
-// ─── Toast ───
-
-function showToast(message, type = 'info') {
-    const toast = document.getElementById('file-access-toast');
-    toast.textContent = message;
-    toast.className = `skill-toast toast-${type}`;
-    toast.style.display = 'block';
-    setTimeout(() => { toast.style.display = 'none'; }, 3000);
-}

@@ -65,13 +65,13 @@
 | REL-4b | **Ollama embeddings Docker** | Ollama sidecar per embeddings gratuite in Docker (no ONNX/glibc). Provider configurabile (ollama/openai/local). `ApiEmbeddingProvider` generico. `--profile with-ollama`. | 1 giorno | ✅ DONE (2026-03-17) |
 | REL-4c | **Embedding Settings UI** | Settings page: filtro modelli embedding Ollama, auto-pull on save, custom model support. IndexMeta sidecar per tracking provider/model/dims. Mismatch detection + "Rebuild Vector Indices" button per ricostruzione in-place degli indici HNSW. | 1 giorno | ✅ DONE (2026-03-17) |
 | REL-5 | **Health check completo** | `GET /api/v1/health/components` — 6 component checks: database (SELECT 1), LLM providers (circuit breaker snapshots), channels (enabled count), tools (count), knowledge/RAG (stats), data dir. Overall status worst-case derivation. | 2 giorni | ✅ DONE (2026-03-17) |
-| REL-6 | **README utente** | Riscrivere README in ottica utente: prerequisiti, quick start (Docker), config minima, screenshot. Non dev-oriented. | 2 giorni | TODO |
-| REL-7 | **Getting Started guide** | Guida step-by-step: installazione → primo messaggio → prima automazione → primo canale. Con screenshot. | 3 giorni | TODO |
+| REL-6 | **README utente** | README riscritto in ottica prodotto: features, quick start Docker/source/binary, config minima, build profiles, CLI commands, requirements table. Da ~310 a ~110 righe. | 2 giorni | ✅ DONE (2026-03-17) |
+| REL-7 | **Getting Started guide** | `docs/GETTING-STARTED.md`: 6 step funnel (install → setup wizard → first chat → first channel → first automation → memory). Tabella "What's next" per discovery avanzata. Troubleshooting section. | 3 giorni | ✅ DONE (2026-03-17) |
 | REL-8 | **Graceful shutdown completo** | SIGTERM+Ctrl+C unificati, 30s grace period con countdown, `request_stop()` agent, DB pool close, progress indication. | 2 giorni | ✅ DONE (2026-03-17) |
-| REL-9 | **Fix flaky CI tests** | AUD-12: sandbox tests PoisonError. Aggiungere `#[serial]` o refactor test harness. CI deve essere verde. | 1 giorno | TODO |
-| REL-10 | **Error states UI base** | Toast/notification system globale. Error state component riusabile. Retry button. Timeout handling con spinner. | 3 giorni | TODO |
-| REL-11 | **Pre-built binaries** | GitHub Actions: release workflow con build cross-platform (linux-x64, linux-arm64, macos-x64, macos-arm64, windows-x64). | 2 giorni | TODO |
-| REL-12 | **CHANGELOG** | Generare changelog dalla git history. Formato Keep a Changelog. Aggiornare ad ogni release. | 1 giorno | TODO |
+| REL-9 | **Fix flaky CI tests** | AUD-12: sandbox tests PoisonError. Aggiunto `serial_test` crate + `#[serial]` su 4 test env-mutating + `EnvGuard` RAII per cleanup automatico. Mutex manuale rimosso. 5/5 stress-test green. | 1 giorno | ✅ DONE (2026-03-17) |
+| REL-10 | **Error states UI base** | Toast/notification system globale unificato (`hm-toast`). 17 implementazioni locali rimosse, 6 div HTML pre-renderizzati rimossi, 1 utility globale `toast.js`. Posizione unificata bottom-right 24px. | 3 giorni | ✅ DONE (2026-03-17) |
+| REL-11 | **Pre-built binaries** | CI release workflow già presente (5 piattaforme, cross-compile, GitHub Release su tag `v*`). Aggiunto step SHA256 checksums (`checksums.sha256`) per verifica download. | 2 giorni | ✅ DONE (2026-03-17) |
+| REL-12 | **CHANGELOG** | `CHANGELOG.md` in formato Keep a Changelog. 188 commit organizzati in 15 sezioni (core, channels, tools, sandbox, skills, memory, RAG, web UI, automations, workflows, business, browser, security, MCP, infra). | 1 giorno | ✅ DONE (2026-03-17) |
 
 ---
 
@@ -94,7 +94,7 @@
 | ONB-3 | **OAuth per provider** | OAuth flow per Google (Gemini), GitHub (Copilot). Invece di incollare API key manualmente. | 1 settimana | TODO |
 | ONB-4 | **First-run tutorial** | Tour interattivo dopo il setup: "Ecco la chat", "Prova a chiedere...", "Qui trovi le automazioni". Dismissable, non riappare. | 3 giorni | TODO |
 | **UX overhaul** | | | | |
-| UXO-1 | **Toast/notification system** | Componente globale per success/error/warning/info. Auto-dismiss configurabile. Stack multiplo. | 2 giorni | TODO |
+| UXO-1 | **Toast/notification system** | Completato con REL-10: `hm-toast` globale unificato, 17 implementazioni rimosse. | 2 giorni | ✅ DONE (2026-03-17) |
 | UXO-2 | **Error states everywhere** | Ogni pagina: stato errore con messaggio chiaro + retry button. Pattern riusabile `.error-state`. | 3 giorni | TODO |
 | UXO-3 | **Progress indicators** | Operazioni lunghe (browser, RAG ingest, skill install): progress bar o spinner con messaggio. | 2 giorni | TODO |
 | UXO-4 | **Chat: fix reasoning persistence** | UX-3: blocchi thinking/reasoning persistenti quando si torna su una chat. | 2 giorni | TODO |

@@ -27,15 +27,6 @@ function escapeHtml(s) {
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-function showToast(msg, type = 'success') {
-    const el = document.createElement('div');
-    el.className = `toast toast-${type}`;
-    el.textContent = msg;
-    document.body.appendChild(el);
-    setTimeout(() => { el.classList.add('toast-out'); }, 2800);
-    setTimeout(() => el.remove(), 3200);
-}
-
 function statusBadge(status) {
     const cls = {
         pending: 'badge-neutral',

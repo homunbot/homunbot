@@ -2,20 +2,6 @@
 
 // ─── Helpers ───
 
-function showToast(message, type) {
-    type = type || 'success';
-    var existing = document.querySelector('.toast');
-    if (existing) existing.remove();
-    var toast = document.createElement('div');
-    toast.className = 'toast toast-' + type;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    setTimeout(function () {
-        toast.classList.add('toast-out');
-        setTimeout(function () { toast.remove(); }, 300);
-    }, 2500);
-}
-
 function escapeHtml(value) {
     return String(value || '').replaceAll('&', '&amp;').replaceAll('<', '&lt;')
         .replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
