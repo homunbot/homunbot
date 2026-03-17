@@ -12,9 +12,9 @@
 
 | Metrica | Valore |
 |---------|--------|
-| LOC Rust | ~84,800 |
+| LOC Rust | ~87,400 |
 | LOC Frontend | ~19,000 (JS) + ~10,000 (CSS) |
-| Test | 633 passing (verificato con `cargo test` il 2026-03-16) |
+| Test | 646 passing (verificato con `cargo test` il 2026-03-17) |
 | Binary (release) | ~35MB |
 | Provider LLM | 14 |
 | Canali | 7 (CLI, Telegram✅, Discord⚠️, WhatsApp⚠️, Slack⚠️, Email✅, Web) |
@@ -63,6 +63,7 @@
 | REL-3 | **Caddy reverse proxy** | Caddyfile con HTTPS automatico (Let's Encrypt), WebSocket proxy, security headers. | 1 giorno | ✅ DONE (2026-03-17) |
 | REL-4 | **.env.example + cleanup** | Template .env con tutte le variabili documentate. Rimuovere credenziali test dalla git history. | 1 giorno | ✅ DONE (2026-03-17) |
 | REL-4b | **Ollama embeddings Docker** | Ollama sidecar per embeddings gratuite in Docker (no ONNX/glibc). Provider configurabile (ollama/openai/local). `ApiEmbeddingProvider` generico. `--profile with-ollama`. | 1 giorno | ✅ DONE (2026-03-17) |
+| REL-4c | **Embedding Settings UI** | Settings page: filtro modelli embedding Ollama, auto-pull on save, custom model support. IndexMeta sidecar per tracking provider/model/dims. Mismatch detection + "Rebuild Vector Indices" button per ricostruzione in-place degli indici HNSW. | 1 giorno | ✅ DONE (2026-03-17) |
 | REL-5 | **Health check completo** | `/health/components` — stato DB, provider LLM, canali, MCP, disk space. Readiness probe per orchestrator. | 2 giorni | TODO |
 | REL-6 | **README utente** | Riscrivere README in ottica utente: prerequisiti, quick start (Docker), config minima, screenshot. Non dev-oriented. | 2 giorni | TODO |
 | REL-7 | **Getting Started guide** | Guida step-by-step: installazione → primo messaggio → prima automazione → primo canale. Con screenshot. | 3 giorni | TODO |

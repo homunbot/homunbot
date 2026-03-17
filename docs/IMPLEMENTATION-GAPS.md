@@ -1,6 +1,6 @@
 # Implementation Gaps
 
-Updated: March 16, 2026 (MCP hot-reload, Google Workspace unification, OAuth refresh Google+Notion, registry-first tool discovery)
+Updated: March 17, 2026 (embedding mismatch detection + rebuild, vault retrieve leak filter bypass, api_base URL fix)
 
 This document is the operational backlog derived from the real codebase and the current roadmap.
 
@@ -312,7 +312,7 @@ Status: strong core with hidden gaps (code-audit verified 2026-03-13)
 ### Memory system
 - Consolidation works: two-tier (MEMORY.md facts + HISTORY.md events), LLM-driven, dedup with Jaccard 70% threshold, vault secret extraction. 17 unit tests.
 - Hybrid search works: HNSW 384-dim + FTS5 + RRF merge + temporal decay. 10 unit tests.
-- Embeddings work: fastembed local + OpenAI API, LRU cache 512 entries.
+- Embeddings work: pluggable providers (Ollama, OpenAI, Mistral, Cohere, Together, Fireworks), LRU cache 512 entries. ✅ IndexMeta sidecar tracking (2026-03-17): detects model/provider/dimension mismatches, Settings UI warning banner + in-place rebuild button.
 
 ### Gaps found during audit
 
@@ -365,7 +365,7 @@ Status: strong encryption, critical API gaps (deep audit 2026-03-13)
 
 ### Remaining gaps
 
-3. **Vault values in agent output**: Exfiltration guard (20+ patterns) scans LLM output, but relies on pattern matching. Strengthened with instruction boundary (SEC-6) to prevent social engineering attacks that induce the LLM to reveal secrets.
+3. **Vault values in agent output**: Exfiltration guard (20+ patterns) scans LLM output, but relies on pattern matching. Strengthened with instruction boundary (SEC-6) to prevent social engineering attacks that induce the LLM to reveal secrets. ✅ **Vault leak filter now allows explicit retrieves** (2026-03-17): when the user retrieves a secret via vault tool with 2FA verified, the value passes through to the chat. Other vault values are still redacted.
 
 4. **RAG sensitive chunks: no 2FA gate**: Chunks marked `sensitive=true` are redacted in output (`[REDACTED — auth required]`), but there's no actual flow to provide 2FA and unlock them.
 
