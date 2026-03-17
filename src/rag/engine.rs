@@ -456,3 +456,217 @@ fn walk_recursive(dir: &Path, paths: &mut Vec<std::path::PathBuf>) -> Result<()>
 
     Ok(())
 }
+
+// ─── Tests ────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::embeddings::{EmbeddingEngine, EmbeddingProvider};
+    use async_trait::async_trait;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    /// Deterministic mock embedding provider for testing.
+    /// Returns hash-based vectors so identical texts produce identical embeddings.
+    struct MockEmbeddingProvider {
+        dims: usize,
+    }
+
+    #[async_trait]
+    impl EmbeddingProvider for MockEmbeddingProvider {
+        async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+            Ok(texts
+                .iter()
+                .map(|text| {
+                    // Hash-based deterministic vector
+                    let hash = {
+                        let mut hasher = Sha256::new();
+                        hasher.update(text.as_bytes());
+                        hasher.finalize()
+                    };
+                    (0..self.dims)
+                        .map(|i| {
+                            let byte = hash[i % hash.len()];
+                            (byte as f32 / 255.0) * 2.0 - 1.0 // normalize to [-1, 1]
+                        })
+                        .collect()
+                })
+                .collect())
+        }
+        fn dimensions(&self) -> usize {
+            self.dims
+        }
+        fn name(&self) -> &str {
+            "mock"
+        }
+        fn model_name(&self) -> &str {
+            "mock-embed-test"
+        }
+    }
+
+    /// Create an isolated RAG engine with temp DB + temp index.
+    async fn test_rag_engine() -> (RagEngine, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let db = Database::open(&db_path).await.unwrap();
+
+        let index_path = dir.path().join("rag_test.usearch");
+        let provider = Box::new(MockEmbeddingProvider { dims: 32 });
+        let engine = EmbeddingEngine::with_provider_and_path(provider, index_path).unwrap();
+
+        let rag = RagEngine::new(db, engine, ChunkOptions::default());
+        (rag, dir)
+    }
+
+    /// Write a test markdown file and return its path.
+    fn write_test_md(dir: &Path, name: &str, content: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn test_ingest_markdown_file() {
+        let (mut rag, dir) = test_rag_engine().await;
+
+        let md = write_test_md(
+            dir.path(),
+            "test.md",
+            "# Heading One\n\nSome content about Rust.\n\n# Heading Two\n\nMore about async.",
+        );
+
+        let result = rag.ingest_file(&md, "test").await.unwrap();
+        assert!(result.is_some(), "Should return source_id");
+
+        let sources = rag.list_sources().await.unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].file_name, "test.md");
+        assert_eq!(sources[0].status, "indexed");
+        assert!(sources[0].chunk_count > 0);
+    }
+
+    #[tokio::test]
+    async fn test_dedup_same_file() {
+        let (mut rag, dir) = test_rag_engine().await;
+
+        let md = write_test_md(dir.path(), "dedup.md", "# Test\n\nContent.");
+
+        let first = rag.ingest_file(&md, "test").await.unwrap();
+        assert!(first.is_some());
+
+        let second = rag.ingest_file(&md, "test").await.unwrap();
+        assert!(second.is_none(), "Same file should be deduplicated");
+
+        let sources = rag.list_sources().await.unwrap();
+        assert_eq!(sources.len(), 1, "Should still have exactly one source");
+    }
+
+    #[tokio::test]
+    async fn test_search_returns_results() {
+        let (mut rag, dir) = test_rag_engine().await;
+
+        let md = write_test_md(
+            dir.path(),
+            "searchable.md",
+            "# Machine Learning\n\nNeural networks use gradient descent for optimization.\n\n\
+             # Databases\n\nSQLite is a lightweight embedded database engine.",
+        );
+
+        rag.ingest_file(&md, "test").await.unwrap();
+
+        let results = rag.search("neural networks", 5).await.unwrap();
+        assert!(!results.is_empty(), "Search should return results");
+        assert!(results[0].score > 0.0, "Score should be positive");
+        assert_eq!(results[0].source_file, "searchable.md");
+    }
+
+    #[tokio::test]
+    async fn test_sensitive_chunk_redacted() {
+        let (mut rag, dir) = test_rag_engine().await;
+
+        // Content with an API key pattern — should be flagged sensitive
+        let md = write_test_md(
+            dir.path(),
+            "secrets.md",
+            "# Config\n\napi_key: sk-abc123456789012345678901234567890123456789\n\nDon't share this.",
+        );
+
+        rag.ingest_file(&md, "test").await.unwrap();
+
+        let results = rag.search("api key config", 5).await.unwrap();
+        // Find the sensitive chunk — it should be redacted
+        let has_redacted = results
+            .iter()
+            .any(|r| r.chunk.content.contains("[REDACTED"));
+        assert!(
+            has_redacted,
+            "Sensitive chunk should be redacted in search results"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_remove_source() {
+        let (mut rag, dir) = test_rag_engine().await;
+
+        let md = write_test_md(dir.path(), "removable.md", "# Remove\n\nThis will be removed.");
+
+        let source_id = rag.ingest_file(&md, "test").await.unwrap().unwrap();
+
+        let removed = rag.remove_source(source_id).await.unwrap();
+        assert!(removed, "Should return true for existing source");
+
+        let sources = rag.list_sources().await.unwrap();
+        assert!(sources.is_empty(), "Sources should be empty after removal");
+    }
+
+    #[tokio::test]
+    async fn test_stats() {
+        let (mut rag, dir) = test_rag_engine().await;
+
+        let stats_before = rag.stats().await.unwrap();
+        assert_eq!(stats_before.source_count, 0);
+        assert_eq!(stats_before.chunk_count, 0);
+
+        let md = write_test_md(
+            dir.path(),
+            "stats.md",
+            "# Section A\n\nContent A.\n\n# Section B\n\nContent B.",
+        );
+        rag.ingest_file(&md, "test").await.unwrap();
+
+        let stats_after = rag.stats().await.unwrap();
+        assert_eq!(stats_after.source_count, 1);
+        assert!(stats_after.chunk_count > 0);
+    }
+
+    #[tokio::test]
+    async fn test_reindex_all() {
+        let (mut rag, dir) = test_rag_engine().await;
+
+        let md = write_test_md(
+            dir.path(),
+            "reindex.md",
+            "# Topic A\n\nInformation about topic A.\n\n# Topic B\n\nDetails on topic B.",
+        );
+        rag.ingest_file(&md, "test").await.unwrap();
+
+        let stats = rag.stats().await.unwrap();
+        let chunk_count_before = stats.chunk_count;
+
+        // Simulate index loss (e.g. file deleted after restart) by
+        // creating a fresh engine with empty HNSW, then reindexing.
+        let provider = Box::new(MockEmbeddingProvider { dims: 32 });
+        rag.reset_engine(provider).unwrap();
+
+        let stats_after_reset = rag.stats().await.unwrap();
+        assert_eq!(stats_after_reset.index_vectors, 0, "Index should be empty after reset");
+
+        let reindexed = rag.reindex_all().await.unwrap();
+        assert_eq!(
+            reindexed as i64, chunk_count_before,
+            "Reindex should process all chunks"
+        );
+        assert!(rag.stats().await.unwrap().index_vectors > 0, "Index should have vectors after reindex");
+    }
+}
