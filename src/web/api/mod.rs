@@ -7,6 +7,7 @@ mod channels;
 mod chat;
 mod connections;
 mod email_accounts;
+mod embeddings;
 mod health;
 mod knowledge;
 mod logs;
@@ -70,6 +71,10 @@ pub fn router() -> Router<Arc<AppState>> {
     // --- Knowledge Base (RAG) ---
     #[cfg(feature = "embeddings")]
     let api_router = api_router.merge(knowledge::routes());
+
+    // --- Embedding Index Management ---
+    #[cfg(feature = "embeddings")]
+    let api_router = api_router.merge(embeddings::routes());
 
     // --- Browser (optional) ---
     #[cfg(feature = "browser")]

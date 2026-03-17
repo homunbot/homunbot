@@ -744,6 +744,24 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                         </div>
                         <div id="embeddings-result" class="form-hint" style="margin-top:10px;"></div>
                     </form>
+
+                    <!-- Index status: mismatch warning + rebuild button -->
+                    <div id="embedding-index-status" style="margin-top:16px;">
+                        <div id="embedding-index-warning" class="form-hint pairing-status error" style="display:none;">
+                            <strong>⚠ Mismatch:</strong> Current indices were built with a different embedding model.
+                            Search results may be inaccurate. Rebuild to fix.
+                        </div>
+                        <div id="embedding-index-unknown" class="form-hint pairing-status" style="display:none;">
+                            Index metadata not found. If you changed embedding settings, consider rebuilding indices.
+                        </div>
+                        <div id="embedding-reindex-row" style="display:none; margin-top:12px;">
+                            <button type="button" id="btn-reindex" class="btn btn-secondary">Rebuild Vector Indices</button>
+                            <span id="reindex-result" class="form-hint" style="margin-left:8px;"></span>
+                        </div>
+                        <div id="embedding-index-ok" class="form-hint pairing-status success" style="display:none;">
+                            ✓ Vector indices are up to date.
+                        </div>
+                    </div>
                 </section>
 
             </div>

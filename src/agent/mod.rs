@@ -18,6 +18,9 @@ mod verifier;
 pub mod embeddings;
 
 #[cfg(feature = "embeddings")]
+pub mod index_meta;
+
+#[cfg(feature = "embeddings")]
 pub mod memory_search;
 
 pub use agent_loop::AgentLoop;
@@ -35,6 +38,9 @@ pub use subagent::SubagentManager;
 
 #[cfg(feature = "embeddings")]
 pub use embeddings::{create_embedding_provider, EmbeddingEngine};
+
+#[cfg(feature = "embeddings")]
+pub use index_meta::IndexMeta;
 
 #[cfg(feature = "embeddings")]
 pub use memory_search::MemorySearcher;

@@ -2452,6 +2452,104 @@ if (btnRunCleanup) {
     initEmbeddings();
 })();
 
+// ═══ Embedding Index Mismatch Detection ═══
+
+(function() {
+    var warningEl = document.getElementById('embedding-index-warning');
+    var unknownEl = document.getElementById('embedding-index-unknown');
+    var okEl = document.getElementById('embedding-index-ok');
+    var reindexRow = document.getElementById('embedding-reindex-row');
+    var reindexBtn = document.getElementById('btn-reindex');
+    var reindexResult = document.getElementById('reindex-result');
+
+    if (!warningEl || !reindexBtn) return;
+
+    /** Fetch index status and update UI. */
+    async function checkStatus() {
+        try {
+            var resp = await fetch('/api/v1/embeddings/status');
+            if (!resp.ok) return;
+            var data = await resp.json();
+            if (!data.ok) return;
+
+            var hasChunks = (data.memory_chunks_in_db > 0 || data.rag_chunks_in_db > 0);
+
+            if (data.mismatch && hasChunks) {
+                // Config differs from what built the index
+                warningEl.style.display = '';
+                unknownEl.style.display = 'none';
+                okEl.style.display = 'none';
+                reindexRow.style.display = '';
+            } else if (!data.memory_index && !data.rag_index && hasChunks) {
+                // No meta files but chunks exist — unknown state (pre-feature index)
+                warningEl.style.display = 'none';
+                unknownEl.style.display = '';
+                okEl.style.display = 'none';
+                reindexRow.style.display = '';
+            } else if (hasChunks) {
+                // All good — config matches stored meta
+                warningEl.style.display = 'none';
+                unknownEl.style.display = 'none';
+                okEl.style.display = '';
+                reindexRow.style.display = 'none';
+            } else {
+                // No chunks at all — hide everything
+                warningEl.style.display = 'none';
+                unknownEl.style.display = 'none';
+                okEl.style.display = 'none';
+                reindexRow.style.display = 'none';
+            }
+        } catch (e) {
+            console.warn('[Embeddings] Failed to check index status:', e);
+        }
+    }
+
+    /** Handle rebuild button click. */
+    reindexBtn.addEventListener('click', async function() {
+        reindexBtn.disabled = true;
+        reindexBtn.textContent = 'Rebuilding\u2026';
+        reindexResult.textContent = 'Re-embedding all chunks with current model. This may take several minutes.';
+        reindexResult.className = 'form-hint';
+
+        try {
+            var resp = await fetch('/api/v1/embeddings/reindex', { method: 'POST' });
+            var data = await resp.json();
+            if (data.ok) {
+                reindexResult.textContent = '\u2713 ' + data.message;
+                reindexResult.className = 'form-hint pairing-status success';
+                // Update status display
+                warningEl.style.display = 'none';
+                unknownEl.style.display = 'none';
+                okEl.style.display = '';
+                reindexRow.style.display = 'none';
+            } else {
+                reindexResult.textContent = '\u2717 ' + (data.message || 'Rebuild failed');
+                reindexResult.className = 'form-hint pairing-status error';
+            }
+        } catch (e) {
+            reindexResult.textContent = '\u2717 Request failed: ' + e.message;
+            reindexResult.className = 'form-hint pairing-status error';
+        }
+
+        reindexBtn.textContent = 'Rebuild Vector Indices';
+        reindexBtn.disabled = false;
+    });
+
+    // Check status on page load
+    checkStatus();
+
+    // Re-check after embeddings config save (MutationObserver on result div)
+    var embResult = document.getElementById('embeddings-result');
+    if (embResult) {
+        var observer = new MutationObserver(function() {
+            if (embResult.textContent.indexOf('\u2713') >= 0) {
+                setTimeout(checkStatus, 500);
+            }
+        });
+        observer.observe(embResult, { childList: true, characterData: true, subtree: true });
+    }
+})();
+
 // ─── Browser Form ─────────────────────────────────────────────────
 
 (function() {

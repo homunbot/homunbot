@@ -12,7 +12,7 @@
 //! An LRU cache (512 entries) prevents redundant embedding calls.
 
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
@@ -20,6 +20,8 @@ use lru::LruCache;
 use usearch::ffi::{IndexOptions, MetricKind, ScalarKind};
 
 use crate::config::Config;
+
+use super::index_meta::IndexMeta;
 
 /// Default dimensionality — used when config doesn't specify.
 const DEFAULT_EMBEDDING_DIM: usize = 384;
@@ -38,8 +40,11 @@ pub trait EmbeddingProvider: Send + Sync {
     /// Embedding dimensionality (must be EMBEDDING_DIM for HNSW compat).
     fn dimensions(&self) -> usize;
 
-    /// Provider name for logging.
+    /// Provider name for logging (e.g. "ollama", "openai").
     fn name(&self) -> &str;
+
+    /// Model identifier (e.g. "nomic-embed-text", "text-embedding-3-small").
+    fn model_name(&self) -> &str;
 }
 
 // ─── API Provider (OpenAI-compatible) ─────────────────────────
@@ -124,6 +129,10 @@ impl EmbeddingProvider for ApiEmbeddingProvider {
     fn name(&self) -> &str {
         &self.provider_name
     }
+
+    fn model_name(&self) -> &str {
+        &self.model
+    }
 }
 
 // ─── Embedding Engine ──────────────────────────────────────────
@@ -138,6 +147,10 @@ pub struct EmbeddingEngine {
     index: usearch::Index,
     index_path: PathBuf,
     count: usize,
+    /// Tracking fields for IndexMeta sidecar (detect model changes).
+    provider_name: String,
+    model_name: String,
+    dims: usize,
 }
 
 impl EmbeddingEngine {
@@ -218,12 +231,19 @@ impl EmbeddingEngine {
 
         let cache_cap = NonZeroUsize::new(CACHE_CAPACITY).expect("CACHE_CAPACITY must be non-zero");
 
+        let provider_name = provider.name().to_string();
+        let model_name = provider.model_name().to_string();
+        let dims = provider.dimensions();
+
         Ok(Self {
             provider,
             cache: LruCache::new(cache_cap),
             index,
             index_path,
             count,
+            provider_name,
+            model_name,
+            dims,
         })
     }
 
@@ -325,6 +345,18 @@ impl EmbeddingEngine {
             .save(self.index_path.to_str().unwrap_or("memory.usearch"))
             .map_err(|e| anyhow::anyhow!("Failed to save USearch index: {e}"))?;
 
+        // Write sidecar metadata (best-effort — non-critical)
+        let meta = IndexMeta {
+            provider: self.provider_name.clone(),
+            model: self.model_name.clone(),
+            dimensions: self.dims,
+            chunk_count: self.count,
+            built_at: chrono::Utc::now().to_rfc3339(),
+        };
+        if let Err(e) = meta.write(&self.index_path) {
+            tracing::warn!(error = %e, "Failed to write index metadata sidecar");
+        }
+
         tracing::debug!(
             vectors = self.count,
             path = %self.index_path.display(),
@@ -341,6 +373,72 @@ impl EmbeddingEngine {
     /// Whether the index is empty.
     pub fn is_empty(&self) -> bool {
         self.count == 0
+    }
+
+    /// Current index metadata (for status reporting and mismatch detection).
+    pub fn index_meta(&self) -> IndexMeta {
+        IndexMeta {
+            provider: self.provider_name.clone(),
+            model: self.model_name.clone(),
+            dimensions: self.dims,
+            chunk_count: self.count,
+            built_at: String::new(), // Filled on save
+        }
+    }
+
+    /// Path to the HNSW index file on disk.
+    pub fn index_path(&self) -> &Path {
+        &self.index_path
+    }
+
+    /// Replace the internal provider and create a fresh HNSW index.
+    ///
+    /// Deletes the old `.usearch` and `.meta` files, creates a new empty
+    /// index with the new provider's dimensions. Used by the reindex flow
+    /// when the user changes embedding model in Settings.
+    pub fn reset_with_provider(&mut self, provider: Box<dyn EmbeddingProvider>) -> Result<()> {
+        // Delete existing index + meta files
+        if self.index_path.exists() {
+            std::fs::remove_file(&self.index_path)
+                .with_context(|| format!("Failed to remove old index: {}", self.index_path.display()))?;
+        }
+        IndexMeta::delete(&self.index_path);
+
+        // Create fresh HNSW index with new dimensions
+        let options = IndexOptions {
+            dimensions: provider.dimensions(),
+            metric: MetricKind::Cos,
+            quantization: ScalarKind::F32,
+            connectivity: 16,
+            expansion_add: 128,
+            expansion_search: 64,
+            multi: false,
+        };
+
+        let index = usearch::new_index(&options)
+            .map_err(|e| anyhow::anyhow!("Failed to create new USearch index: {e}"))?;
+        index.reserve(1000)
+            .map_err(|e| anyhow::anyhow!("Failed to reserve capacity: {e}"))?;
+
+        // Swap all internals
+        self.provider_name = provider.name().to_string();
+        self.model_name = provider.model_name().to_string();
+        self.dims = provider.dimensions();
+        self.provider = provider;
+        self.index = index;
+        self.count = 0;
+        self.cache = LruCache::new(
+            NonZeroUsize::new(CACHE_CAPACITY).expect("CACHE_CAPACITY must be non-zero"),
+        );
+
+        tracing::info!(
+            provider = %self.provider_name,
+            model = %self.model_name,
+            dimensions = self.dims,
+            "Embedding engine reset with new provider"
+        );
+
+        Ok(())
     }
 }
 

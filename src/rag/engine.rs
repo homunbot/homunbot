@@ -358,6 +358,14 @@ impl RagEngine {
         self.engine.save()
     }
 
+    /// Replace the embedding engine's provider (for model change + reindex).
+    pub fn reset_engine(
+        &mut self,
+        provider: Box<dyn crate::agent::embeddings::EmbeddingProvider>,
+    ) -> Result<()> {
+        self.engine.reset_with_provider(provider)
+    }
+
     /// Reveal a sensitive chunk's full content (bypasses redaction).
     pub async fn reveal_chunk(&self, chunk_id: i64) -> Result<Option<RagChunkRow>> {
         let chunks = self.db.load_rag_chunks_by_ids(&[chunk_id]).await?;

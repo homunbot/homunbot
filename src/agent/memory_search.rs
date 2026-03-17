@@ -164,6 +164,29 @@ impl MemorySearcher {
     pub fn save_index(&self) -> Result<()> {
         self.engine.save()
     }
+
+    /// Replace the embedding engine's provider (for model change + reindex).
+    pub fn reset_engine(
+        &mut self,
+        provider: Box<dyn super::embeddings::EmbeddingProvider>,
+    ) -> Result<()> {
+        self.engine.reset_with_provider(provider)
+    }
+
+    /// Rebuild the HNSW index from all memory chunks in the database.
+    ///
+    /// Used after `reset_engine()` when the user changes embedding model.
+    pub async fn reindex_all(&mut self) -> Result<usize> {
+        let chunks = self.db.load_all_memory_chunks().await?;
+        let mut total = 0;
+        for chunk in &chunks {
+            self.engine.index_chunk(chunk.id, &chunk.content).await?;
+            total += 1;
+        }
+        self.engine.save()?;
+        tracing::info!(vectors = total, "Memory index rebuilt");
+        Ok(total)
+    }
 }
 
 /// Sanitize a query string for FTS5 MATCH.

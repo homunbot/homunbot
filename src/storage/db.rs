@@ -857,6 +857,18 @@ impl Database {
         Ok(count)
     }
 
+    /// Load all memory chunks (for re-embedding after model change).
+    pub async fn load_all_memory_chunks(&self) -> Result<Vec<MemoryChunkRow>> {
+        let rows = sqlx::query_as::<_, MemoryChunkRow>(
+            "SELECT id, date, source, heading, content, memory_type, created_at
+             FROM memory_chunks ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to load all memory chunks")?;
+        Ok(rows)
+    }
+
     /// Delete all memory data from the database (memory_chunks, memories, messages).
     pub async fn reset_all_memory(&self) -> Result<()> {
         sqlx::query("DELETE FROM memory_chunks")
