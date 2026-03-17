@@ -330,7 +330,7 @@ Status: strong core with hidden gaps (code-audit verified 2026-03-13)
 Next work:
 
 - ~~P0: verify memory search wiring~~ ✅ VERIFIED WORKING
-- **P1**: add integration test for RAG pipeline (ingest→search round-trip)
+- ~~**P1**: add integration test for RAG pipeline (ingest→search round-trip)~~ ✅ DONE (2026-03-17): 7 test con MockEmbeddingProvider
 - **P1**: clarify feature gating in README and setup wizard
 - **P2**: add real parsing for more formats (TypeScript AST, Python AST, etc.)
 
@@ -367,14 +367,14 @@ Status: strong encryption, critical API gaps (deep audit 2026-03-13)
 
 3. **Vault values in agent output**: Exfiltration guard (20+ patterns) scans LLM output, but relies on pattern matching. Strengthened with instruction boundary (SEC-6) to prevent social engineering attacks that induce the LLM to reveal secrets. ✅ **Vault leak filter now allows explicit retrieves** (2026-03-17): when the user retrieves a secret via vault tool with 2FA verified, the value passes through to the chat. Other vault values are still redacted.
 
-4. **RAG sensitive chunks: no 2FA gate**: Chunks marked `sensitive=true` are redacted in output (`[REDACTED — auth required]`), but there's no actual flow to provide 2FA and unlock them.
+4. ~~**RAG sensitive chunks: no 2FA gate**~~: ✅ DONE (2026-03-16) — `knowledge reveal` action con 2FA gate, Web API con session_id, JS prompt per codice.
 
-5. **No vault access audit log**: No dedicated logging of who accessed which secret, when, and through what mechanism.
+5. ~~**No vault access audit log**~~: ✅ DONE (2026-03-16) — Migration 019: `vault_access_log` table. Fire-and-forget audit in VaultTool + web API. `GET /v1/vault/audit` endpoint.
 
 Next work:
 
-- **HIGH**: Instruction boundary (SEC-6) — strongest defense against vault exfiltration via social engineering
-- **MEDIUM**: Implement 2FA flow for unlocking sensitive RAG chunks (VLT-2)
+- ~~**HIGH**: Instruction boundary (SEC-6)~~ ✅ DONE
+- ~~**MEDIUM**: Implement 2FA flow for unlocking sensitive RAG chunks (VLT-2)~~ ✅ DONE
 - **MEDIUM**: Add `vault_access_log` table (VLT-4)
 
 ## Automations UX
@@ -584,8 +584,8 @@ Next work:
 4. ~~**SEC-8**: Email content framing~~ ✅ DONE — `[INCOMING EMAIL — UNTRUSTED]`, 1 test
 5. ~~**SEC-9**: Vault output guard~~ ✅ COPERTO da SEC-6 + exfiltration guard
 6. ~~**SEC-10**: Vault retrieve con 2FA~~ ✅ GIA' IMPLEMENTATO
-7. **SEC-11**: RAG document injection detection — TODO (prossimo)
-8. **SEC-12**: Skill body injection scan — TODO
+7. ~~**SEC-11**: RAG document injection detection~~ — ✅ DONE: `detect_injection()` in `rag/sensitive.rs` (7 pattern, 8 test), runtime redaction in `agent_loop.rs` (righe 640-659)
+8. ~~**SEC-12**: Skill body injection scan~~ — ✅ DONE: `skills/security.rs` ha 9 pattern `PromptInjection` (righe 907-999), 2 test
 
 ### Phase 2: Consolidamento
 7. ~~Memory→reasoning wiring~~ ✅ VERIFIED WORKING
