@@ -68,7 +68,7 @@ La strategia è **consolidare il nucleo e aprirlo al mondo esterno** in ordine d
 |---|------|--------|------|
 | CHH-2 | **Discord reconnect robusto** | 2 giorni | ✅ DONE (2026-03-18) — resume/cache_ready handlers, health tracking in message loop, ChannelHealthTracker passato a Handler. Serenity auto-reconnect + spawn_monitored_channel restart |
 | CHH-3 | **Slack → Socket Mode** | 1 settimana | ✅ DONE (2026-03-18) — Socket Mode via tokio-tungstenite quando app_token presente, polling fallback altrimenti. Latenza da 3s a <100ms |
-| CHH-4 | **WhatsApp re-pairing da gateway** | 3 giorni | QR code via web UI, non solo TUI |
+| CHH-4 | **WhatsApp re-pairing da gateway** | 3 giorni | ✅ DONE — WebSocket pairing endpoint `/api/v1/channels/whatsapp/pair`, JS client con pair code display, config auto-save. Usa pair code (8 char) non QR |
 | CHH-5 | **Email robustness** | 3 giorni | ✅ DONE (2026-03-18) — NOOP keepalive ogni 5 cicli IDLE, seen messages pruning (cap 5000), reconnect con exponential backoff + password re-resolve da vault |
 | PRO-1 | **Proactive messaging Discord** | 2 giorni | ✅ DONE (2026-03-18) — thread_id routing in outbound, config warning. Proactive già funzionante via default_channel_id |
 | PRO-2 | **Proactive messaging Slack** | 2 giorni | ✅ DONE (2026-03-18) — default_channel_id config, fallback a channel_id, startup warning. Proactive via chat.postMessage + routing in active_channels_with_chat_ids |
