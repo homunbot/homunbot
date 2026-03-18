@@ -1,5 +1,6 @@
 #[cfg(feature = "browser")]
 mod inner {
+    #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
     use std::path::Path;
     use std::sync::Arc;
@@ -206,24 +207,30 @@ mod inner {
     }
 
     /// Get current process UID by reading metadata of the executable.
+    #[cfg(unix)]
     fn current_uid() -> u32 {
-        // Read uid from /proc or from our own binary metadata
         std::env::current_exe()
             .ok()
             .and_then(|p| std::fs::metadata(p).ok())
             .map(|m| m.uid())
-            .unwrap_or(501) // fallback to typical macOS user uid
+            .unwrap_or(501)
+    }
+
+    #[cfg(not(unix))]
+    fn current_uid() -> u32 {
+        0 // Ownership checks not applicable on Windows
     }
 
     /// Walk a directory recursively and return (total_size, wrong_owner_count).
-    fn dir_stats(path: &Path, expected_uid: u32) -> (u64, u64) {
+    fn dir_stats(path: &Path, _expected_uid: u32) -> (u64, u64) {
         let mut size = 0u64;
         let mut wrong = 0u64;
         walk_dir(path, &mut |meta| {
             if meta.is_file() {
                 size += meta.len();
             }
-            if meta.uid() != expected_uid {
+            #[cfg(unix)]
+            if meta.uid() != _expected_uid {
                 wrong += 1;
             }
         });
