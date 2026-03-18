@@ -52,6 +52,8 @@ pub struct AppState {
     pub rag_engine: Option<Arc<tokio::sync::Mutex<crate::rag::RagEngine>>>,
     /// Provider health tracker for circuit breaker metrics.
     pub health_tracker: Option<Arc<ProviderHealthTracker>>,
+    /// Channel health tracker for circuit breaker + restart monitoring.
+    pub channel_health: Option<Arc<crate::channels::ChannelHealthTracker>>,
     /// Workflow engine for multi-step orchestration.
     pub workflow_engine: Option<Arc<WorkflowEngine>>,
     /// Business engine for autonomous business management.
@@ -90,6 +92,7 @@ pub struct WebServer {
     #[cfg(feature = "embeddings")]
     rag_engine: Option<Arc<tokio::sync::Mutex<crate::rag::RagEngine>>>,
     health_tracker: Option<Arc<ProviderHealthTracker>>,
+    channel_health: Option<Arc<crate::channels::ChannelHealthTracker>>,
     workflow_engine: Option<Arc<WorkflowEngine>>,
     business_engine: Option<Arc<crate::business::engine::BusinessEngine>>,
     estop_handles: Arc<tokio::sync::RwLock<EStopHandles>>,
@@ -115,6 +118,7 @@ impl WebServer {
             #[cfg(feature = "embeddings")]
             rag_engine: None,
             health_tracker: None,
+            channel_health: None,
             workflow_engine: None,
             business_engine: None,
             estop_handles: Arc::new(tokio::sync::RwLock::new(EStopHandles::default())),
@@ -140,6 +144,10 @@ impl WebServer {
     /// Set the provider health tracker for the `/api/v1/providers/health` endpoint.
     pub fn set_health_tracker(&mut self, tracker: Arc<ProviderHealthTracker>) {
         self.health_tracker = Some(tracker);
+    }
+
+    pub fn set_channel_health(&mut self, tracker: Arc<crate::channels::ChannelHealthTracker>) {
+        self.channel_health = Some(tracker);
     }
 
     /// Set the tool registry for the /v1/tools endpoint.
@@ -187,6 +195,7 @@ impl WebServer {
             #[cfg(feature = "embeddings")]
             rag_engine: None,
             health_tracker: None,
+            channel_health: None,
             workflow_engine: None,
             business_engine: None,
             estop_handles: Arc::new(tokio::sync::RwLock::new(EStopHandles::default())),
@@ -248,6 +257,7 @@ impl WebServer {
             #[cfg(feature = "embeddings")]
             rag_engine: self.rag_engine,
             health_tracker: self.health_tracker,
+            channel_health: self.channel_health,
             workflow_engine: self.workflow_engine,
             business_engine: self.business_engine,
             estop_handles: self.estop_handles,
