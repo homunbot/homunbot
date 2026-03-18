@@ -5,7 +5,9 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use super::{Contact, ContactEvent, ContactIdentity, ContactRelationship, PendingResponse, UpcomingEvent};
+use super::{
+    Contact, ContactEvent, ContactIdentity, ContactRelationship, PendingResponse, UpcomingEvent,
+};
 use crate::storage::Database;
 
 // ── Update request ──────────────────────────────────────────────────
@@ -87,12 +89,10 @@ impl Database {
                 .context("Failed to list contacts")
             }
             _ => {
-                sqlx::query_as::<_, Contact>(
-                    "SELECT * FROM contacts ORDER BY name COLLATE NOCASE",
-                )
-                .fetch_all(self.pool())
-                .await
-                .context("Failed to list contacts")
+                sqlx::query_as::<_, Contact>("SELECT * FROM contacts ORDER BY name COLLATE NOCASE")
+                    .fetch_all(self.pool())
+                    .await
+                    .context("Failed to list contacts")
             }
         }
     }
@@ -329,7 +329,22 @@ impl Database {
     pub async fn load_upcoming_contact_events(&self, days: i32) -> Result<Vec<UpcomingEvent>> {
         // For yearly recurrence: compare MM-DD portion.
         // For 'once': compare full date.
-        let rows = sqlx::query_as::<_, (i64, i64, String, String, String, Option<String>, i32, Option<String>, i32, String, String)>(
+        let rows = sqlx::query_as::<
+            _,
+            (
+                i64,
+                i64,
+                String,
+                String,
+                String,
+                Option<String>,
+                i32,
+                Option<String>,
+                i32,
+                String,
+                String,
+            ),
+        >(
             "SELECT ce.id, ce.contact_id, ce.event_type, ce.date, ce.recurrence,
                     ce.label, ce.auto_greet, ce.greet_template, ce.notify_days_before,
                     ce.created_at, c.name
@@ -355,15 +370,37 @@ impl Database {
 
         Ok(rows
             .into_iter()
-            .map(|(id, contact_id, event_type, date, recurrence, label, auto_greet, greet_template, notify_days_before, created_at, contact_name)| {
-                UpcomingEvent {
-                    event: ContactEvent {
-                        id, contact_id, event_type, date, recurrence, label,
-                        auto_greet, greet_template, notify_days_before, created_at,
-                    },
+            .map(
+                |(
+                    id,
+                    contact_id,
+                    event_type,
+                    date,
+                    recurrence,
+                    label,
+                    auto_greet,
+                    greet_template,
+                    notify_days_before,
+                    created_at,
                     contact_name,
-                }
-            })
+                )| {
+                    UpcomingEvent {
+                        event: ContactEvent {
+                            id,
+                            contact_id,
+                            event_type,
+                            date,
+                            recurrence,
+                            label,
+                            auto_greet,
+                            greet_template,
+                            notify_days_before,
+                            created_at,
+                        },
+                        contact_name,
+                    }
+                },
+            )
             .collect())
     }
 }
@@ -394,25 +431,24 @@ impl Database {
         Ok(id)
     }
 
-    pub async fn list_pending_responses(&self, status: Option<&str>) -> Result<Vec<PendingResponse>> {
+    pub async fn list_pending_responses(
+        &self,
+        status: Option<&str>,
+    ) -> Result<Vec<PendingResponse>> {
         match status {
-            Some(s) => {
-                sqlx::query_as::<_, PendingResponse>(
-                    "SELECT * FROM pending_responses WHERE status = ? ORDER BY created_at DESC",
-                )
-                .bind(s)
-                .fetch_all(self.pool())
-                .await
-                .context("Failed to list pending responses")
-            }
-            None => {
-                sqlx::query_as::<_, PendingResponse>(
-                    "SELECT * FROM pending_responses ORDER BY created_at DESC",
-                )
-                .fetch_all(self.pool())
-                .await
-                .context("Failed to list pending responses")
-            }
+            Some(s) => sqlx::query_as::<_, PendingResponse>(
+                "SELECT * FROM pending_responses WHERE status = ? ORDER BY created_at DESC",
+            )
+            .bind(s)
+            .fetch_all(self.pool())
+            .await
+            .context("Failed to list pending responses"),
+            None => sqlx::query_as::<_, PendingResponse>(
+                "SELECT * FROM pending_responses ORDER BY created_at DESC",
+            )
+            .fetch_all(self.pool())
+            .await
+            .context("Failed to list pending responses"),
         }
     }
 
@@ -456,7 +492,17 @@ mod tests {
 
         // Create
         let id = db
-            .insert_contact("Marco Rossi", Some("marco"), Some("CTO"), None, Some("1990-03-21"), None, Some("telegram"), None, None)
+            .insert_contact(
+                "Marco Rossi",
+                Some("marco"),
+                Some("CTO"),
+                None,
+                Some("1990-03-21"),
+                None,
+                Some("telegram"),
+                None,
+                None,
+            )
             .await
             .unwrap();
         assert!(id > 0);
@@ -497,9 +543,15 @@ mod tests {
     #[tokio::test]
     async fn test_identities() {
         let (db, _dir) = test_db().await;
-        let cid = db.insert_contact("Test", None, None, None, None, None, None, None, None).await.unwrap();
+        let cid = db
+            .insert_contact("Test", None, None, None, None, None, None, None, None)
+            .await
+            .unwrap();
 
-        let iid = db.insert_contact_identity(cid, "telegram", "12345", Some("personal")).await.unwrap();
+        let iid = db
+            .insert_contact_identity(cid, "telegram", "12345", Some("personal"))
+            .await
+            .unwrap();
         assert!(iid > 0);
 
         // List
@@ -509,11 +561,19 @@ mod tests {
         assert_eq!(ids[0].identifier, "12345");
 
         // Find by identity
-        let found = db.find_contact_by_identity("telegram", "12345").await.unwrap().unwrap();
+        let found = db
+            .find_contact_by_identity("telegram", "12345")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(found.id, cid);
 
         // Not found
-        assert!(db.find_contact_by_identity("telegram", "99999").await.unwrap().is_none());
+        assert!(db
+            .find_contact_by_identity("telegram", "99999")
+            .await
+            .unwrap()
+            .is_none());
 
         // Delete identity
         assert!(db.delete_contact_identity(iid).await.unwrap());
@@ -523,10 +583,19 @@ mod tests {
     #[tokio::test]
     async fn test_relationships() {
         let (db, _dir) = test_db().await;
-        let a = db.insert_contact("Alice", None, None, None, None, None, None, None, None).await.unwrap();
-        let b = db.insert_contact("Bob", None, None, None, None, None, None, None, None).await.unwrap();
+        let a = db
+            .insert_contact("Alice", None, None, None, None, None, None, None, None)
+            .await
+            .unwrap();
+        let b = db
+            .insert_contact("Bob", None, None, None, None, None, None, None, None)
+            .await
+            .unwrap();
 
-        let rid = db.insert_contact_relationship(a, b, "madre", true, Some("figlio"), None).await.unwrap();
+        let rid = db
+            .insert_contact_relationship(a, b, "madre", true, Some("figlio"), None)
+            .await
+            .unwrap();
         assert!(rid > 0);
 
         // List from Alice's perspective
@@ -546,9 +615,23 @@ mod tests {
     #[tokio::test]
     async fn test_events() {
         let (db, _dir) = test_db().await;
-        let cid = db.insert_contact("Test", None, None, None, None, None, None, None, None).await.unwrap();
+        let cid = db
+            .insert_contact("Test", None, None, None, None, None, None, None, None)
+            .await
+            .unwrap();
 
-        let eid = db.insert_contact_event(cid, "birthday", "03-21", None, Some("Compleanno"), false, Some(2)).await.unwrap();
+        let eid = db
+            .insert_contact_event(
+                cid,
+                "birthday",
+                "03-21",
+                None,
+                Some("Compleanno"),
+                false,
+                Some(2),
+            )
+            .await
+            .unwrap();
         assert!(eid > 0);
 
         let evs = db.list_contact_events(cid).await.unwrap();
@@ -564,9 +647,16 @@ mod tests {
     #[tokio::test]
     async fn test_cascade_delete() {
         let (db, _dir) = test_db().await;
-        let cid = db.insert_contact("Cascade", None, None, None, None, None, None, None, None).await.unwrap();
-        db.insert_contact_identity(cid, "email", "a@b.com", None).await.unwrap();
-        db.insert_contact_event(cid, "birthday", "01-01", None, None, false, None).await.unwrap();
+        let cid = db
+            .insert_contact("Cascade", None, None, None, None, None, None, None, None)
+            .await
+            .unwrap();
+        db.insert_contact_identity(cid, "email", "a@b.com", None)
+            .await
+            .unwrap();
+        db.insert_contact_event(cid, "birthday", "01-01", None, None, false, None)
+            .await
+            .unwrap();
 
         // Delete contact → identities + events cascade
         assert!(db.delete_contact(cid).await.unwrap());
@@ -577,9 +667,15 @@ mod tests {
     #[tokio::test]
     async fn test_pending_responses() {
         let (db, _dir) = test_db().await;
-        let cid = db.insert_contact("Sender", None, None, None, None, None, None, None, None).await.unwrap();
+        let cid = db
+            .insert_contact("Sender", None, None, None, None, None, None, None, None)
+            .await
+            .unwrap();
 
-        let pid = db.insert_pending_response(Some(cid), "telegram", "chat_1", "Hello!", None).await.unwrap();
+        let pid = db
+            .insert_pending_response(Some(cid), "telegram", "chat_1", "Hello!", None)
+            .await
+            .unwrap();
         assert!(pid > 0);
 
         // List all
@@ -594,7 +690,10 @@ mod tests {
         assert!(approved.is_empty());
 
         // Update status
-        assert!(db.update_pending_response_status(pid, "approved").await.unwrap());
+        assert!(db
+            .update_pending_response_status(pid, "approved")
+            .await
+            .unwrap());
         let r = db.load_pending_response(pid).await.unwrap().unwrap();
         assert_eq!(r.status, "approved");
     }

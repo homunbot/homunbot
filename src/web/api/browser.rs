@@ -105,7 +105,10 @@ mod inner {
         if !profile_path.exists() {
             return Json(ProfileActionResponse {
                 success: false,
-                message: format!("Profile directory does not exist: {}", profile_path.display()),
+                message: format!(
+                    "Profile directory does not exist: {}",
+                    profile_path.display()
+                ),
                 fixed_count: None,
             });
         }
@@ -251,10 +254,7 @@ mod inner {
                 "/v1/browser/profiles/{name}/fix-permissions",
                 post(fix_profile_permissions),
             )
-            .route(
-                "/v1/browser/profiles/{name}",
-                delete(delete_profile_data),
-            )
+            .route("/v1/browser/profiles/{name}", delete(delete_profile_data))
     }
 }
 

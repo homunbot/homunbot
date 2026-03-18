@@ -125,7 +125,10 @@ impl ContactsTool {
                         "#{} {} {} [{}] mode={}",
                         c.id,
                         c.name,
-                        c.nickname.as_deref().map(|n| format!("({n})")).unwrap_or_default(),
+                        c.nickname
+                            .as_deref()
+                            .map(|n| format!("({n})"))
+                            .unwrap_or_default(),
                         c.preferred_channel.as_deref().unwrap_or("?"),
                         c.response_mode,
                     )
@@ -133,7 +136,10 @@ impl ContactsTool {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
-        Ok(ToolResult { output, is_error: false })
+        Ok(ToolResult {
+            output,
+            is_error: false,
+        })
     }
 
     async fn do_resolve(&self, args: &Value) -> Result<ToolResult> {
@@ -149,8 +155,10 @@ impl ContactsTool {
             Some(result) => Ok(ToolResult {
                 output: format!(
                     "Resolved: #{} {} (confidence: {:.0}%)\nPath: {}",
-                    result.contact.id, result.contact.name,
-                    result.confidence * 100.0, result.resolution_path,
+                    result.contact.id,
+                    result.contact.name,
+                    result.confidence * 100.0,
+                    result.resolution_path,
                 ),
                 is_error: false,
             }),
@@ -164,7 +172,10 @@ impl ContactsTool {
     async fn do_get(&self, args: &Value) -> Result<ToolResult> {
         let id = args["contact_id"].as_i64().unwrap_or(0);
         if id == 0 {
-            return Ok(ToolResult { output: "Missing contact_id".into(), is_error: true });
+            return Ok(ToolResult {
+                output: "Missing contact_id".into(),
+                is_error: true,
+            });
         }
         let contact = self.db.load_contact(id).await?;
         match contact {
@@ -176,38 +187,53 @@ impl ContactsTool {
                     "Contact #{}: {}\nNickname: {}\nBio: {}\nNotes: {}\nBirthday: {}\n\
                      Channel: {}\nMode: {}\nTags: {}\n\
                      Identities: {}\nRelationships: {}\nEvents: {}",
-                    c.id, c.name,
+                    c.id,
+                    c.name,
                     c.nickname.as_deref().unwrap_or("-"),
-                    c.bio, c.notes,
+                    c.bio,
+                    c.notes,
                     c.birthday.as_deref().unwrap_or("-"),
                     c.preferred_channel.as_deref().unwrap_or("-"),
-                    c.response_mode, c.tags,
+                    c.response_mode,
+                    c.tags,
                     format_identities(&identities),
                     format_relationships(&relationships),
                     format_events(&events),
                 );
-                Ok(ToolResult { output, is_error: false })
+                Ok(ToolResult {
+                    output,
+                    is_error: false,
+                })
             }
-            None => Ok(ToolResult { output: format!("Contact #{id} not found"), is_error: true }),
+            None => Ok(ToolResult {
+                output: format!("Contact #{id} not found"),
+                is_error: true,
+            }),
         }
     }
 
     async fn do_create(&self, args: &Value) -> Result<ToolResult> {
         let name = args["name"].as_str().unwrap_or("");
         if name.is_empty() {
-            return Ok(ToolResult { output: "Missing 'name' for create".into(), is_error: true });
+            return Ok(ToolResult {
+                output: "Missing 'name' for create".into(),
+                is_error: true,
+            });
         }
-        let id = self.db.insert_contact(
-            name,
-            args["nickname"].as_str(),
-            args["bio"].as_str(),
-            args["notes"].as_str(),
-            args["birthday"].as_str(),
-            args["nameday"].as_str(),
-            args["preferred_channel"].as_str(),
-            args["response_mode"].as_str(),
-            args["tags"].as_str(),
-        ).await?;
+        let id = self
+            .db
+            .insert_contact(
+                name,
+                args["nickname"].as_str(),
+                args["bio"].as_str(),
+                args["notes"].as_str(),
+                args["birthday"].as_str(),
+                args["nameday"].as_str(),
+                args["preferred_channel"].as_str(),
+                args["response_mode"].as_str(),
+                args["tags"].as_str(),
+            )
+            .await?;
         Ok(ToolResult {
             output: format!("Created contact #{id}: {name}"),
             is_error: false,
@@ -217,7 +243,10 @@ impl ContactsTool {
     async fn do_update(&self, args: &Value) -> Result<ToolResult> {
         let id = args["contact_id"].as_i64().unwrap_or(0);
         if id == 0 {
-            return Ok(ToolResult { output: "Missing contact_id".into(), is_error: true });
+            return Ok(ToolResult {
+                output: "Missing contact_id".into(),
+                is_error: true,
+            });
         }
         let upd = ContactUpdate {
             name: args["name"].as_str().map(|s| s.to_string()),
@@ -233,7 +262,11 @@ impl ContactsTool {
         };
         let updated = self.db.update_contact(id, &upd).await?;
         Ok(ToolResult {
-            output: if updated { format!("Updated contact #{id}") } else { format!("Contact #{id} not found or no fields to update") },
+            output: if updated {
+                format!("Updated contact #{id}")
+            } else {
+                format!("Contact #{id} not found or no fields to update")
+            },
             is_error: !updated,
         })
     }
@@ -248,9 +281,10 @@ impl ContactsTool {
                 is_error: true,
             });
         }
-        let id = self.db.insert_contact_identity(
-            contact_id, channel, identifier, args["label"].as_str(),
-        ).await?;
+        let id = self
+            .db
+            .insert_contact_identity(contact_id, channel, identifier, args["label"].as_str())
+            .await?;
         Ok(ToolResult {
             output: format!("Added identity #{id}: {channel}:{identifier}"),
             is_error: false,
@@ -268,11 +302,17 @@ impl ContactsTool {
             });
         }
         let bidir = args["bidirectional"].as_bool().unwrap_or(false);
-        let id = self.db.insert_contact_relationship(
-            from_id, to_id, rel_type, bidir,
-            args["reverse_type"].as_str(),
-            args["notes"].as_str(),
-        ).await?;
+        let id = self
+            .db
+            .insert_contact_relationship(
+                from_id,
+                to_id,
+                rel_type,
+                bidir,
+                args["reverse_type"].as_str(),
+                args["notes"].as_str(),
+            )
+            .await?;
         Ok(ToolResult {
             output: format!("Added relationship #{id}: {rel_type}"),
             is_error: false,
@@ -289,13 +329,18 @@ impl ContactsTool {
                 is_error: true,
             });
         }
-        let id = self.db.insert_contact_event(
-            contact_id, event_type, date,
-            args["recurrence"].as_str(),
-            args["label"].as_str(),
-            args["auto_greet"].as_bool().unwrap_or(false),
-            args["notify_days_before"].as_i64().map(|n| n as i32),
-        ).await?;
+        let id = self
+            .db
+            .insert_contact_event(
+                contact_id,
+                event_type,
+                date,
+                args["recurrence"].as_str(),
+                args["label"].as_str(),
+                args["auto_greet"].as_bool().unwrap_or(false),
+                args["notify_days_before"].as_i64().map(|n| n as i32),
+            )
+            .await?;
         Ok(ToolResult {
             output: format!("Added event #{id}: {event_type} on {date}"),
             is_error: false,
@@ -332,7 +377,10 @@ impl ContactsTool {
     async fn do_send(&self, args: &Value) -> Result<ToolResult> {
         let message = args["message"].as_str().unwrap_or("");
         if message.is_empty() {
-            return Ok(ToolResult { output: "Missing 'message'".into(), is_error: true });
+            return Ok(ToolResult {
+                output: "Missing 'message'".into(),
+                is_error: true,
+            });
         }
 
         // Resolve the contact (by ID or query)

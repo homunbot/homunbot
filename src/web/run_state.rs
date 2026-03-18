@@ -113,8 +113,7 @@ impl WebRunStore {
             // Plan events: keep only the latest snapshot (replace, don't accumulate)
             // to avoid replaying stale intermediate states on reconnect.
             if event_type == "plan" {
-                if let Some(existing) =
-                    run.events.iter_mut().rev().find(|e| e.event_type == "plan")
+                if let Some(existing) = run.events.iter_mut().rev().find(|e| e.event_type == "plan")
                 {
                     *existing = event;
                 } else {
@@ -267,7 +266,11 @@ mod tests {
             .iter()
             .filter(|e| e.event_type == "plan")
             .collect();
-        assert_eq!(plan_events.len(), 1, "should keep only the latest plan event");
+        assert_eq!(
+            plan_events.len(),
+            1,
+            "should keep only the latest plan event"
+        );
         assert!(plan_events[0].name.contains("step 2"));
     }
 }

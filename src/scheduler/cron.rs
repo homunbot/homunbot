@@ -736,11 +736,19 @@ mod tests {
 
         // last_run was 30 seconds ago (same minute) — must NOT fire again
         let last_run = "2026-03-18 09:35:03";
-        assert!(!should_fire_schedule("cron:35 9 * * *", Some(last_run), &now));
+        assert!(!should_fire_schedule(
+            "cron:35 9 * * *",
+            Some(last_run),
+            &now
+        ));
 
         // last_run was yesterday — should fire
         let last_run_old = "2026-03-17 09:35:03";
-        assert!(should_fire_schedule("cron:35 9 * * *", Some(last_run_old), &now));
+        assert!(should_fire_schedule(
+            "cron:35 9 * * *",
+            Some(last_run_old),
+            &now
+        ));
 
         // no last_run — should fire (first time)
         assert!(should_fire_schedule("cron:35 9 * * *", None, &now));

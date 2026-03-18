@@ -76,7 +76,9 @@ mod integration_tests {
     /// All known channels have consistent capabilities.
     #[test]
     fn capabilities_coverage_all_channels() {
-        let channels = ["cli", "telegram", "discord", "slack", "whatsapp", "email", "web"];
+        let channels = [
+            "cli", "telegram", "discord", "slack", "whatsapp", "email", "web",
+        ];
 
         for name in &channels {
             let caps = capabilities_for(name);
@@ -129,7 +131,10 @@ mod integration_tests {
     #[test]
     fn email_prefix_normalization() {
         assert_eq!(capabilities_for("email"), capabilities_for("email:lavoro"));
-        assert_eq!(capabilities_for("email"), capabilities_for("email:personal"));
+        assert_eq!(
+            capabilities_for("email"),
+            capabilities_for("email:personal")
+        );
     }
 
     /// Unknown channels get safe defaults.

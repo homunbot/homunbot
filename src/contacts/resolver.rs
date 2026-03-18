@@ -22,14 +22,47 @@ pub struct ResolveResult {
 
 /// Relationship keywords that trigger LLM resolution.
 const RELATIONSHIP_KEYWORDS: &[&str] = &[
-    "madre", "padre", "mamma", "papà", "papa", "figlio", "figlia",
-    "fratello", "sorella", "marito", "moglie", "partner", "collega",
-    "capo", "amico", "amica", "zio", "zia", "nonno", "nonna",
-    "cugino", "cugina", "nipote",
+    "madre",
+    "padre",
+    "mamma",
+    "papà",
+    "papa",
+    "figlio",
+    "figlia",
+    "fratello",
+    "sorella",
+    "marito",
+    "moglie",
+    "partner",
+    "collega",
+    "capo",
+    "amico",
+    "amica",
+    "zio",
+    "zia",
+    "nonno",
+    "nonna",
+    "cugino",
+    "cugina",
+    "nipote",
     // Prepositions that indicate relational queries
-    " di ", " del ", " della ", " dello ", " dei ", " delle ",
-    "mother", "father", "son", "daughter", "wife", "husband",
-    "brother", "sister", "friend", "colleague", "boss",
+    " di ",
+    " del ",
+    " della ",
+    " dello ",
+    " dei ",
+    " delle ",
+    "mother",
+    "father",
+    "son",
+    "daughter",
+    "wife",
+    "husband",
+    "brother",
+    "sister",
+    "friend",
+    "colleague",
+    "boss",
 ];
 
 /// Check if a query contains relationship language.
@@ -74,7 +107,10 @@ pub async fn resolve_contact(
     // Build contact list with relationships for LLM context
     let mut context_lines = Vec::new();
     for c in &contacts {
-        let rels = db.list_contact_relationships(c.id).await.unwrap_or_default();
+        let rels = db
+            .list_contact_relationships(c.id)
+            .await
+            .unwrap_or_default();
         let rel_str = if rels.is_empty() {
             String::new()
         } else {

@@ -115,9 +115,7 @@ impl ChannelMetrics {
     }
 
     fn uptime_secs(&self) -> u64 {
-        self.started_at
-            .map(|s| s.elapsed().as_secs())
-            .unwrap_or(0)
+        self.started_at.map(|s| s.elapsed().as_secs()).unwrap_or(0)
     }
 }
 

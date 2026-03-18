@@ -1381,7 +1381,8 @@ async fn main() -> Result<()> {
                                 const DELAYS: [u64; 5] = [10, 20, 40, 60, 120];
                                 let mut connected = None;
                                 for attempt in 0..MAX_RETRIES {
-                                    let delay = std::time::Duration::from_secs(DELAYS[attempt as usize]);
+                                    let delay =
+                                        std::time::Duration::from_secs(DELAYS[attempt as usize]);
                                     tokio::time::sleep(delay).await;
                                     tracing::info!(
                                         attempt = attempt + 1,
@@ -1396,7 +1397,10 @@ async fn main() -> Result<()> {
                                     .await
                                     {
                                         Ok(peer) => {
-                                            tracing::info!("✅ Browser MCP connected on retry {}", attempt + 1);
+                                            tracing::info!(
+                                                "✅ Browser MCP connected on retry {}",
+                                                attempt + 1
+                                            );
                                             connected = Some(peer);
                                             break;
                                         }

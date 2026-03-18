@@ -114,7 +114,11 @@ const SETTINGS_PAGES: &[&str] = &[
 /// Build the sidebar navigation HTML (icon bar only, 80px).
 fn sidebar(active: &str) -> String {
     let a = |page: &str| -> &str {
-        if active == page { " active" } else { "" }
+        if active == page {
+            " active"
+        } else {
+            ""
+        }
     };
 
     let is_tools = TOOLS_PAGES.contains(&active);
@@ -177,7 +181,11 @@ fn sidebar(active: &str) -> String {
 /// Returns empty string for pages without a subnav (chat, dashboard, account).
 fn content_subnav(active: &str) -> String {
     let a = |page: &str| -> &str {
-        if active == page { " active" } else { "" }
+        if active == page {
+            " active"
+        } else {
+            ""
+        }
     };
 
     if TOOLS_PAGES.contains(&active) {
@@ -196,9 +204,14 @@ fn content_subnav(active: &str) -> String {
                 <a href="/mcp" class="sidebar-subnav-link{6}">MCP Servers</a>
                 <a href="/vault" class="sidebar-subnav-link{7}">Vault</a>
             </aside>"#,
-            a("automations"), a("workflows"),
-            a("memory"), a("knowledge"), a("contacts"),
-            a("skills"), a("mcp"), a("vault"),
+            a("automations"),
+            a("workflows"),
+            a("memory"),
+            a("knowledge"),
+            a("contacts"),
+            a("skills"),
+            a("mcp"),
+            a("vault"),
         )
     } else if SETTINGS_PAGES.contains(&active) {
         format!(
@@ -219,9 +232,16 @@ fn content_subnav(active: &str) -> String {
                 <a href="/maintenance" class="sidebar-subnav-link{8}">Database</a>
                 <a href="/logs" class="sidebar-subnav-link{9}">Logs</a>
             </aside>"#,
-            a("settings"), a("appearance"), a("channels"), a("browser"),
-            a("approvals"), a("file-access"), a("shell"), a("sandbox"),
-            a("maintenance"), a("logs"),
+            a("settings"),
+            a("appearance"),
+            a("channels"),
+            a("browser"),
+            a("approvals"),
+            a("file-access"),
+            a("shell"),
+            a("sandbox"),
+            a("maintenance"),
+            a("logs"),
         )
     } else {
         String::new()

@@ -22,10 +22,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             "/v1/health/components",
             axum::routing::get(components_health),
         )
-        .route(
-            "/v1/channels/health",
-            axum::routing::get(channels_health),
-        )
+        .route("/v1/channels/health", axum::routing::get(channels_health))
 }
 
 // --- Health check (public) ---
@@ -223,12 +220,24 @@ async fn check_channels(state: &AppState) -> ComponentHealth {
         let config = state.config.read().await;
         let ch = &config.channels;
         let mut enabled = Vec::new();
-        if ch.telegram.enabled { enabled.push("telegram"); }
-        if ch.discord.enabled { enabled.push("discord"); }
-        if ch.slack.enabled { enabled.push("slack"); }
-        if ch.whatsapp.enabled { enabled.push("whatsapp"); }
-        if ch.web.enabled { enabled.push("web"); }
-        if ch.email.enabled || !ch.active_email_accounts().is_empty() { enabled.push("email"); }
+        if ch.telegram.enabled {
+            enabled.push("telegram");
+        }
+        if ch.discord.enabled {
+            enabled.push("discord");
+        }
+        if ch.slack.enabled {
+            enabled.push("slack");
+        }
+        if ch.whatsapp.enabled {
+            enabled.push("whatsapp");
+        }
+        if ch.web.enabled {
+            enabled.push("web");
+        }
+        if ch.email.enabled || !ch.active_email_accounts().is_empty() {
+            enabled.push("email");
+        }
 
         let details = serde_json::json!({ "enabled": enabled });
         if enabled.is_empty() {
@@ -240,9 +249,7 @@ async fn check_channels(state: &AppState) -> ComponentHealth {
 }
 
 /// Per-channel runtime health data.
-async fn channels_health(
-    State(state): State<Arc<AppState>>,
-) -> Json<serde_json::Value> {
+async fn channels_health(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let channels = match &state.channel_health {
         Some(tracker) => serde_json::to_value(tracker.snapshots()).unwrap_or_default(),
         None => serde_json::json!([]),

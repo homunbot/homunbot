@@ -681,13 +681,12 @@ impl AgentLoop {
             .await;
 
         // Inject contact context for known senders (CTB-5)
-        let contact_ctx = crate::contacts::context::build_contact_context(
-            &self.db, channel, chat_id,
-        )
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+        let contact_ctx =
+            crate::contacts::context::build_contact_context(&self.db, channel, chat_id)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
         self.context.set_contact_context(contact_ctx).await;
 
         // Build initial messages for the LLM

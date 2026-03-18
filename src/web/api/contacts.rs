@@ -52,17 +52,11 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             "/v1/contacts/relationships/{id}",
             delete(remove_relationship),
         )
-        .route(
-            "/v1/contacts/{id}/events",
-            get(list_events).post(add_event),
-        )
+        .route("/v1/contacts/{id}/events", get(list_events).post(add_event))
         .route("/v1/contacts/events/{id}", delete(remove_event))
         .route("/v1/contacts/upcoming", get(upcoming_events))
         .route("/v1/contacts/pending", get(list_pending))
-        .route(
-            "/v1/contacts/pending/{id}/approve",
-            post(approve_pending),
-        )
+        .route("/v1/contacts/pending/{id}/approve", post(approve_pending))
         .route("/v1/contacts/pending/{id}/reject", post(reject_pending))
 }
 
@@ -256,7 +250,12 @@ async fn add_identity(
 ) -> Result<Json<Value>, ApiErr> {
     let db = require_db(&state)?;
     let id = db
-        .insert_contact_identity(contact_id, &body.channel, &body.identifier, body.label.as_deref())
+        .insert_contact_identity(
+            contact_id,
+            &body.channel,
+            &body.identifier,
+            body.label.as_deref(),
+        )
         .await
         .map_err(internal)?;
     Ok(Json(json!({"id": id})))

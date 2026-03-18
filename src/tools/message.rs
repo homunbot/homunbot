@@ -75,9 +75,8 @@ impl Tool for MessageTool {
 
         // Check capabilities before sending (content will be moved)
         let caps = capabilities_for(&channel);
-        let has_markdown = content.contains('#')
-            || content.contains("**")
-            || content.contains("```");
+        let has_markdown =
+            content.contains('#') || content.contains("**") || content.contains("```");
 
         let outbound = OutboundMessage {
             channel: channel.clone(),

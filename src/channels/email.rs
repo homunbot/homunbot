@@ -479,7 +479,11 @@ async fn run_account_imap_session(
 
         let mut idle = session.idle();
         idle.init().await.context("Failed to initialize IDLE")?;
-        debug!(account = account_name, cycle = idle_cycles, "Entering IMAP IDLE mode");
+        debug!(
+            account = account_name,
+            cycle = idle_cycles,
+            "Entering IMAP IDLE mode"
+        );
 
         let (wait_future, _stop_source) = idle.wait();
         let result = timeout(idle_timeout, wait_future).await;

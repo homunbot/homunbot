@@ -109,7 +109,9 @@ async fn generate_greeting(
 
     // If there's a custom template, use it directly
     if let Some(tpl) = &event.greet_template {
-        return tpl.replace("{name}", contact_name).replace("{event}", label);
+        return tpl
+            .replace("{name}", contact_name)
+            .replace("{event}", label);
     }
 
     // Generate via LLM
@@ -118,7 +120,10 @@ async fn generate_greeting(
         system_prompt: "Write a warm, short greeting message (1-2 sentences). \
             Be natural and heartfelt. Write in Italian unless the name suggests otherwise."
             .to_string(),
-        user_message: format!("Contact: {contact_name}\nEvent: {label}\nDate: {}", event.date),
+        user_message: format!(
+            "Contact: {contact_name}\nEvent: {label}\nDate: {}",
+            event.date
+        ),
         max_tokens: 128,
         temperature: 0.7,
         timeout_secs: 15,

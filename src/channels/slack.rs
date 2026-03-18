@@ -189,10 +189,7 @@ impl SlackChannel {
                 // ACK immediately (must be <3s)
                 if let Some(envelope_id) = envelope.get("envelope_id").and_then(|v| v.as_str()) {
                     let ack = serde_json::json!({ "envelope_id": envelope_id });
-                    if let Err(e) = write
-                        .send(WsMessage::Text(ack.to_string().into()))
-                        .await
-                    {
+                    if let Err(e) = write.send(WsMessage::Text(ack.to_string().into())).await {
                         tracing::warn!("Slack Socket Mode: ACK failed: {e}");
                         break;
                     }
@@ -212,10 +209,7 @@ impl SlackChannel {
                 }
 
                 // Extract message event
-                let Some(event) = envelope
-                    .get("payload")
-                    .and_then(|p| p.get("event"))
-                else {
+                let Some(event) = envelope.get("payload").and_then(|p| p.get("event")) else {
                     continue;
                 };
                 if event.get("type").and_then(|v| v.as_str()) != Some("message") {
@@ -262,10 +256,7 @@ impl SlackChannel {
                     continue;
                 }
 
-                let ts = event
-                    .get("ts")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
+                let ts = event.get("ts").and_then(|v| v.as_str()).unwrap_or_default();
                 if ts.is_empty() {
                     continue;
                 }
@@ -287,10 +278,7 @@ impl SlackChannel {
                 last_ts_by_channel.insert(channel_id.to_string(), ts.to_string());
 
                 // Thread context
-                let thread_ts = event
-                    .get("thread_ts")
-                    .and_then(|v| v.as_str())
-                    .or(Some(ts));
+                let thread_ts = event.get("thread_ts").and_then(|v| v.as_str()).or(Some(ts));
                 let metadata = thread_ts.map(|tts| MessageMetadata {
                     thread_id: Some(tts.to_string()),
                     ..Default::default()
@@ -432,8 +420,7 @@ impl SlackChannel {
             }
 
             for channel_id in target_channels {
-                let mut params =
-                    vec![("channel", channel_id.clone()), ("limit", "10".to_string())];
+                let mut params = vec![("channel", channel_id.clone()), ("limit", "10".to_string())];
 
                 if let Some(last_ts) = last_ts_by_channel.get(&channel_id) {
                     if !last_ts.is_empty() {
@@ -541,12 +528,11 @@ impl Channel for SlackChannel {
     ) -> Result<()> {
         let bot_user_id = self.get_bot_user_id().await?;
 
-        let scoped_channel =
-            if self.config.channel_id.is_empty() || self.config.channel_id == "*" {
-                None
-            } else {
-                Some(self.config.channel_id.clone())
-            };
+        let scoped_channel = if self.config.channel_id.is_empty() || self.config.channel_id == "*" {
+            None
+        } else {
+            Some(self.config.channel_id.clone())
+        };
 
         // Proactive messaging check
         let proactive_target = if !self.config.default_channel_id.is_empty() {

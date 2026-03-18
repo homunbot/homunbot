@@ -136,7 +136,10 @@ mod tests {
             "ollama_cloud",
             "ollama/minimax-m2:cloud"
         ));
-        assert!(supports_tool_calls("ollama_cloud", "ollama/glm-4.7-flash:cloud"));
+        assert!(supports_tool_calls(
+            "ollama_cloud",
+            "ollama/glm-4.7-flash:cloud"
+        ));
         // Blacklisted models (no native tool support)
         assert!(!supports_tool_calls(
             "ollama_cloud",
@@ -147,7 +150,10 @@ mod tests {
         assert!(!supports_tool_calls("ollama", "ollama/tinyllama:latest"));
         // Cloud providers always support tool calls
         assert!(supports_tool_calls("openai", "openai/gpt-4o"));
-        assert!(supports_tool_calls("anthropic", "anthropic/claude-sonnet-4"));
+        assert!(supports_tool_calls(
+            "anthropic",
+            "anthropic/claude-sonnet-4"
+        ));
         assert!(detect_model_capabilities("openai", "openai/gpt-4o").image_input);
     }
 

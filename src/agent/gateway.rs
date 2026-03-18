@@ -40,8 +40,8 @@ use crate::channels::WhatsAppChannel;
 #[cfg(feature = "channel-email")]
 use crate::channels::EmailChannel;
 
-use crate::channels::{Channel, ChannelHealthTracker};
-use crate::channels::SlackChannel; // Import trait to call .start()
+use crate::channels::SlackChannel;
+use crate::channels::{Channel, ChannelHealthTracker}; // Import trait to call .start()
 
 use super::AgentLoop;
 
@@ -311,19 +311,15 @@ impl Gateway {
             if dc_config.token.is_empty() || dc_config.token == "***ENCRYPTED***" {
                 tracing::error!("Discord enabled but no token found - skipping channel");
             } else {
-                let ch = spawn_monitored_channel(
-                    "discord",
-                    &self.channel_health,
-                    inbound_tx.clone(),
-                    {
+                let ch =
+                    spawn_monitored_channel("discord", &self.channel_health, inbound_tx.clone(), {
                         let health = self.channel_health.clone();
                         move || {
                             Box::new(
                                 DiscordChannel::new(dc_config.clone()).with_health(health.clone()),
                             )
                         }
-                    },
-                );
+                    });
                 channels.push(ch);
                 tracing::info!("Discord channel started (monitored)");
             }
@@ -708,8 +704,10 @@ impl Gateway {
                             let known = known.clone();
 
                             tokio::spawn(async move {
-                                dispatch_to_agent(prepared, agent, senders, stream_tx, db, locks, known)
-                                    .await;
+                                dispatch_to_agent(
+                                    prepared, agent, senders, stream_tx, db, locks, known,
+                                )
+                                .await;
                             });
                         })
                         .await;
@@ -731,8 +729,7 @@ impl Gateway {
                     .as_ref()
                     .map(|m| m.is_system)
                     .unwrap_or(false);
-                if !is_system_msg
-                    && !inbound_rate_limiter.check(&inbound.channel, &inbound.chat_id)
+                if !is_system_msg && !inbound_rate_limiter.check(&inbound.channel, &inbound.chat_id)
                 {
                     tracing::warn!(
                         channel = %inbound.channel,
@@ -804,7 +801,8 @@ impl Gateway {
                                         content: response,
                                         metadata: None,
                                     };
-                                    route_outbound(outbound, &senders_for_routing, &known_chat_ids).await;
+                                    route_outbound(outbound, &senders_for_routing, &known_chat_ids)
+                                        .await;
                                     continue;
                                 }
                                 Ok(None) => {} // Sender is trusted, proceed
@@ -945,7 +943,8 @@ impl Gateway {
                                             content: format!("❌ Errore nella rigenerazione: {e}"),
                                             metadata: None,
                                         };
-                                        route_outbound(err_msg, &modify_senders, &modify_known).await;
+                                        route_outbound(err_msg, &modify_senders, &modify_known)
+                                            .await;
                                         return;
                                     }
                                 };
@@ -1016,7 +1015,8 @@ impl Gateway {
                                         ),
                                         metadata: None,
                                     };
-                                    route_outbound(confirm, &senders_for_routing, &known_chat_ids).await;
+                                    route_outbound(confirm, &senders_for_routing, &known_chat_ids)
+                                        .await;
 
                                     // If message content is just the filename (no user caption),
                                     // skip the agent loop — the confirmation is sufficient.
@@ -1043,7 +1043,8 @@ impl Gateway {
                                         content: format!("📄 \"{file_name}\" already in knowledge base (duplicate)."),
                                         metadata: None,
                                     };
-                                    route_outbound(confirm, &senders_for_routing, &known_chat_ids).await;
+                                    route_outbound(confirm, &senders_for_routing, &known_chat_ids)
+                                        .await;
                                     let content_trimmed = inbound.content.trim();
                                     if content_trimmed == file_name
                                         || content_trimmed == "[document]"
@@ -1059,7 +1060,8 @@ impl Gateway {
                                         content: format!("❌ Failed to index \"{file_name}\": {e}"),
                                         metadata: None,
                                     };
-                                    route_outbound(confirm, &senders_for_routing, &known_chat_ids).await;
+                                    route_outbound(confirm, &senders_for_routing, &known_chat_ids)
+                                        .await;
                                     let content_trimmed = inbound.content.trim();
                                     if content_trimmed == file_name
                                         || content_trimmed == "[document]"
@@ -1085,7 +1087,8 @@ impl Gateway {
                         .ok()
                         .flatten();
                     if let Some(c) = &contact {
-                        let mode = if c.response_mode != "automatic" && !c.response_mode.is_empty() {
+                        let mode = if c.response_mode != "automatic" && !c.response_mode.is_empty()
+                        {
                             c.response_mode.clone()
                         } else {
                             // Channel default from config
@@ -1094,10 +1097,16 @@ impl Gateway {
                                 "telegram" => &cfg.channels.telegram.response_mode,
                                 "discord" => &cfg.channels.discord.response_mode,
                                 "slack" => &cfg.channels.slack.response_mode,
-                                s if s.starts_with("whatsapp") => &cfg.channels.whatsapp.response_mode,
+                                s if s.starts_with("whatsapp") => {
+                                    &cfg.channels.whatsapp.response_mode
+                                }
                                 _ => &String::new(),
                             };
-                            if ch_mode.is_empty() { "automatic".to_string() } else { ch_mode.clone() }
+                            if ch_mode.is_empty() {
+                                "automatic".to_string()
+                            } else {
+                                ch_mode.clone()
+                            }
                         };
                         (Some(c.id), Some(mode))
                     } else {
@@ -1114,9 +1123,15 @@ impl Gateway {
                     }
                     "on_demand" => {
                         tracing::info!(channel = %channel_name, sender = %inbound.sender_id, "Contact on_demand mode: saving pending");
-                        let _ = routing_db.insert_pending_response(
-                            contact_id, &channel_name, &chat_id, &inbound.content, None,
-                        ).await;
+                        let _ = routing_db
+                            .insert_pending_response(
+                                contact_id,
+                                &channel_name,
+                                &chat_id,
+                                &inbound.content,
+                                None,
+                            )
+                            .await;
                         continue;
                     }
                     _ => {} // automatic and assisted proceed
