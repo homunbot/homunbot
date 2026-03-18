@@ -103,12 +103,12 @@
 | UXO-7 | **Responsive polish** | Added `@media ≤600px` and `@media ≤480px` global breakpoints: scaled fonts, single-column grids, full-width modals, scrollable data tables, tighter spacing. | 1 settimana | ✅ DONE (2026-03-18) |
 | UXO-8 | **Keyboard shortcuts** | `command-palette.js` global (Cmd/Ctrl+K): 15 nav actions + theme toggle, fuzzy search, arrow/enter/escape. Chat page adds New Conversation, Search, Focus Input. Extensible via `homunCommandPalette.register()`. | 3 giorni | ✅ DONE (2026-03-18) |
 | **Channel hardening** | | | | |
-| CHH-1 | **Circuit breaker tutti i canali** | Pattern comune: open → half-open → closed. Backoff esponenziale. Health reporting. | 3 giorni | TODO |
+| CHH-1 | **Circuit breaker tutti i canali** | `ChannelHealthTracker` (circular buffer, 50%/80% thresholds), `spawn_monitored_channel()` con auto-restart (max 10, exponential backoff), relay pattern per stable outbound_tx. 8 unit tests. | 3 giorni | ✅ DONE (2026-03-18) |
 | CHH-2 | **Reconnect robusto Discord** | Serenity ha reconnect base, ma serve monitoring + logging + alerting. | 2 giorni | TODO |
 | CHH-3 | **Slack Events API** | AUD-7: da polling 3s a Events API push. Rate limit handling (429). | 1 settimana | TODO |
 | CHH-4 | **WhatsApp re-pairing** | AUD-8: re-pairing da gateway senza TUI. QR code via web UI. | 3 giorni | TODO |
 | CHH-5 | **Email robustness** | IMAP idle, reconnect su timeout, attachment MIME handling migliorato. | 3 giorni | TODO |
-| CHH-6 | **Channel health API** | Endpoint per stato real-time di ogni canale. Dashboard widget con status live. | 2 giorni | TODO |
+| CHH-6 | **Channel health API** | `GET /api/v1/channels/health` per-channel snapshots. Enriched `/api/v1/health/components` con runtime data. Dashboard widget con status dots + restart count + uptime. | 2 giorni | ✅ DONE (2026-03-18) |
 | **Testing** | | | | |
 | TST-1 | **E2E Playwright CI** | CHAT-7 + AUD-4: smoke suite completa per Web UI (chat, automations, settings). In CI. | 1 settimana | TODO |
 | TST-2 | **Integration test RAG** | AUD-5: ingest → chunk → embed → search round-trip. | 2 giorni | TODO |
