@@ -2130,7 +2130,7 @@ function startEditMessage(msgDiv) {
     });
 }
 
-function resendFromMessage(msgDiv, newContent) {
+async function resendFromMessage(msgDiv, newContent) {
     // Remove all messages after (and including) this message from DOM
     const allMsgs = Array.from(messagesEl.querySelectorAll('.chat-msg, .chat-thinking, .chat-reasoning'));
     const idx = allMsgs.indexOf(msgDiv);
@@ -2140,17 +2140,24 @@ function resendFromMessage(msgDiv, newContent) {
         }
     }
 
-    // Backend truncation — if we have a message ID, call the truncate API
+    // Backend truncation — await so the DB is clean before sending the new message
     const messageId = msgDiv.dataset.messageId;
     if (messageId && currentConversationId) {
-        fetch(conversationApi('/truncate'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                conversation_id: currentConversationId,
-                from_message_id: parseInt(messageId, 10)
-            })
-        }).catch(() => { /* best effort */ });
+        try {
+            const res = await fetch(conversationApi('/api/v1/chat/truncate'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    conversation_id: currentConversationId,
+                    from_message_id: parseInt(messageId, 10)
+                })
+            });
+            if (!res.ok) {
+                console.warn('Truncate failed:', res.status);
+            }
+        } catch (e) {
+            console.warn('Truncate error:', e);
+        }
     }
 
     // Re-add the edited user message and send via WebSocket
