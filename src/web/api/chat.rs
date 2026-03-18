@@ -12,6 +12,7 @@ use axum::Router;
 use serde::{Deserialize, Serialize};
 
 use super::super::server::AppState;
+use crate::utils::reasoning_filter::strip_reasoning;
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -572,10 +573,17 @@ async fn chat_history(
         .map(|r| {
             let tools: Vec<String> = serde_json::from_str(&r.tools_used).unwrap_or_default();
             let parsed = super::super::chat_attachments::parse_message_content(&r.content);
+            // Strip reasoning/thinking blocks from stored assistant messages —
+            // these are only meaningful during live streaming, not on history reload.
+            let text = if r.role == "assistant" {
+                strip_reasoning(&parsed.text)
+            } else {
+                parsed.text
+            };
             ChatHistoryMessage {
                 id: r.id,
                 role: r.role,
-                content: parsed.text,
+                content: text,
                 tools_used: tools,
                 timestamp: r.timestamp,
                 attachments: parsed.attachments,
