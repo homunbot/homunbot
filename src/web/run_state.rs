@@ -105,11 +105,24 @@ impl WebRunStore {
             if event_type == "model" && !msg.delta.trim().is_empty() {
                 run.effective_model = Some(msg.delta.clone());
             }
-            run.events.push(WebChatRunEvent {
+            let event = WebChatRunEvent {
                 event_type: event_type.clone(),
                 name: msg.delta.clone(),
                 tool_call: msg.tool_call_data.clone(),
-            });
+            };
+            // Plan events: keep only the latest snapshot (replace, don't accumulate)
+            // to avoid replaying stale intermediate states on reconnect.
+            if event_type == "plan" {
+                if let Some(existing) =
+                    run.events.iter_mut().rev().find(|e| e.event_type == "plan")
+                {
+                    *existing = event;
+                } else {
+                    run.events.push(event);
+                }
+            } else {
+                run.events.push(event);
+            }
         } else if !msg.delta.is_empty() {
             run.assistant_response.push_str(&msg.delta);
         }
@@ -219,5 +232,42 @@ mod tests {
         let inner = store.inner.lock().unwrap();
         let expired = inner.runs.values().next().unwrap();
         assert_eq!(expired.status, "interrupted");
+    }
+
+    #[test]
+    fn plan_events_keep_only_latest() {
+        let store = WebRunStore::default();
+        store.start_run("web:plan", "do something").unwrap();
+
+        // Send two plan events
+        store.append_stream_message(
+            "web:plan",
+            &StreamMessage {
+                chat_id: "plan".into(),
+                delta: r#"{"objective":"step 1"}"#.into(),
+                done: false,
+                event_type: Some("plan".into()),
+                tool_call_data: None,
+            },
+        );
+        store.append_stream_message(
+            "web:plan",
+            &StreamMessage {
+                chat_id: "plan".into(),
+                delta: r#"{"objective":"step 2"}"#.into(),
+                done: false,
+                event_type: Some("plan".into()),
+                tool_call_data: None,
+            },
+        );
+
+        let snap = store.active_snapshot("web:plan").unwrap();
+        let plan_events: Vec<_> = snap
+            .events
+            .iter()
+            .filter(|e| e.event_type == "plan")
+            .collect();
+        assert_eq!(plan_events.len(), 1, "should keep only the latest plan event");
+        assert!(plan_events[0].name.contains("step 2"));
     }
 }

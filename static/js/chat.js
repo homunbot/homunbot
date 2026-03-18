@@ -834,6 +834,9 @@ function hydrateActiveRun(run) {
     clearExecutionPlan();
     let lastStatusHint = '';
 
+    // Find the last plan event upfront — only apply the final plan snapshot
+    // to avoid DOM thrashing from intermediate states.
+    let lastPlanEvent = null;
     for (const event of run.events || []) {
         if (event.event_type === 'tool_start') {
             showToolIndicator(event.name, event.tool_call || null);
@@ -845,8 +848,11 @@ function hydrateActiveRun(run) {
         } else if (event.event_type === 'model') {
             setExecutionModel(event.name || run.effective_model || '');
         } else if (event.event_type === 'plan') {
-            applyExecutionPlan(parsePlanPayload(event.name));
+            lastPlanEvent = event;
         }
+    }
+    if (lastPlanEvent) {
+        applyExecutionPlan(parsePlanPayload(lastPlanEvent.name));
     }
 
     if (run.effective_model) {
