@@ -90,7 +90,7 @@ Stato: SEC-6/7/8/11/12/13/14/15 tutti ✅ DONE. Scudo anti-injection completo.
 | # | Task | Effort | Note |
 |---|------|--------|------|
 | TST-1 | **E2E Playwright CI** | 1 settimana | CHAT-7: smoke suite per Web UI in CI (chat, automations, settings) |
-| TST-3 | **Channel integration tests** | 1 settimana | Mock server per ogni canale. Test send/receive/reconnect |
+| TST-3 | **Channel integration tests** | 1 settimana | ✅ DONE (2026-03-18) — 8 integration test in channels/mod.rs: health lifecycle, capabilities coverage, degradation/recovery, proactive routing, Slack Socket Mode toggle, config defaults |
 | TST-4 | **CI sandbox validation** | 2 giorni | Push e trigger workflow GitHub Actions su runner reali |
 
 #### 1D. UX Beta (P1)

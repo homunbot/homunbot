@@ -35,7 +35,7 @@ impl SlackChannel {
     }
 
     /// Whether Socket Mode is available (app_token configured).
-    fn has_socket_mode(&self) -> bool {
+    pub fn has_socket_mode(&self) -> bool {
         !self.config.app_token.is_empty()
     }
 
