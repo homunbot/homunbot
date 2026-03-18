@@ -606,6 +606,13 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                                     <div class="setup-step-desc">Validate that provider credentials and endpoint work.</div>
                                 </div>
                             </div>
+                            <div class="setup-step" id="wizard-step-chat">
+                                <span class="setup-step-dot"></span>
+                                <div class="setup-step-content">
+                                    <div class="setup-step-title">4. Send your first message</div>
+                                    <div class="setup-step-desc">Try a quick chat to verify everything works end-to-end.</div>
+                                </div>
+                            </div>
                         </div>
                         <div class="setup-wizard-actions">
                             <button type="button" class="btn btn-primary btn-sm" id="wizard-next-step">Next step</button>

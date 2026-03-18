@@ -2267,6 +2267,17 @@ function sendCurrentMessage() {
     if (chatDocInput) chatDocInput.value = '';
     setProcessing(true);
     closeChatPlusMenu();
+
+    // Mark setup wizard step 4 complete on first message
+    try {
+        var ck = localStorage.getItem('homun-wizard-checkpoint');
+        if (ck) {
+            var d = JSON.parse(ck);
+            if (d && d.step === 'chat') {
+                localStorage.setItem('homun-wizard-checkpoint', JSON.stringify({ step: 'done', ts: Date.now() }));
+            }
+        }
+    } catch(_) {}
     updateConversationSummary((conversation) => {
         if (!conversation.message_count) {
             conversation.title = truncateConversationText(text)

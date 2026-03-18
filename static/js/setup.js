@@ -574,7 +574,33 @@ var wizardEls = {
     stepProvider: document.getElementById('wizard-step-provider'),
     stepModel: document.getElementById('wizard-step-model'),
     stepTest: document.getElementById('wizard-step-test'),
+    stepChat: document.getElementById('wizard-step-chat'),
 };
+
+// ─── Wizard Checkpoint (survives reload) ───
+var WIZARD_CHECKPOINT_KEY = 'homun-wizard-checkpoint';
+
+function saveWizardCheckpoint(step) {
+    try { localStorage.setItem(WIZARD_CHECKPOINT_KEY, JSON.stringify({ step: step, ts: Date.now() })); } catch(_) {}
+}
+
+function loadWizardCheckpoint() {
+    try {
+        var raw = localStorage.getItem(WIZARD_CHECKPOINT_KEY);
+        if (!raw) return null;
+        var data = JSON.parse(raw);
+        // Expire after 24h
+        if (Date.now() - data.ts > 86400000) {
+            localStorage.removeItem(WIZARD_CHECKPOINT_KEY);
+            return null;
+        }
+        return data.step;
+    } catch(_) { return null; }
+}
+
+function clearWizardCheckpoint() {
+    try { localStorage.removeItem(WIZARD_CHECKPOINT_KEY); } catch(_) {}
+}
 
 function setWizardStepState(stepEl, state) {
     if (!stepEl) return;
@@ -601,18 +627,34 @@ function refreshSetupWizard() {
     var hasProvider = providers.length > 0;
     var hasModel = hasActiveModelConfigured();
     var hasTest = !!lastProviderTestOk;
+    // Restore test checkpoint from localStorage (survives reload)
+    if (!hasTest && loadWizardCheckpoint() === 'chat') hasTest = true;
+    var hasChat = loadWizardCheckpoint() === 'done';
 
+    // Step 1: Provider
     if (hasProvider) setWizardStepState(wizardEls.stepProvider, 'is-done');
     else setWizardStepState(wizardEls.stepProvider, 'is-active');
 
+    // Step 2: Model
     if (!hasProvider) setWizardStepState(wizardEls.stepModel, null);
     else if (hasModel) setWizardStepState(wizardEls.stepModel, 'is-done');
     else setWizardStepState(wizardEls.stepModel, 'is-active');
 
+    // Step 3: Test
     if (!hasProvider || !hasModel) setWizardStepState(wizardEls.stepTest, null);
     else if (hasTest) setWizardStepState(wizardEls.stepTest, 'is-done');
     else setWizardStepState(wizardEls.stepTest, 'is-active');
 
+    // Step 4: First message
+    if (!hasTest) setWizardStepState(wizardEls.stepChat, null);
+    else if (hasChat) setWizardStepState(wizardEls.stepChat, 'is-done');
+    else setWizardStepState(wizardEls.stepChat, 'is-active');
+
+    // Checkpoint: save highest completed step
+    if (hasProvider && hasModel && hasTest && !hasChat) saveWizardCheckpoint('chat');
+    if (hasChat) saveWizardCheckpoint('done');
+
+    // Status text
     if (wizardEls.status) {
         wizardEls.status.classList.remove('validation-ok');
         if (!hasProvider) {
@@ -621,15 +663,25 @@ function refreshSetupWizard() {
             wizardEls.status.textContent = 'Next: choose an active model.';
         } else if (!hasTest) {
             wizardEls.status.textContent = 'Next: run provider connection test.';
+        } else if (!hasChat) {
+            wizardEls.status.textContent = 'Next: send your first message to verify the full pipeline.';
         } else {
-            wizardEls.status.textContent = 'Setup complete. You are ready to chat.';
+            wizardEls.status.textContent = 'Setup complete! Homun is ready.';
             wizardEls.status.classList.add('validation-ok');
         }
     }
 
+    // Button state
     if (wizardEls.nextBtn) {
-        wizardEls.nextBtn.textContent = (hasProvider && hasModel && hasTest) ? 'Setup complete' : 'Next step';
-        wizardEls.nextBtn.disabled = hasProvider && hasModel && hasTest;
+        if (hasChat) {
+            wizardEls.nextBtn.textContent = 'Setup complete';
+            wizardEls.nextBtn.disabled = true;
+        } else if (hasTest) {
+            wizardEls.nextBtn.textContent = 'Open chat';
+        } else {
+            wizardEls.nextBtn.textContent = 'Next step';
+            wizardEls.nextBtn.disabled = false;
+        }
     }
 }
 
@@ -637,6 +689,7 @@ async function runWizardNextStep() {
     var providers = getConfiguredProviders();
     var hasProvider = providers.length > 0;
     var hasModel = hasActiveModelConfigured();
+    var hasTest = !!lastProviderTestOk || loadWizardCheckpoint() === 'chat';
 
     if (!hasProvider) {
         if (providerGrid) providerGrid.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -659,15 +712,22 @@ async function runWizardNextStep() {
         return;
     }
 
-    var activeCard = getActiveProviderCard() || providers[0];
-    if (activeCard) {
-        var body = activeCard.querySelector('.provider-card-body');
-        var header = activeCard.querySelector('.provider-card-header');
-        if (body && body.hidden && header) header.click();
-        activeCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        await runProviderConnectionTest(activeCard);
-        refreshSetupWizard();
+    if (!hasTest) {
+        var activeCard = getActiveProviderCard() || providers[0];
+        if (activeCard) {
+            var body = activeCard.querySelector('.provider-card-body');
+            var header = activeCard.querySelector('.provider-card-header');
+            if (body && body.hidden && header) header.click();
+            activeCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            await runProviderConnectionTest(activeCard);
+            refreshSetupWizard();
+        }
+        return;
     }
+
+    // Step 4: Open chat page for first message
+    saveWizardCheckpoint('chat');
+    window.location.href = '/chat';
 }
 
 (function initSetupWizard() {
