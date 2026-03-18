@@ -96,12 +96,12 @@
 | **UX overhaul** | | | | |
 | UXO-1 | **Toast/notification system** | Completato con REL-10: `hm-toast` globale unificato, 17 implementazioni rimosse. | 2 giorni | ✅ DONE (2026-03-17) |
 | UXO-2 | **Error states everywhere** | Pattern `.hm-error-state` (CSS + JS safe DOM). `showErrorState(id, msg, retryFn)` + `clearErrorState(id)` in toast.js. Applicato a 10 pagine: knowledge, skills, mcp, vault, automations, workflows, business, approvals, file-access, maintenance. Icona warning SVG + retry button. | 3 giorni | ✅ DONE (2026-03-17) |
-| UXO-3 | **Progress indicators** | Operazioni lunghe (browser, RAG ingest, skill install): progress bar o spinner con messaggio. | 2 giorni | TODO |
-| UXO-4 | **Chat: fix reasoning persistence** | UX-3: blocchi thinking/reasoning persistenti quando si torna su una chat. | 2 giorni | TODO |
-| UXO-5 | **Chat: fix plan mode display** | UX-2: messaggi plan devono corrispondere al piano reale. | 2-3 giorni | TODO |
-| UXO-6 | **Chat: fix edit inline** | UX-6: edit inline messaggi rotto. | 1-2 giorni | TODO |
-| UXO-7 | **Responsive polish** | Verificare 375, 390, 768, 1024, 1280px su tutte le 20 pagine. Fix breakpoint issues. | 1 settimana | TODO |
-| UXO-8 | **Keyboard shortcuts** | Cmd/Ctrl+K command palette. Shortcuts per azioni comuni. Help overlay. | 3 giorni | TODO |
+| UXO-3 | **Progress indicators** | `.hm-spinner` shared component (sm/lg), `.hm-progress` inline row, `showProgressToast()` persistent toast. Applied to: knowledge upload/index/search, skill install button. | 2 giorni | ✅ DONE (2026-03-18) |
+| UXO-4 | **Chat: fix reasoning persistence** | `strip_reasoning()` applied at API layer in `chat_history()` — strips `<think>` tags and `## Thinking` sections from stored messages before returning to frontend. Raw data preserved in DB. | 2 giorni | ✅ DONE (2026-03-18) |
+| UXO-5 | **Chat: fix plan mode display** | Plan events in `run_state.rs` now replace-not-accumulate (single latest snapshot). Frontend `hydrateActiveRun()` applies only last plan event. Added test. | 2-3 giorni | ✅ DONE (2026-03-18) |
+| UXO-6 | **Chat: fix edit inline** | Fixed truncate API path (`/truncate` → `/api/v1/chat/truncate`). Silent 404 was causing old messages to persist in DB after edit. Now awaits truncation before resend. | 1-2 giorni | ✅ DONE (2026-03-18) |
+| UXO-7 | **Responsive polish** | Added `@media ≤600px` and `@media ≤480px` global breakpoints: scaled fonts, single-column grids, full-width modals, scrollable data tables, tighter spacing. | 1 settimana | ✅ DONE (2026-03-18) |
+| UXO-8 | **Keyboard shortcuts** | `command-palette.js` global (Cmd/Ctrl+K): 15 nav actions + theme toggle, fuzzy search, arrow/enter/escape. Chat page adds New Conversation, Search, Focus Input. Extensible via `homunCommandPalette.register()`. | 3 giorni | ✅ DONE (2026-03-18) |
 | **Channel hardening** | | | | |
 | CHH-1 | **Circuit breaker tutti i canali** | Pattern comune: open → half-open → closed. Backoff esponenziale. Health reporting. | 3 giorni | TODO |
 | CHH-2 | **Reconnect robusto Discord** | Serenity ha reconnect base, ma serve monitoring + logging + alerting. | 2 giorni | TODO |
