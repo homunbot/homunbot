@@ -40,16 +40,120 @@ use crate::channels::WhatsAppChannel;
 #[cfg(feature = "channel-email")]
 use crate::channels::EmailChannel;
 
-use crate::channels::Channel;
+use crate::channels::{Channel, ChannelHealthTracker};
 use crate::channels::SlackChannel; // Import trait to call .start()
 
 use super::AgentLoop;
+
+/// Maximum restart attempts before giving up on a channel.
+const MAX_CHANNEL_RESTARTS: u32 = 10;
 
 /// A running channel: name + task handle + outbound sender
 struct ChannelHandle {
     name: String,
     handle: tokio::task::JoinHandle<()>,
     outbound_tx: mpsc::Sender<OutboundMessage>,
+}
+
+/// Spawn a channel with health monitoring and automatic restart on failure.
+///
+/// The gateway keeps a stable `outbound_tx` in its routing table. On each
+/// restart attempt, a fresh (inner_tx, inner_rx) pair is created for the
+/// channel, and a relay task forwards messages from the stable queue to the
+/// inner receiver. This way the routing table doesn't change on restart.
+fn spawn_monitored_channel<F>(
+    name: &str,
+    health: &Arc<ChannelHealthTracker>,
+    inbound_tx: mpsc::Sender<InboundMessage>,
+    channel_factory: F,
+) -> ChannelHandle
+where
+    F: Fn() -> Box<dyn Channel> + Send + 'static,
+{
+    let ch_name = name.to_string();
+    let health = health.clone();
+    let (outbound_tx, mut stable_rx) = mpsc::channel::<OutboundMessage>(100);
+
+    let handle = tokio::spawn(async move {
+        let retry_config = crate::utils::retry::RetryConfig::patient();
+        let mut attempt: u32 = 0;
+
+        loop {
+            health.mark_started(&ch_name);
+            tracing::info!(channel = %ch_name, attempt, "Channel starting");
+
+            // Create fresh inner channel for this attempt
+            let (inner_tx, inner_rx) = mpsc::channel::<OutboundMessage>(100);
+
+            // Relay: forward from stable outbound queue to this attempt's inner_tx.
+            // Stops when inner_tx is dropped (channel crashes) or stable_rx is closed.
+            let relay_inner_tx = inner_tx.clone();
+            let relay_handle = tokio::spawn(async move {
+                while let Some(msg) = stable_rx.recv().await {
+                    if relay_inner_tx.send(msg).await.is_err() {
+                        break; // inner channel gone (crashed), stop relaying
+                    }
+                }
+                stable_rx // return ownership so the next iteration can reuse it
+            });
+
+            let channel = channel_factory();
+            let inbound = inbound_tx.clone();
+            let result = channel.start(inbound, inner_rx).await;
+
+            // Channel exited — abort relay and reclaim stable_rx
+            relay_handle.abort();
+            match relay_handle.await {
+                Ok(rx) => stable_rx = rx,
+                Err(_) => {
+                    // Relay was aborted, we need a new stable_rx but can't get it back.
+                    // This shouldn't happen in practice, but if it does, we stop.
+                    tracing::error!(channel = %ch_name, "Lost outbound relay — stopping channel");
+                    health.mark_stopped(&ch_name, Some("internal: lost outbound relay"));
+                    break;
+                }
+            }
+
+            match result {
+                Ok(()) => {
+                    // Clean exit (channel decided to stop)
+                    tracing::info!(channel = %ch_name, "Channel exited cleanly");
+                    health.mark_stopped(&ch_name, None);
+                    break;
+                }
+                Err(e) => {
+                    let err_msg = format!("{e:#}");
+                    tracing::error!(channel = %ch_name, attempt, error = %err_msg, "Channel crashed");
+                    health.mark_stopped(&ch_name, Some(&err_msg));
+
+                    attempt += 1;
+                    if attempt >= MAX_CHANNEL_RESTARTS {
+                        tracing::error!(
+                            channel = %ch_name,
+                            max = MAX_CHANNEL_RESTARTS,
+                            "Max restarts exceeded — giving up"
+                        );
+                        break;
+                    }
+
+                    // Exponential backoff before restart
+                    let delay = retry_config.delay_for_attempt(attempt);
+                    tracing::info!(
+                        channel = %ch_name,
+                        delay_secs = delay.as_secs(),
+                        "Waiting before restart"
+                    );
+                    tokio::time::sleep(delay).await;
+                }
+            }
+        }
+    });
+
+    ChannelHandle {
+        name: name.to_string(),
+        handle,
+        outbound_tx,
+    }
 }
 
 /// Gateway — orchestrates channels, agent loop, cron scheduler, and message routing.
@@ -82,6 +186,8 @@ pub struct Gateway {
     workflow_event_rx: Option<mpsc::Receiver<WorkflowEvent>>,
     /// Business engine for autonomous business management
     business_engine: Option<Arc<crate::business::engine::BusinessEngine>>,
+    /// Channel health tracker for circuit breaker + auto-restart
+    channel_health: Arc<ChannelHealthTracker>,
 }
 
 impl Gateway {
@@ -109,7 +215,13 @@ impl Gateway {
             workflow_engine: None,
             workflow_event_rx: None,
             business_engine: None,
+            channel_health: Arc::new(ChannelHealthTracker::new()),
         }
+    }
+
+    /// Get channel health tracker (for sharing with web server).
+    pub fn channel_health(&self) -> Arc<ChannelHealthTracker> {
+        self.channel_health.clone()
     }
 
     /// Set the receiver for tool-originated messages (from MessageTool)
@@ -170,22 +282,14 @@ impl Gateway {
             if tg_config.token.is_empty() || tg_config.token == "***ENCRYPTED***" {
                 tracing::error!("Telegram enabled but no token found - skipping channel");
             } else {
-                let tg_inbound_tx = inbound_tx.clone();
-                let (tg_outbound_tx, tg_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
-
-                let handle = tokio::spawn(async move {
-                    let channel = TelegramChannel::new(tg_config);
-                    if let Err(e) = channel.start(tg_inbound_tx, tg_outbound_rx).await {
-                        tracing::error!(error = %e, "Telegram channel error");
-                    }
-                });
-
-                channels.push(ChannelHandle {
-                    name: "telegram".to_string(),
-                    handle,
-                    outbound_tx: tg_outbound_tx,
-                });
-                tracing::info!("Telegram channel started");
+                let ch = spawn_monitored_channel(
+                    "telegram",
+                    &self.channel_health,
+                    inbound_tx.clone(),
+                    move || Box::new(TelegramChannel::new(tg_config.clone())),
+                );
+                channels.push(ch);
+                tracing::info!("Telegram channel started (monitored)");
             }
         }
 
@@ -207,22 +311,14 @@ impl Gateway {
             if dc_config.token.is_empty() || dc_config.token == "***ENCRYPTED***" {
                 tracing::error!("Discord enabled but no token found - skipping channel");
             } else {
-                let dc_inbound_tx = inbound_tx.clone();
-                let (dc_outbound_tx, dc_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
-
-                let handle = tokio::spawn(async move {
-                    let channel = DiscordChannel::new(dc_config);
-                    if let Err(e) = channel.start(dc_inbound_tx, dc_outbound_rx).await {
-                        tracing::error!(error = %e, "Discord channel error");
-                    }
-                });
-
-                channels.push(ChannelHandle {
-                    name: "discord".to_string(),
-                    handle,
-                    outbound_tx: dc_outbound_tx,
-                });
-                tracing::info!("Discord channel started");
+                let ch = spawn_monitored_channel(
+                    "discord",
+                    &self.channel_health,
+                    inbound_tx.clone(),
+                    move || Box::new(DiscordChannel::new(dc_config.clone())),
+                );
+                channels.push(ch);
+                tracing::info!("Discord channel started (monitored)");
             }
         }
 
@@ -230,22 +326,14 @@ impl Gateway {
         #[cfg(feature = "channel-whatsapp")]
         if config.channels.whatsapp.enabled {
             let wa_config = config.channels.whatsapp.clone();
-            let wa_inbound_tx = inbound_tx.clone();
-            let (wa_outbound_tx, wa_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
-
-            let handle = tokio::spawn(async move {
-                let channel = WhatsAppChannel::new(wa_config);
-                if let Err(e) = channel.start(wa_inbound_tx, wa_outbound_rx).await {
-                    tracing::error!(error = %e, "WhatsApp channel error");
-                }
-            });
-
-            channels.push(ChannelHandle {
-                name: "whatsapp".to_string(),
-                handle,
-                outbound_tx: wa_outbound_tx,
-            });
-            tracing::info!("WhatsApp channel started");
+            let ch = spawn_monitored_channel(
+                "whatsapp",
+                &self.channel_health,
+                inbound_tx.clone(),
+                move || Box::new(WhatsAppChannel::new(wa_config.clone())),
+            );
+            channels.push(ch);
+            tracing::info!("WhatsApp channel started (monitored)");
         }
 
         // --- Start Slack channel ---
@@ -266,22 +354,14 @@ impl Gateway {
             if slack_config.token.is_empty() || slack_config.token == "***ENCRYPTED***" {
                 tracing::error!("Slack enabled but no token found - skipping channel");
             } else {
-                let slack_inbound_tx = inbound_tx.clone();
-                let (slack_outbound_tx, slack_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
-
-                let handle = tokio::spawn(async move {
-                    let channel = crate::channels::SlackChannel::new(slack_config);
-                    if let Err(e) = channel.start(slack_inbound_tx, slack_outbound_rx).await {
-                        tracing::error!(error = %e, "Slack channel error");
-                    }
-                });
-
-                channels.push(ChannelHandle {
-                    name: "slack".to_string(),
-                    handle,
-                    outbound_tx: slack_outbound_tx,
-                });
-                tracing::info!("Slack channel started");
+                let ch = spawn_monitored_channel(
+                    "slack",
+                    &self.channel_health,
+                    inbound_tx.clone(),
+                    move || Box::new(SlackChannel::new(slack_config.clone())),
+                );
+                channels.push(ch);
+                tracing::info!("Slack channel started (monitored)");
             }
         }
 
@@ -300,22 +380,14 @@ impl Gateway {
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
 
-                let email_inbound_tx = inbound_tx.clone();
-                let (email_outbound_tx, email_outbound_rx) = mpsc::channel::<OutboundMessage>(100);
-
-                let handle = tokio::spawn(async move {
-                    let channel = EmailChannel::new(accounts);
-                    if let Err(e) = channel.start(email_inbound_tx, email_outbound_rx).await {
-                        tracing::error!(error = %e, "Email channel error");
-                    }
-                });
-
-                channels.push(ChannelHandle {
-                    name: "email".to_string(),
-                    handle,
-                    outbound_tx: email_outbound_tx,
-                });
-                tracing::info!("Email channel started (multi-account)");
+                let ch = spawn_monitored_channel(
+                    "email",
+                    &self.channel_health,
+                    inbound_tx.clone(),
+                    move || Box::new(EmailChannel::new(accounts.clone())),
+                );
+                channels.push(ch);
+                tracing::info!("Email channel started (monitored, multi-account)");
             }
         }
 
@@ -333,6 +405,7 @@ impl Gateway {
 
             let web_db = self.db.clone();
             let web_health_tracker = self.health_tracker.clone();
+            let web_channel_health = self.channel_health.clone();
             let web_workflow_engine = self.workflow_engine.clone();
             let web_business_engine = self.business_engine.clone();
             let web_estop_handles = self.estop_handles.clone();
@@ -350,6 +423,7 @@ impl Gateway {
                 if let Some(tracker) = web_health_tracker {
                     server.set_health_tracker(tracker);
                 }
+                server.set_channel_health(web_channel_health);
                 if let Some(wf_engine) = web_workflow_engine {
                     server.set_workflow_engine(wf_engine);
                 }
@@ -376,6 +450,7 @@ impl Gateway {
                 handle,
                 outbound_tx: web_outbound_tx,
             });
+            self.channel_health.mark_started("web");
             tracing::info!(port = port, "Web UI started at http://localhost:{}", port);
         }
 
@@ -561,6 +636,7 @@ impl Gateway {
         let web_stream_tx_for_wf = web_stream_tx.clone();
         let routing_db = self.db.clone();
 
+        let channel_health = self.channel_health.clone();
         let routing_loop = tokio::spawn(async move {
             let approval_handler = std::sync::Arc::new(approval_handler);
 
@@ -592,6 +668,9 @@ impl Gateway {
             }
             #[allow(unused_mut)] // `inbound` is mutated inside #[cfg(feature = "embeddings")]
             while let Some(mut inbound) = inbound_rx.recv().await {
+                // Track successful inbound message in channel health
+                channel_health.record_message(&inbound.channel);
+
                 let session_key = inbound
                     .metadata
                     .as_ref()
