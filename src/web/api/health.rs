@@ -210,7 +210,7 @@ async fn check_channels(state: &AppState) -> ComponentHealth {
         if down_count == total_enabled {
             ComponentHealth::degraded("channels", "All channels down").with_details(details)
         } else if down_count > 0 {
-            ComponentHealth::degraded("channels", &format!("{down_count} channel(s) down"))
+            ComponentHealth::degraded("channels", format!("{down_count} channel(s) down"))
                 .with_details(details)
         } else {
             ComponentHealth::healthy("channels").with_details(details)

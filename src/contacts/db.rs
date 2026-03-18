@@ -29,6 +29,7 @@ pub struct ContactUpdate {
 // ── Contacts CRUD ───────────────────────────────────────────────────
 
 impl Database {
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_contact(
         &self,
         name: &str,
@@ -273,6 +274,7 @@ impl Database {
 // ── Events ──────────────────────────────────────────────────────────
 
 impl Database {
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_contact_event(
         &self,
         contact_id: i64,
