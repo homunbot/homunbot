@@ -9439,3 +9439,54 @@ html, body {
     }
 }
 
+/* ═══ UXO-7: Mobile Responsive Polish ═══ */
+
+/* Global: scale headings + stat values on small screens */
+@media (max-width: 600px) {
+    .page-title { font-size: 20px; }
+    .stat-value, .card-value { font-size: 22px; }
+    .maint-stat-value { font-size: 18px; }
+    .maint-summary { gap: 12px; }
+
+    /* Knowledge: make sources table scrollable horizontally */
+    .sources-list { overflow-x: auto; }
+
+    /* Workflows: stack detail header */
+    .wf-detail-header { flex-direction: column; gap: 8px; align-items: flex-start; }
+    .wf-step-row { padding: 0.5rem; }
+
+    /* Approvals & permissions: allow text wrap in tight cells */
+    .approval-card, .perm-card { font-size: 13px; }
+
+    /* Form sections: tighter gaps */
+    .form-row { gap: 12px; }
+    .form-section { padding: 16px; }
+}
+
+/* Phone: ≤480px — aggressive stacking */
+@media (max-width: 480px) {
+    .page-title { font-size: 18px; }
+    .page-subtitle { font-size: 12px; }
+    .stat-value, .card-value { font-size: 18px; }
+    .stats-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+    .stat-card { padding: 12px; }
+
+    /* Knowledge grid: single column */
+    .knowledge-grid { grid-template-columns: 1fr; }
+
+    /* Automations: reduce canvas padding, allow scroll */
+    .automation-flow-canvas { padding: 8px; }
+    .automation-flow-mini { overflow-x: auto; }
+
+    /* Chat: smaller font, tighter spacing */
+    .chat-msg { font-size: 13px; }
+    .chat-composer-textarea { font-size: 14px; }
+
+    /* Modals: full width on phone */
+    .modal { width: calc(100vw - 24px); max-width: calc(100vw - 24px); }
+
+    /* Data tables: ensure horizontal scroll */
+    .data-table { min-width: 500px; }
+    .sources-list, .usage-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}
+
