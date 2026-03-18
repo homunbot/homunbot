@@ -42,9 +42,17 @@ impl Channel for DiscordChannel {
         let allow_from: HashSet<String> = self.config.allow_from.iter().cloned().collect();
         let allow_all = allow_from.is_empty();
 
+        if self.config.default_channel_id.is_empty() {
+            tracing::warn!(
+                "Discord: default_channel_id not set — proactive messaging disabled. \
+                 Set [channels.discord] default_channel_id in config.toml to enable."
+            );
+        }
+
         tracing::info!(
             allow_from = ?self.config.allow_from,
             allow_all,
+            default_channel_id = %self.config.default_channel_id,
             "Discord channel starting"
         );
 
@@ -269,6 +277,10 @@ impl EventHandler for Handler {
 }
 
 /// Outbound loop: receive agent responses and send to Discord.
+///
+/// Supports thread routing via `metadata.thread_id` — if present, sends to
+/// that thread instead of the main channel. This enables proactive messaging
+/// to specific threads (e.g. from automations or cross-channel routing).
 async fn outbound_loop(http: Arc<serenity::http::Http>, mut rx: mpsc::Receiver<OutboundMessage>) {
     while let Some(msg) = rx.recv().await {
         if msg.channel != "discord" {
@@ -287,12 +299,20 @@ async fn outbound_loop(http: Arc<serenity::http::Http>, mut rx: mpsc::Receiver<O
             }
         };
 
+        // Use thread_id from metadata if available (thread routing)
+        let target_id = msg
+            .metadata
+            .as_ref()
+            .and_then(|m| m.thread_id.as_ref())
+            .and_then(|tid| tid.parse::<u64>().ok())
+            .unwrap_or(channel_id);
+
         // Discord message limit is 2000 chars
         let chunks = split_message(&msg.content, 1900);
 
         for chunk in chunks {
-            if let Err(e) = ChannelId::new(channel_id).say(&http, &chunk).await {
-                tracing::error!(error = %e, "Failed to send Discord message");
+            if let Err(e) = ChannelId::new(target_id).say(&http, &chunk).await {
+                tracing::error!(error = %e, channel_id, target_id, "Failed to send Discord message");
             }
         }
     }
