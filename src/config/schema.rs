@@ -148,14 +148,9 @@ impl Config {
             }
         }
 
-        // 4. Auto-detect: Ollama models often have unreliable native tool calling
-        // Models with :cloud suffix or certain patterns may work better with XML
-        if provider_name == "ollama" {
-            // For Ollama cloud models, default to XML dispatch
-            // Local models may support native tool calling better
-            if model.contains(":cloud") {
-                return true;
-            }
+        // 4. Auto-detect from capabilities: models without verified tool support use XML
+        if !crate::provider::capabilities::supports_tool_calls(provider_name, model) {
+            return true;
         }
 
         false

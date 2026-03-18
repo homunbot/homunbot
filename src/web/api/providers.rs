@@ -619,7 +619,12 @@ fn cloud_models_for(provider: &str) -> &'static [&'static str] {
         "cloudflare" => &["cloudflare/@cf/meta/llama-3.3-70b-instruct"],
         "copilot" => &["copilot/gpt-4o"],
         "bedrock" => &["bedrock/anthropic.claude-3-sonnet"],
-        "ollama_cloud" => &["ollama_cloud/llama3.3", "ollama_cloud/mistral"],
+        "ollama_cloud" => &[
+            "ollama_cloud/qwen3.5",
+            "ollama_cloud/nemotron-3-super",
+            "ollama_cloud/devstral-2",
+            "ollama_cloud/qwen3-next",
+        ],
         // Chinese providers
         "moonshot" => &["moonshot/moonshot-v1-8k"],
         "zhipu" => &["zhipu/glm-4"],
@@ -1005,6 +1010,26 @@ struct OllamaCloudModel {
     owned_by: String,
 }
 
+/// Ollama Cloud model allowlist — only models with verified "Tools" tag on ollama.com.
+/// Models without native tool calling produce free-text instead of structured tool calls.
+/// Source: https://ollama.com/search?c=cloud (check "Tools" tag)
+fn is_ollama_cloud_supported(model_name: &str) -> bool {
+    // Extract base name: "qwen3.5:397b" → "qwen3.5", "nemotron-3-super:latest" → "nemotron-3-super"
+    let base = model_name.split(':').next().unwrap_or(model_name);
+    matches!(
+        base,
+        "qwen3.5"
+            | "qwen3-coder-next"
+            | "qwen3-next"
+            | "nemotron-3-super"
+            | "nemotron-3-nano"
+            | "devstral-small-2"
+            | "devstral-2"
+            | "ministral-3"
+            | "rnj-1"
+    )
+}
+
 async fn list_ollama_cloud_models(
     State(state): State<Arc<AppState>>,
 ) -> Json<OllamaCloudModelsResponse> {
@@ -1102,6 +1127,7 @@ async fn list_ollama_cloud_models(
                     let models = data
                         .models
                         .into_iter()
+                        .filter(|m| is_ollama_cloud_supported(&m.name))
                         .map(|m| OllamaCloudModel {
                             id: m.name,
                             owned_by: "ollama".to_string(),

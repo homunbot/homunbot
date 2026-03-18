@@ -58,10 +58,33 @@ pub fn detect_model_capabilities(provider_name: &str, model: &str) -> ModelCapab
         }
     };
 
+    let tool_calls = match provider.as_str() {
+        // Ollama cloud/local: only models with verified "Tools" tag on ollama.com
+        "ollama" | "ollama_cloud" => {
+            model.contains("qwen3.5")
+                || model.contains("qwen3-coder")
+                || model.contains("qwen3-next")
+                || model.contains("nemotron-3")
+                || model.contains("devstral")
+                || model.contains("ministral-3")
+                || model.contains("rnj-1")
+                // Well-known local models with tool support
+                || model.contains("llama3")
+                || model.contains("mistral")
+                || model.contains("qwen2.5")
+                || model.contains("qwen3:")
+                || model.contains("command-r")
+                || model.contains("firefunction")
+                || model.contains("hermes")
+        }
+        // All major cloud providers support tool calling natively
+        _ => true,
+    };
+
     ModelCapabilities {
         multimodal: image_input,
         image_input,
-        tool_calls: true,
+        tool_calls,
         thinking,
     }
 }
@@ -101,9 +124,31 @@ mod tests {
     }
 
     #[test]
-    fn defaults_tool_call_support_to_enabled() {
+    fn detects_tool_call_support() {
+        // Ollama models with verified Tools support
         assert!(supports_tool_calls("ollama", "ollama/qwen3.5:latest"));
+        assert!(supports_tool_calls("ollama", "ollama/llama3:8b"));
+        assert!(supports_tool_calls(
+            "ollama_cloud",
+            "ollama/nemotron-3-super:cloud"
+        ));
+        assert!(supports_tool_calls(
+            "ollama_cloud",
+            "ollama/devstral-2:cloud"
+        ));
+        // Ollama models WITHOUT Tools support
+        assert!(!supports_tool_calls(
+            "ollama_cloud",
+            "ollama/deepseek-v3.2:cloud"
+        ));
+        assert!(!supports_tool_calls("ollama_cloud", "ollama/glm-5:cloud"));
+        assert!(!supports_tool_calls(
+            "ollama_cloud",
+            "ollama/minimax-m2:cloud"
+        ));
+        // Cloud providers always support tool calls
         assert!(supports_tool_calls("openai", "openai/gpt-4o"));
+        assert!(supports_tool_calls("anthropic", "anthropic/claude-sonnet-4"));
         assert!(detect_model_capabilities("openai", "openai/gpt-4o").image_input);
     }
 

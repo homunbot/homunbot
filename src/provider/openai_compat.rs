@@ -58,6 +58,13 @@ impl OpenAICompatProvider {
         if let Some(stripped) = model.strip_prefix(&prefix) {
             return stripped.to_string();
         }
+        // ollama_cloud receives models prefixed with "ollama/" (from resolve_provider),
+        // so strip that prefix too.
+        if self.provider_name == "ollama_cloud" {
+            if let Some(stripped) = model.strip_prefix("ollama/") {
+                return stripped.to_string();
+            }
+        }
         model.to_string()
     }
 
@@ -741,6 +748,26 @@ mod tests {
         let provider =
             OpenAICompatProvider::new("key", "http://localhost:11434/v1", "ollama", HashMap::new());
         assert_eq!(provider.resolve_model("llama3"), "llama3");
+    }
+
+    #[test]
+    fn test_resolve_model_ollama_cloud_strips_ollama_prefix() {
+        let provider = OpenAICompatProvider::new(
+            "key",
+            "https://ollama.com/v1",
+            "ollama_cloud",
+            HashMap::new(),
+        );
+        // Models routed via resolve_provider come with "ollama/" prefix
+        assert_eq!(
+            provider.resolve_model("ollama/deepseek-v3.2:cloud"),
+            "deepseek-v3.2:cloud"
+        );
+        // Direct ollama_cloud/ prefix also works
+        assert_eq!(
+            provider.resolve_model("ollama_cloud/glm-5:cloud"),
+            "glm-5:cloud"
+        );
     }
 
     #[test]
