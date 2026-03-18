@@ -59,23 +59,17 @@ pub fn detect_model_capabilities(provider_name: &str, model: &str) -> ModelCapab
     };
 
     let tool_calls = match provider.as_str() {
-        // Ollama cloud/local: only models with verified "Tools" tag on ollama.com
+        // Ollama: default to true (most modern models support tools).
+        // Blacklist only models known to NOT support native tool calling.
         "ollama" | "ollama_cloud" => {
-            model.contains("qwen3.5")
-                || model.contains("qwen3-coder")
-                || model.contains("qwen3-next")
-                || model.contains("nemotron-3")
-                || model.contains("devstral")
-                || model.contains("ministral-3")
-                || model.contains("rnj-1")
-                // Well-known local models with tool support
-                || model.contains("llama3")
-                || model.contains("mistral")
-                || model.contains("qwen2.5")
-                || model.contains("qwen3:")
-                || model.contains("command-r")
-                || model.contains("firefunction")
-                || model.contains("hermes")
+            !(model.contains("deepseek-r1")
+                || model.contains("deepseek-v3")
+                || model.contains("phi-2")
+                || model.contains("tinyllama")
+                || model.contains("codellama")
+                || model.contains("starcoder")
+                || model.contains("stablelm")
+                || model.contains("yi:"))
         }
         // All major cloud providers support tool calling natively
         _ => true,
@@ -125,7 +119,7 @@ mod tests {
 
     #[test]
     fn detects_tool_call_support() {
-        // Ollama models with verified Tools support
+        // Ollama: default true for modern models
         assert!(supports_tool_calls("ollama", "ollama/qwen3.5:latest"));
         assert!(supports_tool_calls("ollama", "ollama/llama3:8b"));
         assert!(supports_tool_calls(
@@ -136,16 +130,21 @@ mod tests {
             "ollama_cloud",
             "ollama/devstral-2:cloud"
         ));
-        // Ollama models WITHOUT Tools support
+        // Models previously missing from whitelist now work
+        assert!(supports_tool_calls("ollama_cloud", "ollama/glm-5:cloud"));
+        assert!(supports_tool_calls(
+            "ollama_cloud",
+            "ollama/minimax-m2:cloud"
+        ));
+        assert!(supports_tool_calls("ollama_cloud", "ollama/glm-4.7-flash:cloud"));
+        // Blacklisted models (no native tool support)
         assert!(!supports_tool_calls(
             "ollama_cloud",
             "ollama/deepseek-v3.2:cloud"
         ));
-        assert!(!supports_tool_calls("ollama_cloud", "ollama/glm-5:cloud"));
-        assert!(!supports_tool_calls(
-            "ollama_cloud",
-            "ollama/minimax-m2:cloud"
-        ));
+        assert!(!supports_tool_calls("ollama", "ollama/deepseek-r1:8b"));
+        assert!(!supports_tool_calls("ollama", "ollama/phi-2:latest"));
+        assert!(!supports_tool_calls("ollama", "ollama/tinyllama:latest"));
         // Cloud providers always support tool calls
         assert!(supports_tool_calls("openai", "openai/gpt-4o"));
         assert!(supports_tool_calls("anthropic", "anthropic/claude-sonnet-4"));

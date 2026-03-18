@@ -19,8 +19,8 @@ pub fn build_tools_prompt(tools: &[ToolDefinition]) -> String {
     }
 
     let mut p = String::from("\n\n## Tool Use Protocol\n\n");
-    p.push_str("To use a tool, wrap a JSON object in <tool_call_call> tags:\n\n");
-    p.push_str("```\n<tool_call_call>\n{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n</tool_call_call>\n```\n\n");
+    p.push_str("To use a tool, wrap a JSON object in <tool_call> tags:\n\n");
+    p.push_str("```\n<tool_call>\n{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n</tool_call>\n```\n\n");
     p.push_str("### Available Tools\n\n");
 
     for t in tools {
@@ -57,8 +57,8 @@ pub fn build_tools_prompt(tools: &[ToolDefinition]) -> String {
     }
 
     p.push_str("\n## Examples\n\n");
-    p.push_str("To save user info:\n```\n<tool_call_call>\n{\"name\": \"remember\", \"arguments\": {\"key\": \"hobby\", \"value\": \"cucinare\"}}\n</tool_call_call>\n```\n\n");
-    p.push_str("CRITICAL: Saying \"Fatto\", \"Salvato\", or \"Done\" does NOTHING. You MUST output the <tool_call_call> tag.\n");
+    p.push_str("To save user info:\n```\n<tool_call>\n{\"name\": \"remember\", \"arguments\": {\"key\": \"hobby\", \"value\": \"cucinare\"}}\n</tool_call>\n```\n\n");
+    p.push_str("CRITICAL: Saying \"Fatto\", \"Salvato\", or \"Done\" does NOTHING. You MUST output the <tool_call> tag.\n");
 
     p
 }
@@ -173,8 +173,13 @@ fn find_tag(text: &str, tag: &str) -> Option<usize> {
 
 fn find_tool_start(t: &str) -> Option<(&'static str, &'static str, usize)> {
     let patterns = [
+        // Standard format (most LLMs naturally generate this)
+        ("<tool_call>", "</tool_call>"),
+        ("<tool_call>\n", "</tool_call>"),
+        // Legacy format (backward compat with older conversations)
         ("<tool_call_call>", "</tool_call_call>"),
         ("<tool_call_call\n", "</tool_call_call>"),
+        // Alternative formats
         ("[TOOL_CALL]", "[/TOOL_CALL]"),
         (".tool_call\n", ".end_tool_call"),
         (".tool_call", ".end_tool_call"),
@@ -222,7 +227,15 @@ fn escape_xml(s: &str) -> String {
 mod tests {
     use super::*;
     #[test]
-    fn test_parse() {
+    fn test_parse_standard_tag() {
+        let r = "Let me save.\n<tool_call>\n{\"name\": \"remember\", \"arguments\": {\"key\": \"hobby\", \"value\": \"cucinare\"}}\n</tool_call>\nDone!";
+        let (t, c) = parse_tool_calls(r);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].name, "remember");
+        assert!(t.contains("Let me save"));
+    }
+    #[test]
+    fn test_parse_legacy_tag() {
         let r = "Let me save.\n<tool_call_call>\n{\"name\": \"remember\", \"arguments\": {\"key\": \"hobby\", \"value\": \"cucinare\"}}\n</tool_call_call>\nDone!";
         let (t, c) = parse_tool_calls(r);
         assert_eq!(c.len(), 1);
