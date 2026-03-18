@@ -934,6 +934,13 @@ async function selectConversation(conversationId) {
     chatText?.focus();
 }
 
+// ─── Command palette: chat-specific actions ───
+if (window.homunCommandPalette) {
+    homunCommandPalette.register({ id: 'chat-new', label: 'New Conversation', icon: '➕', fn: createNewConversation });
+    homunCommandPalette.register({ id: 'chat-search', label: 'Search Conversations', icon: '🔍', fn: function() { openSearchModal(); } });
+    homunCommandPalette.register({ id: 'chat-focus', label: 'Focus Chat Input', icon: '⌨️', fn: function() { chatText?.focus(); } });
+}
+
 // ─── Search modal ───
 btnChatSearch?.addEventListener('click', () => openSearchModal());
 btnChatSearchClose?.addEventListener('click', () => closeSearchModal());

@@ -335,6 +335,7 @@ fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String 
         </div>
     </div>
     <script src="/static/js/toast.js"></script>
+    <script src="/static/js/command-palette.js"></script>
     {script_tags}
     <script>
     (function() {{
