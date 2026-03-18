@@ -141,7 +141,7 @@ pub fn capabilities_for(channel_name: &str) -> ChannelCapabilities {
             dm_scope: true,
             thread_scope: false,
             mention_policy: true,
-            typing_state: false,
+            typing_state: true,
             markdown_support: false,
         },
         "email" => ChannelCapabilities {

@@ -74,6 +74,19 @@ impl Channel for WhatsAppChannel {
             );
         }
 
+        // Proactive messaging info
+        if !self.config.phone_number.is_empty() {
+            tracing::info!(
+                phone = %self.config.phone_number,
+                "WhatsApp proactive messaging enabled (phone_number configured)"
+            );
+        } else {
+            tracing::warn!(
+                "WhatsApp: phone_number not set — proactive messaging disabled. \
+                 Set [channels.whatsapp] phone_number in config.toml to enable."
+            );
+        }
+
         // Resolve DB path
         let db_path = self.config.resolved_db_path();
 
@@ -198,6 +211,10 @@ impl WhatsAppChannel {
                                 let mut ct = connect_time.lock().await;
                                 *ct = Some(Instant::now());
                             }
+                            // Set presence to "online"
+                            if let Err(e) = client.presence().set_available().await {
+                                tracing::debug!("WhatsApp: failed to set presence: {e}");
+                            }
                             let is_ready_delayed = is_ready.clone();
                             tokio::spawn(async move {
                                 tokio::time::sleep(tokio::time::Duration::from_secs(CONNECT_GRACE_PERIOD_SECS)).await;
@@ -291,7 +308,10 @@ impl WhatsAppChannel {
                         ..Default::default()
                     };
 
-                    match outbound_client.send_message(to, reply_message).await {
+                    match outbound_client
+                        .send_message(to.clone(), reply_message)
+                        .await
+                    {
                         Ok(msg_id) => {
                             let mut ids = sent_ids_for_outbound.lock().await;
                             if ids.len() >= SENT_IDS_MAX {
@@ -302,6 +322,11 @@ impl WhatsAppChannel {
                         Err(e) => {
                             tracing::error!(error = %e, "Failed to send WhatsApp message");
                         }
+                    }
+
+                    // Clear typing indicator after reply
+                    if let Err(e) = outbound_client.chatstate().send_paused(&to).await {
+                        tracing::debug!("WhatsApp: failed to clear typing: {e}");
                     }
                 }
             }
@@ -460,6 +485,13 @@ async fn handle_message(
         len = text.len(),
         "WhatsApp: received message"
     );
+
+    // Send typing indicator ("composing") to show the bot is processing
+    if let Some(jid) = parse_jid(&chat_jid.to_string()) {
+        if let Err(e) = client.chatstate().send_composing(&jid).await {
+            tracing::debug!("WhatsApp: failed to send typing indicator: {e}");
+        }
+    }
 
     let metadata = if attachment_path.is_some() {
         Some(MessageMetadata {

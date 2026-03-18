@@ -72,7 +72,7 @@ La strategia è **consolidare il nucleo e aprirlo al mondo esterno** in ordine d
 | CHH-5 | **Email robustness** | 3 giorni | ✅ DONE (2026-03-18) — NOOP keepalive ogni 5 cicli IDLE, seen messages pruning (cap 5000), reconnect con exponential backoff + password re-resolve da vault |
 | PRO-1 | **Proactive messaging Discord** | 2 giorni | ✅ DONE (2026-03-18) — thread_id routing in outbound, config warning. Proactive già funzionante via default_channel_id |
 | PRO-2 | **Proactive messaging Slack** | 2 giorni | ✅ DONE (2026-03-18) — default_channel_id config, fallback a channel_id, startup warning. Proactive via chat.postMessage + routing in active_channels_with_chat_ids |
-| PRO-3 | **Proactive messaging WhatsApp** | 3 giorni | Valutare fattibilità in wa-rs fork |
+| PRO-3 | **Proactive messaging WhatsApp** | 3 giorni | ✅ DONE (2026-03-18) — già funzionante via phone_number→JID in active_channels_with_chat_ids. Aggiunto typing indicator (composing/paused), presence online, startup warning |
 | CAP-1 | **Channel capability matrix** | 3 giorni | ✅ DONE (2026-03-18) — `ChannelCapabilities` struct, `capabilities_for()`, system prompt injection, send_message soft warnings. 7 test. ~190 LOC |
 
 #### 1B. Sicurezza Prompt Injection (P0)
