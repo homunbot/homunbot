@@ -297,8 +297,18 @@ impl Channel for EmailChannel {
                             {
                                 info!(account = %account_name, "Password updated from vault, resetting backoff");
                                 current_password = fresh;
-                                backoff = Duration::from_secs(1); // reset backoff on credential change
+                                backoff = Duration::from_secs(1);
                             }
+
+                            // Prune seen messages to avoid unbounded growth
+                            {
+                                let mut seen = seen_messages.lock().await;
+                                if seen.len() > 5000 {
+                                    seen.clear();
+                                    debug!(account = %account_name, "Pruned seen messages cache");
+                                }
+                            }
+
                             sleep(backoff).await;
                             backoff = std::cmp::min(backoff * 2, max_backoff);
                         }
@@ -454,13 +464,22 @@ async fn run_account_imap_session(
     )
     .await?;
 
-    // IDLE loop
+    // IDLE loop with NOOP keepalive for connection health
     let idle_timeout = Duration::from_secs(config.idle_timeout_secs);
+    let mut idle_cycles: u32 = 0;
 
     loop {
+        // NOOP keepalive every 5 cycles (~145 min) to verify connection is alive
+        if idle_cycles > 0 && idle_cycles % 5 == 0 {
+            debug!(account = account_name, "NOOP keepalive");
+            if let Err(e) = session.noop().await {
+                return Err(anyhow!("NOOP failed (connection lost): {e}"));
+            }
+        }
+
         let mut idle = session.idle();
         idle.init().await.context("Failed to initialize IDLE")?;
-        debug!(account = account_name, "Entering IMAP IDLE mode");
+        debug!(account = account_name, cycle = idle_cycles, "Entering IMAP IDLE mode");
 
         let (wait_future, _stop_source) = idle.wait();
         let result = timeout(idle_timeout, wait_future).await;
@@ -505,7 +524,7 @@ async fn run_account_imap_session(
             }
             Ok(Err(e)) => {
                 let _ = idle.done().await;
-                return Err(anyhow!("IDLE error: {}", e));
+                return Err(anyhow!("IDLE error: {e}"));
             }
             Err(_) => {
                 debug!(account = account_name, "IDLE timeout, re-establishing");
@@ -522,6 +541,7 @@ async fn run_account_imap_session(
                 .await?;
             }
         }
+        idle_cycles += 1;
     }
 }
 
