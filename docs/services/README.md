@@ -8,7 +8,7 @@ Use these documents when you need to understand how a subsystem works today in c
 - anchor each document to the Rust modules that actually implement it
 - record operational behavior, persistence, config ownership, and known limits
 
-For the prioritized backlog derived from these documents, use [../IMPLEMENTATION-GAPS.md](../IMPLEMENTATION-GAPS.md).
+For the prioritized backlog and roadmap, use [../UNIFIED-ROADMAP.md](../UNIFIED-ROADMAP.md).
 
 ## How To Use This Folder
 
@@ -52,7 +52,7 @@ Read in this order when you are onboarding or planning a change:
 
 ## Source Of Truth Rules
 
-- `docs/ROADMAP.md` is the planning document.
+- `docs/UNIFIED-ROADMAP.md` is the planning document.
 - this folder is the implementation document set
 - when they disagree, trust the code first and update the docs
 
@@ -62,7 +62,7 @@ When a change touches a subsystem boundary, update:
 
 1. the relevant file in `docs/services/`
 2. `README.md` if user-facing behavior changed
-3. `docs/ROADMAP.md` if milestone status changed
+3. `docs/UNIFIED-ROADMAP.md` if milestone status changed
 
 ## Writing Standard
 

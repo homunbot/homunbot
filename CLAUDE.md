@@ -1,6 +1,6 @@
 # Homun — Claude Code Instructions
 
-> **Reference docs**: `docs/PROJECT.md` (vision), `docs/ROADMAP.md` (sprint status), `docs/services/` (per-domain architecture)
+> **Reference docs**: `docs/UNIFIED-ROADMAP.md` (roadmap & status), `docs/PROJECT.md` (vision), `docs/services/` (per-domain architecture)
 > This file contains the technical guidelines for writing code in this codebase.
 
 ## What is Homun
@@ -9,7 +9,7 @@ Homun is a personal AI assistant written in Rust — a digital homunculus that l
 
 **Core philosophy**: single binary, local-first, privacy-focused, skill-powered.
 
-**Scale**: ~78K LOC Rust, ~17K LOC JS, 130+ source files, 18 SQLite migrations, 522+ tests, 11-check CI pipeline.
+**Scale**: ~87K LOC Rust, ~19K LOC JS, 130+ source files, 18 SQLite migrations, 646+ tests, 11-check CI pipeline.
 
 ## Architecture Overview
 
@@ -373,7 +373,7 @@ Before implementing a new component or feature domain:
 2. **Study how they do it**: check the relevant module in both projects.
    - OpenClaw (TypeScript): `~/Projects/openclaw/` — 30+ channels, Lobster workflows, ClawHub marketplace
    - ZeroClaw (Rust): `~/Projects/zeroclaw/` — lean binary, HNSW vectors, AIEOS identity
-   - Analysis docs: `docs/competitors/openclaw.md`, `docs/competitors/zeroclaw.md`, `docs/competitors/COMPARISON.md`
+   - Competitive analysis conclusions are in `docs/UNIFIED-ROADMAP.md` (positioning section)
 3. **Document findings** in the plan before writing code.
 4. This applies to: new tools, new channels, new storage patterns, new API designs, new skill features.
 
@@ -424,13 +424,11 @@ Before implementing a new component or feature domain:
 - **JS**: check if a similar UI pattern already exists in another page's JS before writing new code.
 
 ### Roadmap Tracking
-- **After completing a feature or significant change**, update `docs/ROADMAP.md`:
+- **After completing a feature or significant change**, update `docs/UNIFIED-ROADMAP.md`:
   - Mark relevant tasks as ✅ DONE with date
-  - Update LOC counts if significant
+  - Update "Stato Attuale" metrics table if numbers changed
   - Add new tasks discovered during implementation
-  - Update "Status Attuale" metrics table if numbers changed
-- Keep the ROADMAP as the **single source of truth** for project status.
-- Format: `| task | files | LOC | ✅ DONE |` in the sprint tables.
+- `docs/UNIFIED-ROADMAP.md` is the **single source of truth** for project status and planning.
 
 ### UX Conventions
 - **Design system**: follow `docs/design/design-constitution.md` (Braun-inspired, 8px grid, specific scales).
@@ -465,14 +463,13 @@ Before implementing a new component or feature domain:
 - Workflow Engine: persistent, approval gates, retry, resume-on-boot
 - Business Autopilot BIZ-1: OODA core, budget enforcement
 
-### In Progress / Remaining
-- CHAT-7: E2E test formalization (release-grade)
-- Browser: stealth hardening, screenshot/vision
-- BIZ-2..5: payments, accounting, marketing, crypto
-- Mobile App: Flutter, encrypted pairing
-- Distribution: pre-built binaries, Docker, Homebrew
+### Current Focus (Fase 1: Hardening Industriale)
+- Channel hardening: Slack Socket Mode, WhatsApp re-pairing, Discord reconnect, proactive messaging
+- Security: tool result scanning, webhook sanitization, browser content isolation
+- E2E testing in CI (CHAT-7)
+- Onboarding: setup wizard v2, Ollama local flow
 
-See `docs/ROADMAP.md` for detailed sprint status.
+See `docs/UNIFIED-ROADMAP.md` for the full 4-phase plan.
 
 ## Important Directories
 

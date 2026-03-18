@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::bus::OutboundMessage;
+use crate::channels::capabilities_for;
 
 use super::registry::{get_optional_string, get_string_param, Tool, ToolContext, ToolResult};
 
@@ -72,6 +73,12 @@ impl Tool for MessageTool {
             }
         };
 
+        // Check capabilities before sending (content will be moved)
+        let caps = capabilities_for(&channel);
+        let has_markdown = content.contains('#')
+            || content.contains("**")
+            || content.contains("```");
+
         let outbound = OutboundMessage {
             channel: channel.clone(),
             chat_id: chat_id.clone(),
@@ -82,7 +89,19 @@ impl Tool for MessageTool {
         match tx.send(outbound).await {
             Ok(()) => {
                 tracing::info!(channel = %channel, chat_id = %chat_id, "Message sent to user");
-                Ok(ToolResult::success("Message delivered to user"))
+                let mut notes = Vec::new();
+                if !caps.markdown_support && has_markdown {
+                    notes.push("channel does not support markdown formatting");
+                }
+                if !caps.proactive_send {
+                    notes.push("channel may not support proactive messages");
+                }
+                let msg = if notes.is_empty() {
+                    "Message delivered to user".to_string()
+                } else {
+                    format!("Message delivered to user (note: {})", notes.join("; "))
+                };
+                Ok(ToolResult::success(msg))
             }
             Err(e) => {
                 tracing::error!(error = %e, "Failed to send message");

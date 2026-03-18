@@ -1,3 +1,4 @@
+pub mod capabilities;
 mod cli;
 pub mod health;
 pub mod slack;
@@ -30,5 +31,6 @@ pub use whatsapp::WhatsAppChannel;
 #[cfg(feature = "channel-email")]
 pub use email::EmailChannel;
 
+pub use capabilities::{capabilities_for, ChannelCapabilities};
 pub use health::ChannelHealthTracker;
 pub use traits::Channel;

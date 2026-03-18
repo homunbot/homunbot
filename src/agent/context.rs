@@ -257,6 +257,11 @@ impl ContextBuilder {
         info.push_str(
             "If no `Subject:` prefix is provided, the subject defaults to \"Homun Response\".\n",
         );
+        // Append channel capabilities so the LLM knows what each channel supports
+        let channel_names: Vec<&str> = channels.iter().map(|(name, _)| *name).collect();
+        info.push_str(&crate::channels::capabilities::build_capabilities_prompt(
+            &channel_names,
+        ));
         self.channels_info = info;
     }
 

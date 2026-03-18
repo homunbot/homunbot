@@ -103,7 +103,7 @@ homun service        Install as OS service (launchd / systemd)
 
 - [Getting Started Guide](docs/GETTING-STARTED.md) -- step-by-step from install to first automation
 - [Changelog](CHANGELOG.md) -- all notable changes
-- [Roadmap](docs/ROADMAP.md) -- milestone plan and current status
+- [Roadmap](docs/UNIFIED-ROADMAP.md) -- milestone plan and current status
 - [Architecture](docs/services/README.md) -- subsystem documentation for contributors
 
 ## Requirements

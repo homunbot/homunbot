@@ -107,5 +107,5 @@ Gateway mode also manages the PID file in `~/.homun/homun.pid`.
 When changing runtime composition or config semantics, also update:
 
 - `README.md`
-- `docs/ROADMAP.md` if feature status changed
+- `docs/UNIFIED-ROADMAP.md` if feature status changed
 - the corresponding service document in this folder
