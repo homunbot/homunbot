@@ -11,6 +11,13 @@ function formatInt(value) {
     return new Intl.NumberFormat('en-US').format(Number(value || 0));
 }
 
+function formatUptime(secs) {
+    if (secs < 60) return secs + 's';
+    if (secs < 3600) return Math.floor(secs / 60) + 'm';
+    if (secs < 86400) return Math.floor(secs / 3600) + 'h ' + Math.floor((secs % 3600) / 60) + 'm';
+    return Math.floor(secs / 86400) + 'd ' + Math.floor((secs % 86400) / 3600) + 'h';
+}
+
 function formatUsd(value) {
     return '$' + Number(value || 0).toFixed(4);
 }
@@ -59,7 +66,7 @@ async function loadDashboardData() {
         fetch('/api/v1/automations').then(function (r) { return r.json(); }),
         fetch('/api/v1/workflows').then(function (r) { return r.json(); }),
         fetch('/api/v1/providers/health').then(function (r) { return r.json(); }),
-        fetch('/api/v1/status').then(function (r) { return r.json(); }),
+        fetch('/api/v1/channels/health').then(function (r) { return r.json(); }),
         fetch('/api/v1/memory/stats').then(function (r) { return r.json(); }),
         fetch('/api/v1/knowledge/stats').then(function (r) { return r.json(); }),
         fetch('/api/v1/logs/recent?limit=50').then(function (r) { return r.json(); }),
@@ -324,11 +331,15 @@ function renderSystemHealth(providers, status, memoryStats, knowledgeStats) {
             return;
         }
         channels.forEach(function (ch) {
-            body.appendChild(buildStatusRow(
-                ch.enabled ? 'ok' : 'neutral',
-                ch.name,
-                ch.enabled ? 'connected' : 'disabled'
-            ));
+            var dot = ch.status === 'healthy' ? 'ok'
+                    : ch.status === 'degraded' ? 'warn'
+                    : ch.status === 'down' || ch.status === 'stopped' ? 'err'
+                    : 'neutral';
+            if (!ch.enabled) dot = 'neutral';
+            var meta = ch.status || 'unknown';
+            if (ch.restart_count > 0) meta += ' (' + ch.restart_count + ' restarts)';
+            if (ch.uptime_secs > 0) meta += ' \u00b7 ' + formatUptime(ch.uptime_secs);
+            body.appendChild(buildStatusRow(dot, ch.name, meta));
         });
     }));
 

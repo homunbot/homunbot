@@ -22,6 +22,10 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             "/v1/health/components",
             axum::routing::get(components_health),
         )
+        .route(
+            "/v1/channels/health",
+            axum::routing::get(channels_health),
+        )
 }
 
 // --- Health check (public) ---
@@ -189,34 +193,61 @@ fn check_providers(state: &AppState) -> ComponentHealth {
 }
 
 async fn check_channels(state: &AppState) -> ComponentHealth {
-    let config = state.config.read().await;
-    let ch = &config.channels;
-    let mut enabled = Vec::new();
-    if ch.telegram.enabled {
-        enabled.push("telegram");
-    }
-    if ch.discord.enabled {
-        enabled.push("discord");
-    }
-    if ch.slack.enabled {
-        enabled.push("slack");
-    }
-    if ch.whatsapp.enabled {
-        enabled.push("whatsapp");
-    }
-    if ch.web.enabled {
-        enabled.push("web");
-    }
-    if ch.email.enabled || !ch.active_email_accounts().is_empty() {
-        enabled.push("email");
-    }
+    use crate::channels::health::ChannelStatus;
 
-    let details = serde_json::json!({ "enabled": enabled });
-    if enabled.is_empty() {
-        ComponentHealth::degraded("channels", "No channels enabled").with_details(details)
+    // If we have runtime health data, use it; otherwise fall back to config check.
+    if let Some(tracker) = &state.channel_health {
+        let snaps = tracker.snapshots();
+        if snaps.is_empty() {
+            return ComponentHealth::degraded("channels", "No channels running")
+                .with_details(serde_json::json!({ "channels": [] }));
+        }
+        let down_count = snaps
+            .iter()
+            .filter(|s| s.status == ChannelStatus::Down || s.status == ChannelStatus::Stopped)
+            .filter(|s| s.enabled)
+            .count();
+        let total_enabled = snaps.iter().filter(|s| s.enabled).count();
+
+        let details = serde_json::json!({ "channels": snaps });
+        if down_count == total_enabled {
+            ComponentHealth::degraded("channels", "All channels down").with_details(details)
+        } else if down_count > 0 {
+            ComponentHealth::degraded("channels", &format!("{down_count} channel(s) down"))
+                .with_details(details)
+        } else {
+            ComponentHealth::healthy("channels").with_details(details)
+        }
     } else {
-        ComponentHealth::healthy("channels").with_details(details)
+        // Fallback: config-only check (no gateway running)
+        let config = state.config.read().await;
+        let ch = &config.channels;
+        let mut enabled = Vec::new();
+        if ch.telegram.enabled { enabled.push("telegram"); }
+        if ch.discord.enabled { enabled.push("discord"); }
+        if ch.slack.enabled { enabled.push("slack"); }
+        if ch.whatsapp.enabled { enabled.push("whatsapp"); }
+        if ch.web.enabled { enabled.push("web"); }
+        if ch.email.enabled || !ch.active_email_accounts().is_empty() { enabled.push("email"); }
+
+        let details = serde_json::json!({ "enabled": enabled });
+        if enabled.is_empty() {
+            ComponentHealth::degraded("channels", "No channels enabled").with_details(details)
+        } else {
+            ComponentHealth::healthy("channels").with_details(details)
+        }
     }
+}
+
+/// Per-channel runtime health data.
+async fn channels_health(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let channels = match &state.channel_health {
+        Some(tracker) => serde_json::to_value(tracker.snapshots()).unwrap_or_default(),
+        None => serde_json::json!([]),
+    };
+    Json(serde_json::json!({ "channels": channels }))
 }
 
 async fn check_tools(state: &AppState) -> ComponentHealth {
