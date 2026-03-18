@@ -2032,7 +2032,7 @@ dependencies = [
  "wa-rs-ureq-http",
  "webpki-roots 0.26.11",
  "whoami",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
  "zeroize",
  "zip 2.4.2",
 ]
