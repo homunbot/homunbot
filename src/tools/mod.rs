@@ -3,6 +3,7 @@ pub mod automation;
 #[cfg(feature = "browser")]
 pub mod browser;
 pub mod business;
+pub mod contacts;
 pub mod cron;
 #[cfg(feature = "channel-email")]
 pub mod email_inbox;
@@ -34,6 +35,7 @@ pub use automation::CreateAutomationTool;
 #[cfg(feature = "browser")]
 pub use browser::{BrowserSession, BrowserTool};
 pub use business::BusinessTool;
+pub use contacts::ContactsTool;
 pub use cron::CronTool;
 #[cfg(feature = "channel-email")]
 pub use email_inbox::ReadEmailInboxTool;

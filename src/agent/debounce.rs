@@ -43,6 +43,10 @@ pub struct DispatchContext {
     pub blocked_tools: &'static [&'static str],
     pub thinking_override: Option<bool>,
     pub inbound_metadata: Option<MessageMetadata>,
+    /// Resolved contact ID from the contact book (if sender is known).
+    pub contact_id: Option<i64>,
+    /// Response mode for this message (contact override > channel default > "automatic").
+    pub contact_response_mode: Option<String>,
 }
 
 // ── Config ──────────────────────────────────────────────────────────
@@ -315,6 +319,8 @@ mod tests {
                 blocked_tools: &[],
                 thinking_override: None,
                 inbound_metadata: None,
+                contact_id: None,
+                contact_response_mode: None,
             },
         }
     }

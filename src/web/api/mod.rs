@@ -5,6 +5,7 @@ mod browser;
 mod business;
 mod channels;
 mod chat;
+mod contacts;
 mod connections;
 mod email_accounts;
 mod embeddings;
@@ -66,7 +67,8 @@ pub fn router() -> Router<Arc<AppState>> {
         // --- Usage ---
         .merge(usage::routes())
         .merge(workflows::routes())
-        .merge(business::routes());
+        .merge(business::routes())
+        .merge(contacts::routes());
 
     // --- Knowledge Base (RAG) ---
     #[cfg(feature = "embeddings")]

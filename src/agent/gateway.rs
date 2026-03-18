@@ -659,6 +659,7 @@ impl Gateway {
         let web_stream_tx = self.web_stream_tx.take();
         let web_stream_tx_for_wf = web_stream_tx.clone();
         let routing_db = self.db.clone();
+        let routing_config = self.config.clone();
 
         let channel_health = self.channel_health.clone();
         // Track known (channel, chat_id) pairs from inbound messages.
@@ -1061,6 +1062,51 @@ impl Gateway {
                     }
                 }
 
+                // --- Contact resolution + response mode routing (CTB-3) ---
+                let (contact_id, contact_response_mode) = {
+                    let contact = routing_db
+                        .find_contact_by_identity(&channel_name, &inbound.sender_id)
+                        .await
+                        .ok()
+                        .flatten();
+                    if let Some(c) = &contact {
+                        let mode = if c.response_mode != "automatic" && !c.response_mode.is_empty() {
+                            c.response_mode.clone()
+                        } else {
+                            // Channel default from config
+                            let cfg = routing_config.read().await;
+                            let ch_mode = match channel_name.as_str() {
+                                "telegram" => &cfg.channels.telegram.response_mode,
+                                "discord" => &cfg.channels.discord.response_mode,
+                                "slack" => &cfg.channels.slack.response_mode,
+                                s if s.starts_with("whatsapp") => &cfg.channels.whatsapp.response_mode,
+                                _ => &String::new(),
+                            };
+                            if ch_mode.is_empty() { "automatic".to_string() } else { ch_mode.clone() }
+                        };
+                        (Some(c.id), Some(mode))
+                    } else {
+                        (None, None)
+                    }
+                };
+
+                // Apply response mode: silent and on_demand skip agent processing
+                let effective_mode = contact_response_mode.as_deref().unwrap_or("automatic");
+                match effective_mode {
+                    "silent" => {
+                        tracing::info!(channel = %channel_name, sender = %inbound.sender_id, "Contact silent mode: dropping message");
+                        continue;
+                    }
+                    "on_demand" => {
+                        tracing::info!(channel = %channel_name, sender = %inbound.sender_id, "Contact on_demand mode: saving pending");
+                        let _ = routing_db.insert_pending_response(
+                            contact_id, &channel_name, &chat_id, &inbound.content, None,
+                        ).await;
+                        continue;
+                    }
+                    _ => {} // automatic and assisted proceed
+                }
+
                 // --- Email assisted/approval routing ---
                 // If the email requires approval, route the agent's response to the
                 // notify channel (e.g. Telegram) instead of back to the email sender.
@@ -1141,6 +1187,8 @@ impl Gateway {
                         blocked_tools,
                         thinking_override,
                         inbound_metadata,
+                        contact_id,
+                        contact_response_mode,
                     },
                 };
 

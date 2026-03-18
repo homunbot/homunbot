@@ -6,6 +6,7 @@
 use std::collections::HashSet;
 
 use anyhow::Result;
+use async_trait::async_trait;
 use frankenstein::client_reqwest::Bot;
 use frankenstein::methods::{
     GetFileParams, GetUpdatesParams, SendChatActionParams, SendMessageParams,
@@ -16,6 +17,7 @@ use frankenstein::{AsyncTelegramApi, ParseMode};
 use tokio::sync::mpsc;
 
 use crate::bus::{InboundMessage, MessageMetadata, OutboundMessage};
+use crate::channels::traits::Channel;
 use crate::config::TelegramConfig;
 
 /// Context passed to message handler (avoids too many function arguments).
@@ -38,9 +40,15 @@ impl TelegramChannel {
     pub fn new(config: TelegramConfig) -> Self {
         Self { config }
     }
+}
 
-    /// Start the Telegram bot using Frankenstein API
-    pub async fn start(
+#[async_trait]
+impl Channel for TelegramChannel {
+    fn name(&self) -> &str {
+        "telegram"
+    }
+
+    async fn start(
         &self,
         inbound_tx: mpsc::Sender<InboundMessage>,
         outbound_rx: mpsc::Receiver<OutboundMessage>,
@@ -109,7 +117,9 @@ impl TelegramChannel {
             }
         }
     }
+}
 
+impl TelegramChannel {
     async fn handle_message(
         api: &Bot,
         msg: frankenstein::types::Message,

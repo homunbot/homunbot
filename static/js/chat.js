@@ -1156,7 +1156,7 @@ function createReasoningSection() {
         <div class="chat-reasoning-header" onclick="toggleReasoning(this)">
             <span class="chat-reasoning-summary">
                 <span class="chat-reasoning-label">Tool activity</span>
-                <span class="chat-reasoning-count">0 steps</span>
+                <span class="chat-reasoning-count">0</span>
             </span>
             <span class="chat-reasoning-toggle">›</span>
         </div>
@@ -1189,7 +1189,7 @@ function updateReasoningCount() {
     if (reasoningSectionEl) {
         const countEl = reasoningSectionEl.querySelector('.chat-reasoning-count');
         if (countEl) {
-            countEl.textContent = `${reasoningCount} step${reasoningCount === 1 ? '' : 's'}`;
+            countEl.textContent = `${reasoningCount}`;
         }
         const labelEl = reasoningSectionEl.querySelector('.chat-reasoning-label');
         if (labelEl) {
@@ -1259,8 +1259,12 @@ function addToolCallCard(toolCallData) {
     updateReasoningCount();
     currentToolCalls.push(toolCallData.id);
 
-    // Auto-expand while tools are running
-    reasoningSectionEl.classList.remove('collapsed');
+    // Auto-expand for first few tools, then collapse to reduce noise
+    if (reasoningCount <= 3) {
+        reasoningSectionEl.classList.remove('collapsed');
+    } else {
+        reasoningSectionEl.classList.add('collapsed');
+    }
 
     scrollThreadToBottom();
 }
@@ -1291,7 +1295,7 @@ function describeToolCall(toolCallData) {
     if (name === 'web_search') {
         return {
             label: 'Searched the web',
-            detail: args.query ? `"${truncate(String(args.query), 56)}"` : '',
+            detail: args.query ? `"${truncate(String(args.query), 40)}"` : '',
         };
     }
 
@@ -1325,7 +1329,7 @@ function describeToolCall(toolCallData) {
     if (name === 'shell') {
         return {
             label: 'Ran a command',
-            detail: args.command ? truncate(String(args.command), 56) : '',
+            detail: args.command ? truncate(String(args.command), 40) : '',
         };
     }
 
@@ -1341,7 +1345,7 @@ function summarizeUrl(url) {
         const parsed = new URL(String(url));
         return parsed.hostname.replace(/^www\./, '');
     } catch (_) {
-        return truncate(String(url), 56);
+        return truncate(String(url), 30);
     }
 }
 
@@ -1396,7 +1400,7 @@ function endToolIndicator(toolName) {
         completedCard.dataset.toolStatus = 'done';
         const meta = completedCard.querySelector('.chat-tool-call-meta');
         if (meta) {
-            meta.textContent = 'Done';
+            meta.textContent = '\u2713';
         }
     }
     if (activeTools.length > 0 && toolIndicatorEl) {

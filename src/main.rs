@@ -40,6 +40,7 @@ mod business;
 mod channels;
 mod config;
 mod connections;
+mod contacts;
 mod logs;
 mod mcp_setup;
 mod provider;
@@ -70,9 +71,9 @@ use crate::storage::Database;
 #[cfg(feature = "channel-email")]
 use crate::tools::ReadEmailInboxTool;
 use crate::tools::{
-    BusinessTool, CreateAutomationTool, CronTool, EditFileTool, ListDirTool, MessageTool,
-    ReadFileTool, ShellTool, SpawnTool, ToolRegistry, VaultTool, WebFetchTool, WebSearchTool,
-    WorkflowTool, WriteFileTool,
+    BusinessTool, ContactsTool, CreateAutomationTool, CronTool, EditFileTool, ListDirTool,
+    MessageTool, ReadFileTool, ShellTool, SpawnTool, ToolRegistry, VaultTool, WebFetchTool,
+    WebSearchTool, WorkflowTool, WriteFileTool,
 };
 
 #[cfg(feature = "mcp")]
@@ -486,7 +487,7 @@ fn create_tool_registry(
         config.tools.exec.restrict_to_workspace,
         Some(shell_permissions),
         Some(config.security.execution_sandbox.clone()),
-        shared_config,
+        shared_config.clone(),
     )));
 
     // File tools with ACL-based permissions
@@ -522,6 +523,11 @@ fn create_tool_registry(
 
     // Vault tool (encrypted secrets storage, with audit logging via VLT-4)
     registry.register(Box::new(VaultTool::with_db(db.clone())));
+
+    // Contacts tool (personal CRM: search, resolve, manage contacts + relationships)
+    if let Some(ref sc) = shared_config {
+        registry.register(Box::new(ContactsTool::new(db.clone(), sc.clone())));
+    }
 
     // Automation creation tool (shared storage with scheduler + web API)
     registry.register(Box::new(CreateAutomationTool::new(db)));
@@ -1031,7 +1037,15 @@ async fn main() -> Result<()> {
 
             // Create CronScheduler before the tool registry so CronTool can use it
             let (cron_event_tx, cron_event_rx) = tokio::sync::mpsc::channel(50);
+            let contact_event_tx = cron_event_tx.clone();
             let cron_scheduler = Arc::new(CronScheduler::new(db.clone(), cron_event_tx));
+
+            // Start contact event scanner (birthday/anniversary notifications — CTB-4)
+            let _contact_event_scanner = crate::contacts::events::start_event_scanner(
+                db.clone(),
+                shared_config.clone(),
+                contact_event_tx,
+            );
 
             // Build tool registry with CronTool + MessageTool + SpawnTool + MCP tools
             let mut tool_registry =

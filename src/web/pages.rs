@@ -33,6 +33,7 @@ pub fn router() -> Router<Arc<AppState>> {
             "/mcp/oauth/notion/callback",
             get(mcp_notion_oauth_callback_page),
         )
+        .route("/contacts", get(contacts_page))
         .route("/memory", get(memory_page))
         .route("/knowledge", get(knowledge_page))
         .route("/vault", get(vault_page))
@@ -91,6 +92,7 @@ const TOOLS_PAGES: &[&str] = &[
     "workflows",
     "skills",
     "mcp",
+    "contacts",
     "memory",
     "knowledge",
     "vault",
@@ -182,34 +184,43 @@ fn content_subnav(active: &str) -> String {
         format!(
             r#"<aside class="sidebar-subnav is-open" id="tools-subnav">
                 <div class="sidebar-subnav-header">TOOLS</div>
+                <div class="subnav-section">Automazione</div>
                 <a href="/automations" class="sidebar-subnav-link{0}">Automations</a>
                 <a href="/workflows" class="sidebar-subnav-link{1}">Workflows</a>
-                <a href="/skills" class="sidebar-subnav-link{2}">Skills</a>
-                <a href="/mcp" class="sidebar-subnav-link{3}">MCP Servers</a>
-                <a href="/memory" class="sidebar-subnav-link{4}">Memory</a>
-                <a href="/knowledge" class="sidebar-subnav-link{5}">Knowledge</a>
-                <a href="/vault" class="sidebar-subnav-link{6}">Vault</a>
+                <div class="subnav-section">Conoscenza</div>
+                <a href="/memory" class="sidebar-subnav-link{2}">Memory</a>
+                <a href="/knowledge" class="sidebar-subnav-link{3}">Knowledge</a>
+                <a href="/contacts" class="sidebar-subnav-link{4}">Contacts</a>
+                <div class="subnav-section">Ecosystem</div>
+                <a href="/skills" class="sidebar-subnav-link{5}">Skills</a>
+                <a href="/mcp" class="sidebar-subnav-link{6}">MCP Servers</a>
+                <a href="/vault" class="sidebar-subnav-link{7}">Vault</a>
             </aside>"#,
-            a("automations"), a("workflows"), a("skills"), a("mcp"),
-            a("memory"), a("knowledge"), a("vault"),
+            a("automations"), a("workflows"),
+            a("memory"), a("knowledge"), a("contacts"),
+            a("skills"), a("mcp"), a("vault"),
         )
     } else if SETTINGS_PAGES.contains(&active) {
         format!(
             r#"<aside class="sidebar-subnav is-open" id="settings-subnav">
                 <div class="sidebar-subnav-header">SETTINGS</div>
+                <div class="subnav-section">Modello</div>
                 <a href="/setup" class="sidebar-subnav-link{0}">Model &amp; Providers</a>
                 <a href="/appearance" class="sidebar-subnav-link{1}">Appearance</a>
+                <div class="subnav-section">Connessioni</div>
                 <a href="/channels" class="sidebar-subnav-link{2}">Channels</a>
                 <a href="/browser" class="sidebar-subnav-link{3}">Browser</a>
-                <a href="/file-access" class="sidebar-subnav-link{4}">File Access</a>
-                <a href="/shell" class="sidebar-subnav-link{5}">Shell</a>
-                <a href="/sandbox" class="sidebar-subnav-link{6}">Sandbox</a>
-                <a href="/approvals" class="sidebar-subnav-link{7}">Approvals</a>
+                <div class="subnav-section">Permessi</div>
+                <a href="/approvals" class="sidebar-subnav-link{4}">Approvals</a>
+                <a href="/file-access" class="sidebar-subnav-link{5}">File Access</a>
+                <a href="/shell" class="sidebar-subnav-link{6}">Shell</a>
+                <a href="/sandbox" class="sidebar-subnav-link{7}">Sandbox</a>
+                <div class="subnav-section">Sistema</div>
                 <a href="/maintenance" class="sidebar-subnav-link{8}">Database</a>
                 <a href="/logs" class="sidebar-subnav-link{9}">Logs</a>
             </aside>"#,
             a("settings"), a("appearance"), a("channels"), a("browser"),
-            a("file-access"), a("shell"), a("sandbox"), a("approvals"),
+            a("approvals"), a("file-access"), a("shell"), a("sandbox"),
             a("maintenance"), a("logs"),
         )
     } else {
@@ -1381,7 +1392,7 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             </section>
                             <div class="chat-composer-shell" id="chat-config" data-model="{current_model}" data-vision-model="{current_vision_model}">
                                 <form class="chat-input" id="chat-form">
-                                    <textarea id="chat-text" placeholder="Reply to Homun…" autocomplete="off" class="input chat-textarea" rows="1" autofocus></textarea>
+                                    <textarea id="chat-text" placeholder="Message Homun…" autocomplete="off" class="input chat-textarea" rows="1" autofocus></textarea>
                                     <div class="chat-attachment-strip" id="chat-attachment-strip" hidden></div>
                                     <div class="chat-input-bottom">
                                         <div class="chat-composer-footer">
@@ -2086,7 +2097,7 @@ async fn mcp_page(State(state): State<Arc<AppState>>) -> Html<String> {
         "MCP",
         "mcp",
         &body,
-        &["connections.js", "mcp.js"],
+        &["connections.js", "mcp-loader.js", "mcp.js"],
     ))
 }
 
@@ -2283,6 +2294,28 @@ async fn logs_page() -> Html<String> {
         </main>"#;
 
     Html(page_html("Logs", "logs", body, &["logs.js"]))
+}
+
+// ─── Contacts ─────────────────────────────────────────────────────
+
+async fn contacts_page(State(_state): State<Arc<AppState>>) -> Html<String> {
+    let body = r#"<main class="content">
+        <div class="content-inner">
+            <div class="page-header">
+                <h1>Contacts</h1>
+                <p class="page-subtitle">Personal CRM — manage contacts, identities, relationships, and events</p>
+            </div>
+            <div class="contacts-toolbar" style="display:flex;gap:12px;margin-bottom:24px;align-items:center">
+                <input type="text" id="contact-search" placeholder="Search contacts..." class="input" style="flex:1;max-width:400px">
+                <button class="btn btn-primary" id="add-contact-btn">+ New Contact</button>
+            </div>
+            <div id="contacts-list" class="contacts-grid"></div>
+            <div id="contact-detail" style="display:none"></div>
+            <div id="contact-form-modal" class="modal" style="display:none"></div>
+            <div id="pending-section" style="margin-top:32px"></div>
+        </div>
+    </main>"#;
+    Html(page_html("Contacts", "contacts", body, &["contacts.js"]))
 }
 
 // ─── Memory ──────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ use serenity::prelude::*;
 use tokio::sync::mpsc;
 
 use crate::bus::{InboundMessage, MessageMetadata, OutboundMessage};
+use crate::channels::traits::Channel;
 use crate::config::DiscordConfig;
 
 /// Discord channel — bot via serenity.
@@ -25,9 +26,15 @@ impl DiscordChannel {
     pub fn new(config: DiscordConfig) -> Self {
         Self { config }
     }
+}
 
-    /// Start the Discord bot: listen for messages and route responses.
-    pub async fn start(
+#[async_trait::async_trait]
+impl Channel for DiscordChannel {
+    fn name(&self) -> &str {
+        "discord"
+    }
+
+    async fn start(
         &self,
         inbound_tx: mpsc::Sender<InboundMessage>,
         outbound_rx: mpsc::Receiver<OutboundMessage>,

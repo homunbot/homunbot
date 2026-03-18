@@ -231,6 +231,20 @@ impl Database {
         )
         .await?;
 
+        Self::apply_migration(
+            pool,
+            "019_vault_access_log",
+            include_str!("../../migrations/019_vault_access_log.sql"),
+        )
+        .await?;
+
+        Self::apply_migration(
+            pool,
+            "020_contacts",
+            include_str!("../../migrations/020_contacts.sql"),
+        )
+        .await?;
+
         Ok(())
     }
 

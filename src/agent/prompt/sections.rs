@@ -580,6 +580,30 @@ impl PromptSection for BusinessSection {
 }
 
 // ============================================================================
+// CONTACTS SECTION
+// ============================================================================
+
+/// Injects the current message sender's contact profile into the system prompt.
+pub struct ContactsSection;
+
+impl PromptSection for ContactsSection {
+    fn name(&self) -> &str {
+        "contacts"
+    }
+
+    fn build(&self, ctx: &PromptContext<'_>) -> Result<String> {
+        if ctx.contact_context.is_empty() {
+            return Ok(String::new());
+        }
+        Ok(format!(
+            "## Current Contact\n\n{}\n\nUse this info to personalize your response. \
+             Address the contact by name when appropriate.\n",
+            ctx.contact_context,
+        ))
+    }
+}
+
+// ============================================================================
 // TESTS
 // ============================================================================
 
@@ -603,6 +627,7 @@ mod tests {
             channel: "test",
             prompt_mode: PromptMode::Full,
             channels_info: "",
+            contact_context: "",
         }
     }
 

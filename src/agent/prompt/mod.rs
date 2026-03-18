@@ -10,8 +10,8 @@ mod sections;
 
 pub use builder::SystemPromptBuilder;
 pub use sections::{
-    BusinessSection, IdentitySection, MemorySection, PromptSection, RuntimeSection, SafetySection,
-    SkillsSection, ToolsSection, WorkspaceSection,
+    BusinessSection, ContactsSection, IdentitySection, MemorySection, PromptSection,
+    RuntimeSection, SafetySection, SkillsSection, ToolsSection, WorkspaceSection,
 };
 
 use std::path::Path;
@@ -44,6 +44,8 @@ pub struct PromptContext<'a> {
     pub prompt_mode: PromptMode,
     /// Available channels for cross-channel messaging
     pub channels_info: &'a str,
+    /// Contact profile for the current message sender (CTB-5)
+    pub contact_context: &'a str,
 }
 
 /// Tool information for prompt generation.

@@ -15,6 +15,7 @@ use wa_rs_tokio_transport::TokioWebSocketTransportFactory;
 use wa_rs_ureq_http::UreqHttpClient;
 
 use crate::bus::{InboundMessage, MessageMetadata, OutboundMessage};
+use crate::channels::traits::Channel;
 use crate::config::WhatsAppConfig;
 
 /// Max number of sent message IDs to track (prevents unbounded growth)
@@ -42,6 +43,13 @@ impl WhatsAppChannel {
     pub fn new(config: WhatsAppConfig) -> Self {
         Self { config }
     }
+}
+
+#[async_trait::async_trait]
+impl Channel for WhatsAppChannel {
+    fn name(&self) -> &str {
+        "whatsapp"
+    }
 
     /// Start the WhatsApp channel with automatic reconnect on failure.
     ///
@@ -51,7 +59,7 @@ impl WhatsAppChannel {
     ///
     /// On disconnection or error, the bot reconnects with exponential backoff
     /// (2s → 4s → 8s → ... → 120s cap). Backoff resets after a stable connection.
-    pub async fn start(
+    async fn start(
         &self,
         inbound_tx: mpsc::Sender<InboundMessage>,
         outbound_rx: mpsc::Receiver<OutboundMessage>,
@@ -117,7 +125,9 @@ impl WhatsAppChannel {
             }
         }
     }
+}
 
+impl WhatsAppChannel {
     /// Run a single WhatsApp bot session. Returns Ok(()) on clean exit, Err on failure.
     async fn run_session(
         &self,

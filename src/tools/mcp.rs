@@ -432,6 +432,7 @@ impl McpManager {
                     // Try OAuth token refresh + reconnect for auth failures
                     if is_auth_error {
                         if let Some(server_cfg) = servers.get(&name) {
+                            tracing::info!(server = %name, "Auth error detected, attempting OAuth token refresh");
                             match super::mcp_token_refresh::try_refresh_for_server(
                                 &name, server_cfg,
                             )
@@ -502,9 +503,11 @@ impl McpManager {
                                     }
                                 }
                                 Err(refresh_err) => {
-                                    tracing::warn!(server = %name, error = %refresh_err, "OAuth token refresh failed");
+                                    tracing::warn!(server = %name, error = %refresh_err, "OAuth token refresh failed — re-authorize from MCP page");
                                 }
                             }
+                        } else {
+                            tracing::warn!(server = %name, "Auth error but server not found in config — cannot attempt token refresh");
                         }
                     }
 

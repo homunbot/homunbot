@@ -412,7 +412,24 @@ fn should_fire_schedule(
             }
             None => true,
         },
-        ScheduleKind::Cron(expr) => cron_matches_now(&expr, now),
+        ScheduleKind::Cron(expr) => {
+            if !cron_matches_now(&expr, now) {
+                return false;
+            }
+            // Guard: don't fire again if we already fired this minute
+            if let Some(last) = last_run {
+                if let Ok(last_time) =
+                    chrono::NaiveDateTime::parse_from_str(last, "%Y-%m-%d %H:%M:%S")
+                {
+                    let last_utc = last_time.and_utc();
+                    let elapsed = (*now - last_utc).num_seconds();
+                    if elapsed < 60 {
+                        return false;
+                    }
+                }
+            }
+            true
+        }
         ScheduleKind::At(target) => {
             if let Ok(target_time) =
                 chrono::NaiveDateTime::parse_from_str(&target, "%Y-%m-%dT%H:%M:%S")
@@ -704,5 +721,28 @@ mod tests {
             .unwrap()
             .and_utc();
         assert!(!cron_matches_now("*/30 * * * *", &t3));
+    }
+
+    #[test]
+    fn test_cron_no_duplicate_fire_within_same_minute() {
+        // Regression: scheduler checks every 30s, so the same cron minute
+        // would match twice (e.g. 09:35:03 and 09:35:33).
+        // should_fire_schedule must reject the second fire.
+        let now = chrono::NaiveDate::from_ymd_opt(2026, 3, 18)
+            .unwrap()
+            .and_hms_opt(9, 35, 33)
+            .unwrap()
+            .and_utc();
+
+        // last_run was 30 seconds ago (same minute) — must NOT fire again
+        let last_run = "2026-03-18 09:35:03";
+        assert!(!should_fire_schedule("cron:35 9 * * *", Some(last_run), &now));
+
+        // last_run was yesterday — should fire
+        let last_run_old = "2026-03-17 09:35:03";
+        assert!(should_fire_schedule("cron:35 9 * * *", Some(last_run_old), &now));
+
+        // no last_run — should fire (first time)
+        assert!(should_fire_schedule("cron:35 9 * * *", None, &now));
     }
 }

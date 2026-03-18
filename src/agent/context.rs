@@ -59,6 +59,8 @@ pub struct ContextBuilder {
     /// Names of all registered tools (always set, for routing rules in system prompt).
     /// Uses RwLock so deferred MCP tools can be added after startup.
     registered_tool_names: RwLock<Vec<String>>,
+    /// Contact context for the current message sender (CTB-5).
+    contact_context: RwLock<String>,
 }
 
 impl ContextBuilder {
@@ -79,6 +81,7 @@ impl ContextBuilder {
             prompt_builder: SystemPromptBuilder::with_defaults(),
             model_name: RwLock::new(config.agent.model.clone()),
             registered_tool_names: RwLock::new(Vec::new()),
+            contact_context: RwLock::new(String::new()),
         }
     }
 
@@ -199,6 +202,11 @@ impl ContextBuilder {
         *guard = suggestions;
     }
 
+    /// Set the contact context for the current message sender (CTB-5).
+    pub async fn set_contact_context(&self, ctx: String) {
+        *self.contact_context.write().await = ctx;
+    }
+
     /// Update the model name shown in the system prompt (called on hot-reload).
     pub async fn set_model_name(&self, model: String) {
         *self.model_name.write().await = model;
@@ -306,6 +314,7 @@ impl ContextBuilder {
         let mcp_suggestions = self.mcp_suggestions.read().await;
         let model_name = self.model_name.read().await;
         let registered_tool_names = self.registered_tool_names.read().await;
+        let contact_context = self.contact_context.read().await;
 
         // Build PromptContext
         let ctx = PromptContext {
@@ -322,6 +331,7 @@ impl ContextBuilder {
             channel: "main",
             prompt_mode: PromptMode::Full,
             channels_info: &self.channels_info,
+            contact_context: &contact_context,
         };
 
         // Build prompt using modular system

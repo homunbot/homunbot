@@ -665,6 +665,10 @@ pub struct TelegramConfig {
     /// In groups, only respond when @mentioned or replied to (default: true).
     #[serde(default = "default_true")]
     pub mention_required: bool,
+    /// Default response mode for contacts on this channel.
+    /// Empty or "automatic" = respond immediately. Options: automatic, assisted, on_demand, silent.
+    #[serde(default)]
+    pub response_mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -688,6 +692,9 @@ pub struct WhatsAppConfig {
     /// In groups, the bot only responds when mentioned by this name.
     #[serde(default = "default_bot_name")]
     pub bot_name: String,
+    /// Default response mode for contacts on this channel.
+    #[serde(default)]
+    pub response_mode: String,
 }
 
 fn default_bot_name() -> String {
@@ -704,6 +711,7 @@ impl Default for WhatsAppConfig {
             allow_from: Vec::new(),
             pairing_required: false,
             bot_name: default_bot_name(),
+            response_mode: String::new(),
         }
     }
 }
@@ -738,6 +746,9 @@ pub struct DiscordConfig {
     /// In guilds, only respond when @mentioned (default: true).
     #[serde(default = "default_true")]
     pub mention_required: bool,
+    /// Default response mode for contacts on this channel.
+    #[serde(default)]
+    pub response_mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -797,6 +808,9 @@ pub struct SlackConfig {
     /// In channels, only respond when @mentioned (default: true).
     #[serde(default = "default_true")]
     pub mention_required: bool,
+    /// Default response mode for contacts on this channel.
+    #[serde(default)]
+    pub response_mode: String,
 }
 
 /// Email response mode for an account.
