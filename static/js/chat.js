@@ -323,6 +323,9 @@ function renderConversationList() {
 }
 
 function buildConversationItem(conversation) {
+    var icRename = '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.2 5.2l-1.8-1.8a2.5 2.5 0 00-3.5 0L3.5 9.9V14.5h4.6l6.4-6.4a2.5 2.5 0 000-3.5z"/></svg>';
+    var icDelete = '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h12"/><path d="M7 5V3h4v2"/><path d="M5 5v10a1 1 0 001 1h6a1 1 0 001-1V5"/></svg>';
+
     const item = document.createElement('div');
     item.className = 'chat-conversation-item';
     if (conversation.conversation_id === currentConversationId) item.classList.add('is-active');
@@ -334,96 +337,85 @@ function buildConversationItem(conversation) {
         if (selectedConversations.has(conversation.conversation_id)) item.classList.add('is-selected');
     }
 
-    // Checkbox (multi-select only)
-    if (multiSelectMode) {
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.className = 'chat-select-checkbox';
-        cb.checked = selectedConversations.has(conversation.conversation_id);
-        cb.addEventListener('click', (e) => { e.stopPropagation(); toggleConversationSelection(conversation.conversation_id); });
-        item.appendChild(cb);
-    }
+    // Checkbox — always present, slides in on hover via CSS
+    const checkWrap = document.createElement('div');
+    checkWrap.className = 'chat-conv-check';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = multiSelectMode && selectedConversations.has(conversation.conversation_id);
+    cb.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (!multiSelectMode) enterMultiSelectMode(conversation.conversation_id);
+        else toggleConversationSelection(conversation.conversation_id);
+    });
+    checkWrap.appendChild(cb);
+    item.appendChild(checkWrap);
 
-    // Body
-    const body = document.createElement('button');
-    body.type = 'button';
-    body.className = 'chat-conversation-item-body';
-
+    // Name — shifts right on hover via CSS
     if (renamingConversationId === conversation.conversation_id) {
         const inp = document.createElement('input');
         inp.type = 'text';
         inp.className = 'input chat-rename-input';
         inp.value = renameDraft || conversation.title || 'New conversation';
         inp.setAttribute('aria-label', 'Rename conversation');
-        inp.addEventListener('click', (e) => e.stopPropagation());
-        inp.addEventListener('input', () => { renameDraft = inp.value; });
-        inp.addEventListener('keydown', async (e) => {
+        inp.addEventListener('click', function(e) { e.stopPropagation(); });
+        inp.addEventListener('input', function() { renameDraft = inp.value; });
+        inp.addEventListener('keydown', async function(e) {
             if (e.key === 'Enter') { e.preventDefault(); await commitRenameConversation(conversation); }
             else if (e.key === 'Escape') { e.preventDefault(); cancelRenameConversation(); }
         });
-        inp.addEventListener('blur', async () => { await commitRenameConversation(conversation); });
-        body.appendChild(inp);
-        setTimeout(() => { inp.focus(); inp.select(); }, 0);
+        inp.addEventListener('blur', async function() { await commitRenameConversation(conversation); });
+        item.appendChild(inp);
+        setTimeout(function() { inp.focus(); inp.select(); }, 0);
     } else {
         const nameEl = document.createElement('span');
         nameEl.className = 'chat-conversation-name';
         nameEl.textContent = capitalizeFirst(conversation.title) || 'New conversation';
-        body.appendChild(nameEl);
+        nameEl.addEventListener('click', function() {
+            if (multiSelectMode) { toggleConversationSelection(conversation.conversation_id); return; }
+            if (conversation.conversation_id !== currentConversationId) selectConversation(conversation.conversation_id);
+        });
+        item.appendChild(nameEl);
     }
+
+    // Trailing: timestamp (default) / action icons (hover)
+    const trailing = document.createElement('div');
+    trailing.className = 'chat-conv-trailing';
+
     const dateEl = document.createElement('span');
     dateEl.className = 'chat-conversation-date';
     dateEl.textContent = formatConversationTimestamp(conversation.updated_at);
-    body.appendChild(dateEl);
+    trailing.appendChild(dateEl);
 
-    body.addEventListener('click', () => {
-        if (renamingConversationId === conversation.conversation_id) return;
-        if (multiSelectMode) { toggleConversationSelection(conversation.conversation_id); return; }
-        if (conversation.conversation_id !== currentConversationId) selectConversation(conversation.conversation_id);
-    });
-    item.appendChild(body);
+    const hoverActions = document.createElement('div');
+    hoverActions.className = 'chat-conv-hover-actions';
 
-    // Menu button (three dots)
-    const menuBtn = document.createElement('button');
-    menuBtn.type = 'button';
-    menuBtn.className = 'chat-conversation-menu-btn';
-    menuBtn.setAttribute('aria-label', 'Conversation actions');
-    menuBtn.innerHTML = '<svg viewBox="0 0 18 18" fill="currentColor" width="14" height="14"><circle cx="4" cy="9" r="1.4"/><circle cx="9" cy="9" r="1.4"/><circle cx="14" cy="9" r="1.4"/></svg>';
-    menuBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openConversationMenuId = openConversationMenuId === conversation.conversation_id ? null : conversation.conversation_id;
-        renderConversationList();
-    });
-    item.appendChild(menuBtn);
+    const renameBtn = document.createElement('button');
+    renameBtn.type = 'button';
+    renameBtn.className = 'chat-conv-action-btn';
+    renameBtn.title = 'Rename';
+    renameBtn.appendChild(parseSvg(icRename));
+    renameBtn.addEventListener('click', async function(e) { e.stopPropagation(); await renameConversation(conversation); });
+    hoverActions.appendChild(renameBtn);
 
-    // Menu dropdown
-    const menu = document.createElement('div');
-    menu.className = 'chat-conversation-menu';
-    if (openConversationMenuId !== conversation.conversation_id) menu.hidden = true;
-    const actions = [
-        { action: 'rename', label: 'Rename', cls: '' },
-        { action: 'select', label: multiSelectMode ? 'Deselect' : 'Select', cls: '' },
-        { action: conversation.archived ? 'unarchive' : 'archive', label: conversation.archived ? 'Unarchive' : 'Archive', cls: '' },
-        { action: 'delete', label: 'Delete', cls: 'is-danger' },
-    ];
-    actions.forEach(({ action, label, cls }) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'chat-conversation-menu-item' + (cls ? ' ' + cls : '');
-        btn.dataset.action = action;
-        btn.textContent = label;
-        btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            if (action === 'rename') await renameConversation(conversation);
-            else if (action === 'select') enterMultiSelectMode(conversation.conversation_id);
-            else if (action === 'archive') await setConversationArchived(conversation, true);
-            else if (action === 'unarchive') await setConversationArchived(conversation, false);
-            else if (action === 'delete') await deleteConversation(conversation);
-        });
-        menu.appendChild(btn);
-    });
-    item.appendChild(menu);
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'chat-conv-action-btn is-danger';
+    deleteBtn.title = 'Delete';
+    deleteBtn.appendChild(parseSvg(icDelete));
+    deleteBtn.addEventListener('click', async function(e) { e.stopPropagation(); await deleteConversation(conversation); });
+    hoverActions.appendChild(deleteBtn);
+
+    trailing.appendChild(hoverActions);
+    item.appendChild(trailing);
 
     return item;
+}
+
+function parseSvg(str) {
+    var t = document.createElement('template');
+    t.innerHTML = str.trim();
+    return t.content.firstChild;
 }
 
 async function refreshConversationList() {
@@ -682,7 +674,6 @@ function applyExecutionPlan(plan) {
         const doneItems = Array.isArray(currentPlanState.completed_steps) ? currentPlanState.completed_steps : [];
         const remainingItems = [
             ...(Array.isArray(currentPlanState.active_blockers) ? currentPlanState.active_blockers : []),
-            ...(Array.isArray(currentPlanState.required_sources) ? currentPlanState.required_sources.map(s => `Source: ${s}`) : []),
             ...(Array.isArray(currentPlanState.constraints) ? currentPlanState.constraints.filter(c => isUsefulPlanConstraint(c) && !doneItems.includes(c)) : []),
         ].filter((v, i, a) => v && a.indexOf(v) === i);
         steps = [

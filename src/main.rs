@@ -1334,7 +1334,7 @@ async fn main() -> Result<()> {
                 tokio::spawn(async move {
                     let (mut mcp_manager, mcp_tools) = McpManager::start_with_sandbox(
                         &mcp_servers_config,
-                        Some(mcp_sandbox_config),
+                        Some(mcp_sandbox_config.clone()),
                         Some(mcp_shared_config),
                     )
                     .await;
@@ -1350,11 +1350,59 @@ async fn main() -> Result<()> {
                     // Register regular MCP tools into the shared registry
                     agent_for_mcp.register_deferred_tools(regular_tools).await;
 
-                    // Handle browser peer: create BrowserTool and set session on both agent and estop
+                    // Handle browser peer: create BrowserTool and set session on both agent and estop.
+                    // If the browser MCP failed (e.g. no network at startup), retry with backoff.
                     #[cfg(feature = "browser")]
                     {
-                        if let Some(browser_peer) = mcp_manager.take_browser_peer() {
-                            let browser_tool = crate::tools::BrowserTool::new(browser_peer);
+                        let browser_peer = if let Some(peer) = mcp_manager.take_browser_peer() {
+                            Some(peer)
+                        } else {
+                            // Retry connecting just the browser MCP server
+                            let browser_name = crate::browser::BROWSER_MCP_SERVER_NAME;
+                            if let Some(browser_cfg) = mcp_servers_config.get(browser_name) {
+                                tracing::warn!(
+                                    "⚠️ Browser MCP failed on first attempt — retrying with backoff"
+                                );
+                                const MAX_RETRIES: u32 = 5;
+                                const DELAYS: [u64; 5] = [10, 20, 40, 60, 120];
+                                let mut connected = None;
+                                for attempt in 0..MAX_RETRIES {
+                                    let delay = std::time::Duration::from_secs(DELAYS[attempt as usize]);
+                                    tokio::time::sleep(delay).await;
+                                    tracing::info!(
+                                        attempt = attempt + 1,
+                                        delay_secs = delay.as_secs(),
+                                        "🔄 Retrying browser MCP connection"
+                                    );
+                                    match McpManager::connect_peer(
+                                        browser_name,
+                                        browser_cfg,
+                                        &mcp_sandbox_config,
+                                    )
+                                    .await
+                                    {
+                                        Ok(peer) => {
+                                            tracing::info!("✅ Browser MCP connected on retry {}", attempt + 1);
+                                            connected = Some(peer);
+                                            break;
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                attempt = attempt + 1,
+                                                error = %e,
+                                                "Browser MCP retry failed"
+                                            );
+                                        }
+                                    }
+                                }
+                                connected
+                            } else {
+                                None
+                            }
+                        };
+
+                        if let Some(peer) = browser_peer {
+                            let browser_tool = crate::tools::BrowserTool::new(peer);
                             let session = browser_tool.session();
                             agent_for_mcp
                                 .register_deferred_tools(vec![Box::new(browser_tool)])
@@ -1365,7 +1413,7 @@ async fn main() -> Result<()> {
                             tracing::info!("🌐 Browser tool registered successfully");
                         } else {
                             tracing::warn!(
-                                "⚠️ Browser MCP peer not available — browser tool will NOT be registered. \
+                                "⚠️ Browser MCP peer not available after retries — browser tool will NOT be registered. \
                                  Check that @playwright/mcp is installed: npx @playwright/mcp --help"
                             );
                         }

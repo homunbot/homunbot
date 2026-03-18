@@ -2689,6 +2689,137 @@ if (btnRunCleanup) {
     console.log('[Browser] Form handler initialized');
 })();
 
+// ═══ Browser Profiles ═══
+
+(function() {
+    var container = document.getElementById('profiles-list');
+    if (!container) return;
+
+    function formatBytes(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / 1048576).toFixed(1) + ' MB';
+    }
+
+    function buildProfileCard(p) {
+        var card = document.createElement('div');
+        card.className = 'provider-card';
+        card.style.marginBottom = '8px';
+
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;';
+
+        // Left: info
+        var info = document.createElement('div');
+        var title = document.createElement('strong');
+        title.textContent = p.display_name;
+        info.appendChild(title);
+        if (p.is_default) {
+            var badge = document.createElement('span');
+            badge.style.cssText = 'font-size:10px;opacity:0.5;margin-left:4px;';
+            badge.textContent = '(default)';
+            info.appendChild(badge);
+        }
+        var meta = document.createElement('div');
+        meta.style.cssText = 'font-size:12px;color:var(--t3);margin-top:2px;';
+        if (p.exists) {
+            var sizeSpan = document.createElement('span');
+            sizeSpan.className = 'pairing-status success';
+            sizeSpan.style.fontSize = '12px';
+            sizeSpan.textContent = formatBytes(p.size_bytes);
+            meta.appendChild(sizeSpan);
+        } else {
+            var notCreated = document.createElement('span');
+            notCreated.className = 'pairing-status';
+            notCreated.style.fontSize = '12px';
+            notCreated.textContent = 'Not created yet';
+            meta.appendChild(notCreated);
+        }
+        if (p.wrong_owner_count > 0) {
+            var warn = document.createElement('span');
+            warn.className = 'pairing-status error';
+            warn.style.cssText = 'font-size:12px;margin-left:8px;';
+            warn.textContent = p.wrong_owner_count + ' files with wrong ownership';
+            meta.appendChild(warn);
+        }
+        info.appendChild(meta);
+
+        // Right: buttons
+        var btns = document.createElement('div');
+        btns.style.cssText = 'display:flex;gap:6px;';
+        if (p.wrong_owner_count > 0) {
+            var fixBtn = document.createElement('button');
+            fixBtn.className = 'btn btn-secondary';
+            fixBtn.style.cssText = 'font-size:12px;padding:4px 10px;';
+            fixBtn.textContent = 'Fix Permissions';
+            fixBtn.addEventListener('click', function() { fixProfile(p.name); });
+            btns.appendChild(fixBtn);
+        }
+        if (p.exists) {
+            var cleanBtn = document.createElement('button');
+            cleanBtn.className = 'btn btn-secondary';
+            cleanBtn.style.cssText = 'font-size:12px;padding:4px 10px;color:var(--danger);';
+            cleanBtn.textContent = 'Clean';
+            cleanBtn.addEventListener('click', function() { cleanProfile(p.name); });
+            btns.appendChild(cleanBtn);
+        }
+
+        row.appendChild(info);
+        row.appendChild(btns);
+        card.appendChild(row);
+        return card;
+    }
+
+    async function loadProfiles() {
+        try {
+            var resp = await fetch('/api/v1/browser/profiles');
+            if (!resp.ok) throw new Error('Failed to load profiles');
+            var profiles = await resp.json();
+
+            container.textContent = '';
+            if (profiles.length === 0) {
+                container.textContent = 'No profiles configured.';
+                return;
+            }
+            profiles.forEach(function(p) {
+                container.appendChild(buildProfileCard(p));
+            });
+        } catch (err) {
+            container.textContent = err.message;
+        }
+    }
+
+    async function fixProfile(name) {
+        if (!confirm('Fix file ownership for profile "' + name + '"?')) return;
+        try {
+            var resp = await fetch('/api/v1/browser/profiles/' + encodeURIComponent(name) + '/fix-permissions', {
+                method: 'POST',
+            });
+            var data = await resp.json();
+            showToast(data.message, data.success ? 'success' : 'error');
+            loadProfiles();
+        } catch (err) {
+            showToast('Failed: ' + err.message, 'error');
+        }
+    }
+
+    async function cleanProfile(name) {
+        if (!confirm('Delete ALL data for profile "' + name + '"? Cookies, sessions, and cache will be lost.')) return;
+        try {
+            var resp = await fetch('/api/v1/browser/profiles/' + encodeURIComponent(name), {
+                method: 'DELETE',
+            });
+            var data = await resp.json();
+            showToast(data.message, data.success ? 'success' : 'error');
+            loadProfiles();
+        } catch (err) {
+            showToast('Failed: ' + err.message, 'error');
+        }
+    }
+
+    loadProfiles();
+})();
+
 // ═══ Web Search Form ═══
 
 (function() {

@@ -559,6 +559,19 @@ impl McpManager {
             .map(|(_, p)| Arc::clone(p))
     }
 
+    /// Connect to a single MCP server and return just the peer.
+    ///
+    /// Used for retrying individual server connections (e.g. browser MCP
+    /// when network was unavailable at gateway startup).
+    pub async fn connect_peer(
+        name: &str,
+        config: &McpServerConfig,
+        sandbox_config: &ExecutionSandboxConfig,
+    ) -> Result<Arc<McpPeer>> {
+        let (peer, _tools, _info) = connect_server(name, config, sandbox_config).await?;
+        Ok(Arc::new(peer))
+    }
+
     /// Shutdown all MCP server connections
     pub async fn shutdown(&self) {
         for (name, peer) in &self.peers {

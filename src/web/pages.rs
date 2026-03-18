@@ -109,16 +109,10 @@ const SETTINGS_PAGES: &[&str] = &[
     "logs",
 ];
 
-/// Build the sidebar navigation HTML.
-/// Renders 5 main icons + 2 static sub-navigation panels (Tools, Settings).
-/// Sub-nav panels are shown/hidden purely server-side via `.is-open` class.
+/// Build the sidebar navigation HTML (icon bar only, 80px).
 fn sidebar(active: &str) -> String {
     let a = |page: &str| -> &str {
-        if active == page {
-            " active"
-        } else {
-            ""
-        }
+        if active == page { " active" } else { "" }
     };
 
     let is_tools = TOOLS_PAGES.contains(&active);
@@ -126,9 +120,6 @@ fn sidebar(active: &str) -> String {
 
     let tools_active = if is_tools { " active" } else { "" };
     let settings_active = if is_settings { " active" } else { "" };
-
-    let tools_open = if is_tools { " is-open" } else { "" };
-    let settings_open = if is_settings { " is-open" } else { "" };
 
     format!(
         r##"<nav class="sidebar">
@@ -162,29 +153,6 @@ fn sidebar(active: &str) -> String {
                     <span class="nav-icon">{ic_logout}</span>
                 </button>
             </div>
-            <div class="sidebar-subnav{tools_open}" id="tools-subnav">
-                <div class="sidebar-subnav-header">Tools</div>
-                <a href="/automations" class="sidebar-subnav-link{automations_a}"><span class="subnav-icon">⚡</span> Automations</a>
-                <a href="/workflows" class="sidebar-subnav-link{workflows_a}"><span class="subnav-icon">🔀</span> Workflows</a>
-                <a href="/skills" class="sidebar-subnav-link{skills_a}"><span class="subnav-icon">🧩</span> Skills</a>
-                <a href="/mcp" class="sidebar-subnav-link{mcp_a}"><span class="subnav-icon">🔌</span> MCP Servers</a>
-                <a href="/memory" class="sidebar-subnav-link{memory_a}"><span class="subnav-icon">🧠</span> Memory</a>
-                <a href="/knowledge" class="sidebar-subnav-link{knowledge_a}"><span class="subnav-icon">📚</span> Knowledge</a>
-                <a href="/vault" class="sidebar-subnav-link{vault_a}"><span class="subnav-icon">🔐</span> Vault</a>
-            </div>
-            <div class="sidebar-subnav{settings_open}" id="settings-subnav">
-                <div class="sidebar-subnav-header">Settings</div>
-                <a href="/setup" class="sidebar-subnav-link{setup_a}"><span class="subnav-icon">🤖</span> Model &amp; Providers</a>
-                <a href="/appearance" class="sidebar-subnav-link{appearance_a}"><span class="subnav-icon">🎨</span> Appearance</a>
-                <a href="/channels" class="sidebar-subnav-link{channels_a}"><span class="subnav-icon">📡</span> Channels</a>
-                <a href="/browser" class="sidebar-subnav-link{browser_a}"><span class="subnav-icon">🌐</span> Browser</a>
-                <a href="/file-access" class="sidebar-subnav-link{file_access_a}"><span class="subnav-icon">📁</span> File Access</a>
-                <a href="/shell" class="sidebar-subnav-link{shell_a}"><span class="subnav-icon">⌨️</span> Shell</a>
-                <a href="/sandbox" class="sidebar-subnav-link{sandbox_a}"><span class="subnav-icon">📦</span> Sandbox</a>
-                <a href="/approvals" class="sidebar-subnav-link{approvals_a}"><span class="subnav-icon">✅</span> Approvals</a>
-                <a href="/maintenance" class="sidebar-subnav-link{maintenance_a}"><span class="subnav-icon">🗄️</span> Database</a>
-                <a href="/logs" class="sidebar-subnav-link{logs_a}"><span class="subnav-icon">📋</span> Logs</a>
-            </div>
         </nav>"##,
         logo = LOGO_ICON,
         // Main icons
@@ -200,37 +168,75 @@ fn sidebar(active: &str) -> String {
         ic_estop = ICON_ESTOP,
         ic_settings = ICON_SETTINGS,
         ic_logout = ICON_LOGOUT,
-        // Tools subnav
-        tools_open = tools_open,
-        automations_a = a("automations"),
-        workflows_a = a("workflows"),
-        skills_a = a("skills"),
-        mcp_a = a("mcp"),
-        memory_a = a("memory"),
-        knowledge_a = a("knowledge"),
-        vault_a = a("vault"),
-        // Settings subnav
-        settings_open = settings_open,
-        setup_a = a("settings"),
-        appearance_a = a("appearance"),
-        channels_a = a("channels"),
-        browser_a = a("browser"),
-        file_access_a = a("file-access"),
-        shell_a = a("shell"),
-        sandbox_a = a("sandbox"),
-        approvals_a = a("approvals"),
-        maintenance_a = a("maintenance"),
-        logs_a = a("logs"),
     )
+}
+
+/// Build the content subnav (Tools or Settings) — placed inside `<main class="content">`.
+/// Returns empty string for pages without a subnav (chat, dashboard, account).
+fn content_subnav(active: &str) -> String {
+    let a = |page: &str| -> &str {
+        if active == page { " active" } else { "" }
+    };
+
+    if TOOLS_PAGES.contains(&active) {
+        format!(
+            r#"<aside class="sidebar-subnav is-open" id="tools-subnav">
+                <div class="sidebar-subnav-header">TOOLS</div>
+                <a href="/automations" class="sidebar-subnav-link{0}">Automations</a>
+                <a href="/workflows" class="sidebar-subnav-link{1}">Workflows</a>
+                <a href="/skills" class="sidebar-subnav-link{2}">Skills</a>
+                <a href="/mcp" class="sidebar-subnav-link{3}">MCP Servers</a>
+                <a href="/memory" class="sidebar-subnav-link{4}">Memory</a>
+                <a href="/knowledge" class="sidebar-subnav-link{5}">Knowledge</a>
+                <a href="/vault" class="sidebar-subnav-link{6}">Vault</a>
+            </aside>"#,
+            a("automations"), a("workflows"), a("skills"), a("mcp"),
+            a("memory"), a("knowledge"), a("vault"),
+        )
+    } else if SETTINGS_PAGES.contains(&active) {
+        format!(
+            r#"<aside class="sidebar-subnav is-open" id="settings-subnav">
+                <div class="sidebar-subnav-header">SETTINGS</div>
+                <a href="/setup" class="sidebar-subnav-link{0}">Model &amp; Providers</a>
+                <a href="/appearance" class="sidebar-subnav-link{1}">Appearance</a>
+                <a href="/channels" class="sidebar-subnav-link{2}">Channels</a>
+                <a href="/browser" class="sidebar-subnav-link{3}">Browser</a>
+                <a href="/file-access" class="sidebar-subnav-link{4}">File Access</a>
+                <a href="/shell" class="sidebar-subnav-link{5}">Shell</a>
+                <a href="/sandbox" class="sidebar-subnav-link{6}">Sandbox</a>
+                <a href="/approvals" class="sidebar-subnav-link{7}">Approvals</a>
+                <a href="/maintenance" class="sidebar-subnav-link{8}">Database</a>
+                <a href="/logs" class="sidebar-subnav-link{9}">Logs</a>
+            </aside>"#,
+            a("settings"), a("appearance"), a("channels"), a("browser"),
+            a("file-access"), a("shell"), a("sandbox"), a("approvals"),
+            a("maintenance"), a("logs"),
+        )
+    } else {
+        String::new()
+    }
 }
 
 /// HTML document skeleton
 fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String {
     let sidebar_html = sidebar(active);
+    let subnav_html = content_subnav(active);
     let script_tags: String = scripts
         .iter()
         .map(|s| format!(r#"<script src="/static/js/{s}"></script>"#))
         .collect::<String>();
+
+    // Inject subnav inside <main class="content"> as first child.
+    // Pages with a subnav get a flex wrapper so subnav + page content sit side by side.
+    let body = if subnav_html.is_empty() {
+        body.to_string()
+    } else {
+        // Replace the opening <main class="content"> tag with one that includes the subnav
+        body.replace(
+            r#"<main class="content">"#,
+            &format!(r#"<main class="content has-subnav">{subnav_html}"#),
+        )
+    };
 
     format!(
         r##"<!DOCTYPE html>
@@ -246,16 +252,19 @@ fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String 
     <link rel="stylesheet" href="/static/css/style.css">
     <script>
     (function() {{
-        const theme = localStorage.getItem('homun-theme') || 'system';
-        const accent = localStorage.getItem('homun-accent') || 'moss';
-        const configuredLanguage = localStorage.getItem('homun-language') || 'system';
-        const resolvedLanguage = configuredLanguage === 'system'
+        var theme = localStorage.getItem('homun-theme') || 'system';
+        var accent = localStorage.getItem('homun-accent') || '';
+        var texture = localStorage.getItem('homun-texture') || 'none';
+        var configuredLanguage = localStorage.getItem('homun-language') || 'system';
+        var resolvedLanguage = configuredLanguage === 'system'
             ? ((navigator.language || 'en').split('-')[0] || 'en')
             : configuredLanguage;
         document.documentElement.lang = resolvedLanguage;
         if (theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {{
             document.documentElement.classList.add('dark');
         }}
+        // Store texture for JS to apply on .content element after DOM ready
+        document.documentElement.setAttribute('data-texture', texture);
         if (accent && accent.startsWith('#')) {{
             // Custom color — derive accent family inline to avoid flash
             var h, s, l;
@@ -286,10 +295,20 @@ fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String 
             st.setProperty('--focus-ring', hx(h, Math.min(s+5,60), isDk ? Math.min(l+10,70) : Math.min(l+10,55)));
             st.setProperty('--selection-bg', hx(h, isDk ? 20 : 25, isDk ? 22 : 82));
             st.setProperty('--chart-primary', accent);
-        }} else if (accent && accent !== 'moss') {{
+            // Nav bar inherits accent as background
+            st.setProperty('--nav-bg', accent);
+        }} else if (accent) {{
             document.documentElement.setAttribute('data-accent', accent);
         }}
     }})();
+    </script>
+    <script>
+    // Apply texture class to .content after DOM ready
+    document.addEventListener('DOMContentLoaded', function() {{
+        var tex = document.documentElement.getAttribute('data-texture') || 'none';
+        var el = document.querySelector('.content');
+        if (el && tex !== 'none') el.classList.add('bg-texture-' + tex);
+    }});
     </script>
 </head>
 <body>
@@ -848,16 +867,47 @@ async fn appearance_page(State(state): State<Arc<AppState>>) -> Html<String> {
                         <div class="form-group" style="margin-top:16px;">
                             <label>Accent Color</label>
                             <div class="accent-picker" id="accent-picker">
-                                <button type="button" class="accent-swatch" data-accent="moss" title="Moss (default)"><span style="background:#628A4A"></span></button>
+                                <button type="button" class="accent-swatch" data-accent="" title="Blue (default)"><span style="background:#3B82F6"></span></button>
+                                <button type="button" class="accent-swatch" data-accent="moss" title="Moss"><span style="background:#628A4A"></span></button>
                                 <button type="button" class="accent-swatch" data-accent="terracotta" title="Terracotta"><span style="background:#B85C38"></span></button>
-                                <button type="button" class="accent-swatch" data-accent="plum" title="Plum"><span style="background:#7A5C68"></span></button>
-                                <button type="button" class="accent-swatch" data-accent="stone" title="Stone"><span style="background:#7A7268"></span></button>
+                                <button type="button" class="accent-swatch" data-accent="plum" title="Plum"><span style="background:#7C3AED"></span></button>
+                                <button type="button" class="accent-swatch" data-accent="stone" title="Stone"><span style="background:#78716C"></span></button>
                                 <label class="accent-swatch accent-custom-label" title="Custom color">
-                                    <input type="color" id="accent-custom-input" value="#628A4A">
+                                    <input type="color" id="accent-custom-input" value="#3B82F6">
                                     <span class="accent-custom-preview"></span>
                                 </label>
                             </div>
                             <div class="form-hint">Choose a preset or pick your own accent color.</div>
+                        </div>
+                        <div class="form-group" style="margin-top:16px;">
+                            <label>Background Texture</label>
+                            <div class="texture-picker" id="texture-picker">
+                                <button type="button" class="texture-swatch is-active" data-texture="none" title="None">
+                                    <span class="texture-preview"></span>
+                                    <span class="texture-name">None</span>
+                                </button>
+                                <button type="button" class="texture-swatch" data-texture="noise" title="Paper">
+                                    <span class="texture-preview bg-texture-noise"></span>
+                                    <span class="texture-name">Paper</span>
+                                </button>
+                                <button type="button" class="texture-swatch" data-texture="dots" title="Dots">
+                                    <span class="texture-preview bg-texture-dots"></span>
+                                    <span class="texture-name">Dots</span>
+                                </button>
+                                <button type="button" class="texture-swatch" data-texture="grid" title="Grid">
+                                    <span class="texture-preview bg-texture-grid"></span>
+                                    <span class="texture-name">Grid</span>
+                                </button>
+                                <button type="button" class="texture-swatch" data-texture="hatch" title="Hatch">
+                                    <span class="texture-preview bg-texture-hatch"></span>
+                                    <span class="texture-name">Hatch</span>
+                                </button>
+                                <button type="button" class="texture-swatch" data-texture="waves" title="Waves">
+                                    <span class="texture-preview bg-texture-waves"></span>
+                                    <span class="texture-name">Waves</span>
+                                </button>
+                            </div>
+                            <div class="form-hint">Adds a subtle pattern to the content background.</div>
                         </div>
                         <button type="submit" class="btn btn-primary">Save Appearance</button>
                     </form>
@@ -1150,6 +1200,12 @@ async fn browser_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     </form>
                 </section>
 
+                <section class="section" id="section-profiles">
+                    <h2>Browser Profiles</h2>
+                    <div class="form-hint" style="margin-bottom:12px;">Manage browser profiles — each profile has its own cookies, sessions, and cache.</div>
+                    <div id="profiles-list" class="form-hint">Loading profiles…</div>
+                </section>
+
                 <section class="section" id="section-web-search">
                     <h2>Web Search</h2>
                     <form class="form" id="web-search-form">
@@ -1254,7 +1310,7 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
                 <div class="chat-shell">
                     <aside class="chat-sidebar">
                         <div class="chat-sidebar-header">
-                            <span class="chat-sidebar-title">Conversations</span>
+                            <span class="chat-sidebar-title">Storico</span>
                             <div class="chat-sidebar-actions">
                                 <button class="btn-icon" id="btn-chat-search" title="Search">
                                     <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="7.5" r="5.5"/><path d="M12 12l4.5 4.5"/></svg>
@@ -1283,26 +1339,25 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     <section class="chat-main">
                         <div class="chat-topbar">
                             <div class="chat-topbar-leading">
-                                <div class="chat-topbar-meta">
-                                    <div class="chat-topbar-title" id="chat-conversation-title">New conversation</div>
-                                    <div class="chat-topbar-statusline">
-                                        <span class="chat-connection" id="ws-status">Connecting…</span>
-                                        <span class="chat-run-model" id="chat-run-model" hidden></span>
-                                        <span class="chat-run-badge is-idle is-dot-only" id="chat-run-badge" aria-label="idle"></span>
+                                <button class="chat-sidebar-toggle-btn" id="btn-chat-sidebar" title="Toggle sidebar" aria-label="Toggle sidebar">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h7"/></svg>
+                                </button>
+                                <div class="chat-topbar-model-pill">
+                                    <div class="chat-model-selector">
+                                        <div class="chat-model-pill" id="chat-model-pill">
+                                            <span class="chat-model-pill-name" id="chat-model-pill-name">{current_model}</span>
+                                            <svg class="chat-model-pill-arrow" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7l4 4 4-4"/></svg>
+                                        </div>
+                                        <select id="chat-model-select" class="chat-model-select-hidden" aria-label="Model">
+                                            <option value="{current_model}">{current_model}</option>
+                                        </select>
                                     </div>
                                 </div>
                             </div>
                             <div class="chat-actions">
-                                <button class="btn btn-ghost btn-sm" id="btn-new-chat-topbar" title="New conversation">
-                                <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="3" x2="9" y2="15"/><line x1="3" y1="9" x2="15" y2="9"/></svg>
-                                </button>
-                                <button class="btn btn-ghost btn-sm" id="btn-clear-chat" title="Clear screen">
-                                <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 4 9 9 14 4"/><polyline points="4 14 9 9 14 14"/></svg>
-                                </button>
-                                <button class="btn btn-ghost btn-sm chat-sidebar-toggle-btn" id="btn-chat-sidebar" title="Toggle sidebar" aria-label="Toggle sidebar">
-                                    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="14" height="12" rx="1.5"/><line x1="7" y1="3" x2="7" y2="15"/><line x1="10.5" y1="6" x2="13" y2="6"/><line x1="10.5" y1="9" x2="13" y2="9"/><line x1="10.5" y1="12" x2="13" y2="12"/></svg>
-                                </button>
+                                <span class="chat-connection" id="ws-status">Connecting…</span>
                             </div>
+                            <span id="chat-conversation-title" hidden>New conversation</span>
                         </div>
                         <div class="chat-thread-wrap">
                             <div class="chat-empty-state" id="chat-empty-state">
@@ -1329,16 +1384,6 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
                                     <div class="chat-attachment-strip" id="chat-attachment-strip" hidden></div>
                                     <div class="chat-input-bottom">
                                         <div class="chat-composer-footer">
-                                            <div class="chat-model-selector">
-                                                <div class="chat-model-pill" id="chat-model-pill">
-                                                    <span class="chat-model-pill-name" id="chat-model-pill-name">{current_model}</span>
-                                                    <svg class="chat-model-pill-arrow" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7l4 4 4-4"/></svg>
-                                                </div>
-                                                <select id="chat-model-select" class="chat-model-select-hidden" aria-label="Model">
-                                                    <option value="{current_model}">{current_model}</option>
-                                                </select>
-                                            </div>
-                                            <div class="chat-model-capabilities" id="chat-model-capabilities" hidden></div>
                                         </div>
                                         <div class="chat-input-actions">
                                             <div class="chat-plus-wrap">
@@ -1422,7 +1467,7 @@ async fn automations_page() -> Html<String> {
             <div class="content-inner auto-list-view" id="automations-list-view" style="max-width:none;padding:0;display:flex;flex-direction:column;height:100%;">
                 <div class="auto-master-detail" style="display:flex;flex:1;min-height:0;overflow:hidden;">
                     <!-- Master: list + prompt bar -->
-                    <div class="auto-master" id="auto-master" style="flex:1;min-width:0;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;padding-left:216px;padding-right:24px;">
+                    <div class="auto-master" id="auto-master" style="flex:1;min-width:0;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;padding-left:24px;padding-right:24px;">
                         <div class="page-header">
                             <div class="page-title-group">
                                 <h1 class="page-title">Automations</h1>
@@ -4276,22 +4321,24 @@ fn standalone_page(title: &str, body: &str) -> String {
     }})();
     </script>
     <style>
-        body {{ display: flex; justify-content: center; align-items: center; min-height: 100vh; background: var(--bg-primary); }}
-        .auth-card {{ background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; width: 100%; max-width: 400px; box-shadow: 0 4px 24px rgba(0,0,0,0.2); }}
-        .auth-card h1 {{ font-size: 1.5rem; margin: 0 0 0.5rem; text-align: center; }}
-        .auth-card p {{ color: var(--text-secondary); font-size: 0.875rem; text-align: center; margin: 0 0 1.5rem; }}
-        .auth-card label {{ display: block; font-size: 0.8125rem; font-weight: 500; margin-bottom: 0.375rem; color: var(--text-secondary); }}
-        .auth-card input[type="text"], .auth-card input[type="password"] {{ width: 100%; padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); color: var(--text-primary); font-size: 0.875rem; box-sizing: border-box; margin-bottom: 1rem; }}
-        .auth-card input:focus {{ outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(99,102,241,0.2); }}
-        .auth-card button {{ width: 100%; padding: 0.75rem; border: none; border-radius: 8px; background: var(--accent); color: white; font-size: 0.875rem; font-weight: 600; cursor: pointer; transition: opacity 0.15s; }}
+        body {{ display: flex; justify-content: center; align-items: center; min-height: 100vh; background: var(--nav-bg); }}
+        .auth-card {{ background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-2xl); padding: 2.5rem; width: 100%; max-width: 400px; box-shadow: 0 20px 50px rgba(0,0,0,0.3); }}
+        .auth-card h1 {{ font-size: 1.5rem; margin: 0 0 0.5rem; text-align: center; color: var(--t1); }}
+        .auth-card p {{ color: var(--t3); font-size: 0.875rem; text-align: center; margin: 0 0 1.5rem; }}
+        .auth-card label {{ display: block; font-size: 0.8125rem; font-weight: 500; margin-bottom: 0.375rem; color: var(--t2); }}
+        .auth-card input[type="text"], .auth-card input[type="password"] {{ width: 100%; padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg); color: var(--t1); font-size: 0.875rem; box-sizing: border-box; margin-bottom: 1rem; }}
+        .auth-card input:focus {{ outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-light); }}
+        .auth-card button {{ width: 100%; padding: 0.75rem; border: none; border-radius: var(--r-full); background: var(--accent); color: white; font-size: 0.875rem; font-weight: 600; cursor: pointer; transition: opacity 0.15s; }}
         .auth-card button:hover {{ opacity: 0.9; }}
         .auth-card button:disabled {{ opacity: 0.5; cursor: not-allowed; }}
-        .auth-error {{ color: var(--danger, #ef4444); font-size: 0.8125rem; text-align: center; min-height: 1.25rem; margin-bottom: 0.5rem; }}
+        .auth-error {{ color: var(--err); font-size: 0.8125rem; text-align: center; min-height: 1.25rem; margin-bottom: 0.5rem; }}
         .auth-logo {{ text-align: center; margin-bottom: 1.5rem; }}
-        .auth-logo img {{ height: 40px; width: auto; }}
+        .auth-logo img {{ height: 48px; width: auto; }}
+        .auth-logo-light {{ display: inline; }}
         .auth-logo-dark {{ display: none; }}
         .dark .auth-logo-light {{ display: none; }}
         .dark .auth-logo-dark {{ display: inline; }}
+        .dark .auth-card {{ background: var(--surface); }}
     </style>
 </head>
 <body>

@@ -17,7 +17,8 @@
 
             var theme = themeSelect ? themeSelect.value : 'system';
             var language = languageSelect ? languageSelect.value : 'system';
-            var accent = localStorage.getItem('homun-accent') || 'moss';
+            var accent = localStorage.getItem('homun-accent') || '';
+            var texture = localStorage.getItem('homun-texture') || 'none';
 
             try {
                 var responses = await Promise.all([
@@ -35,6 +36,11 @@
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ key: 'ui.accent', value: accent }),
+                    }),
+                    fetch('/api/v1/config', {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ key: 'ui.texture', value: texture }),
                     }),
                 ]);
 
@@ -129,11 +135,15 @@
         root.setProperty('--focus-ring', hslToHex(h, Math.min(s + 5, 60), isDark ? Math.min(l + 10, 70) : Math.min(l + 10, 55)));
         root.setProperty('--selection-bg', hslToHex(h, isDark ? 20 : 25, isDark ? 22 : 82));
         root.setProperty('--chart-primary', hex);
+        // Nav bar uses accent color as background
+        root.setProperty('--nav-bg', hex);
+        // Contrast text for accent backgrounds (user bubbles, etc.)
+        root.setProperty('--accent-contrast', l > 55 ? '#1a1a1a' : '#ffffff');
     }
 
     function clearCustomAccent() {
         var props = ['--accent', '--accent-text', '--accent-hover', '--accent-active',
-                     '--accent-light', '--accent-border', '--focus-ring', '--selection-bg', '--chart-primary'];
+                     '--accent-light', '--accent-border', '--focus-ring', '--selection-bg', '--chart-primary', '--nav-bg', '--accent-contrast'];
         props.forEach(function(p) { document.documentElement.style.removeProperty(p); });
     }
 
@@ -145,8 +155,12 @@
             document.documentElement.removeAttribute('data-accent');
             deriveAccentFamily(accent);
             localStorage.setItem('homun-accent-custom', accent);
-        } else if (accent === 'moss') {
+        } else if (accent === '' || accent === 'moss') {
+            // Blue (default) or Moss — remove data-accent, CSS :root handles it
             document.documentElement.removeAttribute('data-accent');
+            if (accent === 'moss') {
+                document.documentElement.setAttribute('data-accent', 'moss');
+            }
         } else {
             document.documentElement.setAttribute('data-accent', accent);
         }
@@ -185,7 +199,7 @@
     // Accent picker — presets
     var accentPicker = document.getElementById('accent-picker');
     if (accentPicker) {
-        var currentAccent = localStorage.getItem('homun-accent') || 'moss';
+        var currentAccent = localStorage.getItem('homun-accent') || '';
         var presetSwatches = accentPicker.querySelectorAll('.accent-swatch[data-accent]');
         presetSwatches.forEach(function(swatch) {
             if (swatch.getAttribute('data-accent') === currentAccent) {
@@ -193,7 +207,7 @@
             }
             swatch.addEventListener('click', function() {
                 var accent = this.getAttribute('data-accent');
-                if (accent) applyAccent(accent);
+                if (accent !== null) applyAccent(accent);
             });
         });
 
@@ -215,6 +229,49 @@
                 applyAccent(this.value);
             });
         }
+    }
+
+    // --- Texture picker ---
+
+    var texturePicker = document.getElementById('texture-picker');
+    if (texturePicker) {
+        var currentTexture = localStorage.getItem('homun-texture') || 'none';
+        var textureSwatches = texturePicker.querySelectorAll('.texture-swatch');
+
+        // Set initial active state
+        textureSwatches.forEach(function(swatch) {
+            var tex = swatch.getAttribute('data-texture');
+            swatch.classList.toggle('is-active', tex === currentTexture);
+
+            swatch.addEventListener('click', function() {
+                var selected = this.getAttribute('data-texture');
+                applyTexture(selected);
+            });
+        });
+    }
+
+    function applyTexture(texture) {
+        localStorage.setItem('homun-texture', texture);
+        document.documentElement.setAttribute('data-texture', texture);
+
+        // Update .content element class
+        var content = document.querySelector('.content');
+        if (content) {
+            // Remove all texture classes
+            var classes = content.className.split(' ').filter(function(c) {
+                return !c.startsWith('bg-texture-');
+            });
+            if (texture !== 'none') {
+                classes.push('bg-texture-' + texture);
+            }
+            content.className = classes.join(' ');
+        }
+
+        // Update active state on swatches
+        var swatches = document.querySelectorAll('.texture-swatch');
+        swatches.forEach(function(s) {
+            s.classList.toggle('is-active', s.getAttribute('data-texture') === texture);
+        });
     }
 
     console.log('[Appearance] Page initialized');
