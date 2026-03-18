@@ -162,6 +162,7 @@ wa-rs-ureq-http = { git = "https://github.com/homunbot/wa-rs", rev = "d369582", 
 wa-rs-core = { git = "https://github.com/homunbot/wa-rs", rev = "d369582", optional = true }
 wa-rs-proto = { git = "https://github.com/homunbot/wa-rs", rev = "d369582", optional = true }
 futures-util = { version = "0.3", optional = true }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 
 # --- Embeddings (HNSW vector index + cache) ---
 usearch = { version = "2", optional = true }

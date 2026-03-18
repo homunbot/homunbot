@@ -340,12 +340,20 @@ impl Gateway {
         if config.channels.slack.enabled {
             let mut slack_config = config.channels.slack.clone();
 
-            // Resolve token from encrypted storage if marker is present
+            // Resolve tokens from encrypted storage if marker is present
             if slack_config.token == "***ENCRYPTED***" || slack_config.token.is_empty() {
                 if let Ok(secrets) = crate::storage::global_secrets() {
                     let key = crate::storage::SecretKey::channel_token("slack");
                     if let Ok(Some(real_token)) = secrets.get(&key) {
                         slack_config.token = real_token;
+                    }
+                }
+            }
+            if slack_config.app_token == "***ENCRYPTED***" || slack_config.app_token.is_empty() {
+                if let Ok(secrets) = crate::storage::global_secrets() {
+                    let key = crate::storage::SecretKey::channel_token("slack_app");
+                    if let Ok(Some(real_token)) = secrets.get(&key) {
+                        slack_config.app_token = real_token;
                     }
                 }
             }

@@ -796,6 +796,9 @@ impl Default for WebConfig {
 pub struct SlackConfig {
     pub enabled: bool,
     pub token: String,
+    /// App-level token (xapp-*) for Socket Mode. If empty, falls back to HTTP polling.
+    #[serde(default)]
+    pub app_token: String,
     /// Channel ID to monitor (e.g., "C1234567890"). Empty or "*" = auto-discover all accessible channels.
     #[serde(default)]
     pub channel_id: String,
