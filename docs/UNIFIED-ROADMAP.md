@@ -98,7 +98,7 @@ Stato: SEC-6/7/8/11/12/13/14/15 tutti ✅ DONE. Scudo anti-injection completo.
 | # | Task | Effort | Note |
 |---|------|--------|------|
 | ONB-1 | **Setup wizard v2** | 1 settimana | ✅ DONE (2026-03-18) — 4 step (provider → model → test → first message), localStorage checkpoint con expiry 24h, resume su reload, redirect a /chat per step 4 |
-| ONB-2 | **Flusso Ollama locale** | 3 giorni | "Vuoi AI locale senza API key?" → Ollama → pull → pronto |
+| ONB-2 | **Flusso Ollama locale** | 3 giorni | ✅ DONE (2026-03-18) — Auto-detect Ollama nel wizard, banner "No API key?", select modello + pull + activate one-click. Suggerisce llama3.2:3b/gemma3:4b se nessun modello installato |
 | ONB-4 | **First-run tutorial** | 3 giorni | Tour interattivo dismissable |
 | AUD-2 | **Feature gating doc** | 1 giorno | Documentare chiaramente embeddings/RAG gating in README e setup wizard |
 

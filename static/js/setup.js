@@ -758,8 +758,111 @@ async function runWizardNextStep() {
     }
 
     refreshSetupWizard();
+    detectOllamaLocal();
 })();
 
+// ─── Ollama Local Detection ───
+
+async function detectOllamaLocal() {
+    var banner = document.getElementById('ollama-local-banner');
+    if (!banner) return;
+
+    // Only show if no provider configured yet
+    var providers = getConfiguredProviders();
+    if (providers.length > 0) return;
+
+    try {
+        var resp = await fetch('/api/v1/providers/ollama/models');
+        var data = await resp.json();
+        if (!data.ok || !data.models) return;
+
+        banner.style.display = 'block';
+        var select = document.getElementById('ollama-model-select');
+        if (!select) return;
+
+        while (select.firstChild) select.removeChild(select.firstChild);
+
+        if (data.models.length === 0) {
+            var defaultModels = ['llama3.2:3b', 'gemma3:4b', 'phi4-mini:3.8b', 'qwen3:4b'];
+            defaultModels.forEach(function(m) {
+                var opt = document.createElement('option');
+                opt.value = m;
+                opt.textContent = m + ' (will download)';
+                opt.dataset.needsPull = 'true';
+                select.appendChild(opt);
+            });
+        } else {
+            data.models.forEach(function(m) {
+                var opt = document.createElement('option');
+                opt.value = m.name;
+                opt.textContent = m.name + ' (' + m.size + ')';
+                select.appendChild(opt);
+            });
+        }
+    } catch (_) {
+        // Ollama not running
+    }
+}
+
+document.addEventListener('click', async function(e) {
+    if (e.target.id !== 'ollama-quick-setup') return;
+    var select = document.getElementById('ollama-model-select');
+    var status = document.getElementById('ollama-banner-status');
+    var btn = e.target;
+    if (!select || !select.value) return;
+
+    var model = select.value;
+    btn.disabled = true;
+    btn.textContent = 'Setting up\u2026';
+
+    var needsPull = select.selectedOptions[0] && select.selectedOptions[0].dataset.needsPull === 'true';
+    if (needsPull) {
+        if (status) status.textContent = 'Downloading ' + model + '\u2026 this may take a few minutes.';
+        try {
+            var pullResp = await fetch('/api/v1/providers/ollama/pull', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: model }),
+            });
+            var pullData = await pullResp.json();
+            if (!pullData.ok) {
+                if (status) status.textContent = 'Pull failed: ' + (pullData.message || 'unknown error');
+                btn.disabled = false;
+                btn.textContent = 'Use this model';
+                return;
+            }
+        } catch (err) {
+            if (status) status.textContent = 'Pull failed: ' + err.message;
+            btn.disabled = false;
+            btn.textContent = 'Use this model';
+            return;
+        }
+    }
+
+    if (status) status.textContent = 'Configuring Ollama as active provider\u2026';
+    try {
+        var activateResp = await fetch('/api/v1/providers/activate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: 'ollama', model: 'ollama/' + model }),
+        });
+        var activateData = await activateResp.json();
+        if (activateData.ok) {
+            if (status) status.textContent = 'Ollama configured! Model: ' + model;
+            status.classList.add('validation-ok');
+            btn.textContent = 'Done';
+            setTimeout(function() { window.location.reload(); }, 1000);
+        } else {
+            if (status) status.textContent = 'Activation failed: ' + (activateData.error || 'unknown');
+            btn.disabled = false;
+            btn.textContent = 'Use this model';
+        }
+    } catch (err) {
+        if (status) status.textContent = 'Error: ' + err.message;
+        btn.disabled = false;
+        btn.textContent = 'Use this model';
+    }
+});
 
 // ═══ Load Models for a Provider Accordion Item ═══
 

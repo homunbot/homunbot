@@ -604,6 +604,18 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                 <section class="section setup-wizard-section" id="setup-wizard-section">
                     <h2>Guided Setup</h2>
                     <div class="setup-wizard" id="setup-wizard">
+                        <div class="ollama-local-banner" id="ollama-local-banner" style="display:none">
+                            <div class="form-hint" style="margin-bottom: var(--space-sm)">
+                                <strong>No API key?</strong> Ollama detected on your machine — use local AI for free.
+                            </div>
+                            <div style="display:flex;gap:var(--space-sm);align-items:center;flex-wrap:wrap">
+                                <select id="ollama-model-select" class="input" style="min-width:200px">
+                                    <option value="">Loading models…</option>
+                                </select>
+                                <button type="button" class="btn btn-primary btn-sm" id="ollama-quick-setup">Use this model</button>
+                            </div>
+                            <div class="form-hint" id="ollama-banner-status"></div>
+                        </div>
                         <div class="setup-wizard-steps">
                             <div class="setup-step" id="wizard-step-provider">
                                 <span class="setup-step-dot"></span>
