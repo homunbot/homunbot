@@ -2864,6 +2864,40 @@ html, body {
 .hm-toast--error   { border-left: 3px solid var(--err); color: var(--err); }
 .hm-toast--warning { border-left: 3px solid var(--warn); color: var(--warn); }
 .hm-toast--info    { border-left: 3px solid var(--info); color: var(--info); }
+.hm-toast--progress {
+    border-left: 3px solid var(--accent);
+    color: var(--t1);
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+/* ═══ SHARED SPINNER (hm-spinner) ═══ */
+@keyframes hm-spin { to { transform: rotate(360deg); } }
+.hm-spinner {
+    display: inline-block;
+    width: 16px; height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: hm-spin 0.7s linear infinite;
+    flex-shrink: 0;
+}
+.hm-spinner--sm  { width: 12px; height: 12px; border-width: 1.5px; }
+.hm-spinner--lg  { width: 24px; height: 24px; border-width: 2.5px; }
+
+/* Inline progress row: spinner + text side by side */
+.hm-progress {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: var(--t2);
+    background: var(--surface-inset);
+    border-radius: var(--r-md);
+}
 
 /* ── Inline error state ── */
 .hm-error-state {

@@ -71,6 +71,65 @@ window.showErrorState = function(containerId, message, retryFn) {
     el.appendChild(wrapper);
 };
 
+// Show a persistent progress toast with spinner. Returns nothing — call hideProgressToast() to dismiss.
+window.showProgressToast = function(message) {
+    var existing = document.querySelector('.hm-toast--progress');
+    if (existing) existing.remove();
+
+    var toast = document.createElement('div');
+    toast.className = 'hm-toast hm-toast--progress';
+
+    var spinner = document.createElement('span');
+    spinner.className = 'hm-spinner hm-spinner--sm';
+    toast.appendChild(spinner);
+
+    var text = document.createElement('span');
+    text.textContent = message;
+    toast.appendChild(text);
+
+    document.body.appendChild(toast);
+    requestAnimationFrame(function() { toast.classList.add('hm-toast--visible'); });
+};
+
+// Update the text of an existing progress toast (no-op if none visible).
+window.updateProgressToast = function(message) {
+    var toast = document.querySelector('.hm-toast--progress');
+    if (!toast) return;
+    var text = toast.querySelector('span:not(.hm-spinner)');
+    if (text) text.textContent = message;
+};
+
+// Dismiss the progress toast.
+window.hideProgressToast = function() {
+    var toast = document.querySelector('.hm-toast--progress');
+    if (!toast) return;
+    toast.classList.remove('hm-toast--visible');
+    setTimeout(function() { toast.remove(); }, 200);
+};
+
+// Show an inline progress indicator inside a container (spinner + text).
+window.showProgress = function(containerId, message) {
+    var el = document.getElementById(containerId);
+    if (!el) return;
+    el.style.display = 'block';
+    el.textContent = '';
+    el.className = (el.className.replace(/\bhm-progress\b/, '') + ' hm-progress').trim();
+    var spinner = document.createElement('span');
+    spinner.className = 'hm-spinner hm-spinner--sm';
+    el.appendChild(spinner);
+    var text = document.createElement('span');
+    text.textContent = message;
+    el.appendChild(text);
+};
+
+// Clear inline progress — reset to plain container.
+window.hideProgress = function(containerId) {
+    var el = document.getElementById(containerId);
+    if (!el) return;
+    el.className = el.className.replace(/\bhm-progress\b/, '').trim();
+    el.textContent = '';
+};
+
 window.clearErrorState = function(containerId) {
     var el = document.getElementById(containerId);
     if (!el) return;

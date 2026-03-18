@@ -443,7 +443,14 @@
 
     // --- Install ---
     async function installSkill(source, btn, card) {
-        if (btn) { btn.textContent = 'Installing...'; btn.disabled = true; }
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = '';
+            var sp = document.createElement('span');
+            sp.className = 'hm-spinner hm-spinner--sm';
+            btn.appendChild(sp);
+            btn.appendChild(document.createTextNode(' Installing\u2026'));
+        }
         if (card) card.classList.add('skill-card--installing');
 
         try {

@@ -1828,7 +1828,7 @@ async fn skills_page() -> Html<String> {
                     <div class="form-actions">
                         <button type="button" class="btn btn-primary btn-sm" id="creator-submit-btn">Create Skill</button>
                         <button type="button" class="btn btn-secondary btn-sm" id="creator-cancel-btn">Cancel</button>
-                        <span class="skills-search-spinner" id="creator-spinner" style="display:none"></span>
+                        <span class="hm-spinner" id="creator-spinner" style="display:none"></span>
                     </div>
                     <div id="creator-result" style="display:none"></div>
                 </section>

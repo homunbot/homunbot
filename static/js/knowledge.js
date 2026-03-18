@@ -143,8 +143,7 @@ function setupUpload() {
 
 async function uploadFiles(files) {
     const progress = document.getElementById('upload-progress');
-    progress.style.display = 'block';
-    progress.textContent = 'Uploading ' + files.length + ' file(s)...';
+    showProgress('upload-progress', 'Uploading ' + files.length + ' file(s)\u2026');
 
     const formData = new FormData();
     for (const file of files) {
@@ -158,7 +157,7 @@ async function uploadFiles(files) {
         });
         const data = await resp.json();
 
-        progress.textContent = '';
+        hideProgress('upload-progress');
 
         if (data.ingested && data.ingested.length > 0) {
             const heading = document.createElement('p');
@@ -193,6 +192,8 @@ async function uploadFiles(files) {
         loadSources();
         loadStats();
     } catch (e) {
+        hideProgress('upload-progress');
+        progress.style.display = 'block';
         progress.textContent = 'Upload failed: ' + e.message;
     }
 }
@@ -216,13 +217,12 @@ async function doSearch(query) {
         return;
     }
 
-    container.textContent = 'Searching...';
+    showProgress('search-results', 'Searching\u2026');
     try {
         const resp = await fetch('/api/v1/knowledge/search?q=' + encodeURIComponent(query) + '&limit=5');
         const data = await resp.json();
         const results = data.results || [];
-
-        container.textContent = '';
+        hideProgress('search-results');
 
         if (results.length === 0) {
             const p = document.createElement('p');
@@ -281,6 +281,7 @@ async function doSearch(query) {
             container.appendChild(card);
         });
     } catch (e) {
+        hideProgress('search-results');
         container.textContent = 'Search failed: ' + e.message;
     }
 }
@@ -294,10 +295,8 @@ function setupFolderIndex() {
         const path = document.getElementById('folder-path').value.trim();
         if (!path) { alert('Enter a folder path'); return; }
         const recursive = document.getElementById('folder-recursive').checked;
-        const progress = document.getElementById('folder-progress');
-        progress.style.display = 'block';
-        progress.textContent = 'Indexing...';
         btn.disabled = true;
+        showProgress('folder-progress', 'Indexing \u201c' + path + '\u201d\u2026');
         try {
             const resp = await fetch('/api/v1/knowledge/ingest-directory', {
                 method: 'POST',
@@ -305,6 +304,9 @@ function setupFolderIndex() {
                 body: JSON.stringify({ path, recursive }),
             });
             const data = await resp.json();
+            hideProgress('folder-progress');
+            const progress = document.getElementById('folder-progress');
+            progress.style.display = 'block';
             if (data.error) {
                 progress.textContent = 'Error: ' + data.error;
             } else {
@@ -313,6 +315,9 @@ function setupFolderIndex() {
                 loadStats();
             }
         } catch (e) {
+            hideProgress('folder-progress');
+            const progress = document.getElementById('folder-progress');
+            progress.style.display = 'block';
             progress.textContent = 'Failed: ' + e.message;
         } finally {
             btn.disabled = false;
