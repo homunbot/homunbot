@@ -99,8 +99,8 @@ Stato: SEC-6/7/8/11/12/13/14/15 tutti ✅ DONE. Scudo anti-injection completo.
 |---|------|--------|------|
 | ONB-1 | **Setup wizard v2** | 1 settimana | ✅ DONE (2026-03-18) — 4 step (provider → model → test → first message), localStorage checkpoint con expiry 24h, resume su reload, redirect a /chat per step 4 |
 | ONB-2 | **Flusso Ollama locale** | 3 giorni | ✅ DONE (2026-03-18) — Auto-detect Ollama nel wizard, banner "No API key?", select modello + pull + activate one-click. Suggerisce llama3.2:3b/gemma3:4b se nessun modello installato |
-| ONB-4 | **First-run tutorial** | 3 giorni | Tour interattivo dismissable |
-| AUD-2 | **Feature gating doc** | 1 giorno | Documentare chiaramente embeddings/RAG gating in README e setup wizard |
+| ONB-4 | **Onboarding Experience** | 2 settimane | REDESIGN: esperienza completa first-run. Side panel con checklist, multi-lingua (EN+IT), 5 fasi: conosci utente → provider (cloud/Ollama) → canali → test → primo messaggio. Assorbe ONB-1/2/AUD-2. Spec in `docs/design/ONBOARDING-SPEC.md` |
+| AUD-2 | **Feature gating doc** | — | Assorbito in ONB-4 (spiegato inline durante onboarding) |
 
 ---
 
