@@ -2619,6 +2619,24 @@ html, body {
     border-bottom-right-radius: var(--r-sm);
     font-weight: 500;
 }
+.chat-msg.user.is-hero {
+    align-self: flex-start;
+    background: transparent;
+    color: var(--t1);
+    border-radius: 0;
+    padding: 60px 0 12px;
+    max-width: 100%;
+    font-size: clamp(28px, 4vw, 42px);
+    font-weight: 300;
+    line-height: 1.08;
+    letter-spacing: -0.02em;
+}
+.chat-msg.user.is-hero .chat-msg-body {
+    font-size: inherit;
+    line-height: inherit;
+    font-weight: inherit;
+    letter-spacing: inherit;
+}
 
 .chat-msg.assistant {
     align-self: flex-start;
@@ -2679,12 +2697,12 @@ html, body {
     min-height: 3em;
     max-height: 40vh;
     border: none;
-    border-left: 2px solid var(--accent);
     border-radius: 0;
-    padding: 2px 8px;
+    padding: 0;
     font-family: inherit;
     font-size: inherit;
     line-height: inherit;
+    background: transparent;
     resize: none;
     background: transparent;
     color: var(--t1);
@@ -2693,7 +2711,8 @@ html, body {
     field-sizing: content;
 }
 .chat-msg-edit-area:focus {
-    border-left-color: var(--accent-hover);
+    outline: none;
+    box-shadow: none;
 }
 .chat-msg-edit-actions {
     display: flex;
@@ -3537,8 +3556,6 @@ html, body {
 }
 .chat-conversation-item.is-active {
     background: transparent;
-    border-left: 2px solid var(--accent);
-    padding-left: 10px;
 }
 .chat-conversation-item.is-active .chat-conversation-name {
     color: var(--accent);
@@ -4430,7 +4447,12 @@ html, body {
     width: calc(100% - 34px);
     min-height: 38px;
     font-size: 14px;
-    padding: 0 12px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    outline: none;
+    color: inherit;
+    font-family: inherit;
 }
 
 .chat-modal-backdrop {

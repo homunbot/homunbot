@@ -2186,6 +2186,10 @@ async function resendFromMessage(msgDiv, newContent) {
 function addMessage(role, content, toolsUsed, options = {}) {
     const div = document.createElement('div');
     div.className = `chat-msg ${role}`;
+    // First user message gets hero styling (matches empty-state title)
+    if (role === 'user' && !messagesEl.querySelector('.chat-msg.user')) {
+        div.classList.add('is-hero');
+    }
     if (options.runId) {
         div.dataset.runId = options.runId;
     }
