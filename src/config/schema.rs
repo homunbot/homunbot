@@ -802,6 +802,10 @@ pub struct SlackConfig {
     /// Channel ID to monitor (e.g., "C1234567890"). Empty or "*" = auto-discover all accessible channels.
     #[serde(default)]
     pub channel_id: String,
+    /// Default channel ID for proactive/cross-channel messaging.
+    /// Falls back to `channel_id` if empty.
+    #[serde(default)]
+    pub default_channel_id: String,
     /// List of user IDs allowed to interact (e.g., "U1234567890"). "*" = allow all.
     #[serde(default)]
     pub allow_from: Vec<String>,
@@ -1086,8 +1090,15 @@ impl ChannelsConfig {
             ));
         }
 
-        if self.slack.enabled && !self.slack.token.is_empty() && !self.slack.channel_id.is_empty() {
-            channels.push(("slack".to_string(), self.slack.channel_id.clone()));
+        if self.slack.enabled && !self.slack.token.is_empty() {
+            let proactive_target = if !self.slack.default_channel_id.is_empty() {
+                &self.slack.default_channel_id
+            } else {
+                &self.slack.channel_id
+            };
+            if !proactive_target.is_empty() {
+                channels.push(("slack".to_string(), proactive_target.clone()));
+            }
         }
 
         // Multi-account emails
@@ -2338,5 +2349,31 @@ api_key = "sk-or-test"
             },
         );
         assert!(!config.should_use_xml_dispatch("ollama", "ollama/cloud-native-tools:cloud"));
+    }
+
+    #[test]
+    fn test_slack_proactive_uses_default_channel_id() {
+        let mut ch = ChannelsConfig::default();
+        ch.slack.enabled = true;
+        ch.slack.token = "xoxb-test".to_string();
+        ch.slack.channel_id = "C_LISTEN".to_string();
+        ch.slack.default_channel_id = "C_PROACTIVE".to_string();
+
+        let targets = ch.active_channels_with_chat_ids();
+        let slack = targets.iter().find(|(n, _)| n == "slack");
+        assert_eq!(slack.unwrap().1, "C_PROACTIVE");
+    }
+
+    #[test]
+    fn test_slack_proactive_fallback_to_channel_id() {
+        let mut ch = ChannelsConfig::default();
+        ch.slack.enabled = true;
+        ch.slack.token = "xoxb-test".to_string();
+        ch.slack.channel_id = "C_LISTEN".to_string();
+        // default_channel_id left empty
+
+        let targets = ch.active_channels_with_chat_ids();
+        let slack = targets.iter().find(|(n, _)| n == "slack");
+        assert_eq!(slack.unwrap().1, "C_LISTEN");
     }
 }

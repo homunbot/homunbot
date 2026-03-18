@@ -548,6 +548,21 @@ impl Channel for SlackChannel {
                 Some(self.config.channel_id.clone())
             };
 
+        // Proactive messaging check
+        let proactive_target = if !self.config.default_channel_id.is_empty() {
+            Some(&self.config.default_channel_id)
+        } else if scoped_channel.is_some() {
+            scoped_channel.as_ref()
+        } else {
+            None
+        };
+        if proactive_target.is_none() {
+            tracing::warn!(
+                "Slack: default_channel_id not set — proactive messaging disabled. \
+                 Set [channels.slack] default_channel_id in config.toml to enable."
+            );
+        }
+
         if self.has_socket_mode() {
             tracing::info!("Slack starting in Socket Mode (real-time)");
         } else {
