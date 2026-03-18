@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 
 use crate::bus::{InboundMessage, MessageMetadata, OutboundMessage};
 use crate::channels::traits::Channel;
+use crate::channels::ChannelHealthTracker;
 use crate::config::DiscordConfig;
 
 /// Discord channel — bot via serenity.
@@ -20,11 +21,21 @@ use crate::config::DiscordConfig;
 /// Empty allow_from = allow everyone (not recommended in production).
 pub struct DiscordChannel {
     config: DiscordConfig,
+    health: Option<Arc<ChannelHealthTracker>>,
 }
 
 impl DiscordChannel {
     pub fn new(config: DiscordConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            health: None,
+        }
+    }
+
+    /// Attach a health tracker for reconnect monitoring.
+    pub fn with_health(mut self, health: Arc<ChannelHealthTracker>) -> Self {
+        self.health = Some(health);
+        self
     }
 }
 
@@ -64,6 +75,7 @@ impl Channel for DiscordChannel {
             allow_all,
             mention_required,
             bot_user_id: Arc::new(AtomicU64::new(0)),
+            health: self.health.clone(),
         };
 
         let intents = GatewayIntents::GUILD_MESSAGES
@@ -103,6 +115,7 @@ struct Handler {
     allow_all: bool,
     mention_required: bool,
     bot_user_id: Arc<AtomicU64>,
+    health: Option<Arc<ChannelHealthTracker>>,
 }
 
 #[async_trait]
@@ -206,6 +219,11 @@ impl EventHandler for Handler {
             "Discord: received message"
         );
 
+        // Record successful message in health tracker
+        if let Some(ref health) = self.health {
+            health.record_message("discord");
+        }
+
         // Send typing indicator
         let _ = ctx.http.broadcast_typing(msg.channel_id).await;
 
@@ -273,6 +291,20 @@ impl EventHandler for Handler {
                 tokio::spawn(outbound_loop(http, rx));
             }
         }
+    }
+
+    async fn resume(&self, _ctx: Context, _event: serenity::model::event::ResumedEvent) {
+        tracing::info!("Discord: session resumed after reconnect");
+        if let Some(ref health) = self.health {
+            health.record_message("discord"); // Treat resume as healthy signal
+        }
+    }
+
+    async fn cache_ready(&self, _ctx: Context, guilds: Vec<serenity::model::id::GuildId>) {
+        tracing::info!(
+            guild_count = guilds.len(),
+            "Discord: cache ready, guilds loaded"
+        );
     }
 }
 

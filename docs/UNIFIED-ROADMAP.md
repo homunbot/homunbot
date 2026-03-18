@@ -66,7 +66,7 @@ La strategia è **consolidare il nucleo e aprirlo al mondo esterno** in ordine d
 
 | # | Task | Effort | Note |
 |---|------|--------|------|
-| CHH-2 | **Discord reconnect robusto** | 2 giorni | Serenity ha reconnect base, serve monitoring + logging + alerting |
+| CHH-2 | **Discord reconnect robusto** | 2 giorni | ✅ DONE (2026-03-18) — resume/cache_ready handlers, health tracking in message loop, ChannelHealthTracker passato a Handler. Serenity auto-reconnect + spawn_monitored_channel restart |
 | CHH-3 | **Slack → Socket Mode** | 1 settimana | ✅ DONE (2026-03-18) — Socket Mode via tokio-tungstenite quando app_token presente, polling fallback altrimenti. Latenza da 3s a <100ms |
 | CHH-4 | **WhatsApp re-pairing da gateway** | 3 giorni | QR code via web UI, non solo TUI |
 | CHH-5 | **Email robustness** | 3 giorni | IMAP idle reconnect su timeout, MIME handling migliorato |

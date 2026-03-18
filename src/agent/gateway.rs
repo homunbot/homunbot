@@ -315,7 +315,14 @@ impl Gateway {
                     "discord",
                     &self.channel_health,
                     inbound_tx.clone(),
-                    move || Box::new(DiscordChannel::new(dc_config.clone())),
+                    {
+                        let health = self.channel_health.clone();
+                        move || {
+                            Box::new(
+                                DiscordChannel::new(dc_config.clone()).with_health(health.clone()),
+                            )
+                        }
+                    },
                 );
                 channels.push(ch);
                 tracing::info!("Discord channel started (monitored)");
