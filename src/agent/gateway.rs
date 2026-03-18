@@ -592,6 +592,30 @@ impl Gateway {
             }
         }
 
+        // --- Safety: warn if enabled channels have empty allow_from and no pairing ---
+        for (ch_name, (pairing_required, allow_set)) in &pairing_config {
+            if ch_name == "web" {
+                continue; // web uses session auth, not allow_from
+            }
+            // Only warn for channels that are actually enabled
+            let enabled = match ch_name.as_str() {
+                "telegram" => config.channels.telegram.enabled,
+                "discord" => config.channels.discord.enabled,
+                "slack" => config.channels.slack.enabled,
+                "whatsapp" => config.channels.whatsapp.enabled,
+                _ if ch_name.starts_with("email:") => true, // already in active accounts
+                "email" => config.channels.email.enabled,
+                _ => false,
+            };
+            if enabled && allow_set.is_empty() && !pairing_required {
+                tracing::warn!(
+                    channel = %ch_name,
+                    "Channel has NO allow_from and pairing is disabled — \
+                     bot will not respond to anyone. Add allowed users or enable pairing."
+                );
+            }
+        }
+
         // Spawn periodic cleanup for expired pairing requests
         let cleanup_pm = pairing_manager.clone();
         tokio::spawn(async move {
@@ -637,8 +661,15 @@ impl Gateway {
         let routing_db = self.db.clone();
 
         let channel_health = self.channel_health.clone();
+        // Track known (channel, chat_id) pairs from inbound messages.
+        // Outbound messages to unknown pairs are blocked as a safety measure.
+        let known_chat_ids: Arc<std::sync::Mutex<HashSet<(String, String)>>> =
+            Arc::new(std::sync::Mutex::new(HashSet::new()));
+        let known_chat_ids_for_routing = known_chat_ids.clone();
+
         let routing_loop = tokio::spawn(async move {
             let approval_handler = std::sync::Arc::new(approval_handler);
+            let mut inbound_rate_limiter = InboundRateLimiter::new();
 
             // Debounce pipeline: routing loop → debounce_tx → debouncer → dispatch
             let (debounce_tx, debounce_rx) = mpsc::channel::<PreparedMessage>(100);
@@ -648,6 +679,7 @@ impl Gateway {
                 let stream_tx = web_stream_tx.clone();
                 let db = routing_db.clone();
                 let locks = session_locks.clone();
+                let known = known_chat_ids.clone();
 
                 tokio::spawn(async move {
                     MessageDebouncer::new(debounce_config, debounce_rx)
@@ -657,9 +689,10 @@ impl Gateway {
                             let stream_tx = stream_tx.clone();
                             let db = db.clone();
                             let locks = locks.clone();
+                            let known = known.clone();
 
                             tokio::spawn(async move {
-                                dispatch_to_agent(prepared, agent, senders, stream_tx, db, locks)
+                                dispatch_to_agent(prepared, agent, senders, stream_tx, db, locks, known)
                                     .await;
                             });
                         })
@@ -670,6 +703,30 @@ impl Gateway {
             while let Some(mut inbound) = inbound_rx.recv().await {
                 // Track successful inbound message in channel health
                 channel_health.record_message(&inbound.channel);
+
+                // Register known (channel, chat_id) pair for outbound validation
+                if let Ok(mut known) = known_chat_ids.lock() {
+                    known.insert((inbound.channel.clone(), inbound.chat_id.clone()));
+                }
+
+                // Per-sender rate limiting (skip for system/cron messages)
+                let is_system_msg = inbound
+                    .metadata
+                    .as_ref()
+                    .map(|m| m.is_system)
+                    .unwrap_or(false);
+                if !is_system_msg
+                    && !inbound_rate_limiter.check(&inbound.channel, &inbound.chat_id)
+                {
+                    tracing::warn!(
+                        channel = %inbound.channel,
+                        sender = %inbound.chat_id,
+                        limit = INBOUND_RATE_LIMIT,
+                        window_secs = INBOUND_RATE_WINDOW_SECS,
+                        "Inbound rate limit exceeded — dropping message"
+                    );
+                    continue;
+                }
 
                 let session_key = inbound
                     .metadata
@@ -731,7 +788,7 @@ impl Gateway {
                                         content: response,
                                         metadata: None,
                                     };
-                                    route_outbound(outbound, &senders_for_routing).await;
+                                    route_outbound(outbound, &senders_for_routing, &known_chat_ids).await;
                                     continue;
                                 }
                                 Ok(None) => {} // Sender is trusted, proceed
@@ -773,7 +830,7 @@ impl Gateway {
                                 content: email_content,
                                 metadata: None,
                             };
-                            route_outbound(email_msg, &senders_for_routing).await;
+                            route_outbound(email_msg, &senders_for_routing, &known_chat_ids).await;
 
                             // Update status
                             let _ = routing_db
@@ -787,7 +844,7 @@ impl Gateway {
                                 content: format!("✅ Email inviata a {}", pending.from_address),
                                 metadata: None,
                             };
-                            route_outbound(confirm, &senders_for_routing).await;
+                            route_outbound(confirm, &senders_for_routing, &known_chat_ids).await;
 
                             // Show next pending draft if any
                             show_next_pending(
@@ -795,6 +852,7 @@ impl Gateway {
                                 &senders_for_routing,
                                 &channel_name,
                                 &chat_id,
+                                &known_chat_ids,
                             )
                             .await;
                             continue;
@@ -810,13 +868,14 @@ impl Gateway {
                                 content: "❌ Bozza scartata".to_string(),
                                 metadata: None,
                             };
-                            route_outbound(confirm, &senders_for_routing).await;
+                            route_outbound(confirm, &senders_for_routing, &known_chat_ids).await;
 
                             show_next_pending(
                                 &routing_db,
                                 &senders_for_routing,
                                 &channel_name,
                                 &chat_id,
+                                &known_chat_ids,
                             )
                             .await;
                             continue;
@@ -834,7 +893,7 @@ impl Gateway {
                                     content: msg,
                                     metadata: None,
                                 };
-                                route_outbound(out, &senders_for_routing).await;
+                                route_outbound(out, &senders_for_routing, &known_chat_ids).await;
                             }
                             continue;
                         }
@@ -845,6 +904,7 @@ impl Gateway {
                             );
                             let modify_agent = agent.clone();
                             let modify_senders = senders_for_routing.clone();
+                            let modify_known = known_chat_ids.clone();
                             let modify_db = routing_db.clone();
                             let modify_channel = channel_name.clone();
                             let modify_chat_id = chat_id.clone();
@@ -869,7 +929,7 @@ impl Gateway {
                                             content: format!("❌ Errore nella rigenerazione: {e}"),
                                             metadata: None,
                                         };
-                                        route_outbound(err_msg, &modify_senders).await;
+                                        route_outbound(err_msg, &modify_senders, &modify_known).await;
                                         return;
                                     }
                                 };
@@ -898,7 +958,7 @@ impl Gateway {
                                         content: msg,
                                         metadata: None,
                                     };
-                                    route_outbound(out, &modify_senders).await;
+                                    route_outbound(out, &modify_senders, &modify_known).await;
                                 }
                             });
                             continue;
@@ -940,7 +1000,7 @@ impl Gateway {
                                         ),
                                         metadata: None,
                                     };
-                                    route_outbound(confirm, &senders_for_routing).await;
+                                    route_outbound(confirm, &senders_for_routing, &known_chat_ids).await;
 
                                     // If message content is just the filename (no user caption),
                                     // skip the agent loop — the confirmation is sufficient.
@@ -967,7 +1027,7 @@ impl Gateway {
                                         content: format!("📄 \"{file_name}\" already in knowledge base (duplicate)."),
                                         metadata: None,
                                     };
-                                    route_outbound(confirm, &senders_for_routing).await;
+                                    route_outbound(confirm, &senders_for_routing, &known_chat_ids).await;
                                     let content_trimmed = inbound.content.trim();
                                     if content_trimmed == file_name
                                         || content_trimmed == "[document]"
@@ -983,7 +1043,7 @@ impl Gateway {
                                         content: format!("❌ Failed to index \"{file_name}\": {e}"),
                                         metadata: None,
                                     };
-                                    route_outbound(confirm, &senders_for_routing).await;
+                                    route_outbound(confirm, &senders_for_routing, &known_chat_ids).await;
                                     let content_trimmed = inbound.content.trim();
                                     if content_trimmed == file_name
                                         || content_trimmed == "[document]"
@@ -1159,6 +1219,7 @@ impl Gateway {
         // --- Tool message loop: forward messages from MessageTool to channels ---
         let tool_msg_loop = if let Some(mut tool_rx) = self.tool_message_rx {
             let senders_for_tools = outbound_senders.clone();
+            let known_for_tools = known_chat_ids_for_routing.clone();
             Some(tokio::spawn(async move {
                 while let Some(outbound) = tool_rx.recv().await {
                     tracing::info!(
@@ -1166,7 +1227,7 @@ impl Gateway {
                         chat_id = %outbound.chat_id,
                         "Routing tool-originated message"
                     );
-                    route_outbound(outbound, &senders_for_tools).await;
+                    route_outbound(outbound, &senders_for_tools, &known_for_tools).await;
                 }
             }))
         } else {
@@ -1178,6 +1239,7 @@ impl Gateway {
             (self.workflow_engine.take(), self.workflow_event_rx.take())
         {
             let senders_for_wf = outbound_senders.clone();
+            let known_for_wf = known_chat_ids_for_routing.clone();
             // Resume workflows that were interrupted by previous shutdown
             let engine_for_resume = engine.clone();
             tokio::spawn(async move {
@@ -1221,7 +1283,7 @@ impl Gateway {
                                 content: notification,
                                 metadata: None,
                             };
-                            route_outbound(outbound, &senders_for_wf).await;
+                            route_outbound(outbound, &senders_for_wf, &known_for_wf).await;
                         }
                     }
                 }
@@ -1329,6 +1391,7 @@ async fn dispatch_to_agent(
     stream_tx: Option<mpsc::Sender<StreamMessage>>,
     task_db: Database,
     session_locks: SessionLocks,
+    known_chat_ids: KnownChatIds,
 ) {
     // Per-session serialisation: wait if another batch is still processing.
     let lock = get_session_lock(&session_locks, &prepared.session_key);
@@ -1530,7 +1593,7 @@ async fn dispatch_to_agent(
     }
 
     if !suppress_outbound {
-        route_outbound(outbound, &senders).await;
+        route_outbound(outbound, &senders, &known_chat_ids).await;
     }
 
     if let Some(run_id) = ctx.automation_run_id {
@@ -1686,6 +1749,7 @@ async fn show_next_pending(
     senders: &[(String, mpsc::Sender<OutboundMessage>)],
     channel: &str,
     chat_id: &str,
+    known: &KnownChatIds,
 ) {
     let notify_key = format!("{channel}:{chat_id}");
     if let Ok(remaining) = db.load_pending_for_notify(&notify_key).await {
@@ -1697,7 +1761,7 @@ async fn show_next_pending(
                 content: msg,
                 metadata: None,
             };
-            route_outbound(out, senders).await;
+            route_outbound(out, senders, known).await;
         }
     }
 }
@@ -1706,11 +1770,73 @@ async fn show_next_pending(
 ///
 /// Supports prefixed channel names: `email:lavoro` is routed to the `email` sender
 /// (the email channel handles per-account dispatch internally).
+/// Known (channel, chat_id) pairs from inbound messages.
+type KnownChatIds = Arc<std::sync::Mutex<HashSet<(String, String)>>>;
+
+/// Per-sender inbound rate limiter. Sliding window of message timestamps.
+const INBOUND_RATE_LIMIT: usize = 10; // max messages per window
+const INBOUND_RATE_WINDOW_SECS: u64 = 60; // window duration
+
+struct InboundRateLimiter {
+    windows: HashMap<(String, String), std::collections::VecDeque<std::time::Instant>>,
+}
+
+impl InboundRateLimiter {
+    fn new() -> Self {
+        Self {
+            windows: HashMap::new(),
+        }
+    }
+
+    /// Returns true if the message is allowed, false if rate-limited.
+    fn check(&mut self, channel: &str, sender: &str) -> bool {
+        let now = std::time::Instant::now();
+        let cutoff = now - std::time::Duration::from_secs(INBOUND_RATE_WINDOW_SECS);
+        let key = (channel.to_string(), sender.to_string());
+        let window = self.windows.entry(key).or_default();
+
+        // Remove expired entries
+        while window.front().map(|t| *t < cutoff).unwrap_or(false) {
+            window.pop_front();
+        }
+
+        if window.len() >= INBOUND_RATE_LIMIT {
+            return false; // rate limited
+        }
+
+        window.push_back(now);
+        true
+    }
+}
+
 async fn route_outbound(
     outbound: OutboundMessage,
     senders: &[(String, mpsc::Sender<OutboundMessage>)],
+    known: &KnownChatIds,
 ) {
     let channel_name = outbound.channel.clone();
+
+    // Safety: verify this (channel, chat_id) was seen from an inbound message.
+    // System messages (cron, automations) use synthetic chat_ids — always allow those.
+    let is_system = outbound.chat_id.starts_with("cron:")
+        || outbound.chat_id.starts_with("automation:")
+        || outbound.chat_id.starts_with("workflow:")
+        || outbound.chat_id.starts_with("heartbeat:")
+        || channel_name == "web";
+    if !is_system {
+        let is_known = known
+            .lock()
+            .map(|k| k.contains(&(channel_name.clone(), outbound.chat_id.clone())))
+            .unwrap_or(true); // if lock poisoned, allow (fail-open)
+        if !is_known {
+            tracing::warn!(
+                channel = %channel_name,
+                chat_id = %outbound.chat_id,
+                "Blocked outbound to unknown chat_id (never seen from inbound)"
+            );
+            return;
+        }
+    }
 
     // For prefixed channels like "email:lavoro", the sender is registered as "email"
     let sender_key = if channel_name.contains(':') {
