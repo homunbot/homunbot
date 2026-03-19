@@ -1,0 +1,46 @@
+id = "google-drive"
+display_name = "Google Drive"
+subtitle = "Search, read, and manage files"
+icon = "google"
+category = "Productivity"
+auth_mode = "oauth"
+capability_intro = "Search files, read documents, and manage your Google Drive"
+
+[mcp]
+command = "npx"
+args = ["-y", "@anthropic/mcp-server-gdrive"]
+transport = "stdio"
+
+[success]
+title = "Google Drive connected"
+body = "You can now ask: Find my recent documents / Search for project proposal"
+
+[[fields]]
+id = "client_id"
+label = "Google Client ID"
+help = "OAuth Client ID from Google Cloud Console (enable Drive API)"
+secret = true
+required = true
+input = "text"
+source_hint = "Google Cloud Console → APIs & Services → Credentials"
+env_key = "GOOGLE_CLIENT_ID"
+
+[[fields]]
+id = "client_secret"
+label = "Google Client Secret"
+help = "OAuth Client Secret from Google Cloud Console"
+secret = true
+required = true
+input = "password"
+source_hint = "Google Cloud Console → APIs & Services → Credentials"
+env_key = "GOOGLE_CLIENT_SECRET"
+
+[[fields]]
+id = "refresh_token"
+label = "Google Refresh Token"
+help = "OAuth Refresh Token with drive.readonly scope"
+secret = true
+required = true
+input = "password"
+source_hint = "Obtained via OAuth flow after granting Drive access"
+env_key = "GOOGLE_REFRESH_TOKEN"

@@ -1,0 +1,36 @@
+id = "gitlab"
+display_name = "GitLab"
+subtitle = "Projects, merge requests, and pipelines"
+icon = "gitlab"
+category = "Developer"
+auth_mode = "api_key"
+capability_intro = "Manage GitLab projects, merge requests, issues, and pipelines"
+
+[mcp]
+command = "npx"
+args = ["-y", "mcp-server-gitlab"]
+transport = "stdio"
+
+[success]
+title = "GitLab connected"
+body = "You can now ask: Show open merge requests / List CI pipeline status"
+
+[[fields]]
+id = "personal_access_token"
+label = "GitLab Token"
+help = "Personal access token with api scope"
+secret = true
+required = true
+input = "password"
+source_hint = "GitLab → Preferences → Access Tokens → Add new token (api scope)"
+env_key = "GITLAB_PERSONAL_ACCESS_TOKEN"
+
+[[fields]]
+id = "gitlab_url"
+label = "GitLab URL"
+help = "GitLab instance URL (leave empty for gitlab.com)"
+secret = false
+required = false
+input = "text"
+source_hint = "e.g. https://gitlab.example.com (default: https://gitlab.com)"
+env_key = "GITLAB_URL"

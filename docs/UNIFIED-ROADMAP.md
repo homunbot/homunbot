@@ -154,27 +154,27 @@ Stato: SEC-6/7/8/11/12/13/14/15 tutti ✅ DONE. Scudo anti-injection completo.
 |---|------|--------|------|
 | API-1 | **OpenAI Chat Completions compat** | ✅ DONE 2026-03-19 | `POST /v1/chat/completions` in `openai.rs`. Full agent loop (tools, memory, skills). Non-streaming (JSON) + streaming (SSE). Bearer auth. Session routing via `session_id`. Filtra stream a content-only (skip tool events). Compatible con Python `openai` SDK |
 | API-2 | **Session routing API** | ✅ DONE 2026-03-19 | `sessions.rs`: GET/POST/DELETE `/v1/sessions`, GET `/v1/sessions/{id}/messages`. Prefisso `api:` per distinguere da `web:`. CRUD completo con message history |
-| API-3 | **API docs (OpenAPI spec)** | 3 giorni | Swagger/OpenAPI per tutti i 50+ endpoint |
+| API-3 | **API docs (OpenAPI spec)** | ✅ DONE 2026-03-19 | `docs/openapi.yaml`: OpenAPI 3.1 spec per endpoint principali (chat completions, sessions, devices, health). Copre auth, request/response schemas, SSE streaming |
 
 #### 2C. Trust Model Esplicito (P1)
 
 | # | Task | Effort | Note |
 |---|------|--------|------|
-| TRS-1 | **Trust model doc** | 2 giorni | Documento che definisce: admin locale, admin remoto, browser trusted, sender canale, webhook caller, MCP service, agente. Per ciascuno: come si autentica, che poteri ha, dove vive il suo stato |
+| TRS-1 | **Trust model doc** | ✅ DONE 2026-03-19 | `docs/TRUST-MODEL.md`: 8 principal types (local admin, remote admin, API client, channel sender, webhook, MCP, agent, cron). Trust boundaries, content trust levels, security controls summary |
 | TRS-2 | **Vault access audit log** | ✅ DONE | Migration 019, fire-and-forget audit, `GET /v1/vault/audit` |
 
 #### 2D. MCP Recipes Expansion (P1)
 
 | # | Task | Effort | Note |
 |---|------|--------|------|
-| RCP-1 | **Google Drive recipe** | 1 giorno | TOML + OAuth wiring (scopes già in google_mcp_scopes) |
+| RCP-1 | **Google Drive recipe** | ✅ DONE 2026-03-19 | `recipes/google-drive.toml`: OAuth, @anthropic/mcp-server-gdrive |
 | RCP-2 | **Google Calendar recipe** | ✅ DONE | Parte di google-workspace.toml |
-| RCP-3 | **Linear recipe** | 1 giorno | API key auth, project management |
-| RCP-4 | **Jira recipe** | 1 giorno | API key auth, issue tracking |
-| RCP-5 | **Reddit recipe** | 1 giorno | OAuth, content monitoring |
-| RCP-6 | **GitLab recipe** | 1 giorno | API key auth |
+| RCP-3 | **Linear recipe** | ✅ DONE 2026-03-19 | `recipes/linear.toml`: API key, mcp-server-linear |
+| RCP-4 | **Jira recipe** | ✅ DONE 2026-03-19 | `recipes/jira.toml`: API key + URL, mcp-server-atlassian |
+| RCP-5 | **Reddit recipe** | ✅ DONE 2026-03-19 | `recipes/reddit.toml`: OAuth, mcp-server-reddit |
+| RCP-6 | **GitLab recipe** | ✅ DONE 2026-03-19 | `recipes/gitlab.toml`: API key + optional URL, mcp-server-gitlab |
 
-Target: **12 recipes bundled** (da 6 attuali).
+Target: **10 recipes bundled** (5 existing + 5 new).
 
 #### 2E. Installer Nativi (P1)
 

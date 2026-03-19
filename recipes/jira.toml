@@ -1,0 +1,46 @@
+id = "jira"
+display_name = "Jira"
+subtitle = "Issues, sprints, and boards"
+icon = "jira"
+category = "Project Management"
+auth_mode = "api_key"
+capability_intro = "Search and manage Jira issues, view sprints and boards"
+
+[mcp]
+command = "npx"
+args = ["-y", "mcp-server-atlassian"]
+transport = "stdio"
+
+[success]
+title = "Jira connected"
+body = "You can now ask: Show open bugs in project X / What's in the current sprint?"
+
+[[fields]]
+id = "atlassian_url"
+label = "Atlassian URL"
+help = "Your Atlassian instance URL"
+secret = false
+required = true
+input = "text"
+source_hint = "e.g. https://yourteam.atlassian.net"
+env_key = "ATLASSIAN_URL"
+
+[[fields]]
+id = "atlassian_email"
+label = "Email"
+help = "Email address for your Atlassian account"
+secret = false
+required = true
+input = "text"
+source_hint = "The email you use to log into Jira"
+env_key = "ATLASSIAN_EMAIL"
+
+[[fields]]
+id = "atlassian_token"
+label = "API Token"
+help = "Atlassian API token for authentication"
+secret = true
+required = true
+input = "password"
+source_hint = "Atlassian → Account settings → Security → API tokens"
+env_key = "ATLASSIAN_API_TOKEN"

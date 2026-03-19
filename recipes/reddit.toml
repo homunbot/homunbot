@@ -1,0 +1,36 @@
+id = "reddit"
+display_name = "Reddit"
+subtitle = "Posts, comments, and subreddits"
+icon = "reddit"
+category = "Social"
+auth_mode = "api_key"
+capability_intro = "Browse Reddit posts, search subreddits, and monitor topics"
+
+[mcp]
+command = "npx"
+args = ["-y", "mcp-server-reddit"]
+transport = "stdio"
+
+[success]
+title = "Reddit connected"
+body = "You can now ask: What's trending on r/rust? / Search Reddit for..."
+
+[[fields]]
+id = "client_id"
+label = "Reddit Client ID"
+help = "Reddit application client ID"
+secret = true
+required = true
+input = "text"
+source_hint = "Reddit → Preferences → Apps → Create application (script type)"
+env_key = "REDDIT_CLIENT_ID"
+
+[[fields]]
+id = "client_secret"
+label = "Reddit Client Secret"
+help = "Reddit application client secret"
+secret = true
+required = true
+input = "password"
+source_hint = "Shown after creating your Reddit application"
+env_key = "REDDIT_CLIENT_SECRET"
