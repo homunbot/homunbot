@@ -170,7 +170,7 @@ async fn chat_completions(
         body.model.clone()
     };
 
-    let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4().to_string().replace('-', "")[..24].to_string());
+    let completion_id = format!("chatcmpl-{}", &uuid::Uuid::new_v4().to_string().replace('-', "")[..24]);
     let created = chrono::Utc::now().timestamp();
 
     if body.stream {
