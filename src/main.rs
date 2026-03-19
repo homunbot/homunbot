@@ -1155,11 +1155,12 @@ async fn main() -> Result<()> {
 
             // Apply setters to every agent in the registry
             if let Some(ref mut reg) = registry {
-                // Memory searcher + RAG (shared across all agents)
+                // Memory searcher + RAG (shared across all agents via Arc)
                 #[cfg(feature = "embeddings")]
                 let (memory_searcher, rag_for_agents) = {
                     let cfg = shared_config.read().await;
-                    let searcher = try_create_memory_searcher(db_for_searcher, &cfg);
+                    let searcher = try_create_memory_searcher(db_for_searcher, &cfg)
+                        .map(|s| Arc::new(tokio::sync::Mutex::new(s)));
                     (searcher, rag_engine.clone())
                 };
 
@@ -1187,7 +1188,7 @@ async fn main() -> Result<()> {
                     #[cfg(feature = "embeddings")]
                     {
                         if let Some(ref searcher) = memory_searcher {
-                            a.set_memory_searcher(searcher.clone());
+                            a.set_memory_searcher_shared(searcher.clone());
                         }
                         if let Some(ref rag) = rag_for_agents {
                             a.set_rag_engine(rag.clone());

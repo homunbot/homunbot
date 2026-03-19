@@ -347,6 +347,15 @@ impl AgentLoop {
         self.memory_searcher = Some(Arc::new(tokio::sync::Mutex::new(searcher)));
     }
 
+    /// Set a pre-wrapped memory searcher (shared across multiple agents).
+    #[cfg(feature = "embeddings")]
+    pub fn set_memory_searcher_shared(
+        &mut self,
+        searcher: Arc<tokio::sync::Mutex<MemorySearcher>>,
+    ) {
+        self.memory_searcher = Some(searcher);
+    }
+
     /// Get a clone of the shared memory searcher handle (for sharing with the web server).
     #[cfg(feature = "embeddings")]
     pub fn memory_searcher_handle(&self) -> Option<Arc<tokio::sync::Mutex<MemorySearcher>>> {
