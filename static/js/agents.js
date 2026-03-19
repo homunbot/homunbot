@@ -217,22 +217,6 @@
             .catch(function (e) { console.error('Save routing failed:', e); });
     }
 
-    // ── Model dropdown population ────────────────────────────────────
-
-    function populateModelDropdowns(models) {
-        [modelSelect, classifierSelect].forEach(function (sel) {
-            var currentVal = sel.value;
-            while (sel.options.length > 1) sel.remove(1);
-            models.forEach(function (m) {
-                var opt = document.createElement('option');
-                opt.value = m.id || m;
-                opt.textContent = m.id || m;
-                sel.appendChild(opt);
-            });
-            sel.value = currentVal;
-        });
-    }
-
     // ── Event listeners ──────────────────────────────────────────────
 
     addBtn.addEventListener('click', function () { openModal(null); });
@@ -257,9 +241,13 @@
     loadAgents();
     loadRouting();
 
-    if (typeof window.loadModels === 'function') {
-        window.loadModels(function (models) {
-            populateModelDropdowns(models);
+    // Populate model dropdowns via shared ModelLoader
+    if (window.ModelLoader) {
+        window.ModelLoader.fetchGrouped().then(function (result) {
+            window.ModelLoader.populateSelect(modelSelect, result.groups, '', 'Inherit from global');
+            window.ModelLoader.populateSelect(classifierSelect, result.groups, '', 'Disabled (config-only routing)');
+        }).catch(function (e) {
+            console.warn('Failed to load models for agent dropdowns:', e);
         });
     }
 })();

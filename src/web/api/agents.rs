@@ -18,15 +18,18 @@ use super::OkResponse;
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/v1/agents", axum::routing::get(list_agents))
-        .route("/v1/agents", axum::routing::post(create_agent))
         .route(
-            "/v1/agents/{id}",
-            axum::routing::put(update_agent).delete(delete_agent),
+            "/v1/agents",
+            axum::routing::get(list_agents).post(create_agent),
         )
+        // Static path BEFORE dynamic {id} to avoid ambiguity
         .route(
             "/v1/agents/routing",
             axum::routing::get(get_routing).put(update_routing),
+        )
+        .route(
+            "/v1/agents/{id}",
+            axum::routing::put(update_agent).delete(delete_agent),
         )
 }
 
