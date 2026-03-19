@@ -999,7 +999,11 @@ impl Database {
                 .context("Failed to delete pruned memory chunks")?;
         }
 
-        tracing::info!(pruned = ids.len(), kept = keep_count, "Pruned memory chunks to budget");
+        tracing::info!(
+            pruned = ids.len(),
+            kept = keep_count,
+            "Pruned memory chunks to budget"
+        );
         Ok(ids)
     }
 

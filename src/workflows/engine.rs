@@ -106,7 +106,8 @@ impl WorkflowEngine {
         let running = self.running.clone();
 
         let handle = tokio::spawn(async move {
-            if let Err(e) = run_workflow_loop(db.clone(), registry, event_tx.clone(), &wf_id).await {
+            if let Err(e) = run_workflow_loop(db.clone(), registry, event_tx.clone(), &wf_id).await
+            {
                 tracing::error!(workflow_id = %wf_id, error = %e, "Workflow execution failed");
                 let _ = db
                     .update_workflow_status(&wf_id, WorkflowStatus::Failed, Some(&e.to_string()))

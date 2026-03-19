@@ -4871,5 +4871,10 @@ async fn agents_page(State(_state): State<Arc<AppState>>) -> Html<String> {
         </div>
     </div>"##;
 
-    Html(page_html("Agents", "agents", body, &["model-loader.js", "agents.js"]))
+    Html(page_html(
+        "Agents",
+        "agents",
+        body,
+        &["model-loader.js", "agents.js"],
+    ))
 }

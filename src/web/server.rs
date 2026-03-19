@@ -162,10 +162,7 @@ impl WebServer {
         self.tool_registry = Some(registry);
     }
 
-    pub fn set_channel_cmd_tx(
-        &mut self,
-        tx: mpsc::Sender<crate::agent::gateway::ChannelCommand>,
-    ) {
+    pub fn set_channel_cmd_tx(&mut self, tx: mpsc::Sender<crate::agent::gateway::ChannelCommand>) {
         self.channel_cmd_tx = Some(tx);
     }
 
@@ -217,7 +214,17 @@ impl WebServer {
 
     /// Start the web server. Runs until the server is shut down.
     pub async fn start(self) -> Result<()> {
-        let (host, port, domain, rate_limit, auth_rate_limit, tls_cert, tls_key, auto_tls, session_ttl) = {
+        let (
+            host,
+            port,
+            domain,
+            rate_limit,
+            auth_rate_limit,
+            tls_cert,
+            tls_key,
+            auto_tls,
+            session_ttl,
+        ) = {
             let cfg = self.config.read().await;
             (
                 cfg.channels.web.host.clone(),
@@ -374,7 +381,10 @@ impl WebServer {
         let auth_routes = Router::new()
             .route("/api/auth/login", axum::routing::post(auth::login_handler))
             .route("/api/auth/setup", axum::routing::post(auth::setup_handler))
-            .route("/api/auth/device-approve", axum::routing::post(auth::device_approve_handler))
+            .route(
+                "/api/auth/device-approve",
+                axum::routing::post(auth::device_approve_handler),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 auth::auth_rate_limit_middleware,

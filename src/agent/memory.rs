@@ -84,17 +84,25 @@ impl<'de> serde::Deserialize<'de> for ScoredInstruction {
             }
 
             fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<Self::Value, E> {
-                Ok(ScoredInstruction { text: v.to_string(), importance: 3 })
+                Ok(ScoredInstruction {
+                    text: v.to_string(),
+                    importance: 3,
+                })
             }
 
-            fn visit_map<M: de::MapAccess<'de>>(self, mut map: M) -> std::result::Result<Self::Value, M::Error> {
+            fn visit_map<M: de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> std::result::Result<Self::Value, M::Error> {
                 let mut text = None;
                 let mut importance = 3i32;
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "text" => text = Some(map.next_value()?),
                         "importance" => importance = map.next_value()?,
-                        _ => { let _ = map.next_value::<serde::de::IgnoredAny>()?; }
+                        _ => {
+                            let _ = map.next_value::<serde::de::IgnoredAny>()?;
+                        }
                     }
                 }
                 Ok(ScoredInstruction {
@@ -368,11 +376,14 @@ impl MemoryConsolidator {
 
         // --- 2. Save learned instructions to INSTRUCTIONS.md ---
         // DEDUPLICATION: Skip instructions similar to existing ones
-        let instruction_texts: Vec<String> = parsed.instructions.iter().map(|i| i.text.clone()).collect();
+        let instruction_texts: Vec<String> =
+            parsed.instructions.iter().map(|i| i.text.clone()).collect();
         let new_instruction_texts =
             deduplicate_instructions(&instruction_texts, &existing_instructions);
         // Keep the ScoredInstructions that survived deduplication
-        let new_instructions: Vec<&ScoredInstruction> = parsed.instructions.iter()
+        let new_instructions: Vec<&ScoredInstruction> = parsed
+            .instructions
+            .iter()
             .filter(|i| new_instruction_texts.contains(&i.text))
             .collect();
         let instructions_learned = new_instructions.len();
@@ -431,7 +442,16 @@ impl MemoryConsolidator {
         if memory_updated {
             let chunk_id = self
                 .db
-                .insert_memory_chunk(&today, session_key, "memory", &memory_update, "fact", contact_id, agent_id, 3)
+                .insert_memory_chunk(
+                    &today,
+                    session_key,
+                    "memory",
+                    &memory_update,
+                    "fact",
+                    contact_id,
+                    agent_id,
+                    3,
+                )
                 .await?;
             new_chunk_ids.push((chunk_id, memory_update.clone()));
         }
@@ -513,9 +533,7 @@ impl MemoryConsolidator {
         let today = chrono::Local::now().date_naive();
 
         // Check if last week needs summarization (only on Monday or later)
-        if today.weekday() == chrono::Weekday::Mon
-            || today.weekday() == chrono::Weekday::Tue
-        {
+        if today.weekday() == chrono::Weekday::Mon || today.weekday() == chrono::Weekday::Tue {
             let last_monday = today
                 - chrono::Duration::days(today.weekday().num_days_from_monday() as i64)
                 - chrono::Duration::weeks(1);
@@ -547,8 +565,10 @@ impl MemoryConsolidator {
                     let start = month_start.format("%Y-%m-%d").to_string();
                     let end = month_end.format("%Y-%m-%d").to_string();
                     if !self.db.has_memory_summary("month", &start).await? {
-                        self.summarize_range("month", &start, &end, provider, model, contact_id, agent_id)
-                            .await?;
+                        self.summarize_range(
+                            "month", &start, &end, provider, model, contact_id, agent_id,
+                        )
+                        .await?;
                     }
                 }
             }
@@ -1145,7 +1165,10 @@ mod tests {
         assert!(parsed.history_entry.contains("Rust"));
         assert!(parsed.memory_update.contains("vault://aws_password"));
         assert_eq!(parsed.instructions.len(), 1);
-        assert_eq!(parsed.instructions[0].text, "Always run clippy before committing");
+        assert_eq!(
+            parsed.instructions[0].text,
+            "Always run clippy before committing"
+        );
         assert_eq!(parsed.instructions[0].importance, 3); // default
         assert_eq!(parsed.vault_entries.len(), 1);
         assert_eq!(parsed.vault_entries[0].key, "aws_password");

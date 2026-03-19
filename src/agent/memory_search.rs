@@ -76,7 +76,8 @@ impl MemorySearcher {
         top_k: usize,
         contact_id: Option<i64>,
     ) -> Result<Vec<SearchResult>> {
-        self.search_scoped_full(query, top_k, contact_id, None).await
+        self.search_scoped_full(query, top_k, contact_id, None)
+            .await
     }
 
     /// Search with full scoping: contact + agent.
@@ -104,7 +105,9 @@ impl MemorySearcher {
                     "FTS5 search failed, using vector-only results"
                 );
                 // Fallback: use vector results only
-                return self.search_vector_only(&vector_results, top_k, contact_id, agent_id).await;
+                return self
+                    .search_vector_only(&vector_results, top_k, contact_id, agent_id)
+                    .await;
             }
         };
 

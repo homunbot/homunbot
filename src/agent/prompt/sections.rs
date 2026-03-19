@@ -598,10 +598,7 @@ impl PromptSection for PersonaSection {
         if ctx.persona_context.is_empty() {
             return Ok(String::new());
         }
-        Ok(format!(
-            "## Response Persona\n\n{}\n",
-            ctx.persona_context,
-        ))
+        Ok(format!("## Response Persona\n\n{}\n", ctx.persona_context,))
     }
 }
 

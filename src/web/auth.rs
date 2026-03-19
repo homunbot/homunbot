@@ -340,7 +340,8 @@ pub async fn auth_middleware(
                     }
 
                     // Store CSRF token in request extensions for handlers that need it
-                    req.extensions_mut().insert(CsrfToken(session.csrf_token.clone()));
+                    req.extensions_mut()
+                        .insert(CsrfToken(session.csrf_token.clone()));
 
                     req.extensions_mut().insert(AuthUser {
                         user_id: session.user_id,
@@ -679,7 +680,11 @@ pub async fn login_handler(
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.split(',').next())
             .and_then(|s| s.trim().parse::<IpAddr>().ok());
-        if trust_xff { xff.unwrap_or_else(|| addr.ip()) } else { addr.ip() }
+        if trust_xff {
+            xff.unwrap_or_else(|| addr.ip())
+        } else {
+            addr.ip()
+        }
     };
     let user_agent = headers
         .get(header::USER_AGENT)
@@ -761,7 +766,13 @@ pub async fn login_handler(
     }
 
     // Device approval check (REM-3)
-    let require_device = state.config.read().await.channels.web.require_device_approval;
+    let require_device = state
+        .config
+        .read()
+        .await
+        .channels
+        .web
+        .require_device_approval;
     if require_device {
         let fp = device_fingerprint(&user.id, &user_agent);
         match db.load_trusted_device_by_fingerprint(&user.id, &fp).await {
@@ -786,8 +797,13 @@ pub async fn login_handler(
                 let ua_short = user_agent.chars().take(80).collect::<String>();
                 if let Err(e) = db
                     .insert_trusted_device(
-                        &device_id, &user.id, &fp, &ua_short,
-                        &user_agent, &client_ip.to_string(), &code,
+                        &device_id,
+                        &user.id,
+                        &fp,
+                        &ua_short,
+                        &user_agent,
+                        &client_ip.to_string(),
+                        &code,
                     )
                     .await
                 {
@@ -818,7 +834,13 @@ pub async fn login_handler(
         serde_json::from_str(&user.roles).unwrap_or_else(|_| vec!["user".to_string()]);
     let session_ttl = state.config.read().await.channels.web.session_ttl_secs;
     let (session_id, csrf_token) = session_store
-        .create(&user.id, &user.username, &roles, &client_ip.to_string(), &user_agent)
+        .create(
+            &user.id,
+            &user.username,
+            &roles,
+            &client_ip.to_string(),
+            &user_agent,
+        )
         .await;
     let signed_cookie = session_store.sign_cookie(&session_id);
 
@@ -890,7 +912,11 @@ pub async fn device_approve_handler(
     let db = match &state.db {
         Some(db) => db,
         None => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "db_unavailable"}))).into_response()
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "db_unavailable"})),
+            )
+                .into_response()
         }
     };
 
@@ -898,7 +924,11 @@ pub async fn device_approve_handler(
     let user = match db.load_user_by_username(&body.username).await {
         Ok(Some(u)) => u,
         _ => {
-            return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "invalid_credentials"}))).into_response()
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": "invalid_credentials"})),
+            )
+                .into_response()
         }
     };
 
@@ -907,24 +937,34 @@ pub async fn device_approve_handler(
         Ok(Some(device)) => {
             if let Err(e) = db.approve_trusted_device(&device.id).await {
                 tracing::error!(error = %e, "Failed to approve device");
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "approval_failed"}))).into_response();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "approval_failed"})),
+                )
+                    .into_response();
             }
             tracing::info!(
                 username = %user.username,
                 device_id = %device.id,
                 "Device approved via OTP code"
             );
-            (StatusCode::OK, Json(serde_json::json!({
-                "success": true,
-                "message": "Device approved. You can now log in."
-            }))).into_response()
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "success": true,
+                    "message": "Device approved. You can now log in."
+                })),
+            )
+                .into_response()
         }
-        _ => {
-            (StatusCode::FORBIDDEN, Json(serde_json::json!({
+        _ => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
                 "error": "invalid_code",
                 "message": "Invalid or expired approval code."
-            }))).into_response()
-        }
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -1082,7 +1122,13 @@ pub async fn setup_handler(
     let roles = vec!["admin".to_string()];
     let session_ttl = state.config.read().await.channels.web.session_ttl_secs;
     let (session_id, csrf_token) = session_store
-        .create(&user_id, body.username.trim(), &roles, &client_ip, &user_agent)
+        .create(
+            &user_id,
+            body.username.trim(),
+            &roles,
+            &client_ip,
+            &user_agent,
+        )
         .await;
     let signed_cookie = session_store.sign_cookie(&session_id);
 
@@ -1173,7 +1219,13 @@ mod tests {
         let store = SessionStore::with_key(key, 3600);
 
         let (id, csrf) = store
-            .create("user-1", "admin", &["admin".to_string()], "127.0.0.1", "TestAgent")
+            .create(
+                "user-1",
+                "admin",
+                &["admin".to_string()],
+                "127.0.0.1",
+                "TestAgent",
+            )
             .await;
         assert!(!csrf.is_empty());
         assert!(store.get(&id).await.is_some());

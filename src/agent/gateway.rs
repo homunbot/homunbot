@@ -52,8 +52,7 @@ const MAX_CHANNEL_RESTARTS: u32 = 10;
 
 /// Shared outbound routing table: channel_name → sender.
 /// Wrapped in `Arc<RwLock>` so the channel command handler can add new entries at runtime.
-pub type SharedOutboundSenders =
-    Arc<RwLock<Vec<(String, mpsc::Sender<OutboundMessage>)>>>;
+pub type SharedOutboundSenders = Arc<RwLock<Vec<(String, mpsc::Sender<OutboundMessage>)>>>;
 
 /// Command to start a channel at runtime (hot-reload after config/pairing).
 #[derive(Debug)]
@@ -446,7 +445,12 @@ impl Gateway {
                 &channel_name,
                 &self.channel_health,
                 inbound_tx.clone(),
-                move || Box::new(crate::channels::McpChannel::new(ch_name.clone(), cfg.clone())),
+                move || {
+                    Box::new(crate::channels::McpChannel::new(
+                        ch_name.clone(),
+                        cfg.clone(),
+                    ))
+                },
             );
             channels.push(ch);
             tracing::info!(name = %name, "MCP channel registered");
@@ -673,7 +677,11 @@ impl Gateway {
 
         // Merge contact identities into pairing allow_from sets
         for (ch_name, (_pairing, allow_set)) in &mut pairing_config {
-            let channel_key = if ch_name.starts_with("email:") { "email" } else { ch_name.as_str() };
+            let channel_key = if ch_name.starts_with("email:") {
+                "email"
+            } else {
+                ch_name.as_str()
+            };
             if let Ok(ids) = self.db.contact_identifiers_for_channel(channel_key).await {
                 allow_set.extend(ids);
             }
@@ -730,7 +738,8 @@ impl Gateway {
             for ch_name in &["telegram", "whatsapp", "discord", "slack"] {
                 if let Some(b) = config.channels.behavior_for(ch_name) {
                     if let (Some(nc), Some(ncid)) = (b.notify_channel(), b.notify_chat_id()) {
-                        approval_routes.insert(ch_name.to_string(), (nc.to_string(), ncid.to_string()));
+                        approval_routes
+                            .insert(ch_name.to_string(), (nc.to_string(), ncid.to_string()));
                     }
                 }
             }
@@ -775,7 +784,10 @@ impl Gateway {
                 seed.insert((ident.channel.clone(), chat_id));
             }
             if !seed.is_empty() {
-                tracing::info!(count = seed.len(), "Pre-seeded known chat IDs from contacts");
+                tracing::info!(
+                    count = seed.len(),
+                    "Pre-seeded known chat IDs from contacts"
+                );
             }
         }
         let known_chat_ids: Arc<std::sync::Mutex<HashSet<(String, String)>>> =
@@ -811,13 +823,16 @@ impl Gateway {
                             tokio::spawn(async move {
                                 // Route to the right agent (MAG-2 config + MAG-3 LLM)
                                 let cfg = routing_cfg.read().await;
-                                let agent = registry.route(
-                                    prepared.ctx.contact.as_ref(),
-                                    &prepared.channel_name,
-                                    &cfg,
-                                    &prepared.session_key,
-                                    &prepared.inbound.content,
-                                ).await.clone();
+                                let agent = registry
+                                    .route(
+                                        prepared.ctx.contact.as_ref(),
+                                        &prepared.channel_name,
+                                        &cfg,
+                                        &prepared.session_key,
+                                        &prepared.inbound.content,
+                                    )
+                                    .await
+                                    .clone();
                                 drop(cfg);
                                 dispatch_to_agent(
                                     prepared, agent, senders, stream_tx, db, locks, known,
@@ -1194,10 +1209,8 @@ impl Gateway {
                                 }
                                 Command::List => {
                                     for (i, p) in pending_list.iter().enumerate() {
-                                        let preview = p
-                                            .draft_response
-                                            .as_deref()
-                                            .unwrap_or("[no draft]");
+                                        let preview =
+                                            p.draft_response.as_deref().unwrap_or("[no draft]");
                                         let preview = if preview.len() > 300 {
                                             &preview[..300]
                                         } else {
@@ -1216,12 +1229,8 @@ impl Gateway {
                                             ),
                                             metadata: None,
                                         };
-                                        route_outbound(
-                                            out,
-                                            &senders_for_routing,
-                                            &known_chat_ids,
-                                        )
-                                        .await;
+                                        route_outbound(out, &senders_for_routing, &known_chat_ids)
+                                            .await;
                                     }
                                     continue;
                                 }
@@ -1343,7 +1352,9 @@ impl Gateway {
                         } else {
                             // Channel default from config (via unified ChannelBehavior)
                             let cfg = routing_config.read().await;
-                            let ch_mode = cfg.channels.behavior_for(&channel_name)
+                            let ch_mode = cfg
+                                .channels
+                                .behavior_for(&channel_name)
                                 .map(|b| b.response_mode())
                                 .unwrap_or("automatic");
                             if ch_mode.is_empty() {
@@ -1647,7 +1658,10 @@ impl Gateway {
                         );
                         if let Some(ch) = handle {
                             tracing::info!(channel = %channel, "Hot-started channel via command");
-                            cmd_senders.write().await.push((ch.name.clone(), ch.outbound_tx));
+                            cmd_senders
+                                .write()
+                                .await
+                                .push((ch.name.clone(), ch.outbound_tx));
                             // Keep the JoinHandle alive by leaking it (it self-manages via
                             // spawn_monitored_channel's restart loop).
                             std::mem::forget(ch.handle);
@@ -1926,7 +1940,11 @@ async fn dispatch_to_agent(
             }
         } else {
             // Chat channels: use generic pending_responses table
-            let preview = if content.len() > 500 { &content[..500] } else { &content };
+            let preview = if content.len() > 500 {
+                &content[..500]
+            } else {
+                &content
+            };
             let _ = task_db
                 .insert_pending_response_with_notify(
                     ctx.contact_id,
@@ -2149,8 +2167,7 @@ fn start_channel_by_name(
     config: &Config,
     health: &Arc<ChannelHealthTracker>,
     inbound_tx: mpsc::Sender<InboundMessage>,
-    #[allow(unused_variables)]
-    db: Option<&Database>,
+    #[allow(unused_variables)] db: Option<&Database>,
 ) -> Option<ChannelHandle> {
     /// Resolve an encrypted token from the vault.
     fn resolve_token(channel_key: &str, token: &str) -> String {
@@ -2176,7 +2193,9 @@ fn start_channel_by_name(
                 return None;
             }
             Some(spawn_monitored_channel(
-                "telegram", health, inbound_tx,
+                "telegram",
+                health,
+                inbound_tx,
                 move || Box::new(TelegramChannel::new(cfg.clone())),
             ))
         }
@@ -2189,15 +2208,21 @@ fn start_channel_by_name(
             }
             let health_for_dc = health.clone();
             Some(spawn_monitored_channel(
-                "discord", health, inbound_tx,
-                move || Box::new(DiscordChannel::new(cfg.clone()).with_health(health_for_dc.clone())),
+                "discord",
+                health,
+                inbound_tx,
+                move || {
+                    Box::new(DiscordChannel::new(cfg.clone()).with_health(health_for_dc.clone()))
+                },
             ))
         }
         #[cfg(feature = "channel-whatsapp")]
         "whatsapp" if config.channels.whatsapp.enabled => {
             let cfg = config.channels.whatsapp.clone();
             Some(spawn_monitored_channel(
-                "whatsapp", health, inbound_tx,
+                "whatsapp",
+                health,
+                inbound_tx,
                 move || Box::new(WhatsAppChannel::new(cfg.clone())),
             ))
         }
@@ -2209,19 +2234,30 @@ fn start_channel_by_name(
                 return None;
             }
             Some(spawn_monitored_channel(
-                "slack", health, inbound_tx,
+                "slack",
+                health,
+                inbound_tx,
                 move || Box::new(SlackChannel::new(cfg.clone())),
             ))
         }
         name if name.starts_with("mcp:") => {
             let mcp_name = name.strip_prefix("mcp:").unwrap_or("").to_string();
             let cfg = config.channels.mcp.get(&mcp_name)?;
-            if !cfg.enabled { return None; }
+            if !cfg.enabled {
+                return None;
+            }
             let cfg = cfg.clone();
             let ch_name = name.to_string();
             Some(spawn_monitored_channel(
-                name, health, inbound_tx,
-                move || Box::new(crate::channels::McpChannel::new(ch_name.clone(), cfg.clone())),
+                name,
+                health,
+                inbound_tx,
+                move || {
+                    Box::new(crate::channels::McpChannel::new(
+                        ch_name.clone(),
+                        cfg.clone(),
+                    ))
+                },
             ))
         }
         _ => None,

@@ -774,14 +774,30 @@ pub struct TelegramConfig {
 }
 
 impl ChannelBehavior for TelegramConfig {
-    fn persona(&self) -> &str { &self.persona }
-    fn tone_of_voice(&self) -> &str { &self.tone_of_voice }
-    fn response_mode(&self) -> &str { &self.response_mode }
-    fn notify_channel(&self) -> Option<&str> { self.notify_channel.as_deref() }
-    fn notify_chat_id(&self) -> Option<&str> { self.notify_chat_id.as_deref() }
-    fn allow_from(&self) -> &[String] { &self.allow_from }
-    fn pairing_required(&self) -> bool { self.pairing_required }
-    fn default_agent(&self) -> &str { &self.default_agent }
+    fn persona(&self) -> &str {
+        &self.persona
+    }
+    fn tone_of_voice(&self) -> &str {
+        &self.tone_of_voice
+    }
+    fn response_mode(&self) -> &str {
+        &self.response_mode
+    }
+    fn notify_channel(&self) -> Option<&str> {
+        self.notify_channel.as_deref()
+    }
+    fn notify_chat_id(&self) -> Option<&str> {
+        self.notify_chat_id.as_deref()
+    }
+    fn allow_from(&self) -> &[String] {
+        &self.allow_from
+    }
+    fn pairing_required(&self) -> bool {
+        self.pairing_required
+    }
+    fn default_agent(&self) -> &str {
+        &self.default_agent
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -826,14 +842,30 @@ pub struct WhatsAppConfig {
 }
 
 impl ChannelBehavior for WhatsAppConfig {
-    fn persona(&self) -> &str { &self.persona }
-    fn tone_of_voice(&self) -> &str { &self.tone_of_voice }
-    fn response_mode(&self) -> &str { &self.response_mode }
-    fn notify_channel(&self) -> Option<&str> { self.notify_channel.as_deref() }
-    fn notify_chat_id(&self) -> Option<&str> { self.notify_chat_id.as_deref() }
-    fn allow_from(&self) -> &[String] { &self.allow_from }
-    fn pairing_required(&self) -> bool { self.pairing_required }
-    fn default_agent(&self) -> &str { &self.default_agent }
+    fn persona(&self) -> &str {
+        &self.persona
+    }
+    fn tone_of_voice(&self) -> &str {
+        &self.tone_of_voice
+    }
+    fn response_mode(&self) -> &str {
+        &self.response_mode
+    }
+    fn notify_channel(&self) -> Option<&str> {
+        self.notify_channel.as_deref()
+    }
+    fn notify_chat_id(&self) -> Option<&str> {
+        self.notify_chat_id.as_deref()
+    }
+    fn allow_from(&self) -> &[String] {
+        &self.allow_from
+    }
+    fn pairing_required(&self) -> bool {
+        self.pairing_required
+    }
+    fn default_agent(&self) -> &str {
+        &self.default_agent
+    }
 }
 
 fn default_bot_name() -> String {
@@ -911,14 +943,30 @@ pub struct DiscordConfig {
 }
 
 impl ChannelBehavior for DiscordConfig {
-    fn persona(&self) -> &str { &self.persona }
-    fn tone_of_voice(&self) -> &str { &self.tone_of_voice }
-    fn response_mode(&self) -> &str { &self.response_mode }
-    fn notify_channel(&self) -> Option<&str> { self.notify_channel.as_deref() }
-    fn notify_chat_id(&self) -> Option<&str> { self.notify_chat_id.as_deref() }
-    fn allow_from(&self) -> &[String] { &self.allow_from }
-    fn pairing_required(&self) -> bool { self.pairing_required }
-    fn default_agent(&self) -> &str { &self.default_agent }
+    fn persona(&self) -> &str {
+        &self.persona
+    }
+    fn tone_of_voice(&self) -> &str {
+        &self.tone_of_voice
+    }
+    fn response_mode(&self) -> &str {
+        &self.response_mode
+    }
+    fn notify_channel(&self) -> Option<&str> {
+        self.notify_channel.as_deref()
+    }
+    fn notify_chat_id(&self) -> Option<&str> {
+        self.notify_chat_id.as_deref()
+    }
+    fn allow_from(&self) -> &[String] {
+        &self.allow_from
+    }
+    fn pairing_required(&self) -> bool {
+        self.pairing_required
+    }
+    fn default_agent(&self) -> &str {
+        &self.default_agent
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1017,14 +1065,30 @@ pub struct SlackConfig {
 }
 
 impl ChannelBehavior for SlackConfig {
-    fn persona(&self) -> &str { &self.persona }
-    fn tone_of_voice(&self) -> &str { &self.tone_of_voice }
-    fn response_mode(&self) -> &str { &self.response_mode }
-    fn notify_channel(&self) -> Option<&str> { self.notify_channel.as_deref() }
-    fn notify_chat_id(&self) -> Option<&str> { self.notify_chat_id.as_deref() }
-    fn allow_from(&self) -> &[String] { &self.allow_from }
-    fn pairing_required(&self) -> bool { self.pairing_required }
-    fn default_agent(&self) -> &str { &self.default_agent }
+    fn persona(&self) -> &str {
+        &self.persona
+    }
+    fn tone_of_voice(&self) -> &str {
+        &self.tone_of_voice
+    }
+    fn response_mode(&self) -> &str {
+        &self.response_mode
+    }
+    fn notify_channel(&self) -> Option<&str> {
+        self.notify_channel.as_deref()
+    }
+    fn notify_chat_id(&self) -> Option<&str> {
+        self.notify_chat_id.as_deref()
+    }
+    fn allow_from(&self) -> &[String] {
+        &self.allow_from
+    }
+    fn pairing_required(&self) -> bool {
+        self.pairing_required
+    }
+    fn default_agent(&self) -> &str {
+        &self.default_agent
+    }
 }
 
 /// Email response mode for an account.
@@ -1120,8 +1184,12 @@ fn default_send_delay_secs() -> u64 {
 }
 
 impl ChannelBehavior for EmailAccountConfig {
-    fn persona(&self) -> &str { &self.persona }
-    fn tone_of_voice(&self) -> &str { &self.tone_of_voice }
+    fn persona(&self) -> &str {
+        &self.persona
+    }
+    fn tone_of_voice(&self) -> &str {
+        &self.tone_of_voice
+    }
     fn response_mode(&self) -> &str {
         match self.mode {
             EmailMode::Automatic => "automatic",
@@ -1129,11 +1197,21 @@ impl ChannelBehavior for EmailAccountConfig {
             EmailMode::OnDemand => "on_demand",
         }
     }
-    fn notify_channel(&self) -> Option<&str> { self.notify_channel.as_deref() }
-    fn notify_chat_id(&self) -> Option<&str> { self.notify_chat_id.as_deref() }
-    fn allow_from(&self) -> &[String] { &self.allow_from }
-    fn pairing_required(&self) -> bool { self.pairing_required }
-    fn default_agent(&self) -> &str { &self.default_agent }
+    fn notify_channel(&self) -> Option<&str> {
+        self.notify_channel.as_deref()
+    }
+    fn notify_chat_id(&self) -> Option<&str> {
+        self.notify_chat_id.as_deref()
+    }
+    fn allow_from(&self) -> &[String] {
+        &self.allow_from
+    }
+    fn pairing_required(&self) -> bool {
+        self.pairing_required
+    }
+    fn default_agent(&self) -> &str {
+        &self.default_agent
+    }
 }
 
 impl Default for EmailAccountConfig {
@@ -1489,14 +1567,30 @@ pub struct McpChannelConfig {
 }
 
 impl ChannelBehavior for McpChannelConfig {
-    fn persona(&self) -> &str { &self.persona }
-    fn tone_of_voice(&self) -> &str { &self.tone_of_voice }
-    fn response_mode(&self) -> &str { &self.response_mode }
-    fn notify_channel(&self) -> Option<&str> { None }
-    fn notify_chat_id(&self) -> Option<&str> { None }
-    fn allow_from(&self) -> &[String] { &self.allow_from }
-    fn pairing_required(&self) -> bool { self.pairing_required }
-    fn default_agent(&self) -> &str { &self.default_agent }
+    fn persona(&self) -> &str {
+        &self.persona
+    }
+    fn tone_of_voice(&self) -> &str {
+        &self.tone_of_voice
+    }
+    fn response_mode(&self) -> &str {
+        &self.response_mode
+    }
+    fn notify_channel(&self) -> Option<&str> {
+        None
+    }
+    fn notify_chat_id(&self) -> Option<&str> {
+        None
+    }
+    fn allow_from(&self) -> &[String] {
+        &self.allow_from
+    }
+    fn pairing_required(&self) -> bool {
+        self.pairing_required
+    }
+    fn default_agent(&self) -> &str {
+        &self.default_agent
+    }
 }
 
 impl Default for McpChannelConfig {

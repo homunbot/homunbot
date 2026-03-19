@@ -254,9 +254,7 @@ async fn delete_agent(
 }
 
 /// Get routing configuration.
-async fn get_routing(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<RoutingView>, StatusCode> {
+async fn get_routing(State(state): State<Arc<AppState>>) -> Result<Json<RoutingView>, StatusCode> {
     let config = state.config.read().await;
     let definitions = AgentDefinition::resolve_all(&config);
 

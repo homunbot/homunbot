@@ -3,7 +3,6 @@
 //! This implementation uses the `frankenstein` crate instead of `teloxide`
 //! for better reqwest compatibility and simpler architecture.
 
-
 use anyhow::Result;
 use async_trait::async_trait;
 use frankenstein::client_reqwest::Bot;

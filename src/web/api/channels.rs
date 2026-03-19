@@ -267,11 +267,21 @@ async fn configure_channel(
             if let Some(allow_from) = &req.allow_from {
                 config.channels.telegram.allow_from = allow_from.clone();
             }
-            if let Some(rm) = &req.response_mode { config.channels.telegram.response_mode = rm.clone(); }
-            if req.notify_channel.is_some() { config.channels.telegram.notify_channel = req.notify_channel.clone(); }
-            if req.notify_chat_id.is_some() { config.channels.telegram.notify_chat_id = req.notify_chat_id.clone(); }
-            if let Some(p) = &req.persona { config.channels.telegram.persona = p.clone(); }
-            if let Some(t) = &req.tone_of_voice { config.channels.telegram.tone_of_voice = t.clone(); }
+            if let Some(rm) = &req.response_mode {
+                config.channels.telegram.response_mode = rm.clone();
+            }
+            if req.notify_channel.is_some() {
+                config.channels.telegram.notify_channel = req.notify_channel.clone();
+            }
+            if req.notify_chat_id.is_some() {
+                config.channels.telegram.notify_chat_id = req.notify_chat_id.clone();
+            }
+            if let Some(p) = &req.persona {
+                config.channels.telegram.persona = p.clone();
+            }
+            if let Some(t) = &req.tone_of_voice {
+                config.channels.telegram.tone_of_voice = t.clone();
+            }
             config.channels.telegram.enabled = true;
         }
         "discord" => {
@@ -292,11 +302,21 @@ async fn configure_channel(
             if let Some(channel_id) = &req.default_channel_id {
                 config.channels.discord.default_channel_id = channel_id.clone();
             }
-            if let Some(rm) = &req.response_mode { config.channels.discord.response_mode = rm.clone(); }
-            if req.notify_channel.is_some() { config.channels.discord.notify_channel = req.notify_channel.clone(); }
-            if req.notify_chat_id.is_some() { config.channels.discord.notify_chat_id = req.notify_chat_id.clone(); }
-            if let Some(p) = &req.persona { config.channels.discord.persona = p.clone(); }
-            if let Some(t) = &req.tone_of_voice { config.channels.discord.tone_of_voice = t.clone(); }
+            if let Some(rm) = &req.response_mode {
+                config.channels.discord.response_mode = rm.clone();
+            }
+            if req.notify_channel.is_some() {
+                config.channels.discord.notify_channel = req.notify_channel.clone();
+            }
+            if req.notify_chat_id.is_some() {
+                config.channels.discord.notify_chat_id = req.notify_chat_id.clone();
+            }
+            if let Some(p) = &req.persona {
+                config.channels.discord.persona = p.clone();
+            }
+            if let Some(t) = &req.tone_of_voice {
+                config.channels.discord.tone_of_voice = t.clone();
+            }
             config.channels.discord.enabled = true;
         }
         "slack" => {
@@ -317,11 +337,21 @@ async fn configure_channel(
             if let Some(channel_id) = &req.default_channel_id {
                 config.channels.slack.channel_id = channel_id.clone();
             }
-            if let Some(rm) = &req.response_mode { config.channels.slack.response_mode = rm.clone(); }
-            if req.notify_channel.is_some() { config.channels.slack.notify_channel = req.notify_channel.clone(); }
-            if req.notify_chat_id.is_some() { config.channels.slack.notify_chat_id = req.notify_chat_id.clone(); }
-            if let Some(p) = &req.persona { config.channels.slack.persona = p.clone(); }
-            if let Some(t) = &req.tone_of_voice { config.channels.slack.tone_of_voice = t.clone(); }
+            if let Some(rm) = &req.response_mode {
+                config.channels.slack.response_mode = rm.clone();
+            }
+            if req.notify_channel.is_some() {
+                config.channels.slack.notify_channel = req.notify_channel.clone();
+            }
+            if req.notify_chat_id.is_some() {
+                config.channels.slack.notify_chat_id = req.notify_chat_id.clone();
+            }
+            if let Some(p) = &req.persona {
+                config.channels.slack.persona = p.clone();
+            }
+            if let Some(t) = &req.tone_of_voice {
+                config.channels.slack.tone_of_voice = t.clone();
+            }
             config.channels.slack.enabled = true;
         }
         "whatsapp" => {
@@ -331,11 +361,21 @@ async fn configure_channel(
             if let Some(allow_from) = &req.allow_from {
                 config.channels.whatsapp.allow_from = allow_from.clone();
             }
-            if let Some(rm) = &req.response_mode { config.channels.whatsapp.response_mode = rm.clone(); }
-            if req.notify_channel.is_some() { config.channels.whatsapp.notify_channel = req.notify_channel.clone(); }
-            if req.notify_chat_id.is_some() { config.channels.whatsapp.notify_chat_id = req.notify_chat_id.clone(); }
-            if let Some(p) = &req.persona { config.channels.whatsapp.persona = p.clone(); }
-            if let Some(t) = &req.tone_of_voice { config.channels.whatsapp.tone_of_voice = t.clone(); }
+            if let Some(rm) = &req.response_mode {
+                config.channels.whatsapp.response_mode = rm.clone();
+            }
+            if req.notify_channel.is_some() {
+                config.channels.whatsapp.notify_channel = req.notify_channel.clone();
+            }
+            if req.notify_chat_id.is_some() {
+                config.channels.whatsapp.notify_chat_id = req.notify_chat_id.clone();
+            }
+            if let Some(p) = &req.persona {
+                config.channels.whatsapp.persona = p.clone();
+            }
+            if let Some(t) = &req.tone_of_voice {
+                config.channels.whatsapp.tone_of_voice = t.clone();
+            }
             // Don't set enabled here -- WhatsApp needs pairing first
         }
         "web" => {
@@ -855,13 +895,18 @@ async fn start_channel(
     Path(name): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let tx = state.channel_cmd_tx.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let tx = state
+        .channel_cmd_tx
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     tx.send(crate::agent::gateway::ChannelCommand::Start {
         channel: name.clone(),
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(serde_json::json!({ "ok": true, "message": format!("Start command sent for {name}") })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "message": format!("Start command sent for {name}") }),
+    ))
 }
 
 /// 2. Server starts wa-rs bot with `with_pair_code()`

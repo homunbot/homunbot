@@ -419,7 +419,11 @@ impl ContactsTool {
             Some(c) => {
                 let channel = c.preferred_channel.as_deref().unwrap_or("unknown");
                 // Find the identity for the preferred channel
-                let identities = self.db.list_contact_identities(c.id).await.unwrap_or_default();
+                let identities = self
+                    .db
+                    .list_contact_identities(c.id)
+                    .await
+                    .unwrap_or_default();
                 let identity = identities.iter().find(|i| i.channel == channel);
 
                 if let Some(ident) = identity {
@@ -439,7 +443,8 @@ impl ContactsTool {
                         is_error: false,
                     })
                 } else {
-                    let available = identities.iter()
+                    let available = identities
+                        .iter()
                         .map(|i| format!("{}:{}", i.channel, i.identifier))
                         .collect::<Vec<_>>()
                         .join(", ");
@@ -447,7 +452,12 @@ impl ContactsTool {
                         output: format!(
                             "Contact {} has no {channel} identity. Available: {avail}. \
                              Set preferred_channel or add a {channel} identity first.",
-                            c.name, avail = if available.is_empty() { "none".into() } else { available },
+                            c.name,
+                            avail = if available.is_empty() {
+                                "none".into()
+                            } else {
+                                available
+                            },
                         ),
                         is_error: true,
                     })

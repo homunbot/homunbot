@@ -634,7 +634,15 @@ impl AgentLoop {
         if let Some(ref searcher_mutex) = self.memory_searcher {
             let memory_contact_id = self.resolve_contact_from_session(session_key).await;
             let mut searcher = searcher_mutex.lock().await;
-            match searcher.search_scoped_full(&prompt_content, 5, memory_contact_id, self.agent_id.as_deref()).await {
+            match searcher
+                .search_scoped_full(
+                    &prompt_content,
+                    5,
+                    memory_contact_id,
+                    self.agent_id.as_deref(),
+                )
+                .await
+            {
                 Ok(results) if !results.is_empty() => {
                     let memories_text = results
                         .iter()
@@ -758,8 +766,7 @@ impl AgentLoop {
                 if !persona_text.is_empty() {
                     persona_text.push('\n');
                 }
-                persona_text
-                    .push_str(&format!("Tone of voice: {}", persona.tone_of_voice));
+                persona_text.push_str(&format!("Tone of voice: {}", persona.tone_of_voice));
             }
             self.context.set_persona_context(persona_text).await;
         }
@@ -811,11 +818,7 @@ impl AgentLoop {
 
         // Per-agent tool allowlist (from AgentDefinition).
         if !self.allowed_tools.is_empty() {
-            tool_defs.retain(|td| {
-                self.allowed_tools
-                    .iter()
-                    .any(|a| a == &td.function.name)
-            });
+            tool_defs.retain(|td| self.allowed_tools.iter().any(|a| a == &td.function.name));
         }
 
         if browser_routing.browser_required() {
@@ -2221,7 +2224,14 @@ impl AgentLoop {
                 );
                 tokio::spawn(async move {
                     match memory
-                        .consolidate(&session_key, window, provider.as_ref(), &model, contact_id, agent_id.as_deref())
+                        .consolidate(
+                            &session_key,
+                            window,
+                            provider.as_ref(),
+                            &model,
+                            contact_id,
+                            agent_id.as_deref(),
+                        )
                         .await
                     {
                         Ok(result) => {

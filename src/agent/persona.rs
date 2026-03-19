@@ -85,12 +85,10 @@ fn build_prompt_prefix(persona_type: &str, user_name: &str, custom_instructions:
                  Do not mention that you are an AI or an assistant."
             )
         }
-        "company" => {
-            "You are representing the company. \
+        "company" => "You are representing the company. \
              Respond professionally using 'we' and 'our team'. \
              Maintain a corporate tone."
-                .to_string()
-        }
+            .to_string(),
         "custom" if !custom_instructions.is_empty() => custom_instructions.to_string(),
         // "bot" or any unrecognized value — default behavior (SOUL.md identity)
         _ => String::new(),
@@ -101,11 +99,7 @@ fn build_prompt_prefix(persona_type: &str, user_name: &str, custom_instructions:
 mod tests {
     use super::*;
 
-    fn make_contact(
-        persona_override: Option<&str>,
-        tone: &str,
-        instructions: &str,
-    ) -> Contact {
+    fn make_contact(persona_override: Option<&str>, tone: &str, instructions: &str) -> Contact {
         Contact {
             id: 1,
             name: "Test".to_string(),

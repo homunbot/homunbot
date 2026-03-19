@@ -38,10 +38,7 @@ impl Database {
 
         for (idx, step_def) in req.steps.iter().enumerate() {
             let step_id = format!("{id}-s{idx}");
-            let agent_id = step_def
-                .agent_id
-                .as_deref()
-                .unwrap_or("default");
+            let agent_id = step_def.agent_id.as_deref().unwrap_or("default");
             sqlx::query(
                 "INSERT INTO workflow_steps (id, workflow_id, idx, name, instruction, status, approval_required, max_retries, agent_id)
                  VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)",

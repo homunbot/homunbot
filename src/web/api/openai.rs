@@ -159,30 +159,43 @@ async fn chat_completions(
 
     // Model name for responses (use configured model if not specified)
     let model_name = if body.model.is_empty() {
-        state
-            .config
-            .read()
-            .await
-            .agent
-            .model
-            .clone()
+        state.config.read().await.agent.model.clone()
     } else {
         body.model.clone()
     };
 
-    let completion_id = format!("chatcmpl-{}", &uuid::Uuid::new_v4().to_string().replace('-', "")[..24]);
+    let completion_id = format!(
+        "chatcmpl-{}",
+        &uuid::Uuid::new_v4().to_string().replace('-', "")[..24]
+    );
     let created = chrono::Utc::now().timestamp();
 
     if body.stream {
         handle_streaming(
-            state, inbound_tx, chat_id, session_id, user_content,
-            model_name, completion_id, created, auth,
-        ).await
+            state,
+            inbound_tx,
+            chat_id,
+            session_id,
+            user_content,
+            model_name,
+            completion_id,
+            created,
+            auth,
+        )
+        .await
     } else {
         handle_non_streaming(
-            state, inbound_tx, chat_id, session_id, user_content,
-            model_name, completion_id, created, auth,
-        ).await
+            state,
+            inbound_tx,
+            chat_id,
+            session_id,
+            user_content,
+            model_name,
+            completion_id,
+            created,
+            auth,
+        )
+        .await
     }
 }
 
@@ -313,9 +326,7 @@ async fn handle_streaming(
     let state_cleanup = state.clone();
     let chat_id_cleanup = chat_id.clone();
 
-    let sse_stream = build_sse_stream(
-        stream_rx, response_rx, completion_id, model_name, created,
-    );
+    let sse_stream = build_sse_stream(stream_rx, response_rx, completion_id, model_name, created);
 
     // Spawn cleanup after stream ends
     let state_c2 = state_cleanup.clone();

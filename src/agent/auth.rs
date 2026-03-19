@@ -118,7 +118,18 @@ mod tests {
     async fn authorized_via_contact_db() {
         let (db, _dir) = test_db().await;
         let contact_id = db
-            .insert_contact("Test User", None, None, None, None, None, None, None, None, None)
+            .insert_contact(
+                "Test User",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         db.insert_contact_identity(contact_id, "telegram", "tg_user_42", None)
@@ -134,7 +145,18 @@ mod tests {
     async fn email_channel_uses_email_key_for_lookup() {
         let (db, _dir) = test_db().await;
         let contact_id = db
-            .insert_contact("Email User", None, None, None, None, None, None, None, None, None)
+            .insert_contact(
+                "Email User",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         db.insert_contact_identity(contact_id, "email", "user@example.com", None)

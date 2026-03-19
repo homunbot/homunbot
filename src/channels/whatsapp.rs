@@ -106,10 +106,7 @@ impl Channel for WhatsAppChannel {
                 "WhatsApp channel starting session (reconnect mode)"
             );
 
-            match self
-                .run_session(&inbound_tx, &outbound_rx, &db_path)
-                .await
-            {
+            match self.run_session(&inbound_tx, &outbound_rx, &db_path).await {
                 Ok(()) => {
                     // Clean exit (e.g. logged out, channel closed)
                     tracing::info!("WhatsApp session ended cleanly");

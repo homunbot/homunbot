@@ -1167,7 +1167,10 @@ async fn main() -> Result<()> {
                 let skills_summary = {
                     let sr = skill_registry.read().await;
                     if !sr.is_empty() {
-                        tracing::info!(skills = sr.len(), "Skills loaded into agent context (gateway)");
+                        tracing::info!(
+                            skills = sr.len(),
+                            "Skills loaded into agent context (gateway)"
+                        );
                         Some(sr.build_prompt_summary())
                     } else {
                         None

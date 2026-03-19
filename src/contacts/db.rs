@@ -471,7 +471,13 @@ impl Database {
         draft_response: Option<&str>,
     ) -> Result<i64> {
         self.insert_pending_response_with_notify(
-            contact_id, channel, chat_id, inbound_content, draft_response, None, None,
+            contact_id,
+            channel,
+            chat_id,
+            inbound_content,
+            draft_response,
+            None,
+            None,
         )
         .await
     }
@@ -676,7 +682,9 @@ mod tests {
     async fn test_relationships() {
         let (db, _dir) = test_db().await;
         let a = db
-            .insert_contact("Alice", None, None, None, None, None, None, None, None, None)
+            .insert_contact(
+                "Alice", None, None, None, None, None, None, None, None, None,
+            )
             .await
             .unwrap();
         let b = db
@@ -740,7 +748,9 @@ mod tests {
     async fn test_cascade_delete() {
         let (db, _dir) = test_db().await;
         let cid = db
-            .insert_contact("Cascade", None, None, None, None, None, None, None, None, None)
+            .insert_contact(
+                "Cascade", None, None, None, None, None, None, None, None, None,
+            )
             .await
             .unwrap();
         db.insert_contact_identity(cid, "email", "a@b.com", None)
@@ -760,7 +770,9 @@ mod tests {
     async fn test_pending_responses() {
         let (db, _dir) = test_db().await;
         let cid = db
-            .insert_contact("Sender", None, None, None, None, None, None, None, None, None)
+            .insert_contact(
+                "Sender", None, None, None, None, None, None, None, None, None,
+            )
             .await
             .unwrap();
 
@@ -810,11 +822,17 @@ mod tests {
             .unwrap();
 
         // Telegram: returns exact identifier
-        let tg = db.contact_identifiers_for_channel("telegram").await.unwrap();
+        let tg = db
+            .contact_identifiers_for_channel("telegram")
+            .await
+            .unwrap();
         assert_eq!(tg, vec!["12345"]);
 
         // WhatsApp: returns normalized digits AND original
-        let wa = db.contact_identifiers_for_channel("whatsapp").await.unwrap();
+        let wa = db
+            .contact_identifiers_for_channel("whatsapp")
+            .await
+            .unwrap();
         assert!(wa.contains(&"393331234567".to_string())); // normalized
         assert!(wa.contains(&"+39 333 1234567".to_string())); // original
 

@@ -115,8 +115,8 @@ impl AgentRegistry {
     /// (`set_message_tx`, `set_skill_registry`, etc.) to every agent.
     pub fn for_each_mut(&mut self, mut f: impl FnMut(&mut AgentLoop)) {
         for agent in self.agents.values_mut() {
-            let agent = Arc::get_mut(agent)
-                .expect("for_each_mut must be called before the Arc is shared");
+            let agent =
+                Arc::get_mut(agent).expect("for_each_mut must be called before the Arc is shared");
             f(agent);
         }
     }

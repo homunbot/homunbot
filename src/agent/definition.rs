@@ -187,7 +187,10 @@ mod tests {
         let global = test_global();
         let mut def = AgentDefinition::from_global(&global);
         def.model = String::new();
-        assert_eq!(def.effective_model(&global), "anthropic/claude-sonnet-4-20250514");
+        assert_eq!(
+            def.effective_model(&global),
+            "anthropic/claude-sonnet-4-20250514"
+        );
     }
 
     #[test]
