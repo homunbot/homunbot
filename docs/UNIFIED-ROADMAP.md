@@ -85,6 +85,20 @@ La strategia è **consolidare il nucleo e aprirlo al mondo esterno** in ordine d
 | MAG-3 | **Multi-agent: LLM router** | 3 giorni | ✅ DONE (2026-03-19) — `classify_message()` in registry.rs: fast LLM one-shot classifica il messaggio e sceglie l'agente. `RoutingConfig` con `classifier_model` (vuoto = disabilitato). Cache in-memory session_key→agent_id. Prompt auto-generato dalle definizioni agente. Timeout 5s, validazione risposta, fallback graceful. 5 test |
 | MAG-4 | **Multi-agent: pipeline orchestration** | 1 settimana | ✅ DONE (2026-03-19) — `agent_id` per workflow step (migration 026). `WorkflowEngine` usa `Arc<AgentRegistry>` invece di `Arc<AgentLoop>`. `execute_step()` fa lookup agente via `registry.get(&step.agent_id)`. Tool `workflow` espone parametro `agent_id` per step. Backward-compat: default a "default". Parallel steps rimandati |
 
+#### 1A-bis. Memory Hardening (P1)
+
+> Ispirato a MemCompressor (arxiv 2512.24601). Migliora qualità retrieval e previene crescita infinita.
+
+| # | Task | Effort | Note |
+|---|------|--------|------|
+| MEM-1 | **Contact-aware consolidation** | 2 giorni | Risolvere `contact_id` da `session_key` nel consolidator (TODO in memory.rs:357). Chunks inseriti con il contact_id corretto. Prerequisito per scoping vero |
+| MEM-2 | **Agent-scoped memory chunks** | 2 giorni | Aggiungere `agent_id TEXT` a `memory_chunks` (migration). Consolidation inserisce l'agent_id dall'AgentLoop corrente. `search_scoped()` filtra per agent_id + contact_id + globale |
+| MEM-3 | **Importance scoring** | 3 giorni | Modificare prompt consolidazione v2: LLM assegna peso 1-5 a ogni fatto/istruzione. Campo `importance` su `memory_chunks`. Score finale = RRF × importance × temporal_decay. Upgrade qualità retrieval |
+| MEM-4 | **Memory budget + pruning** | 2 giorni | Config `memory.max_chunks` (default 1000). Quando superato, prune chunks con score più basso (low importance × old). Background job periodico o post-consolidation |
+| MEM-5 | **Hierarchical summarization** | 3 giorni | Post-processor: daily entries → weekly digest → monthly archive. Riduce search space per query temporali. Tabella `memory_summaries` con `period` (day/week/month) |
+
+Sequenza: MEM-1 → MEM-2 → MEM-3 → MEM-4 → MEM-5. MEM-1 è prerequisito per MEM-2.
+
 #### 1B. Sicurezza Prompt Injection (P0)
 
 Stato: SEC-6/7/8/11/12/13/14/15 tutti ✅ DONE. Scudo anti-injection completo.
