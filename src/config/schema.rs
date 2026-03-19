@@ -326,6 +326,9 @@ pub struct AgentConfig {
     /// Message count threshold that triggers memory consolidation.
     /// Lower than memory_window so consolidation runs before the context fills up.
     pub consolidation_threshold: u32,
+    /// Maximum number of memory chunks to keep. When exceeded after consolidation,
+    /// the lowest-scoring chunks (low importance + old) are pruned. 0 = no limit.
+    pub max_memory_chunks: u32,
     /// Force XML tool dispatch instead of native function calling.
     /// Useful for models that accept tool definitions but don't reliably call them
     /// (e.g., some Ollama models like GLM-5, Qwen2.5).
@@ -454,6 +457,7 @@ impl Default for AgentConfig {
             max_iterations: 20,
             memory_window: 50,
             consolidation_threshold: 20,
+            max_memory_chunks: 1000,
             force_xml_tools: false,
             fallback_models: Vec::new(),
             model_overrides: HashMap::new(),
@@ -938,6 +942,14 @@ pub struct WebConfig {
     pub tls_key: String,
     /// Auto-generate self-signed cert if no cert/key provided (default: true).
     pub auto_tls: bool,
+    /// Trust X-Forwarded-For header for client IP extraction (default: false).
+    /// Only enable when running behind a trusted reverse proxy (nginx, Caddy, Tailscale).
+    pub trust_x_forwarded_for: bool,
+    /// Session lifetime in seconds (default: 86400 = 24 hours).
+    pub session_ttl_secs: u64,
+    /// Require explicit device approval for new browsers (default: false).
+    /// When enabled, login from an unrecognized User-Agent requires a 6-digit code.
+    pub require_device_approval: bool,
 }
 
 impl Default for WebConfig {
@@ -953,6 +965,9 @@ impl Default for WebConfig {
             tls_cert: String::new(),
             tls_key: String::new(),
             auto_tls: true,
+            trust_x_forwarded_for: false,
+            session_ttl_secs: 86400,
+            require_device_approval: false,
         }
     }
 }

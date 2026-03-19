@@ -287,6 +287,34 @@ impl Database {
         )
         .await?;
 
+        Self::apply_migration(
+            pool,
+            "027_memory_agent_scope",
+            include_str!("../../migrations/027_memory_agent_scope.sql"),
+        )
+        .await?;
+
+        Self::apply_migration(
+            pool,
+            "028_memory_importance",
+            include_str!("../../migrations/028_memory_importance.sql"),
+        )
+        .await?;
+
+        Self::apply_migration(
+            pool,
+            "029_memory_summaries",
+            include_str!("../../migrations/029_memory_summaries.sql"),
+        )
+        .await?;
+
+        Self::apply_migration(
+            pool,
+            "030_trusted_devices",
+            include_str!("../../migrations/030_trusted_devices.sql"),
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -833,6 +861,7 @@ impl Database {
     // --- Memory chunk operations (for vector + FTS5 search) ---
 
     /// Insert a memory chunk and return its row ID (for vector indexing).
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_memory_chunk(
         &self,
         date: &str,
@@ -841,10 +870,12 @@ impl Database {
         content: &str,
         memory_type: &str,
         contact_id: Option<i64>,
+        agent_id: Option<&str>,
+        importance: i32,
     ) -> Result<i64> {
         let result = sqlx::query(
-            "INSERT INTO memory_chunks (date, source, heading, content, memory_type, contact_id)
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO memory_chunks (date, source, heading, content, memory_type, contact_id, agent_id, importance)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(date)
         .bind(source)
@@ -852,6 +883,8 @@ impl Database {
         .bind(content)
         .bind(memory_type)
         .bind(contact_id)
+        .bind(agent_id)
+        .bind(importance)
         .execute(&self.pool)
         .await
         .context("Failed to insert memory chunk")?;
@@ -868,7 +901,7 @@ impl Database {
         // Build a parameterized IN clause
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let query = format!(
-            "SELECT id, date, source, heading, content, memory_type, created_at, contact_id
+            "SELECT id, date, source, heading, content, memory_type, created_at, contact_id, agent_id, importance
              FROM memory_chunks WHERE id IN ({})
              ORDER BY created_at DESC",
             placeholders.join(",")
@@ -918,12 +951,134 @@ impl Database {
     /// Load all memory chunks (for re-embedding after model change).
     pub async fn load_all_memory_chunks(&self) -> Result<Vec<MemoryChunkRow>> {
         let rows = sqlx::query_as::<_, MemoryChunkRow>(
-            "SELECT id, date, source, heading, content, memory_type, created_at, contact_id
+            "SELECT id, date, source, heading, content, memory_type, created_at, contact_id, agent_id, importance
              FROM memory_chunks ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await
         .context("Failed to load all memory chunks")?;
+        Ok(rows)
+    }
+
+    /// Prune lowest-scoring memory chunks to stay within budget.
+    ///
+    /// Keeps the `keep_count` most valuable chunks, deleting the rest.
+    /// Score is approximated as `importance * recency` where recency penalizes old chunks.
+    /// Returns the IDs of deleted chunks (for HNSW index cleanup).
+    pub async fn prune_memory_chunks_to_budget(&self, keep_count: u32) -> Result<Vec<i64>> {
+        // Find IDs to delete: lowest importance first, then oldest
+        let deleted_ids: Vec<(i64,)> = sqlx::query_as(
+            "SELECT id FROM memory_chunks
+             ORDER BY importance ASC, created_at ASC
+             LIMIT (SELECT MAX(0, COUNT(*) - ?) FROM memory_chunks)",
+        )
+        .bind(keep_count as i64)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to identify chunks to prune")?;
+
+        if deleted_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let ids: Vec<i64> = deleted_ids.iter().map(|r| r.0).collect();
+
+        // Delete in batches to avoid huge SQL
+        for chunk in ids.chunks(100) {
+            let placeholders: Vec<String> = chunk.iter().map(|_| "?".to_string()).collect();
+            let sql = format!(
+                "DELETE FROM memory_chunks WHERE id IN ({})",
+                placeholders.join(",")
+            );
+            let mut q = sqlx::query(&sql);
+            for id in chunk {
+                q = q.bind(id);
+            }
+            q.execute(&self.pool)
+                .await
+                .context("Failed to delete pruned memory chunks")?;
+        }
+
+        tracing::info!(pruned = ids.len(), kept = keep_count, "Pruned memory chunks to budget");
+        Ok(ids)
+    }
+
+    // --- Memory summary operations (hierarchical summarization) ---
+
+    /// Insert a hierarchical memory summary (weekly/monthly digest).
+    pub async fn insert_memory_summary(
+        &self,
+        period: &str,
+        start_date: &str,
+        end_date: &str,
+        content: &str,
+        contact_id: Option<i64>,
+        agent_id: Option<&str>,
+    ) -> Result<i64> {
+        let result = sqlx::query(
+            "INSERT INTO memory_summaries (period, start_date, end_date, content, contact_id, agent_id)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(period)
+        .bind(start_date)
+        .bind(end_date)
+        .bind(content)
+        .bind(contact_id)
+        .bind(agent_id)
+        .execute(&self.pool)
+        .await
+        .context("Failed to insert memory summary")?;
+        Ok(result.last_insert_rowid())
+    }
+
+    /// Check if a summary already exists for the given period and date range.
+    pub async fn has_memory_summary(&self, period: &str, start_date: &str) -> Result<bool> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM memory_summaries WHERE period = ? AND start_date = ?",
+        )
+        .bind(period)
+        .bind(start_date)
+        .fetch_one(&self.pool)
+        .await
+        .context("Failed to check memory summary existence")?;
+        Ok(count > 0)
+    }
+
+    /// Load memory chunks within a date range (for summarization).
+    pub async fn load_chunks_in_range(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<Vec<MemoryChunkRow>> {
+        let rows = sqlx::query_as::<_, MemoryChunkRow>(
+            "SELECT id, date, source, heading, content, memory_type, created_at, contact_id, agent_id, importance
+             FROM memory_chunks WHERE date >= ? AND date <= ?
+             ORDER BY date ASC, created_at ASC",
+        )
+        .bind(start_date)
+        .bind(end_date)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to load chunks in date range")?;
+        Ok(rows)
+    }
+
+    /// Load memory summaries matching a date range (for search augmentation).
+    pub async fn load_summaries_in_range(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<Vec<MemorySummaryRow>> {
+        let rows = sqlx::query_as::<_, MemorySummaryRow>(
+            "SELECT id, period, start_date, end_date, content, contact_id, agent_id, created_at
+             FROM memory_summaries WHERE start_date >= ? AND end_date <= ?
+             ORDER BY start_date ASC",
+        )
+        .bind(start_date)
+        .bind(end_date)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to load memory summaries")?;
         Ok(rows)
     }
 
@@ -1935,6 +2090,107 @@ impl Database {
         Ok(count)
     }
 
+    // --- Trusted devices (REM-3) ---
+
+    /// Insert a new trusted device (pending approval).
+    pub async fn insert_trusted_device(
+        &self,
+        id: &str,
+        user_id: &str,
+        fingerprint: &str,
+        name: &str,
+        user_agent: &str,
+        ip: &str,
+        approval_code: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO trusted_devices (id, user_id, fingerprint, name, user_agent, ip_at_login, approval_code)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(fingerprint)
+        .bind(name)
+        .bind(user_agent)
+        .bind(ip)
+        .bind(approval_code)
+        .execute(&self.pool)
+        .await
+        .context("Failed to insert trusted device")?;
+        Ok(())
+    }
+
+    /// Look up a trusted device by user + fingerprint.
+    pub async fn load_trusted_device_by_fingerprint(
+        &self,
+        user_id: &str,
+        fingerprint: &str,
+    ) -> Result<Option<TrustedDeviceRow>> {
+        let row = sqlx::query_as::<_, TrustedDeviceRow>(
+            "SELECT id, user_id, fingerprint, name, user_agent, ip_at_login, created_at, approved_at, approval_code
+             FROM trusted_devices WHERE user_id = ? AND fingerprint = ?",
+        )
+        .bind(user_id)
+        .bind(fingerprint)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to load trusted device by fingerprint")?;
+        Ok(row)
+    }
+
+    /// Approve a pending device (set approved_at, clear code).
+    pub async fn approve_trusted_device(&self, device_id: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE trusted_devices SET approved_at = datetime('now'), approval_code = NULL WHERE id = ?",
+        )
+        .bind(device_id)
+        .execute(&self.pool)
+        .await
+        .context("Failed to approve trusted device")?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// List all trusted devices for a user.
+    pub async fn load_trusted_devices(&self, user_id: &str) -> Result<Vec<TrustedDeviceRow>> {
+        let rows = sqlx::query_as::<_, TrustedDeviceRow>(
+            "SELECT id, user_id, fingerprint, name, user_agent, ip_at_login, created_at, approved_at, approval_code
+             FROM trusted_devices WHERE user_id = ? ORDER BY created_at DESC",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to load trusted devices")?;
+        Ok(rows)
+    }
+
+    /// Delete a trusted device.
+    pub async fn delete_trusted_device(&self, device_id: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM trusted_devices WHERE id = ?")
+            .bind(device_id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete trusted device")?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Find a pending device by user + approval code.
+    pub async fn load_pending_device_by_code(
+        &self,
+        user_id: &str,
+        code: &str,
+    ) -> Result<Option<TrustedDeviceRow>> {
+        let row = sqlx::query_as::<_, TrustedDeviceRow>(
+            "SELECT id, user_id, fingerprint, name, user_agent, ip_at_login, created_at, approved_at, approval_code
+             FROM trusted_devices WHERE user_id = ? AND approval_code = ? AND approved_at IS NULL",
+        )
+        .bind(user_id)
+        .bind(code)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to load pending device by code")?;
+        Ok(row)
+    }
+
     // --- Token usage ---
 
     pub async fn insert_token_usage(
@@ -2343,6 +2599,43 @@ pub struct MemoryChunkRow {
     pub created_at: String,
     /// Contact associated with this memory chunk (NULL = global).
     pub contact_id: Option<i64>,
+    /// Agent that created this chunk (NULL = global, visible to all agents).
+    pub agent_id: Option<String>,
+    /// Importance score (1-5). 1=trivial, 3=normal, 5=critical.
+    pub importance: i32,
+}
+
+/// A hierarchical summary of memory chunks over a time period.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct MemorySummaryRow {
+    pub id: i64,
+    /// Period type: "week" or "month".
+    pub period: String,
+    /// Start date (inclusive), YYYY-MM-DD.
+    pub start_date: String,
+    /// End date (inclusive), YYYY-MM-DD.
+    pub end_date: String,
+    pub content: String,
+    pub contact_id: Option<i64>,
+    pub agent_id: Option<String>,
+    pub created_at: String,
+}
+
+/// A trusted device record (REM-3).
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct TrustedDeviceRow {
+    pub id: String,
+    pub user_id: String,
+    pub fingerprint: String,
+    pub name: String,
+    pub user_agent: String,
+    pub ip_at_login: String,
+    pub created_at: String,
+    /// NULL = pending approval, non-NULL = approved.
+    pub approved_at: Option<String>,
+    /// 6-digit approval code (cleared after approval).
+    #[serde(skip_serializing)]
+    pub approval_code: Option<String>,
 }
 
 // ─── RAG Knowledge Base Row Types ────────────────────────────────

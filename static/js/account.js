@@ -501,9 +501,96 @@ document.getElementById('create-token-form')?.addEventListener('submit', (e) => 
     console.log('[EmailAccounts] Handler initialized');
 })();
 
+// ─── Trusted Devices (REM-3) ───
+
+async function loadDevices() {
+    try {
+        var res = await fetch('/api/v1/devices');
+        if (!res.ok) return;
+        var data = await res.json();
+        var devices = data.devices || [];
+        var list = document.getElementById('devices-list');
+        var empty = document.getElementById('devices-empty');
+        var badge = document.getElementById('devices-count');
+        if (!list) return;
+        badge.textContent = devices.length;
+        if (devices.length === 0) {
+            // safe: static HTML, no user content
+            list.innerHTML = '<div class="empty-state"><p>No trusted devices</p></div>';
+            return;
+        }
+        if (empty) empty.style.display = 'none';
+        // Build device rows using DOM methods for safety
+        list.innerHTML = '';
+        devices.forEach(function (d) {
+            var row = document.createElement('div');
+            row.className = 'item-row';
+
+            var info = document.createElement('div');
+            info.className = 'item-info';
+            var name = document.createElement('div');
+            name.className = 'item-name';
+            name.textContent = (d.name || d.user_agent || '').substring(0, 60);
+            var meta = document.createElement('div');
+            meta.className = 'item-meta';
+            meta.textContent = d.ip_at_login + ' · ' + formatDate(d.approved_at || d.created_at);
+            info.appendChild(name);
+            info.appendChild(meta);
+
+            var actions = document.createElement('div');
+            actions.className = 'item-actions';
+            var badge_el = document.createElement('span');
+            badge_el.className = d.approved_at ? 'badge badge-success' : 'badge badge-warn';
+            badge_el.textContent = d.approved_at ? 'Approved' : 'Pending';
+            actions.appendChild(badge_el);
+            actions.appendChild(document.createTextNode(' '));
+
+            if (!d.approved_at) {
+                var approveBtn = document.createElement('button');
+                approveBtn.className = 'btn btn-primary btn-sm';
+                approveBtn.textContent = 'Approve';
+                approveBtn.addEventListener('click', function () { approveDevice(d.id); });
+                actions.appendChild(approveBtn);
+                actions.appendChild(document.createTextNode(' '));
+            }
+            var revokeBtn = document.createElement('button');
+            revokeBtn.className = 'btn btn-ghost btn-sm';
+            revokeBtn.textContent = d.approved_at ? 'Revoke' : 'Reject';
+            revokeBtn.addEventListener('click', function () { revokeDevice(d.id); });
+            actions.appendChild(revokeBtn);
+
+            row.appendChild(info);
+            row.appendChild(actions);
+            list.appendChild(row);
+        });
+    } catch (e) {
+        console.warn('[Devices] Load failed:', e);
+    }
+}
+
+async function approveDevice(id) {
+    try {
+        await fetch('/api/v1/devices/' + encodeURIComponent(id) + '/approve', { method: 'POST' });
+        loadDevices();
+    } catch (e) {
+        console.error('[Devices] Approve failed:', e);
+    }
+}
+
+async function revokeDevice(id) {
+    if (!confirm('Revoke this device? It will need re-approval on next login.')) return;
+    try {
+        await fetch('/api/v1/devices/' + encodeURIComponent(id), { method: 'DELETE' });
+        loadDevices();
+    } catch (e) {
+        console.error('[Devices] Revoke failed:', e);
+    }
+}
+
 // ─── Init ───
 document.addEventListener('DOMContentLoaded', () => {
     loadOwner();
     loadIdentities();
     loadTokens();
+    loadDevices();
 });

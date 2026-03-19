@@ -371,6 +371,7 @@ fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String 
             </div>
         </div>
     </div>
+    <script src="/static/js/csrf.js"></script>
     <script src="/static/js/toast.js"></script>
     <script src="/static/js/command-palette.js"></script>
     {script_tags}
@@ -4029,6 +4030,22 @@ async fn account_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     </details>
                 </section>
 
+                <!-- Trusted Devices (REM-3) -->
+                <section class="section">
+                    <div class="section-header">
+                        <h2>Trusted Devices</h2>
+                        <span class="badge" id="devices-count">0</span>
+                    </div>
+                    <p style="color:var(--muted);margin-bottom:1rem;font-size:0.875rem">
+                        Browsers approved for login. Revoke a device to require re-approval on next login.
+                    </p>
+                    <div class="item-list" id="devices-list">
+                        <div class="empty-state" id="devices-empty">
+                            <p>No trusted devices (device approval is off by default)</p>
+                        </div>
+                    </div>
+                </section>
+
                 <!-- Additional Email Accounts -->
                 <section class="section" id="section-email-accounts">
                     <div class="section-header" style="display:flex;justify-content:space-between;align-items:center;">
@@ -4556,16 +4573,24 @@ pub async fn login_page() -> Html<String> {
             <input type="password" id="password" name="password" required autocomplete="current-password">
             <button type="submit" id="login-btn">Sign In</button>
         </form>
+        <div id="device-approval" style="display:none">
+            <p class="auth-device-msg">New device detected. Enter the 6-digit code from your logs or notification channel.</p>
+            <form id="device-form" onsubmit="return handleDeviceApprove(event)">
+                <label for="device-code">Approval Code</label>
+                <input type="text" id="device-code" name="code" maxlength="6" pattern="[0-9]{6}" required autocomplete="one-time-code" inputmode="numeric" placeholder="000000">
+                <button type="submit" id="device-btn">Approve Device</button>
+            </form>
+        </div>
     </div>
     <script>
     async function handleLogin(e) {
         e.preventDefault();
-        const btn = document.getElementById('login-btn');
-        const err = document.getElementById('error-msg');
+        var btn = document.getElementById('login-btn');
+        var err = document.getElementById('error-msg');
         btn.disabled = true;
         err.textContent = '';
         try {
-            const res = await fetch('/api/auth/login', {
+            var res = await fetch('/api/auth/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -4573,11 +4598,47 @@ pub async fn login_page() -> Html<String> {
                     password: document.getElementById('password').value
                 })
             });
-            const data = await res.json();
+            var data = await res.json();
             if (data.success && data.redirect) {
                 window.location.href = data.redirect;
+            } else if (data.error === 'device_approval_required' || data.error === 'device_pending') {
+                document.getElementById('login-form').style.display = 'none';
+                document.getElementById('device-approval').style.display = '';
+                document.getElementById('device-code').focus();
             } else {
                 err.textContent = data.error || 'Login failed';
+            }
+        } catch (ex) {
+            err.textContent = 'Network error';
+        }
+        btn.disabled = false;
+        return false;
+    }
+    async function handleDeviceApprove(e) {
+        e.preventDefault();
+        var btn = document.getElementById('device-btn');
+        var err = document.getElementById('error-msg');
+        btn.disabled = true;
+        err.textContent = '';
+        try {
+            var res = await fetch('/api/auth/device-approve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: document.getElementById('username').value,
+                    code: document.getElementById('device-code').value
+                })
+            });
+            var data = await res.json();
+            if (data.success) {
+                err.style.color = 'var(--accent, #4a7c59)';
+                err.textContent = 'Device approved! Logging in...';
+                // Re-submit login now that device is approved
+                document.getElementById('device-approval').style.display = 'none';
+                document.getElementById('login-form').style.display = '';
+                document.getElementById('login-form').requestSubmit();
+            } else {
+                err.textContent = data.message || data.error || 'Invalid code';
             }
         } catch (ex) {
             err.textContent = 'Network error';

@@ -16,6 +16,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine};
+use ring::digest;
 use ring::hmac;
 use ring::pbkdf2;
 use ring::rand::{SecureRandom, SystemRandom};
@@ -93,6 +94,12 @@ pub struct WebSession {
     pub roles: Vec<String>,
     pub created_at: Instant,
     pub ttl: Duration,
+    /// CSRF token for this session (REM-4a).
+    pub csrf_token: String,
+    /// Client IP at session creation (REM-4b).
+    pub client_ip: String,
+    /// User-Agent at session creation (REM-4b).
+    pub user_agent: String,
 }
 
 impl WebSession {
@@ -153,12 +160,23 @@ impl SessionStore {
         Ok(hmac::Key::new(hmac::HMAC_SHA256, &key_bytes))
     }
 
-    /// Create a new session, returns the session ID.
-    pub async fn create(&self, user_id: &str, username: &str, roles: &[String]) -> String {
+    /// Create a new session, returns the (session_id, csrf_token) pair.
+    pub async fn create(
+        &self,
+        user_id: &str,
+        username: &str,
+        roles: &[String],
+        client_ip: &str,
+        user_agent: &str,
+    ) -> (String, String) {
         let rng = SystemRandom::new();
         let mut id_bytes = [0u8; SESSION_ID_LEN];
         rng.fill(&mut id_bytes).expect("RNG failed");
-        let session_id = B64.encode(id_bytes);
+        let session_id = B64.encode(&id_bytes);
+
+        let mut csrf_bytes = [0u8; 32];
+        rng.fill(&mut csrf_bytes).expect("RNG failed");
+        let csrf_token = B64.encode(csrf_bytes);
 
         let session = WebSession {
             user_id: user_id.to_string(),
@@ -166,13 +184,16 @@ impl SessionStore {
             roles: roles.to_vec(),
             created_at: Instant::now(),
             ttl: self.default_ttl,
+            csrf_token: csrf_token.clone(),
+            client_ip: client_ip.to_string(),
+            user_agent: user_agent.to_string(),
         };
 
         self.sessions
             .write()
             .await
             .insert(session_id.clone(), session);
-        session_id
+        (session_id, csrf_token)
     }
 
     /// Validate a session by ID.
@@ -233,6 +254,10 @@ pub enum AuthMethod {
     BearerToken { scope: String },
 }
 
+/// CSRF token stored in request extensions (REM-4a).
+#[derive(Debug, Clone)]
+pub struct CsrfToken(pub String);
+
 impl AuthUser {
     /// Check if this auth context allows write operations.
     pub fn can_write(&self) -> bool {
@@ -281,6 +306,42 @@ pub async fn auth_middleware(
         if let Some(cookie_value) = extract_session_cookie(&req) {
             if let Some(session_id) = session_store.verify_cookie(&cookie_value) {
                 if let Some(session) = session_store.get(&session_id).await {
+                    // Session binding checks (REM-4b): warn on IP/User-Agent drift
+                    let current_ua = req
+                        .headers()
+                        .get(header::USER_AGENT)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("");
+                    if !session.client_ip.is_empty() {
+                        // Extract current IP from ConnectInfo if available
+                        if let Some(ConnectInfo(addr)) =
+                            req.extensions().get::<ConnectInfo<SocketAddr>>()
+                        {
+                            let config = state.config.read().await;
+                            let trust_xff = config.channels.web.trust_x_forwarded_for;
+                            drop(config);
+                            let current_ip =
+                                extract_client_ip(&req, addr.ip(), trust_xff).to_string();
+                            if current_ip != session.client_ip {
+                                tracing::warn!(
+                                    username = %session.username,
+                                    login_ip = %session.client_ip,
+                                    current_ip = %current_ip,
+                                    "Session IP changed (VPN/mobile?)"
+                                );
+                            }
+                        }
+                    }
+                    if !session.user_agent.is_empty() && current_ua != session.user_agent {
+                        tracing::warn!(
+                            username = %session.username,
+                            "Session User-Agent changed (possible session theft)"
+                        );
+                    }
+
+                    // Store CSRF token in request extensions for handlers that need it
+                    req.extensions_mut().insert(CsrfToken(session.csrf_token.clone()));
+
                     req.extensions_mut().insert(AuthUser {
                         user_id: session.user_id,
                         username: session.username,
@@ -374,6 +435,52 @@ pub async fn auth_middleware(
     }
 }
 
+// ─── Client IP Extraction (REM-2) ──────────────────────────────
+
+/// Extract the real client IP from a request.
+///
+/// When `trust_xff` is true and the request contains an `X-Forwarded-For` header,
+/// the leftmost (original client) IP is used. Otherwise falls back to the socket IP.
+/// Only enable `trust_xff` behind a trusted reverse proxy.
+fn extract_client_ip(req: &Request, socket_ip: IpAddr, trust_xff: bool) -> IpAddr {
+    if trust_xff {
+        if let Some(xff) = req.headers().get("x-forwarded-for") {
+            if let Ok(xff_str) = xff.to_str() {
+                // X-Forwarded-For: client, proxy1, proxy2 — leftmost is the original client
+                if let Some(first) = xff_str.split(',').next() {
+                    if let Ok(ip) = first.trim().parse::<IpAddr>() {
+                        return ip;
+                    }
+                }
+            }
+        }
+    }
+    socket_ip
+}
+
+/// Compute a device fingerprint from user ID + User-Agent.
+///
+/// SHA-256 hash truncated to hex. Not IP-based — IPs change too often.
+fn device_fingerprint(user_id: &str, user_agent: &str) -> String {
+    let input = format!("{user_id}:{user_agent}");
+    let hash = digest::digest(&digest::SHA256, input.as_bytes());
+    // Truncate to 16 hex chars (64 bits) — collision-safe for per-user device sets
+    hash.as_ref()
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Generate a 6-digit numeric approval code.
+fn generate_approval_code() -> String {
+    let rng = SystemRandom::new();
+    let mut bytes = [0u8; 4];
+    rng.fill(&mut bytes).expect("RNG failed");
+    let num = u32::from_le_bytes(bytes) % 1_000_000;
+    format!("{num:06}")
+}
+
 // ─── Rate Limiter ──────────────────────────────────────────────
 
 /// Simple in-memory rate limiter per IP address.
@@ -428,7 +535,9 @@ pub async fn auth_rate_limit_middleware(
     req: Request,
     next: Next,
 ) -> Response {
-    match state.auth_rate_limiter.check(addr.ip()).await {
+    let trust_xff = state.config.read().await.channels.web.trust_x_forwarded_for;
+    let client_ip = extract_client_ip(&req, addr.ip(), trust_xff);
+    match state.auth_rate_limiter.check(client_ip).await {
         Ok(remaining) => {
             let mut response = next.run(req).await;
             if let Ok(val) = remaining.to_string().parse() {
@@ -456,7 +565,9 @@ pub async fn api_rate_limit_middleware(
     req: Request,
     next: Next,
 ) -> Response {
-    match state.api_rate_limiter.check(addr.ip()).await {
+    let trust_xff = state.config.read().await.channels.web.trust_x_forwarded_for;
+    let client_ip = extract_client_ip(&req, addr.ip(), trust_xff);
+    match state.api_rate_limiter.check(client_ip).await {
         Ok(remaining) => {
             let mut response = next.run(req).await;
             if let Ok(val) = remaining.to_string().parse() {
@@ -475,6 +586,66 @@ pub async fn api_rate_limit_middleware(
         )
             .into_response(),
     }
+}
+
+// ─── CSRF Guard Middleware (REM-4a) ─────────────────────────────
+
+/// CSRF protection middleware for state-changing requests.
+///
+/// Validates the `X-CSRF-Token` header against the session's CSRF token.
+/// Skips validation for:
+/// - Safe methods (GET, HEAD, OPTIONS)
+/// - Bearer token auth (token itself proves identity)
+/// - Health and webhook endpoints
+pub async fn csrf_guard_middleware(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+
+    // Safe methods don't need CSRF protection
+    if method == axum::http::Method::GET
+        || method == axum::http::Method::HEAD
+        || method == axum::http::Method::OPTIONS
+    {
+        return next.run(req).await;
+    }
+
+    // Skip CSRF for non-session auth (Bearer tokens prove identity)
+    if let Some(auth) = req.extensions().get::<AuthUser>() {
+        if matches!(auth.auth_method, AuthMethod::BearerToken { .. }) {
+            return next.run(req).await;
+        }
+    }
+
+    // Skip CSRF for public endpoints (health, webhooks, auth endpoints)
+    let path = req.uri().path().to_string();
+    if path == "/api/health"
+        || path.starts_with("/api/auth/")
+        || path.starts_with("/api/v1/webhooks/")
+        || path.starts_with("/ws/")
+    {
+        return next.run(req).await;
+    }
+
+    // Validate CSRF token
+    let csrf_header = req
+        .headers()
+        .get("x-csrf-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if let Some(CsrfToken(expected)) = req.extensions().get::<CsrfToken>() {
+        if !expected.is_empty() && csrf_header != expected {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "csrf_invalid",
+                    "message": "Missing or invalid CSRF token. Include X-CSRF-Token header."
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    next.run(req).await
 }
 
 // ─── Auth API Handlers ─────────────────────────────────────────
@@ -497,8 +668,24 @@ pub struct AuthResponse {
 /// POST /api/auth/login
 pub async fn login_handler(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> Response {
+    let trust_xff = state.config.read().await.channels.web.trust_x_forwarded_for;
+    let client_ip = {
+        let xff = headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.split(',').next())
+            .and_then(|s| s.trim().parse::<IpAddr>().ok());
+        if trust_xff { xff.unwrap_or_else(|| addr.ip()) } else { addr.ip() }
+    };
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
     let db = match &state.db {
         Some(db) => db,
         None => {
@@ -573,22 +760,86 @@ pub async fn login_handler(
             .into_response();
     }
 
+    // Device approval check (REM-3)
+    let require_device = state.config.read().await.channels.web.require_device_approval;
+    if require_device {
+        let fp = device_fingerprint(&user.id, &user_agent);
+        match db.load_trusted_device_by_fingerprint(&user.id, &fp).await {
+            Ok(Some(dev)) if dev.approved_at.is_some() => {
+                // Known approved device — proceed to session creation
+            }
+            Ok(Some(_)) => {
+                // Pending approval — already waiting
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({
+                        "error": "device_pending",
+                        "message": "This device is pending approval. Enter the 6-digit code or approve from an existing session."
+                    })),
+                )
+                    .into_response();
+            }
+            _ => {
+                // New device — generate approval code and register
+                let code = generate_approval_code();
+                let device_id = uuid::Uuid::new_v4().to_string();
+                let ua_short = user_agent.chars().take(80).collect::<String>();
+                if let Err(e) = db
+                    .insert_trusted_device(
+                        &device_id, &user.id, &fp, &ua_short,
+                        &user_agent, &client_ip.to_string(), &code,
+                    )
+                    .await
+                {
+                    tracing::error!(error = %e, "Failed to register new device");
+                }
+                tracing::info!(
+                    username = %user.username,
+                    device_id = %device_id,
+                    code = %code,
+                    ip = %client_ip,
+                    "New device requires approval"
+                );
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({
+                        "error": "device_approval_required",
+                        "message": "New device detected. Enter the 6-digit approval code.",
+                        "device_id": device_id
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
     // Create session
     let roles: Vec<String> =
         serde_json::from_str(&user.roles).unwrap_or_else(|_| vec!["user".to_string()]);
-    let session_id = session_store.create(&user.id, &user.username, &roles).await;
+    let session_ttl = state.config.read().await.channels.web.session_ttl_secs;
+    let (session_id, csrf_token) = session_store
+        .create(&user.id, &user.username, &roles, &client_ip.to_string(), &user_agent)
+        .await;
     let signed_cookie = session_store.sign_cookie(&session_id);
 
-    tracing::info!(username = %user.username, "User logged in via web UI");
+    tracing::info!(username = %user.username, client_ip = %client_ip, "User logged in via web UI");
 
-    let cookie = format!(
-        "{}={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}",
-        SESSION_COOKIE_NAME, signed_cookie, DEFAULT_SESSION_TTL_SECS
+    let session_cookie = format!(
+        "{}={}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={}",
+        SESSION_COOKIE_NAME, signed_cookie, session_ttl
+    );
+    // CSRF cookie: readable by JS (no HttpOnly) for X-CSRF-Token header
+    let csrf_cookie = format!(
+        "homun_csrf={}; Secure; SameSite=Strict; Path=/; Max-Age={}",
+        csrf_token, session_ttl
     );
 
     (
         StatusCode::OK,
-        [(header::SET_COOKIE, cookie)],
+        [
+            (header::SET_COOKIE, session_cookie),
+            (header::SET_COOKIE, csrf_cookie),
+        ],
         Json(AuthResponse {
             success: true,
             redirect: Some("/".into()),
@@ -608,15 +859,19 @@ pub async fn logout_handler(State(state): State<Arc<AppState>>, req: Request) ->
         }
     }
 
-    // Clear cookie
-    let clear_cookie = format!(
-        "{}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0",
+    // Clear cookies
+    let clear_session = format!(
+        "{}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0",
         SESSION_COOKIE_NAME
     );
+    let clear_csrf = "homun_csrf=; Secure; SameSite=Strict; Path=/; Max-Age=0".to_string();
 
     (
         StatusCode::OK,
-        [(header::SET_COOKIE, clear_cookie)],
+        [
+            (header::SET_COOKIE, clear_session),
+            (header::SET_COOKIE, clear_csrf),
+        ],
         Json(AuthResponse {
             success: true,
             redirect: Some("/login".into()),
@@ -624,6 +879,59 @@ pub async fn logout_handler(State(state): State<Arc<AppState>>, req: Request) ->
         }),
     )
         .into_response()
+}
+
+/// POST /api/auth/device-approve — approve a device via username + 6-digit code.
+/// No session needed (the device is not yet trusted).
+pub async fn device_approve_handler(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<DeviceApproveRequest>,
+) -> Response {
+    let db = match &state.db {
+        Some(db) => db,
+        None => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "db_unavailable"}))).into_response()
+        }
+    };
+
+    // Look up user
+    let user = match db.load_user_by_username(&body.username).await {
+        Ok(Some(u)) => u,
+        _ => {
+            return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "invalid_credentials"}))).into_response()
+        }
+    };
+
+    // Find pending device by code
+    match db.load_pending_device_by_code(&user.id, &body.code).await {
+        Ok(Some(device)) => {
+            if let Err(e) = db.approve_trusted_device(&device.id).await {
+                tracing::error!(error = %e, "Failed to approve device");
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "approval_failed"}))).into_response();
+            }
+            tracing::info!(
+                username = %user.username,
+                device_id = %device.id,
+                "Device approved via OTP code"
+            );
+            (StatusCode::OK, Json(serde_json::json!({
+                "success": true,
+                "message": "Device approved. You can now log in."
+            }))).into_response()
+        }
+        _ => {
+            (StatusCode::FORBIDDEN, Json(serde_json::json!({
+                "error": "invalid_code",
+                "message": "Invalid or expired approval code."
+            }))).into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeviceApproveRequest {
+    pub username: String,
+    pub code: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -635,8 +943,16 @@ pub struct SetupRequest {
 /// POST /api/auth/setup — first-run admin creation
 pub async fn setup_handler(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<SetupRequest>,
 ) -> Response {
+    let client_ip = addr.ip().to_string();
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
     let db = match &state.db {
         Some(db) => db,
         None => {
@@ -764,19 +1080,27 @@ pub async fn setup_handler(
     };
 
     let roles = vec!["admin".to_string()];
-    let session_id = session_store
-        .create(&user_id, body.username.trim(), &roles)
+    let session_ttl = state.config.read().await.channels.web.session_ttl_secs;
+    let (session_id, csrf_token) = session_store
+        .create(&user_id, body.username.trim(), &roles, &client_ip, &user_agent)
         .await;
     let signed_cookie = session_store.sign_cookie(&session_id);
 
-    let cookie = format!(
-        "{}={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}",
-        SESSION_COOKIE_NAME, signed_cookie, DEFAULT_SESSION_TTL_SECS
+    let session_cookie = format!(
+        "{}={}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={}",
+        SESSION_COOKIE_NAME, signed_cookie, session_ttl
+    );
+    let csrf_cookie = format!(
+        "homun_csrf={}; Secure; SameSite=Strict; Path=/; Max-Age={}",
+        csrf_token, session_ttl
     );
 
     (
         StatusCode::OK,
-        [(header::SET_COOKIE, cookie)],
+        [
+            (header::SET_COOKIE, session_cookie),
+            (header::SET_COOKIE, csrf_cookie),
+        ],
         Json(AuthResponse {
             success: true,
             redirect: Some("/".into()),
@@ -848,14 +1172,18 @@ mod tests {
         let key = hmac::Key::new(hmac::HMAC_SHA256, &[42u8; 32]);
         let store = SessionStore::with_key(key, 3600);
 
-        let id = store
-            .create("user-1", "admin", &["admin".to_string()])
+        let (id, csrf) = store
+            .create("user-1", "admin", &["admin".to_string()], "127.0.0.1", "TestAgent")
             .await;
+        assert!(!csrf.is_empty());
         assert!(store.get(&id).await.is_some());
 
         let session = store.get(&id).await.unwrap();
         assert_eq!(session.user_id, "user-1");
         assert_eq!(session.username, "admin");
+        assert_eq!(session.client_ip, "127.0.0.1");
+        assert_eq!(session.user_agent, "TestAgent");
+        assert_eq!(session.csrf_token, csrf);
 
         store.destroy(&id).await;
         assert!(store.get(&id).await.is_none());
@@ -867,8 +1195,8 @@ mod tests {
         // TTL of 0 seconds means sessions expire immediately
         let store = SessionStore::with_key(key, 0);
 
-        let id = store
-            .create("user-1", "admin", &["admin".to_string()])
+        let (id, _) = store
+            .create("user-1", "admin", &["admin".to_string()], "127.0.0.1", "")
             .await;
         // Session should be expired immediately (TTL = 0)
         assert!(store.get(&id).await.is_none());
@@ -945,5 +1273,62 @@ mod tests {
         assert!(rl.check(ip2).await.is_ok());
         assert!(rl.check(ip1).await.is_err());
         assert!(rl.check(ip2).await.is_err());
+    }
+
+    #[test]
+    fn test_extract_client_ip_no_xff() {
+        let req = Request::builder().body(axum::body::Body::empty()).unwrap();
+        let socket_ip: IpAddr = "192.168.1.1".parse().unwrap();
+        assert_eq!(extract_client_ip(&req, socket_ip, false), socket_ip);
+        assert_eq!(extract_client_ip(&req, socket_ip, true), socket_ip);
+    }
+
+    #[test]
+    fn test_extract_client_ip_with_xff_trusted() {
+        let req = Request::builder()
+            .header("x-forwarded-for", "10.0.0.1, 172.16.0.1")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let socket_ip: IpAddr = "192.168.1.1".parse().unwrap();
+        // trust_xff = true → use leftmost XFF IP
+        let ip = extract_client_ip(&req, socket_ip, true);
+        assert_eq!(ip, "10.0.0.1".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn test_extract_client_ip_with_xff_untrusted() {
+        let req = Request::builder()
+            .header("x-forwarded-for", "10.0.0.1")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let socket_ip: IpAddr = "192.168.1.1".parse().unwrap();
+        // trust_xff = false → ignore XFF, use socket IP
+        assert_eq!(extract_client_ip(&req, socket_ip, false), socket_ip);
+    }
+
+    #[test]
+    fn test_extract_client_ip_invalid_xff() {
+        let req = Request::builder()
+            .header("x-forwarded-for", "not-an-ip, 172.16.0.1")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let socket_ip: IpAddr = "192.168.1.1".parse().unwrap();
+        // Invalid first entry → fallback to socket IP
+        assert_eq!(extract_client_ip(&req, socket_ip, true), socket_ip);
+    }
+
+    #[tokio::test]
+    async fn test_session_csrf_token_unique() {
+        let key = hmac::Key::new(hmac::HMAC_SHA256, &[42u8; 32]);
+        let store = SessionStore::with_key(key, 3600);
+        let (_, csrf1) = store
+            .create("user-1", "admin", &["admin".to_string()], "127.0.0.1", "")
+            .await;
+        let (_, csrf2) = store
+            .create("user-1", "admin", &["admin".to_string()], "127.0.0.1", "")
+            .await;
+        // Each session gets a unique CSRF token
+        assert_ne!(csrf1, csrf2);
+        assert!(!csrf1.is_empty());
     }
 }
