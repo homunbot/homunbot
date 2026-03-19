@@ -8,6 +8,7 @@ mod channels;
 mod chat;
 mod connections;
 mod contacts;
+mod devices;
 mod email_accounts;
 mod embeddings;
 mod health;
@@ -17,8 +18,10 @@ mod maintenance;
 mod mcp;
 mod memory;
 mod onboarding;
+mod openai;
 mod permissions;
 mod providers;
+mod sessions;
 mod sandbox;
 mod skills;
 mod status;
@@ -72,7 +75,11 @@ pub fn router() -> Router<Arc<AppState>> {
         .merge(business::routes())
         .merge(contacts::routes())
         .merge(onboarding::routes())
-        .merge(agents::routes());
+        .merge(agents::routes())
+        .merge(devices::routes())
+        // --- OpenAI-compatible API ---
+        .merge(openai::routes())
+        .merge(sessions::routes());
 
     // --- Knowledge Base (RAG) ---
     #[cfg(feature = "embeddings")]
