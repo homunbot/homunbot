@@ -82,6 +82,10 @@ impl Tool for WorkflowTool {
                             "max_retries": {
                                 "type": "integer",
                                 "description": "Max retry attempts on failure (default: 1)"
+                            },
+                            "agent_id": {
+                                "type": "string",
+                                "description": "Named agent to execute this step (e.g. 'coder', 'researcher'). Default: 'default'"
                             }
                         },
                         "required": ["name", "instruction"]

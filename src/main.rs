@@ -1261,7 +1261,7 @@ async fn main() -> Result<()> {
             let (workflow_event_tx, workflow_event_rx) = tokio::sync::mpsc::channel(50);
             let workflow_engine = Arc::new(workflows::engine::WorkflowEngine::new(
                 db_for_web.clone(),
-                agent.clone(),
+                registry.clone(),
                 workflow_event_tx,
             ));
             if workflow_engine_cell.set(workflow_engine.clone()).is_err() {

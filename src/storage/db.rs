@@ -280,6 +280,13 @@ impl Database {
         )
         .await?;
 
+        Self::apply_migration(
+            pool,
+            "026_step_agent_id",
+            include_str!("../../migrations/026_step_agent_id.sql"),
+        )
+        .await?;
+
         Ok(())
     }
 

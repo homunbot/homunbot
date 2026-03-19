@@ -38,9 +38,13 @@ impl Database {
 
         for (idx, step_def) in req.steps.iter().enumerate() {
             let step_id = format!("{id}-s{idx}");
+            let agent_id = step_def
+                .agent_id
+                .as_deref()
+                .unwrap_or("default");
             sqlx::query(
-                "INSERT INTO workflow_steps (id, workflow_id, idx, name, instruction, status, approval_required, max_retries)
-                 VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
+                "INSERT INTO workflow_steps (id, workflow_id, idx, name, instruction, status, approval_required, max_retries, agent_id)
+                 VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
             )
             .bind(&step_id)
             .bind(id)
@@ -49,6 +53,7 @@ impl Database {
             .bind(&step_def.instruction)
             .bind(step_def.approval_required)
             .bind(step_def.max_retries as i64)
+            .bind(agent_id)
             .execute(self.pool())
             .await
             .with_context(|| format!("Failed to insert workflow step {step_id}"))?;
@@ -323,6 +328,7 @@ struct StepRow {
     completed_at: Option<String>,
     retry_count: i64,
     max_retries: i64,
+    agent_id: Option<String>,
 }
 
 impl StepRow {
@@ -341,6 +347,7 @@ impl StepRow {
             completed_at: self.completed_at,
             retry_count: self.retry_count as u32,
             max_retries: self.max_retries as u32,
+            agent_id: self.agent_id.unwrap_or_else(|| "default".to_string()),
         }
     }
 }

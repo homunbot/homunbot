@@ -118,6 +118,8 @@ pub struct WorkflowStep {
     pub completed_at: Option<String>,
     pub retry_count: u32,
     pub max_retries: u32,
+    /// Agent to execute this step (MAG-4). Defaults to "default".
+    pub agent_id: String,
 }
 
 // ── Creation request (from LLM tool) ────────────────────────────────
@@ -138,6 +140,9 @@ pub struct StepDefinition {
     pub approval_required: bool,
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+    /// Agent to execute this step (MAG-4).  None = "default".
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 
 fn default_max_retries() -> u32 {

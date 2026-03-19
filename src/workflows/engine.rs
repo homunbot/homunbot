@@ -15,7 +15,7 @@ use anyhow::{bail, Result};
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
-use crate::agent::AgentLoop;
+use crate::agent::AgentRegistry;
 use crate::storage::Database;
 
 use super::{
@@ -25,7 +25,8 @@ use super::{
 /// Workflow engine — orchestrates persistent multi-step autonomous tasks.
 pub struct WorkflowEngine {
     db: Database,
-    agent: Arc<AgentLoop>,
+    /// Agent registry for per-step agent lookup (MAG-4).
+    registry: Arc<AgentRegistry>,
     /// Tracks running workflow tasks: workflow_id → JoinHandle
     running: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
     /// Channel for sending events to the gateway (notifications, approvals)
@@ -33,10 +34,14 @@ pub struct WorkflowEngine {
 }
 
 impl WorkflowEngine {
-    pub fn new(db: Database, agent: Arc<AgentLoop>, event_tx: mpsc::Sender<WorkflowEvent>) -> Self {
+    pub fn new(
+        db: Database,
+        registry: Arc<AgentRegistry>,
+        event_tx: mpsc::Sender<WorkflowEvent>,
+    ) -> Self {
         Self {
             db,
-            agent,
+            registry,
             running: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
         }
@@ -95,13 +100,13 @@ impl WorkflowEngine {
             .await?;
 
         let db = self.db.clone();
-        let agent = self.agent.clone();
+        let registry = self.registry.clone();
         let event_tx = self.event_tx.clone();
         let wf_id = workflow_id.to_string();
         let running = self.running.clone();
 
         let handle = tokio::spawn(async move {
-            if let Err(e) = run_workflow_loop(db.clone(), agent, event_tx.clone(), &wf_id).await {
+            if let Err(e) = run_workflow_loop(db.clone(), registry, event_tx.clone(), &wf_id).await {
                 tracing::error!(workflow_id = %wf_id, error = %e, "Workflow execution failed");
                 let _ = db
                     .update_workflow_status(&wf_id, WorkflowStatus::Failed, Some(&e.to_string()))
@@ -240,6 +245,7 @@ impl WorkflowEngine {
                     instruction: s.instruction.clone(),
                     approval_required: s.approval_required,
                     max_retries: s.max_retries,
+                    agent_id: Some(s.agent_id.clone()),
                 })
                 .collect(),
             deliver_to: workflow.deliver_to.clone(),
@@ -297,7 +303,7 @@ impl WorkflowEngine {
 /// Runs steps sequentially, handles retries and approval gates.
 async fn run_workflow_loop(
     db: Database,
-    agent: Arc<AgentLoop>,
+    registry: Arc<AgentRegistry>,
     event_tx: mpsc::Sender<WorkflowEvent>,
     workflow_id: &str,
 ) -> Result<()> {
@@ -353,7 +359,7 @@ async fn run_workflow_loop(
         }
 
         // Execute the step
-        let result = execute_step(&db, &agent, &event_tx, &workflow, step).await;
+        let result = execute_step(&db, &registry, &event_tx, &workflow, step).await;
 
         match result {
             Ok(output) => {
@@ -435,7 +441,7 @@ async fn run_workflow_loop(
 /// Execute a single workflow step via the agent loop.
 async fn execute_step(
     db: &Database,
-    agent: &AgentLoop,
+    registry: &AgentRegistry,
     event_tx: &mpsc::Sender<WorkflowEvent>,
     workflow: &Workflow,
     step: &WorkflowStep,
@@ -456,10 +462,22 @@ async fn execute_step(
         })
         .await;
 
+    // Resolve agent for this step (MAG-4: per-step agent routing)
+    let agent = registry
+        .get(&step.agent_id)
+        .unwrap_or_else(|| registry.default_agent());
+
     // Build prompt with tool guidance
     let tool_names = agent.registered_tool_names().await;
     let prompt = build_step_prompt(workflow, step, &tool_names);
     let session_key = format!("workflow:{}:step:{}", workflow.id, step.idx);
+
+    tracing::debug!(
+        workflow_id = %workflow.id,
+        step_idx = step.idx,
+        agent_id = %step.agent_id,
+        "Executing workflow step with agent"
+    );
 
     agent
         .process_message(&prompt, &session_key, "workflow", &workflow.id)
