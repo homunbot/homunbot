@@ -1,0 +1,118 @@
+name: E2E CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/web/**'
+      - 'static/**'
+      - 'scripts/e2e_*'
+      - 'scripts/lib/playwright_e2e.sh'
+      - '.github/workflows/e2e-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/web/**'
+      - 'static/**'
+      - 'scripts/e2e_*'
+      - 'scripts/lib/playwright_e2e.sh'
+      - '.github/workflows/e2e-ci.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # E2E credentials for the self-hosted server
+  HOMUN_E2E_USERNAME: ci-admin
+  HOMUN_E2E_PASSWORD: ci-test-password-42
+  HOMUN_E2E_BASE_URL: https://localhost:18443
+  HOMUN_E2E_WAIT_MS: "20000"
+
+jobs:
+  e2e:
+    name: Web UI Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-e2e-
+
+      - name: Build binary
+        run: cargo build --release --features web-ui
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Playwright browser
+        run: ./scripts/playwright_cli.sh install-browser
+
+      - name: Start Homun server
+        shell: bash
+        run: |
+          # Create minimal config (no LLM provider — server starts in setup mode)
+          mkdir -p ~/.homun
+          cat > ~/.homun/config.toml << 'TOML'
+          [channels.web]
+          enabled = true
+          host = "127.0.0.1"
+          port = 18443
+          auto_tls = true
+          TOML
+
+          # Start server in background
+          RUST_LOG=info ./target/release/homun gateway &
+          SERVER_PID=$!
+          echo "SERVER_PID=$SERVER_PID" >> "$GITHUB_ENV"
+
+          # Wait for server to be ready (up to 30s)
+          for i in $(seq 1 30); do
+            if curl -sk https://localhost:18443/api/health 2>/dev/null | grep -q ok; then
+              echo "Server ready after ${i}s"
+              break
+            fi
+            if ! kill -0 $SERVER_PID 2>/dev/null; then
+              echo "Server process died"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Final check
+          curl -sk https://localhost:18443/api/health || { echo "Server failed to start"; exit 1; }
+
+      - name: Run E2E CI suite
+        shell: bash
+        run: ./scripts/e2e_ci_suite.sh
+
+      - name: Stop server
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${SERVER_PID:-}" ]; then
+            kill "$SERVER_PID" 2>/dev/null || true
+            wait "$SERVER_PID" 2>/dev/null || true
+          fi
+
+      - name: Upload E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-ci-artifacts
+          path: output/playwright/
+          if-no-files-found: ignore
+          retention-days: 7

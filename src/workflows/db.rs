@@ -84,7 +84,7 @@ impl Database {
     async fn load_workflow_steps(&self, workflow_id: &str) -> Result<Vec<WorkflowStep>> {
         let rows = sqlx::query_as::<_, StepRow>(
             "SELECT id, workflow_id, idx, name, instruction, status, approval_required,
-                    result, error, started_at, completed_at, retry_count, max_retries
+                    result, error, started_at, completed_at, retry_count, max_retries, agent_id
              FROM workflow_steps WHERE workflow_id = ? ORDER BY idx",
         )
         .bind(workflow_id)

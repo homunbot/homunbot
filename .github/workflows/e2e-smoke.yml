@@ -14,6 +14,7 @@ on:
         type: choice
         options:
           - ./scripts/e2e_chat_suite.sh
+          - ./scripts/e2e_ci_suite.sh
           - ./scripts/e2e_webui_smoke.sh
           - ./scripts/e2e_chat_send_stop.sh
           - ./scripts/e2e_chat_multi_session.sh
