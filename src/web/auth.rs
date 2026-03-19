@@ -13,7 +13,7 @@ use anyhow::Result;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::Next;
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::{AppendHeaders, IntoResponse, Redirect, Response};
 use axum::Json;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine};
 use ring::digest;
@@ -856,12 +856,13 @@ pub async fn login_handler(
         csrf_token, session_ttl
     );
 
+    // AppendHeaders needed: plain arrays deduplicate Set-Cookie (second overwrites first)
     (
         StatusCode::OK,
-        [
+        AppendHeaders([
             (header::SET_COOKIE, session_cookie),
             (header::SET_COOKIE, csrf_cookie),
-        ],
+        ]),
         Json(AuthResponse {
             success: true,
             redirect: Some("/".into()),
@@ -890,10 +891,10 @@ pub async fn logout_handler(State(state): State<Arc<AppState>>, req: Request) ->
 
     (
         StatusCode::OK,
-        [
+        AppendHeaders([
             (header::SET_COOKIE, clear_session),
             (header::SET_COOKIE, clear_csrf),
-        ],
+        ]),
         Json(AuthResponse {
             success: true,
             redirect: Some("/login".into()),
@@ -1143,10 +1144,10 @@ pub async fn setup_handler(
 
     (
         StatusCode::OK,
-        [
+        AppendHeaders([
             (header::SET_COOKIE, session_cookie),
             (header::SET_COOKIE, csrf_cookie),
-        ],
+        ]),
         Json(AuthResponse {
             success: true,
             redirect: Some("/".into()),
