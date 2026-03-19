@@ -1175,14 +1175,7 @@ async fn main() -> Result<()> {
 
                 reg.for_each_mut(|a| {
                     a.set_message_tx(tool_msg_tx.clone());
-
-                    if let Some(ref summary) = skills_summary {
-                        // set_skills_summary is async but we're in a sync closure.
-                        // Use the blocking handle — safe because RwLock is uncontended here.
-                        a.set_skills_summary_sync(summary.clone());
-                    }
                     a.set_skill_registry(skill_registry.clone());
-                    a.set_registered_tool_names_sync(tool_names.clone());
 
                     if !active_channels.is_empty() {
                         a.set_channels_info(&channel_refs);
@@ -1201,6 +1194,14 @@ async fn main() -> Result<()> {
                         }
                     }
                 });
+
+                // Async setters (needs .await, can't use for_each_mut)
+                for agent in reg.agents() {
+                    if let Some(ref summary) = skills_summary {
+                        agent.set_skills_summary(summary.clone()).await;
+                    }
+                    agent.set_registered_tool_names(tool_names.clone()).await;
+                }
             }
 
             // If no provider, start a setup-only Web UI and wait

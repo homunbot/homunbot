@@ -160,11 +160,6 @@ impl ContextBuilder {
         *guard = summary;
     }
 
-    /// Sync variant for use in non-async contexts (uncontended lock).
-    pub fn set_skills_summary_sync(&self, summary: String) {
-        *self.skills_summary.blocking_write() = summary;
-    }
-
     /// Get a shared handle to the skills summary for hot-reload updates.
     pub fn skills_summary_handle(&self) -> Arc<RwLock<String>> {
         self.skills_summary.clone()
@@ -236,11 +231,6 @@ impl ContextBuilder {
     /// Set the names of all registered tools (for routing rules in system prompt).
     pub async fn set_registered_tool_names(&self, names: Vec<String>) {
         *self.registered_tool_names.write().await = names;
-    }
-
-    /// Sync variant for use in non-async contexts (uncontended lock).
-    pub fn set_registered_tool_names_sync(&self, names: Vec<String>) {
-        *self.registered_tool_names.blocking_write() = names;
     }
 
     /// Append additional tool names (called when deferred MCP tools register).

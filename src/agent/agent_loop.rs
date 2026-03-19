@@ -309,12 +309,6 @@ impl AgentLoop {
         self.context.set_skills_summary(summary).await;
     }
 
-    /// Sync variant of `set_skills_summary` for use in non-async contexts
-    /// (e.g. `AgentRegistry::for_each_mut`).  Safe only when no readers hold the lock.
-    pub fn set_skills_summary_sync(&mut self, summary: String) {
-        self.context.set_skills_summary_sync(summary);
-    }
-
     /// Set the shared skill registry for on-demand skill body loading.
     /// When the LLM calls a "tool" that matches a skill name, the agent loop
     /// loads the full SKILL.md body and returns it as the tool result instead
@@ -376,11 +370,6 @@ impl AgentLoop {
     /// even in native function calling mode (where ctx.tools is empty).
     pub async fn set_registered_tool_names(&self, names: Vec<String>) {
         self.context.set_registered_tool_names(names).await;
-    }
-
-    /// Sync variant of `set_registered_tool_names`.
-    pub fn set_registered_tool_names_sync(&mut self, names: Vec<String>) {
-        self.context.set_registered_tool_names_sync(names);
     }
 
     /// Get the names of all registered tools (for workflow step prompts).

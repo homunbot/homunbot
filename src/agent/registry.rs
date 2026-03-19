@@ -121,6 +121,14 @@ impl AgentRegistry {
         }
     }
 
+    /// Get all agent Arc references for async setter application.
+    ///
+    /// Used by `main.rs` to apply async setters before the registry
+    /// is wrapped in its own Arc.
+    pub fn agents(&self) -> impl Iterator<Item = &Arc<AgentLoop>> {
+        self.agents.values()
+    }
+
     /// Route a message to the appropriate agent.
     ///
     /// Priority:
