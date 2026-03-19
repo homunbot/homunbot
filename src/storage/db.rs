@@ -605,6 +605,25 @@ impl Database {
         Ok(count)
     }
 
+    /// Count distinct sessions (by session_key in messages table).
+    pub async fn count_sessions(&self) -> Result<i64> {
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(DISTINCT session_key) FROM messages")
+                .fetch_one(&self.pool)
+                .await
+                .context("Failed to count sessions")?;
+        Ok(count)
+    }
+
+    /// Count all messages across all sessions.
+    pub async fn count_all_messages(&self) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
+            .fetch_one(&self.pool)
+            .await
+            .context("Failed to count all messages")?;
+        Ok(count)
+    }
+
     /// Delete all messages for a session (for /new command)
     pub async fn clear_messages(&self, session_key: &str) -> Result<()> {
         sqlx::query("DELETE FROM messages WHERE session_key = ?")
@@ -946,6 +965,25 @@ impl Database {
             .await
             .context("Failed to count memory chunks")?;
         Ok(count)
+    }
+
+    /// List memory history chunks (type='history'), ordered by newest first.
+    pub async fn list_memory_history(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<MemoryChunkRow>> {
+        let rows = sqlx::query_as::<_, MemoryChunkRow>(
+            "SELECT id, date, source, heading, content, memory_type, created_at, contact_id, agent_id, importance \
+             FROM memory_chunks WHERE memory_type = 'history' \
+             ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to list memory history")?;
+        Ok(rows)
     }
 
     /// Load all memory chunks (for re-embedding after model change).

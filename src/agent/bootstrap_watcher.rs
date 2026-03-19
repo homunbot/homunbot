@@ -16,6 +16,8 @@ use anyhow::Result;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::RwLock;
 
+use crate::utils::watcher::{spawn_watched, WatcherHandle};
+
 /// Bootstrap file names that the agent can edit and read.
 const BOOTSTRAP_FILES: &[&str] = &["USER.md", "SOUL.md", "AGENTS.md", "INSTRUCTIONS.md"];
 
@@ -37,23 +39,6 @@ pub struct BootstrapWatcher {
     data_dir: PathBuf,
 }
 
-/// Handle to a running watcher. Drop it to stop watching.
-pub struct WatcherHandle {
-    stop_tx: Option<tokio::sync::oneshot::Sender<()>>,
-    join_handle: Option<tokio::task::JoinHandle<()>>,
-}
-
-impl Drop for WatcherHandle {
-    fn drop(&mut self) {
-        if let Some(tx) = self.stop_tx.take() {
-            let _ = tx.send(());
-        }
-        if let Some(handle) = self.join_handle.take() {
-            handle.abort();
-        }
-    }
-}
-
 impl BootstrapWatcher {
     /// Create a new watcher with both legacy and new format handles.
     pub fn new(
@@ -70,20 +55,10 @@ impl BootstrapWatcher {
 
     /// Start watching the bootstrap directories. Returns a handle that stops on drop.
     pub fn start(self) -> WatcherHandle {
-        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
-
-        let join_handle = tokio::spawn(async move {
-            if let Err(e) = self.watch_loop(stop_rx).await {
-                if !e.to_string().contains("channel closed") {
-                    tracing::error!(error = %e, "Bootstrap watcher error");
-                }
-            }
-        });
-
-        WatcherHandle {
-            stop_tx: Some(stop_tx),
-            join_handle: Some(join_handle),
-        }
+        spawn_watched(
+            move |stop_rx| self.watch_loop(stop_rx),
+            "bootstrap-watcher",
+        )
     }
 
     async fn watch_loop(self, mut stop_rx: tokio::sync::oneshot::Receiver<()>) -> Result<()> {

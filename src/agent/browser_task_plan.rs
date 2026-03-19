@@ -35,7 +35,7 @@ pub struct BrowserTaskPlanState {
 impl BrowserTaskPlanState {
     pub fn new(user_prompt: &str) -> Self {
         let routing = BrowserRoutingDecision::from_prompt(user_prompt);
-        let objective = user_prompt.trim().chars().take(220).collect::<String>();
+        let objective = crate::utils::text::truncate_str(user_prompt.trim(), 220, "");
         Self {
             objective,
             compare_mode: matches!(routing.task_class, BrowserTaskClass::MultiSourceCompare),

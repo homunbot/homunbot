@@ -2,6 +2,8 @@
 
 pub mod reasoning_filter;
 pub mod retry;
+pub mod text;
+pub mod watcher;
 
 pub use reasoning_filter::{extract_reasoning, has_reasoning, strip_reasoning};
 pub use retry::{

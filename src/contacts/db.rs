@@ -482,6 +482,7 @@ impl Database {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_pending_response_with_notify(
         &self,
         contact_id: Option<i64>,

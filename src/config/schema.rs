@@ -111,6 +111,41 @@ impl Config {
         Self::data_dir().join("workspace")
     }
 
+    /// Skills directory: ~/.homun/skills/
+    pub fn skills_dir() -> PathBuf {
+        Self::data_dir().join("skills")
+    }
+
+    /// Brain directory: ~/.homun/brain/ (agent-written memory files)
+    pub fn brain_dir() -> PathBuf {
+        Self::data_dir().join("brain")
+    }
+
+    /// TLS directory: ~/.homun/tls/
+    pub fn tls_dir() -> PathBuf {
+        Self::data_dir().join("tls")
+    }
+
+    /// Cache directory: ~/.homun/cache/
+    pub fn cache_dir() -> PathBuf {
+        Self::data_dir().join("cache")
+    }
+
+    /// Memory directory: ~/.homun/memory/ (daily memory files)
+    pub fn memory_dir() -> PathBuf {
+        Self::data_dir().join("memory")
+    }
+
+    /// Knowledge directory: ~/.homun/knowledge/
+    pub fn knowledge_dir() -> PathBuf {
+        Self::data_dir().join("knowledge")
+    }
+
+    /// Logs directory: ~/.homun/logs/
+    pub fn logs_dir() -> PathBuf {
+        Self::data_dir().join("logs")
+    }
+
     /// Check if provider has credentials (API key in secure storage, in config, or base URL)
     pub fn is_provider_configured(&self, name: &str) -> bool {
         // Check secure storage for encrypted API key
@@ -367,8 +402,10 @@ pub struct AgentConfig {
     pub max_session_tokens: u32,
     /// Maximum concurrent LLM requests per provider.
     /// Controls the semaphore size in `QueuedProvider`.
+    ///
     /// - Ollama / local models: keep at 1 (serial).
     /// - Cloud APIs (Anthropic, OpenAI, etc.): 5–10.
+    ///
     /// Default: 0 = auto-detect (1 for Ollama, 5 for cloud).
     pub llm_max_concurrent: usize,
     /// User's display name (set during onboarding).

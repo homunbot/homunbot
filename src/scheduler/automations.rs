@@ -3,6 +3,8 @@ use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashSet};
+use crate::config::Config;
+use crate::utils::text::truncate_str;
 
 /// Stored schedule format for automations.
 ///
@@ -587,7 +589,7 @@ pub fn derive_flow(row: &crate::storage::AutomationRow) -> FlowGraph {
                     last_id = gate_id.clone();
                 }
 
-                nodes.push(flow_node(&step_id, "llm", truncate_label(&step.name, 28)));
+                nodes.push(flow_node(&step_id, "llm", truncate_str(step.name.trim(), 28, "\u{2026}")));
                 edges.push(edge(&last_id, &step_id));
                 last_id = step_id;
             }
@@ -637,7 +639,7 @@ pub fn derive_flow(row: &crate::storage::AutomationRow) -> FlowGraph {
         }
 
         let task_id = "task".to_string();
-        nodes.push(flow_node(&task_id, "llm", truncate_label(&row.prompt, 28)));
+        nodes.push(flow_node(&task_id, "llm", truncate_str(row.prompt.trim(), 28, "\u{2026}")));
         edges.push(edge(&last_id, &task_id));
         last_id = task_id;
     }
@@ -704,20 +706,9 @@ fn deliver_channel_label(channel: &str) -> String {
     }
 }
 
-fn truncate_label(s: &str, max: usize) -> String {
-    let trimmed = s.trim();
-    if trimmed.len() <= max {
-        trimmed.to_string()
-    } else {
-        format!("{}…", &trimmed[..max.saturating_sub(1)])
-    }
-}
 
 fn load_installed_skill_names() -> HashSet<String> {
-    let Some(home) = dirs::home_dir() else {
-        return HashSet::new();
-    };
-    let skills_dir = home.join(".homun").join("skills");
+    let skills_dir = Config::skills_dir();
     let Ok(entries) = std::fs::read_dir(skills_dir) else {
         return HashSet::new();
     };

@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+use crate::config::Config;
+
 /// Metadata parsed from SKILL.md YAML frontmatter.
 ///
 /// Follows the open Agent Skills specification (https://github.com/agentskills/agentskills):
@@ -107,10 +109,7 @@ impl SkillRegistry {
     pub async fn scan_and_load(&mut self) -> Result<()> {
         let scan_dirs = vec![
             // User-installed skills
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".homun")
-                .join("skills"),
+            Config::skills_dir(),
             // Project-local skills
             PathBuf::from("skills"),
         ];

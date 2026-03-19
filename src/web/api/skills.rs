@@ -7,6 +7,7 @@ use axum::routing::get;
 use axum::Router;
 use serde::{Deserialize, Serialize};
 
+use crate::config::Config;
 use super::super::server::AppState;
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
@@ -285,10 +286,7 @@ async fn create_skill_api(
 // --- Scan skill ---
 
 async fn scan_skill_api(Path(name): Path<String>) -> Result<Json<serde_json::Value>, StatusCode> {
-    let skills_dir = dirs::home_dir()
-        .unwrap_or_default()
-        .join(".homun")
-        .join("skills");
+    let skills_dir = Config::skills_dir();
     let skill_dir = skills_dir.join(&name);
 
     if !skill_dir.exists() {
@@ -627,10 +625,7 @@ struct CatalogStatusResponse {
 }
 
 async fn catalog_status() -> Json<CatalogStatusResponse> {
-    let cache_path = dirs::home_dir()
-        .unwrap_or_default()
-        .join(".homun")
-        .join("clawhub-catalog.json");
+    let cache_path = Config::data_dir().join("clawhub-catalog.json");
 
     if !cache_path.exists() {
         return Json(CatalogStatusResponse {
@@ -733,7 +728,7 @@ struct CatalogCountsResponse {
 }
 
 async fn catalog_counts() -> Json<CatalogCountsResponse> {
-    let home = dirs::home_dir().unwrap_or_default().join(".homun");
+    let home = Config::data_dir();
 
     // ClawHub count from catalog cache
     let clawhub = tokio::fs::read_to_string(home.join("clawhub-catalog.json"))
@@ -808,10 +803,7 @@ fn render_md_to_html(md: &str) -> String {
 }
 
 async fn get_skill_detail(Path(name): Path<String>) -> Result<Json<SkillDetailView>, StatusCode> {
-    let skills_dir = dirs::home_dir()
-        .unwrap_or_default()
-        .join(".homun")
-        .join("skills");
+    let skills_dir = Config::skills_dir();
     let skill_dir = skills_dir.join(&name);
 
     if !skill_dir.exists() {

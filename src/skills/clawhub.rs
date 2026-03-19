@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+use crate::config::Config;
 use super::installer::InstallResult;
 use super::loader::parse_skill_md_public;
 use super::{
@@ -121,8 +122,8 @@ struct ClawHubApiStats {
 /// ClawHub native API: single skill detail response
 #[derive(Deserialize, Debug)]
 struct ClawHubApiSkillDetail {
-    #[allow(dead_code)]
-    skill: ClawHubApiSkill,
+    #[serde(rename = "skill")]
+    _skill: ClawHubApiSkill,
     owner: ClawHubApiOwner,
 }
 
@@ -147,10 +148,7 @@ const CLAWHUB_API_BASE: &str = "https://clawhub.ai/api/v1";
 
 impl ClawHubInstaller {
     pub fn new() -> Self {
-        let skills_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".homun")
-            .join("skills");
+        let skills_dir = Config::skills_dir();
 
         Self {
             client: Client::builder()

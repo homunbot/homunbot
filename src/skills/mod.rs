@@ -31,4 +31,5 @@ pub use openskills::OpenSkillsSource;
 pub use security::{
     scan_skill_content, scan_skill_package, InstallSecurityOptions, SecurityReport, SecurityWarning,
 };
-pub use watcher::{SkillWatcher, WatcherHandle as SkillWatcherHandle};
+pub use crate::utils::watcher::WatcherHandle as SkillWatcherHandle;
+pub use watcher::SkillWatcher;

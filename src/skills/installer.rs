@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::Deserialize;
 
+use crate::config::Config;
 use super::loader::parse_skill_md_public;
 use super::{adapt_legacy_skill_dir, parse_legacy_manifest};
 use super::{scan_skill_package, InstallSecurityOptions, SecurityReport};
@@ -45,10 +46,7 @@ struct RemoteSkillManifest {
 
 impl SkillInstaller {
     pub fn new() -> Self {
-        let skills_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".homun")
-            .join("skills");
+        let skills_dir = Config::skills_dir();
 
         Self {
             client: Client::new(),
@@ -174,10 +172,7 @@ impl SkillInstaller {
 
     /// Remove an installed skill by name
     pub async fn remove(name: &str) -> Result<()> {
-        let skills_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".homun")
-            .join("skills");
+        let skills_dir = Config::skills_dir();
 
         let skill_dir = skills_dir.join(name);
         if !skill_dir.exists() {
@@ -194,10 +189,7 @@ impl SkillInstaller {
 
     /// List installed skills (reads from ~/.homun/skills/)
     pub async fn list_installed() -> Result<Vec<InstalledSkillInfo>> {
-        let skills_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".homun")
-            .join("skills");
+        let skills_dir = Config::skills_dir();
 
         if !skills_dir.exists() {
             return Ok(Vec::new());

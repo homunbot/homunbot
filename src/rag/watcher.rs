@@ -13,28 +13,12 @@ use tokio::sync::Mutex;
 
 use super::chunker::is_supported;
 use super::engine::RagEngine;
+use crate::utils::watcher::{spawn_watched, WatcherHandle};
 
 /// Watches directories for file changes and auto-ingests into the RAG engine.
 pub struct RagWatcher {
     engine: Arc<Mutex<RagEngine>>,
     watch_dirs: Vec<PathBuf>,
-}
-
-/// Handle to a running watcher. Drop it to stop watching.
-pub struct WatcherHandle {
-    stop_tx: Option<tokio::sync::oneshot::Sender<()>>,
-    join_handle: Option<tokio::task::JoinHandle<()>>,
-}
-
-impl Drop for WatcherHandle {
-    fn drop(&mut self) {
-        if let Some(tx) = self.stop_tx.take() {
-            let _ = tx.send(());
-        }
-        if let Some(handle) = self.join_handle.take() {
-            handle.abort();
-        }
-    }
 }
 
 impl RagWatcher {
@@ -43,18 +27,10 @@ impl RagWatcher {
     }
 
     pub fn start(self) -> WatcherHandle {
-        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
-        let join_handle = tokio::spawn(async move {
-            if let Err(e) = self.watch_loop(stop_rx).await {
-                if !e.to_string().contains("channel closed") {
-                    tracing::error!(error = %e, "RAG directory watcher error");
-                }
-            }
-        });
-        WatcherHandle {
-            stop_tx: Some(stop_tx),
-            join_handle: Some(join_handle),
-        }
+        spawn_watched(
+            move |stop_rx| self.watch_loop(stop_rx),
+            "rag-watcher",
+        )
     }
 
     async fn watch_loop(self, mut stop_rx: tokio::sync::oneshot::Receiver<()>) -> Result<()> {

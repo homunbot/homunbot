@@ -647,8 +647,8 @@ struct ResponseMetadata {
 #[derive(Debug, Deserialize)]
 struct ConversationsHistoryResponse {
     ok: bool,
-    #[allow(dead_code)]
-    error: Option<String>,
+    #[serde(rename = "error")]
+    _error: Option<String>,
     messages: Option<Vec<SlackMessage>>,
 }
 

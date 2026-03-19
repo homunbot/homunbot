@@ -477,9 +477,7 @@ impl WebServer {
                 // Custom domain: set up /etc/hosts + cert trust, proxy port 443
                 let cert_path = if auto_tls && tls_cert.is_empty() {
                     Some(
-                        dirs::home_dir()
-                            .unwrap_or_default()
-                            .join(".homun/tls/cert.pem"),
+                        Config::tls_dir().join("cert.pem"),
                     )
                 } else {
                     None
@@ -557,10 +555,7 @@ async fn build_tls_config(
         )
     } else if auto_tls {
         // Auto-generate self-signed cert
-        let tls_dir = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".homun")
-            .join("tls");
+        let tls_dir = Config::tls_dir();
         let cert_path = tls_dir.join("cert.pem");
         let key_path = tls_dir.join("key.pem");
 
@@ -721,9 +716,7 @@ fn setup_system(domain: &str, cert_path: Option<&Path>) {
         .map(|c| c.contains(domain))
         .unwrap_or(false);
 
-    let cert_marker = dirs::home_dir()
-        .unwrap_or_default()
-        .join(".homun/tls/.trusted");
+    let cert_marker = Config::tls_dir().join(".trusted");
     let needs_cert_trust = cert_path.is_some() && !cert_marker.exists();
 
     if !needs_hosts && !needs_cert_trust {

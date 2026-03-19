@@ -30,28 +30,25 @@ pub fn resolve_persona(
     user_name: &str,
 ) -> ResolvedPersona {
     // Priority chain for persona type
+    let fallback_persona = if channel_persona.is_empty() {
+        "bot"
+    } else {
+        channel_persona
+    };
     let persona_type = contact
         .and_then(|c| c.persona_override.as_deref())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            if channel_persona.is_empty() {
-                "bot"
-            } else {
-                channel_persona
-            }
-        })
+        .unwrap_or(fallback_persona)
         .to_string();
 
     // Priority chain for tone
     let tone_of_voice = contact
         .map(|c| c.tone_of_voice.as_str())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            if channel_tone.is_empty() {
-                ""
-            } else {
-                channel_tone
-            }
+        .unwrap_or(if channel_tone.is_empty() {
+            ""
+        } else {
+            channel_tone
         })
         .to_string();
 

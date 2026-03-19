@@ -272,7 +272,7 @@ impl MemoryConsolidator {
         // Debug: log raw response to understand parsing failures
         tracing::debug!(
             response_len = response_text.len(),
-            response_preview = %response_text.chars().take(500).collect::<String>(),
+            response_preview = %crate::utils::text::truncate_str(&response_text, 500, ""),
             "Consolidation LLM raw response"
         );
 
@@ -1047,7 +1047,7 @@ fn parse_consolidation_response_v2(response: &str) -> ConsolidationResponseV2 {
     }
 
     // Last resort: use entire response as history entry
-    let preview: String = text.chars().take(200).collect();
+    let preview = crate::utils::text::truncate_str(text, 200, "...");
     tracing::warn!(
         preview = %preview,
         len = text.len(),

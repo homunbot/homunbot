@@ -18,6 +18,8 @@ use std::time::Instant;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+
+use crate::utils::text::truncate_utf8_in_place;
 use tokio::sync::RwLock;
 
 use super::mcp::McpPeer;
@@ -880,7 +882,7 @@ impl BrowserTool {
             Ok(output) => {
                 let truncated = if output.len() > 2_000 {
                     let mut s = output;
-                    truncate_utf8(&mut s, 2_000);
+                    truncate_utf8_in_place(&mut s, 2_000);
                     s.push_str("...[truncated]");
                     s
                 } else {
@@ -1352,7 +1354,7 @@ pub fn compact_browser_snapshot_staged(output: &str, seen_results: bool) -> Stri
 
     // Hard truncation (UTF-8 safe)
     if result.len() > max_chars {
-        truncate_utf8(&mut result, max_chars);
+        truncate_utf8_in_place(&mut result, max_chars);
         result.push_str("\n...[snapshot truncated]");
     }
 
@@ -1598,17 +1600,6 @@ fn is_form_field_role(trimmed: &str) -> bool {
         || trimmed.starts_with("spinbutton ")
 }
 
-/// Truncate a string to at most `max_bytes`, snapping to a char boundary.
-fn truncate_utf8(s: &mut String, max_bytes: usize) {
-    if s.len() <= max_bytes {
-        return;
-    }
-    let mut end = max_bytes;
-    while !s.is_char_boundary(end) && end > 0 {
-        end -= 1;
-    }
-    s.truncate(end);
-}
 
 /// Extract the `action` field from browser tool arguments.
 ///

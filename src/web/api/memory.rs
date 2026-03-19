@@ -334,16 +334,10 @@ async fn get_memory_history(
 ) -> Result<Json<SearchResponse>, StatusCode> {
     let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
-    let rows: Vec<crate::storage::MemoryChunkRow> = sqlx::query_as(
-        "SELECT id, date, source, heading, content, memory_type, created_at, contact_id \
-         FROM memory_chunks WHERE memory_type = 'history' \
-         ORDER BY created_at DESC LIMIT ? OFFSET ?",
-    )
-    .bind(q.limit)
-    .bind(q.offset)
-    .fetch_all(db.pool())
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let rows = db
+        .list_memory_history(q.limit, q.offset)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let chunks = rows.into_iter().map(ChunkView::from).collect();
     Ok(Json(SearchResponse { chunks }))

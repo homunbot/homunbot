@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use uuid::Uuid;
 
 use crate::config::{ApprovalConfig, AutonomyLevel};
+use crate::utils::text::truncate_str;
 
 /// Unique ID for a pending approval request
 pub type ApprovalId = String;
@@ -255,26 +256,17 @@ fn summarize_args(args: &serde_json::Value) -> String {
             .iter()
             .map(|(k, v)| {
                 let val = match v {
-                    serde_json::Value::String(s) => truncate(s, 80),
-                    other => truncate(&other.to_string(), 80),
+                    serde_json::Value::String(s) => truncate_str(s, 80, "..."),
+                    other => truncate_str(&other.to_string(), 80, "..."),
                 };
                 format!("{}: {}", k, val)
             })
             .collect::<Vec<_>>()
             .join(", "),
-        other => truncate(&other.to_string(), 120),
+        other => truncate_str(&other.to_string(), 120, "..."),
     }
 }
 
-fn truncate(input: &str, max_chars: usize) -> String {
-    let mut chars = input.chars();
-    let truncated: String = chars.by_ref().take(max_chars).collect();
-    if chars.next().is_some() {
-        format!("{}...", truncated)
-    } else {
-        input.to_string()
-    }
-}
 
 // Global instance
 static GLOBAL_APPROVAL_MANAGER: OnceLock<Arc<ApprovalManager>> = OnceLock::new();
@@ -303,21 +295,21 @@ mod tests {
 
     #[test]
     fn auto_approve_skips_prompt() {
-        let mgr = ApprovalManager::from_config(&supervised_config());
-        assert!(!mgr.needs_approval("ls"));
-        assert!(!mgr.needs_approval("cat"));
+        let manager = ApprovalManager::from_config(&supervised_config());
+        assert!(!manager.needs_approval("ls"));
+        assert!(!manager.needs_approval("cat"));
     }
 
     #[test]
     fn always_ask_always_prompts() {
-        let mgr = ApprovalManager::from_config(&supervised_config());
-        assert!(mgr.needs_approval("rm"));
+        let manager = ApprovalManager::from_config(&supervised_config());
+        assert!(manager.needs_approval("rm"));
     }
 
     #[test]
     fn unknown_tool_needs_approval() {
-        let mgr = ApprovalManager::from_config(&supervised_config());
-        assert!(mgr.needs_approval("npm"));
+        let manager = ApprovalManager::from_config(&supervised_config());
+        assert!(manager.needs_approval("npm"));
     }
 
     #[test]
@@ -326,35 +318,35 @@ mod tests {
             level: AutonomyLevel::Full,
             ..Default::default()
         };
-        let mgr = ApprovalManager::from_config(&config);
-        assert!(!mgr.needs_approval("rm"));
-        assert!(!mgr.needs_approval("npm"));
+        let manager = ApprovalManager::from_config(&config);
+        assert!(!manager.needs_approval("rm"));
+        assert!(!manager.needs_approval("npm"));
     }
 
     #[test]
     fn always_response_adds_to_session_allowlist() {
-        let mgr = ApprovalManager::from_config(&supervised_config());
-        assert!(mgr.needs_approval("npm"));
+        let manager = ApprovalManager::from_config(&supervised_config());
+        assert!(manager.needs_approval("npm"));
 
-        mgr.record_decision(
+        manager.record_decision(
             "npm",
             &serde_json::json!({"command": "npm install"}),
             ApprovalDecision::Always,
             "cli",
         );
 
-        assert!(!mgr.needs_approval("npm"));
+        assert!(!manager.needs_approval("npm"));
     }
 
     #[test]
     fn always_ask_overrides_session_allowlist() {
-        let mgr = ApprovalManager::from_config(&supervised_config());
-        mgr.record_decision(
+        let manager = ApprovalManager::from_config(&supervised_config());
+        manager.record_decision(
             "rm",
             &serde_json::json!({"command": "rm test"}),
             ApprovalDecision::Always,
             "cli",
         );
-        assert!(mgr.needs_approval("rm"));
+        assert!(manager.needs_approval("rm"));
     }
 }

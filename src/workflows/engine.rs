@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
+use crate::utils::text::truncate_str;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
@@ -375,7 +376,7 @@ async fn run_workflow_loop(
                         format!("step_{}", step_idx),
                         serde_json::json!({
                             "name": step.name,
-                            "result": truncate_for_context(&output, 2000),
+                            "result": truncate_str(&output, 2000, "..."),
                         }),
                     );
                 }
@@ -389,7 +390,7 @@ async fn run_workflow_loop(
                         step_idx,
                         total_steps: workflow.steps.len(),
                         step_name: step.name.clone(),
-                        result_summary: truncate_for_context(&output, 200),
+                        result_summary: truncate_str(&output, 200, "..."),
                         deliver_to: workflow.deliver_to.clone(),
                     })
                     .await;
@@ -537,7 +538,7 @@ fn build_step_prompt(workflow: &Workflow, step: &WorkflowStep, tool_names: &[Str
             let result = s
                 .result
                 .as_deref()
-                .map(|r| truncate_for_context(r, 500))
+                .map(|r| truncate_str(r, 500, "..."))
                 .unwrap_or_else(|| "(no output)".to_string());
             lines.push(format!("- Step {} ({}): {}", s.idx, s.name, result));
         }
@@ -594,12 +595,3 @@ async fn complete_workflow(
     Ok(())
 }
 
-fn truncate_for_context(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        let mut result: String = s.chars().take(max.saturating_sub(3)).collect();
-        result.push_str("...");
-        result
-    }
-}

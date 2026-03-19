@@ -12,13 +12,6 @@
 pub enum VerificationResult {
     /// Response is verified.
     Verified,
-    /// (unused, kept for API compatibility)
-    #[allow(dead_code)]
-    NeedsVerification {
-        claimed_action: String,
-        expected_tool: String,
-        verification_prompt: String,
-    },
 }
 
 /// Verify actions — DISABLED, always returns Verified.

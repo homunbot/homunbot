@@ -2440,20 +2440,10 @@ async fn main() -> Result<()> {
                         let chunks: i64 = db.count_memory_chunks().await?;
                         println!("  memory_chunks: {chunks} rows");
 
-                        let pool = db.pool();
-                        let sessions: i64 = sqlx::query_scalar::<_, i64>(
-                            "SELECT COUNT(DISTINCT session_key) FROM messages",
-                        )
-                        .fetch_one(pool)
-                        .await
-                        .unwrap_or(0);
+                        let sessions = db.count_sessions().await.unwrap_or(0);
                         println!("  sessions: {sessions}");
 
-                        let messages: i64 =
-                            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM messages")
-                                .fetch_one(pool)
-                                .await
-                                .unwrap_or(0);
+                        let messages = db.count_all_messages().await.unwrap_or(0);
                         println!("  messages: {messages}");
                     } else {
                         println!("  (no database found)");
@@ -2611,7 +2601,7 @@ async fn main() -> Result<()> {
                                     println!("   {}", r.chunk.heading);
                                 }
                                 // Show first 200 chars of content
-                                let preview: String = r.chunk.content.chars().take(200).collect();
+                                let preview = crate::utils::text::truncate_str(&r.chunk.content, 200, "...");
                                 println!("   {}", preview);
                             }
                         }

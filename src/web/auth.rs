@@ -794,7 +794,7 @@ pub async fn login_handler(
                 // New device — generate approval code and register
                 let code = generate_approval_code();
                 let device_id = uuid::Uuid::new_v4().to_string();
-                let ua_short = user_agent.chars().take(80).collect::<String>();
+                let ua_short = crate::utils::text::truncate_str(&user_agent, 80, "");
                 if let Err(e) = db
                     .insert_trusted_device(
                         &device_id,

@@ -201,20 +201,15 @@ pub struct FunctionDefinition {
 ///
 /// Higher priority requests are served first when the per-provider
 /// concurrency semaphore is contended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RequestPriority {
     /// Background tasks: heartbeat pings, memory consolidation, daily summaries.
     Low = 0,
     /// Automated work: subagent tasks, automations, scheduled jobs.
+    #[default]
     Normal = 1,
     /// Interactive: user chat messages that need low latency.
     High = 2,
-}
-
-impl Default for RequestPriority {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 /// Chat request parameters

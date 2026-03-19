@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use crate::config::Config;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
@@ -84,10 +85,7 @@ pub struct OpenSkillsSource {
 
 impl OpenSkillsSource {
     pub fn new() -> Self {
-        let skills_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".homun")
-            .join("skills");
+        let skills_dir = Config::skills_dir();
 
         Self {
             client: Client::new(),
@@ -494,10 +492,7 @@ impl OpenSkillsSource {
     }
 
     fn cache_path() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".homun")
-            .join(CACHE_FILENAME)
+        Config::data_dir().join(CACHE_FILENAME)
     }
 }
 

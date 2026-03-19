@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use chrono::Utc;
 
-use crate::config::ExecutionSandboxConfig;
+use crate::config::{Config, ExecutionSandboxConfig};
 
 use super::types::{SandboxEvent, SandboxExecutionRequest};
 
@@ -15,10 +15,7 @@ fn sandbox_state_dir() -> PathBuf {
         return PathBuf::from(path);
     }
 
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".homun")
-        .join("logs")
+    Config::logs_dir()
 }
 
 pub(crate) fn sandbox_events_path() -> PathBuf {

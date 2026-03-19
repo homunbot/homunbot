@@ -6,6 +6,7 @@ use axum::response::Json;
 use axum::Router;
 use serde::{Deserialize, Serialize};
 
+use crate::config::Config;
 use super::super::server::AppState;
 
 /// Routes registered inside the authenticated API router.
@@ -281,9 +282,7 @@ async fn check_knowledge(state: &AppState) -> ComponentHealth {
 }
 
 fn check_data_dir() -> ComponentHealth {
-    let data_dir = dirs::home_dir()
-        .map(|h| h.join(".homun"))
-        .unwrap_or_default();
+    let data_dir = Config::data_dir();
     if !data_dir.exists() {
         return ComponentHealth::unhealthy("data_dir", "Data directory does not exist");
     }

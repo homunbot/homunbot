@@ -14,6 +14,7 @@ use crate::security::PairingManager;
 use crate::session::SessionManager;
 use crate::storage::{AutomationUpdate, Database, EmailPendingRow};
 use crate::utils::strip_reasoning;
+use crate::utils::text::truncate_str;
 use crate::workflows::engine::WorkflowEngine;
 use crate::workflows::WorkflowEvent;
 use tokio::sync::RwLock;
@@ -180,8 +181,6 @@ where
 pub struct Gateway {
     registry: Arc<super::registry::AgentRegistry>,
     config: Arc<RwLock<Config>>,
-    #[allow(dead_code)]
-    session_manager: SessionManager,
     cron_scheduler: Arc<CronScheduler>,
     cron_event_rx: mpsc::Receiver<CronEvent>,
     /// Receiver for messages sent by tools (MessageTool) that need routing to channels
@@ -210,7 +209,7 @@ impl Gateway {
     pub fn new(
         registry: Arc<super::registry::AgentRegistry>,
         config: Arc<RwLock<Config>>,
-        session_manager: SessionManager,
+        _session_manager: SessionManager,
         cron_scheduler: Arc<CronScheduler>,
         cron_event_rx: mpsc::Receiver<CronEvent>,
         db: Database,
@@ -218,7 +217,6 @@ impl Gateway {
         Self {
             registry,
             config,
-            session_manager,
             cron_scheduler,
             cron_event_rx,
             tool_message_rx: None,
@@ -1431,7 +1429,7 @@ impl Gateway {
                 };
                 let email_body_preview = if approval_notify.is_some() {
                     let body = &inbound.content;
-                    Some(body.chars().take(500).collect::<String>())
+                    Some(truncate_str(body, 500, "..."))
                 } else {
                     None
                 };
@@ -2042,11 +2040,11 @@ async fn dispatch_to_agent(
 
         if let Some(automation_id) = ctx.automation_id {
             let latest_result = if processing_error.is_some() {
-                truncate_for_status(&run_result, 500)
+                truncate_str(&run_result, 500, "...")
             } else if let Some(note) = trigger_note.as_deref() {
-                format!("{note} | output: {}", truncate_for_status(&run_result, 300))
+                format!("{note} | output: {}", truncate_str(&run_result, 300, "..."))
             } else {
-                truncate_for_status(&run_result, 500)
+                truncate_str(&run_result, 500, "...")
             };
             if let Err(e) = task_db
                 .update_automation(
@@ -2080,13 +2078,6 @@ fn should_suppress_system_outbound(metadata: Option<&MessageMetadata>, channel: 
     meta.is_system && meta.scheduler_kind.as_deref() == Some("cron")
 }
 
-fn truncate_for_status(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-    let clipped: String = text.chars().take(max_chars).collect();
-    format!("{clipped}...")
-}
 
 fn evaluate_automation_trigger(
     trigger_kind: &str,

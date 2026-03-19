@@ -28,9 +28,8 @@ pub mod index_meta;
 pub mod memory_search;
 
 pub use agent_loop::AgentLoop;
-pub use bootstrap_watcher::{
-    BootstrapContent, BootstrapFiles, BootstrapWatcher, WatcherHandle as BootstrapWatcherHandle,
-};
+pub use bootstrap_watcher::{BootstrapContent, BootstrapFiles, BootstrapWatcher};
+pub use crate::utils::watcher::WatcherHandle as BootstrapWatcherHandle;
 pub use browser_task_plan::BrowserTaskPlanState;
 pub use context::ContextBuilder;
 pub use definition::AgentDefinition;

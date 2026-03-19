@@ -886,11 +886,6 @@ async fn test_channel(
 // WhatsApp Pairing -- WebSocket endpoint
 // ═══════════════════════════════════════════════════
 
-/// WebSocket upgrade for WhatsApp pairing flow.
-///
-/// Protocol:
-/// 1. Client sends `{ "phone": "393331234567" }`
-
 /// Hot-start a channel that was configured/paired while the gateway is running.
 async fn start_channel(
     Path(name): Path<String>,

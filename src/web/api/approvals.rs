@@ -77,9 +77,9 @@ struct ApprovalConfigRequest {
 /// List all approvals (pending + summary)
 /// GET /api/v1/approvals
 async fn list_approvals(State(_state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let mgr = crate::tools::global_approval_manager();
+    let manager = crate::tools::global_approval_manager();
 
-    match mgr {
+    match manager {
         Some(m) => {
             let pending = m.get_pending();
             let audit = m.audit_log();
@@ -104,9 +104,9 @@ async fn list_approvals(State(_state): State<Arc<AppState>>) -> Json<serde_json:
 async fn list_pending_approvals(
     State(_state): State<Arc<AppState>>,
 ) -> Json<PendingApprovalsResponse> {
-    let mgr = crate::tools::global_approval_manager();
+    let manager = crate::tools::global_approval_manager();
 
-    let pending = mgr.map(|m| m.get_pending()).unwrap_or_default();
+    let pending = manager.map(|m| m.get_pending()).unwrap_or_default();
     let count = pending.len();
 
     Json(PendingApprovalsResponse { pending, count })
@@ -117,9 +117,9 @@ async fn list_pending_approvals(
 async fn get_approval_audit_log(
     State(_state): State<Arc<AppState>>,
 ) -> Json<ApprovalAuditResponse> {
-    let mgr = crate::tools::global_approval_manager();
+    let manager = crate::tools::global_approval_manager();
 
-    let log = mgr.map(|m| m.audit_log()).unwrap_or_default();
+    let log = manager.map(|m| m.audit_log()).unwrap_or_default();
     let count = log.len();
 
     Json(ApprovalAuditResponse { log, count })
@@ -132,9 +132,9 @@ async fn approve_request(
     State(_state): State<Arc<AppState>>,
     Json(body): Json<ApprovalActionRequest>,
 ) -> Result<Json<ApprovalActionResponse>, (StatusCode, Json<ApprovalActionResponse>)> {
-    let mgr = crate::tools::global_approval_manager();
+    let manager = crate::tools::global_approval_manager();
 
-    match mgr {
+    match manager {
         Some(m) => match m.approve(&id, body.always) {
             Ok(()) => Ok(Json(ApprovalActionResponse {
                 success: true,
@@ -168,9 +168,9 @@ async fn deny_request(
     Path(id): Path<String>,
     State(_state): State<Arc<AppState>>,
 ) -> Result<Json<ApprovalActionResponse>, (StatusCode, Json<ApprovalActionResponse>)> {
-    let mgr = crate::tools::global_approval_manager();
+    let manager = crate::tools::global_approval_manager();
 
-    match mgr {
+    match manager {
         Some(m) => match m.deny(&id) {
             Ok(()) => Ok(Json(ApprovalActionResponse {
                 success: true,
@@ -198,13 +198,13 @@ async fn deny_request(
 /// GET /api/v1/approvals/config
 async fn get_approval_config(State(state): State<Arc<AppState>>) -> Json<ApprovalConfigResponse> {
     let config = state.config.read().await;
-    let mgr = crate::tools::global_approval_manager();
+    let manager = crate::tools::global_approval_manager();
 
     Json(ApprovalConfigResponse {
         level: format!("{:?}", config.permissions.approval.level).to_lowercase(),
         auto_approve: config.permissions.approval.auto_approve.clone(),
         always_ask: config.permissions.approval.always_ask.clone(),
-        pending_count: mgr.map(|m| m.get_pending().len()).unwrap_or(0),
+        pending_count: manager.map(|m| m.get_pending().len()).unwrap_or(0),
     })
 }
 
@@ -249,12 +249,12 @@ async fn put_approval_config(
         ));
     }
 
-    let mgr = crate::tools::global_approval_manager();
+    let manager = crate::tools::global_approval_manager();
 
     Ok(Json(ApprovalConfigResponse {
         level: format!("{:?}", config.permissions.approval.level).to_lowercase(),
         auto_approve: config.permissions.approval.auto_approve.clone(),
         always_ask: config.permissions.approval.always_ask.clone(),
-        pending_count: mgr.map(|m| m.get_pending().len()).unwrap_or(0),
+        pending_count: manager.map(|m| m.get_pending().len()).unwrap_or(0),
     }))
 }

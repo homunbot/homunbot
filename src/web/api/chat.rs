@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::server::AppState;
 use crate::utils::reasoning_filter::strip_reasoning;
+use crate::utils::text::truncate_str;
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -344,15 +345,10 @@ fn chat_conversation_title(metadata: &str, first_user_message: Option<&str>) -> 
 
 fn truncate_conversation_label(value: &str) -> String {
     let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut chars = compact.chars();
-    let truncated: String = chars.by_ref().take(48).collect();
-    if chars.next().is_some() {
-        format!("{truncated}\u{2026}")
-    } else if truncated.is_empty() {
-        "New conversation".to_string()
-    } else {
-        truncated
+    if compact.is_empty() {
+        return "New conversation".to_string();
     }
+    truncate_str(&compact, 48, "\u{2026}")
 }
 
 fn parse_chat_conversation_metadata(metadata: &str) -> ChatConversationMetadata {

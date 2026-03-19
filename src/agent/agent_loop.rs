@@ -17,6 +17,7 @@ use crate::session::SessionManager;
 use crate::skills::{loader::SkillRegistry, suggest_mcp_presets, McpServerPreset};
 use crate::storage::Database;
 use crate::tools::{ToolContext, ToolRegistry};
+use crate::utils::text::truncate_utf8_in_place;
 
 use super::browser_task_plan::{BrowserRoutingDecision, BrowserTaskPlanState};
 use super::context::ContextBuilder;
@@ -1831,50 +1832,26 @@ impl AgentLoop {
                 let response_text = response.content.clone().unwrap_or_default();
 
                 // Verify that claimed actions were actually executed
-                match verify_actions(&response_text, &tools_used) {
-                    VerificationResult::Verified => {
-                        // All good — this is the final response
-                        if !use_streaming {
-                            if let Some(ref tx) = stream_tx {
-                                if let Some(ref text) = response.content {
-                                    let _ = tx
-                                        .send(crate::provider::StreamChunk {
-                                            delta: text.clone(),
-                                            done: true,
-                                            event_type: None,
-                                            tool_call_data: None,
-                                        })
-                                        .await;
-                                }
-                            }
+                // (verification is disabled — always returns Verified)
+                let _verified = verify_actions(&response_text, &tools_used);
+
+                // Final response — send to stream if not already streaming
+                if !use_streaming {
+                    if let Some(ref tx) = stream_tx {
+                        if let Some(ref text) = response.content {
+                            let _ = tx
+                                .send(crate::provider::StreamChunk {
+                                    delta: text.clone(),
+                                    done: true,
+                                    event_type: None,
+                                    tool_call_data: None,
+                                })
+                                .await;
                         }
-                        final_content = response.content;
-                        break;
-                    }
-                    VerificationResult::NeedsVerification {
-                        claimed_action,
-                        expected_tool,
-                        verification_prompt,
-                    } => {
-                        // Hallucination detected! LLM claimed an action but didn't call the tool.
-                        // Inject verification prompt and continue the loop.
-                        tracing::warn!(
-                            claimed_action = %claimed_action,
-                            expected_tool = %expected_tool,
-                            "LLM claimed action without calling tool — injecting verification prompt"
-                        );
-
-                        // Add the LLM's response to messages (so it sees what it said)
-                        messages.push(ChatMessage::assistant(&response_text));
-
-                        // Inject verification prompt
-                        messages.push(ChatMessage::user(&verification_prompt));
-
-                        // Continue the loop — LLM must now actually use the tool
-                        iteration += 1;
-                        continue;
                     }
                 }
+                final_content = response.content;
+                break;
             }
 
             iteration += 1;
@@ -3245,7 +3222,7 @@ fn compact_browser_action_with_tree(output: &str, prefix: &str) -> String {
 
     // Hard truncation — we intentionally keep this small (UTF-8 safe)
     if compact.len() > MAX_CHARS {
-        truncate_utf8(&mut compact, MAX_CHARS);
+        truncate_utf8_in_place(&mut compact, MAX_CHARS);
         compact.push_str("\n...[truncated]");
     }
 
@@ -3261,7 +3238,7 @@ fn compact_browser_action_short(output: &str) -> String {
         // No header found — keep first 500 chars of output
         let truncated = if output.len() > 500 {
             let mut s = output.to_string();
-            truncate_utf8(&mut s, 500);
+            truncate_utf8_in_place(&mut s, 500);
             s.push_str("...");
             s
         } else {
@@ -3272,19 +3249,6 @@ fn compact_browser_action_short(output: &str) -> String {
     header_lines.join("\n")
 }
 
-/// Truncate a string to at most `max_bytes`, snapping to a char boundary.
-/// Never panics on multi-byte UTF-8 characters.
-fn truncate_utf8(s: &mut String, max_bytes: usize) {
-    if s.len() <= max_bytes {
-        return;
-    }
-    // Walk backwards from max_bytes to find a valid char boundary
-    let mut end = max_bytes;
-    while !s.is_char_boundary(end) && end > 0 {
-        end -= 1;
-    }
-    s.truncate(end);
-}
 
 /// Split browser tool output into header lines and accessibility tree lines.
 fn split_browser_output(output: &str) -> (Vec<&str>, Vec<&str>) {

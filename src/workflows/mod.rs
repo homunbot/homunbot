@@ -10,6 +10,7 @@ pub mod db;
 pub mod engine;
 
 use serde::{Deserialize, Serialize};
+use crate::utils::text::truncate_str;
 
 // ── Status enums ─────────────────────────────────────────────────────
 
@@ -244,7 +245,7 @@ impl WorkflowEvent {
                 result_summary,
                 ..
             } => {
-                let summary = truncate(result_summary, 200);
+                let summary = truncate_str(result_summary, 200, "\u{2026}");
                 format!("[Workflow] Step {step_idx} \"{step_name}\" completed: {summary}")
             }
             Self::ApprovalNeeded {
@@ -254,7 +255,7 @@ impl WorkflowEvent {
                 step_instruction,
                 ..
             } => {
-                let instruction = truncate(step_instruction, 300);
+                let instruction = truncate_str(step_instruction, 300, "\u{2026}");
                 format!(
                     "[Workflow] \"{workflow_name}\" paused — approval needed for step {step_idx} \"{step_name}\":\n{instruction}\n\nReply \"approve {workflow_name}\" to continue or \"cancel {workflow_name}\" to abort."
                 )
@@ -271,7 +272,7 @@ impl WorkflowEvent {
                 error,
                 ..
             } => {
-                let err = truncate(error, 300);
+                let err = truncate_str(error, 300, "\u{2026}");
                 format!("[Workflow] \"{workflow_name}\" failed: {err}")
             }
         }
@@ -350,21 +351,12 @@ impl WorkflowEvent {
                 "status": "failed",
                 "completed_steps": *step_idx,
                 "total_steps": total_steps,
-                "error": truncate(error, 200),
+                "error": truncate_str(error, 200, "\u{2026}"),
             }),
         }
     }
 }
 
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        let mut result: String = s.chars().take(max.saturating_sub(1)).collect();
-        result.push('…');
-        result
-    }
-}
 
 #[cfg(test)]
 mod tests {

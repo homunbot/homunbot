@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 
 use super::registry::{get_optional_bool, get_optional_string, Tool, ToolContext, ToolResult};
 use crate::config::{Config, EmailAccountConfig};
+use crate::utils::text::truncate_str;
 
 #[cfg(feature = "channel-email")]
 use async_imap::types::Fetch;
@@ -218,15 +219,6 @@ fn strip_html(html: &str) -> String {
     result.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn truncate_chars(input: &str, max_chars: usize) -> String {
-    let char_count = input.chars().count();
-    if char_count <= max_chars {
-        return input.to_string();
-    }
-    let mut out: String = input.chars().take(max_chars).collect();
-    out.push_str("...");
-    out
-}
 
 #[cfg(feature = "channel-email")]
 async fn open_imap_session(config: &EmailAccountConfig, password: &str) -> Result<ImapSession> {
@@ -330,7 +322,7 @@ async fn fetch_inbox(
         } else {
             String::new()
         };
-        let body = truncate_chars(body_text.trim(), max_body_chars);
+        let body = truncate_str(body_text.trim(), max_body_chars, "...");
 
         let message_id = parsed
             .message_id()
@@ -365,9 +357,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_truncate_chars() {
-        assert_eq!(truncate_chars("ciao", 10), "ciao");
-        assert_eq!(truncate_chars("0123456789", 5), "01234...");
+    fn test_truncate_str() {
+        assert_eq!(truncate_str("ciao", 10, "..."), "ciao");
+        assert_eq!(truncate_str("0123456789", 5, "..."), "01...");
     }
 
     #[test]
