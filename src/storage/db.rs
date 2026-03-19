@@ -2097,6 +2097,7 @@ impl Database {
     // --- Trusted devices (REM-3) ---
 
     /// Insert a new trusted device (pending approval).
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_trusted_device(
         &self,
         id: &str,

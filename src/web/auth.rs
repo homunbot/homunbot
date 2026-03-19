@@ -172,7 +172,7 @@ impl SessionStore {
         let rng = SystemRandom::new();
         let mut id_bytes = [0u8; SESSION_ID_LEN];
         rng.fill(&mut id_bytes).expect("RNG failed");
-        let session_id = B64.encode(&id_bytes);
+        let session_id = B64.encode(id_bytes);
 
         let mut csrf_bytes = [0u8; 32];
         rng.fill(&mut csrf_bytes).expect("RNG failed");
