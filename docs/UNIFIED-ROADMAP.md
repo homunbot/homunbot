@@ -12,7 +12,7 @@
 |---------|--------|
 | LOC Rust | ~87,400 |
 | LOC Frontend | ~19,000 (JS) + ~10,000 (CSS) |
-| Test | 690 passing |
+| Test | 750 passing |
 | Canali | 7 (CLI, Telegram✅, Discord⚠️, WhatsApp⚠️, Slack⚠️, Email✅, Web✅) |
 | Tool built-in | ~20 |
 | Web UI Pages | 20 |
@@ -312,6 +312,7 @@ Questi non sono feature — sono manutenzione continua. Si fanno quando si tocca
 
 | Area | Stato | Azione |
 |---|---|---|
+| DRY refactor (R1-R7) | ✅ DONE 2026-03-19 | `utils/text.rs` (truncate), `utils/watcher.rs` (WatcherHandle), `Config::*_dir()`, dead code, naming. 37 file, -171 LOC nette |
 | File split (FS-*) | 44 file Rust + 12 JS over limit | Split quando si tocca il file, non come sprint |
 | RAG format coverage | 8 formati con parsing reale, 25+ plain text fallback | Aggiungere parser quando serve (TypeScript AST, Python AST) |
 | Browser E2E in CI | Smoke manuale, non in CI | Promuovere a CI con TST-1 |
