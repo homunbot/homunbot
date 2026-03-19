@@ -1,4 +1,5 @@
 mod account;
+mod agents;
 mod approvals;
 mod automations;
 mod browser;
@@ -70,7 +71,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .merge(workflows::routes())
         .merge(business::routes())
         .merge(contacts::routes())
-        .merge(onboarding::routes());
+        .merge(onboarding::routes())
+        .merge(agents::routes());
 
     // --- Knowledge Base (RAG) ---
     #[cfg(feature = "embeddings")]

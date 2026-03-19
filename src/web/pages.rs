@@ -21,6 +21,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/workflows", get(workflows_page))
         .route("/skills", get(skills_page))
         .route("/mcp", get(mcp_page))
+        .route("/agents", get(agents_page))
         .route(
             "/mcp/oauth/google/callback",
             get(mcp_google_oauth_callback_page),
@@ -94,6 +95,7 @@ const TOOLS_PAGES: &[&str] = &[
     "skills",
     "mcp",
     "contacts",
+    "agents",
     "memory",
     "knowledge",
     "vault",
@@ -204,7 +206,8 @@ fn content_subnav(active: &str) -> String {
                 <div class="subnav-section">Ecosystem</div>
                 <a href="/skills" class="sidebar-subnav-link{5}">Skills</a>
                 <a href="/mcp" class="sidebar-subnav-link{6}">MCP Servers</a>
-                <a href="/vault" class="sidebar-subnav-link{7}">Vault</a>
+                <a href="/agents" class="sidebar-subnav-link{7}">Agents</a>
+                <a href="/vault" class="sidebar-subnav-link{8}">Vault</a>
             </aside>"#,
             a("automations"),
             a("workflows"),
@@ -213,6 +216,7 @@ fn content_subnav(active: &str) -> String {
             a("knowledge"),
             a("skills"),
             a("mcp"),
+            a("agents"),
             a("vault"),
         )
     } else if SETTINGS_PAGES.contains(&active) {
@@ -4709,4 +4713,92 @@ async fn onboarding_page() -> Html<String> {
         body,
         &["accent-utils.js", "onboarding.js"],
     ))
+}
+
+/// Multi-agent management page.
+async fn agents_page(State(_state): State<Arc<AppState>>) -> Html<String> {
+    let body = r##"<main class="content">
+        <div class="content-inner">
+            <div class="page-header">
+                <div class="page-title-group">
+                    <h1 class="page-title">Agents</h1>
+                    <span class="badge badge-info" id="agent-count">0</span>
+                </div>
+                <div class="actions">
+                    <button class="btn btn-primary btn-sm" id="add-agent-btn">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"><path d="M8 3v10M3 8h10"/></svg>New Agent
+                    </button>
+                </div>
+            </div>
+
+            <section class="section" id="routing-section">
+                <h2>Routing</h2>
+                <div class="form form--inline">
+                    <div class="form-group">
+                        <label for="classifier-model">Classifier Model</label>
+                        <select id="classifier-model" class="input">
+                            <option value="">Disabled (config-only routing)</option>
+                        </select>
+                        <small class="form-help">Fast model that classifies messages and picks the right agent.</small>
+                    </div>
+                    <button class="btn btn-sm" id="save-routing-btn">Save</button>
+                </div>
+            </section>
+
+            <section class="section">
+                <h2>Agent Definitions</h2>
+                <div class="provider-grid" id="agent-grid">
+                    <div class="empty-state" id="agents-empty">
+                        <p>No custom agents defined. The default agent handles all messages.</p>
+                        <p>Create agents to specialize handling by channel, contact, or message type.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Create/Edit Modal -->
+            <div class="modal-overlay" id="agent-modal" style="display:none">
+                <div class="modal">
+                    <div class="modal-header">
+                        <h2 id="modal-title">New Agent</h2>
+                        <button class="btn btn-ghost btn-sm" id="modal-close">&times;</button>
+                    </div>
+                    <form id="agent-form" class="form">
+                        <div class="form-group">
+                            <label for="af-id">Agent ID</label>
+                            <input id="af-id" name="id" class="input" type="text" placeholder="e.g. coder, researcher" pattern="[a-z0-9_-]+" required>
+                            <small class="form-help">Lowercase, no spaces. Used in config and routing.</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="af-model">Model</label>
+                            <select id="af-model" name="model" class="input">
+                                <option value="">Inherit from global</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="af-instructions">Instructions</label>
+                            <textarea id="af-instructions" name="instructions" class="input" rows="4" placeholder="Task-oriented instructions for this agent..."></textarea>
+                        </div>
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="af-tools">Allowed Tools</label>
+                                <input id="af-tools" name="tools" class="input" placeholder="shell, file_read (empty = all)">
+                                <small class="form-help">Comma-separated. Empty = all tools.</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="af-concurrency">Max Concurrency</label>
+                                <input id="af-concurrency" name="max_concurrency" class="input" type="number" min="0" value="0">
+                                <small class="form-help">0 = use global setting.</small>
+                            </div>
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-primary">Save</button>
+                            <button type="button" class="btn btn-ghost" id="modal-cancel">Cancel</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </main>"##;
+
+    Html(page_html("Agents", "agents", body, &["model-loader.js", "agents.js"]))
 }
