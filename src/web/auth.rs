@@ -847,7 +847,7 @@ pub async fn login_handler(
     tracing::info!(username = %user.username, client_ip = %client_ip, "User logged in via web UI");
 
     let session_cookie = format!(
-        "{}={}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={}",
+        "{}={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}",
         SESSION_COOKIE_NAME, signed_cookie, session_ttl
     );
     // CSRF cookie: readable by JS (no HttpOnly) for X-CSRF-Token header
@@ -883,7 +883,7 @@ pub async fn logout_handler(State(state): State<Arc<AppState>>, req: Request) ->
 
     // Clear cookies
     let clear_session = format!(
-        "{}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0",
+        "{}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0",
         SESSION_COOKIE_NAME
     );
     let clear_csrf = "homun_csrf=; Secure; SameSite=Strict; Path=/; Max-Age=0".to_string();
@@ -1133,7 +1133,7 @@ pub async fn setup_handler(
     let signed_cookie = session_store.sign_cookie(&session_id);
 
     let session_cookie = format!(
-        "{}={}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={}",
+        "{}={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}",
         SESSION_COOKIE_NAME, signed_cookie, session_ttl
     );
     let csrf_cookie = format!(
