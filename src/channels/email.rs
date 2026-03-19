@@ -986,6 +986,7 @@ mod tests {
             send_delay_secs: 30,
             persona: "bot".to_string(),
             tone_of_voice: String::new(),
+            default_agent: String::new(),
         }
     }
 
