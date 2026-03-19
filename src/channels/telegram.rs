@@ -3,7 +3,6 @@
 //! This implementation uses the `frankenstein` crate instead of `teloxide`
 //! for better reqwest compatibility and simpler architecture.
 
-use std::collections::HashSet;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -22,8 +21,6 @@ use crate::config::TelegramConfig;
 
 /// Context passed to message handler (avoids too many function arguments).
 struct BotContext {
-    allow_from: HashSet<String>,
-    allow_all: bool,
     mention_required: bool,
     bot_id: u64,
     bot_username: String,
@@ -55,8 +52,6 @@ impl Channel for TelegramChannel {
     ) -> Result<()> {
         let api = Bot::new(&self.config.token);
 
-        let allow_from: HashSet<String> = self.config.allow_from.iter().cloned().collect();
-        let allow_all = allow_from.is_empty();
         let mention_required = self.config.mention_required;
 
         // Fetch bot identity for mention detection
@@ -65,16 +60,12 @@ impl Channel for TelegramChannel {
         let bot_username = me.result.username.unwrap_or_default().to_lowercase();
 
         tracing::info!(
-            allow_from = ?self.config.allow_from,
-            allow_all,
             mention_required,
             bot_username = %bot_username,
             "Telegram channel (Frankenstein) starting"
         );
 
         let ctx = BotContext {
-            allow_from,
-            allow_all,
             mention_required,
             bot_id,
             bot_username,
@@ -133,10 +124,7 @@ impl TelegramChannel {
             .unwrap_or_default();
         let chat_id = msg.chat.id;
 
-        if !ctx.allow_all && !ctx.allow_from.contains(&sender_id) {
-            tracing::warn!(sender_id = %sender_id, "Unauthorized user");
-            return;
-        }
+        // Auth is handled by the gateway — channels are transport-only.
 
         // Extract text content + optional file attachment
         let mut attachment_path: Option<String> = None;

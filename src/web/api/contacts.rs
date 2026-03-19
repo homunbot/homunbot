@@ -78,6 +78,9 @@ struct CreateContactRequest {
     preferred_channel: Option<String>,
     response_mode: Option<String>,
     tags: Option<String>,
+    tone_of_voice: Option<String>,
+    persona_override: Option<String>,
+    persona_instructions: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -146,6 +149,7 @@ async fn create_contact(
             body.preferred_channel.as_deref(),
             body.response_mode.as_deref(),
             body.tags.as_deref(),
+            body.tone_of_voice.as_deref(),
         )
         .await
         .map_err(internal)?;

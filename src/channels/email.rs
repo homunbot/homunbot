@@ -634,11 +634,7 @@ async fn process_unseen_account(
             .map(|s| s.to_string())
             .unwrap_or_else(|| format!("email-{uid}-{}", Utc::now().timestamp()));
 
-        // Allowlist check
-        if !EmailChannel::is_sender_allowed(&sender, &config.allow_from) {
-            warn!(account = account_name, sender = %sender, "Blocked email");
-            continue;
-        }
+        // Auth is handled by the gateway — channels are transport-only.
 
         // Deduplication
         let is_new = {
@@ -988,6 +984,8 @@ mod tests {
             batch_threshold: 3,
             batch_window_secs: 120,
             send_delay_secs: 30,
+            persona: "bot".to_string(),
+            tone_of_voice: String::new(),
         }
     }
 

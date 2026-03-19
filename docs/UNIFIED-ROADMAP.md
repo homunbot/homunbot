@@ -74,6 +74,16 @@ La strategia è **consolidare il nucleo e aprirlo al mondo esterno** in ordine d
 | PRO-2 | **Proactive messaging Slack** | 2 giorni | ✅ DONE (2026-03-18) — default_channel_id config, fallback a channel_id, startup warning. Proactive via chat.postMessage + routing in active_channels_with_chat_ids |
 | PRO-3 | **Proactive messaging WhatsApp** | 3 giorni | ✅ DONE (2026-03-18) — già funzionante via phone_number→JID in active_channels_with_chat_ids. Aggiunto typing indicator (composing/paused), presence online, startup warning |
 | CAP-1 | **Channel capability matrix** | 3 giorni | ✅ DONE (2026-03-18) — `ChannelCapabilities` struct, `capabilities_for()`, system prompt injection, send_message soft warnings. 7 test. ~190 LOC |
+| CHR-2 | **Unified auth (fail-closed)** | — | ✅ DONE (2026-03-18) — Auth spostata dai canali al gateway. `agent/auth.rs` con pipeline: allow_from → contact DB live lookup → pairing/reject. Tutti i canali fail-closed. Email domain matching preservato. 5 test |
+| CHR-3 | **Per-channel persona** | — | ✅ DONE (2026-03-18) — Persona bot/owner/company/custom per canale e per contatto. Priority chain: contact > channel > "bot". Tone of voice chain analoga. `agent/persona.rs` resolver + `PersonaSection` nel prompt builder. Migration 023. 6 test |
+| CHR-4 | **MCP channel support** | — | ✅ DONE (2026-03-18) — `channels/mcp_channel.rs` + `McpChannelConfig`. Gateway startup + auth pipeline per canali MCP. Scaffold per messaging protocol (attende spec MCP messaging) |
+| CHR-5 | **Memory scoping by contact** | — | ✅ DONE (2026-03-18) — `contact_id` su memory_chunks (migration 024). `search_scoped()` in memory_search.rs filtra per contact + globale. Consolidation passa None (TODO: resolve da session_key) |
+| CHR-6 | **ChannelBehavior trait** | — | ✅ DONE (2026-03-19) — Trait unificato con 7 metodi (persona, tone, response_mode, notify, allow_from, pairing). Implementato su 6 config canale. `behavior_for()` unico punto di lookup. Eliminati 4+ match ripetuti |
+| LLM-1 | **LLM request queue con priorità** | 1 settimana | ✅ DONE (2026-03-19) — `QueuedProvider` in `provider/queued.rs`: tokio::Semaphore per-provider (auto: 1 local, 5 cloud, configurabile via `llm_max_concurrent`). `RequestPriority` 3 livelli (High/Normal/Low) su `ChatRequest`. Yield-loop scheduling: Low cede a High+Normal. Wrappa ReliableProvider in factory.rs, trasparente a tutti i call site |
+| MAG-1 | **Multi-agent: agent definitions** | 1 settimana | ✅ DONE (2026-03-19) — `AgentDefinition` in `agent/definition.rs`: struct con model/instructions/tools/skills/concurrency. `AgentDefinitionConfig` in schema.rs per parsing `[agents.*]` TOML. `AgentInstructionsSection` nel prompt builder. `with_agent_definition()` su AgentLoop (tool+skill filter). Gateway risolve definizioni in `run()`. 11 test. Backward-compat: nessun `[agents.*]` → "default" sintetizzato da `[agent]` |
+| MAG-2 | **Multi-agent: registry + config router** | 1 settimana | ✅ DONE (2026-03-19) — `AgentRegistry` in `agent/registry.rs`: pool di N AgentLoop (uno per definizione), `route()` config-based (contact.agent_override > channel.default_agent > "default"). `default_agent` su ChannelBehavior trait (7 config canale). Migration 025 per `contact.agent_override`. Gateway usa registry con routing nel debounce dispatch. `for_each_mut()` per setter condivisi. 3 test |
+| MAG-3 | **Multi-agent: LLM router** | 3 giorni | Fast model classifica il messaggio e sceglie l'agente. Cache per-session |
+| MAG-4 | **Multi-agent: pipeline orchestration** | 1 settimana | Estende workflow engine. Pipeline step: agent A → output → agent B. Parallel + merge |
 
 #### 1B. Sicurezza Prompt Injection (P0)
 
@@ -99,8 +109,14 @@ Stato: SEC-6/7/8/11/12/13/14/15 tutti ✅ DONE. Scudo anti-injection completo.
 |---|------|--------|------|
 | ONB-1 | **Setup wizard v2** | 1 settimana | ✅ DONE (2026-03-18) — 4 step (provider → model → test → first message), localStorage checkpoint con expiry 24h, resume su reload, redirect a /chat per step 4 |
 | ONB-2 | **Flusso Ollama locale** | 3 giorni | ✅ DONE (2026-03-18) — Auto-detect Ollama nel wizard, banner "No API key?", select modello + pull + activate one-click. Suggerisce llama3.2:3b/gemma3:4b se nessun modello installato |
-| ONB-4 | **Onboarding Experience** | 2 settimane | REDESIGN: esperienza completa first-run. Side panel con checklist, multi-lingua (EN+IT), 5 fasi: conosci utente → provider (cloud/Ollama) → canali → test → primo messaggio. Assorbe ONB-1/2/AUD-2. Spec in `docs/design/ONBOARDING-SPEC.md` |
-| AUD-2 | **Feature gating doc** | — | Assorbito in ONB-4 (spiegato inline durante onboarding) |
+| ONB-4 | **Onboarding Experience** | 2 settimane | ✅ DONE (2026-03-18) — Redesign completo v2: usa `page_html()` con vera nav bar, 4 fasi (Welcome+theme/accent, Provider+Model, Channels, Meet Homun con chat LLM streaming), accent-utils.js condiviso, i18n EN+IT, mobile responsive |
+| AUD-2 | **Feature gating doc** | — | ✅ Assorbito in ONB-4 |
+| CHR-1 | **Chat rename UX** | — | ✅ DONE (2026-03-18) — Optimistic update, no more timing gap, blur guard |
+| CTC-1 | **Contacts UX overhaul** | — | ✅ DONE (2026-03-18) — Pagina ristrutturata come Workflows (page-header + badge + inline form), identità nel form creazione, form inline per add identity/relationship/event, nomi contatto nelle relazioni |
+| HRL-1 | **Channel hot-reload** | — | ✅ DONE (2026-03-18) — `ChannelCommand::Start` + `SharedOutboundSenders`, canali avviabili senza restart gateway, auto-trigger dopo WhatsApp pairing, `POST /v1/channels/{name}/start` |
+| PRO-4 | **Proactive messaging contacts** | — | ✅ DONE (2026-03-18) — `known_chat_ids` pre-seeded da identità contatti, tool messages pre-registrano chat_id, `contacts send` restituisce chat_id corretto (JID WhatsApp) |
+| BHV-1 | **Unified channel behavior** | — | ✅ DONE (2026-03-18) — Assisted/on_demand/silent per tutti i canali (non solo email). Config: `notify_channel` + `notify_chat_id` su Telegram/WhatsApp/Discord/Slack. `pending_responses` con notify routing (migration 021). Approval interception generico. UI Behavior section nel modale Channels |
+| WA-1 | **WhatsApp self-message filter** | — | ✅ DONE (2026-03-18) — Messaggi `is_from_me` ignorati (non solo bot echo, anche messaggi scritti dal telefono) |
 
 ---
 

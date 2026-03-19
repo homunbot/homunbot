@@ -68,6 +68,8 @@ pub struct AppState {
     pub api_rate_limiter: Arc<auth::RateLimiter>,
     /// Tool registry — shared with AgentLoop for listing registered tools.
     pub tool_registry: Option<Arc<tokio::sync::RwLock<crate::tools::ToolRegistry>>>,
+    /// Channel command sender — for hot-starting channels after config/pairing.
+    pub channel_cmd_tx: Option<mpsc::Sender<crate::agent::gateway::ChannelCommand>>,
 }
 
 impl AppState {
@@ -97,6 +99,7 @@ pub struct WebServer {
     business_engine: Option<Arc<crate::business::engine::BusinessEngine>>,
     estop_handles: Arc<tokio::sync::RwLock<EStopHandles>>,
     tool_registry: Option<Arc<tokio::sync::RwLock<crate::tools::ToolRegistry>>>,
+    channel_cmd_tx: Option<mpsc::Sender<crate::agent::gateway::ChannelCommand>>,
 }
 
 impl WebServer {
@@ -123,6 +126,7 @@ impl WebServer {
             business_engine: None,
             estop_handles: Arc::new(tokio::sync::RwLock::new(EStopHandles::default())),
             tool_registry: None,
+            channel_cmd_tx: None,
         }
     }
 
@@ -156,6 +160,13 @@ impl WebServer {
         registry: Arc<tokio::sync::RwLock<crate::tools::ToolRegistry>>,
     ) {
         self.tool_registry = Some(registry);
+    }
+
+    pub fn set_channel_cmd_tx(
+        &mut self,
+        tx: mpsc::Sender<crate::agent::gateway::ChannelCommand>,
+    ) {
+        self.channel_cmd_tx = Some(tx);
     }
 
     /// Set the workflow engine for multi-step orchestration API endpoints.
@@ -200,6 +211,7 @@ impl WebServer {
             business_engine: None,
             estop_handles: Arc::new(tokio::sync::RwLock::new(EStopHandles::default())),
             tool_registry: None,
+            channel_cmd_tx: None,
         }
     }
 
@@ -265,6 +277,7 @@ impl WebServer {
             auth_rate_limiter: auth_rate_limiter.clone(),
             api_rate_limiter: api_rate_limiter.clone(),
             tool_registry: self.tool_registry,
+            channel_cmd_tx: self.channel_cmd_tx,
         });
 
         // If we have outbound messages, spawn task to route them to WebSocket sessions

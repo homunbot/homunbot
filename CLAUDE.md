@@ -286,6 +286,8 @@ static/
 - Autonomy levels, transaction tracking.
 - 13 LLM tool actions.
 
+---
+
 ## Rust Conventions
 
 ### General
@@ -328,6 +330,144 @@ static/
 
 Keep dependencies lean. Do NOT add unnecessary crates.
 
+---
+
+## Regole di Programmazione
+
+> Queste regole si applicano a ogni modifica, grande o piccola. Prima di consegnare qualsiasi implementazione, verifica mentalmente questa lista. Se stai violando una regola, riscrivi o chiedi conferma prima di procedere.
+
+### DRY — Don't Repeat Yourself
+
+- **Prima di creare qualsiasi cosa**: cerca nel codebase se esiste già logica simile. Estendila, non duplicarla.
+- Estrai funzioni/metodi non appena la stessa logica appare **2+ volte** — anche se le occorrenze sono in file diversi.
+- Preferisci parametrizzare piuttosto che duplicare con piccole variazioni.
+- **Pattern già esistenti — riusali sempre**:
+  - `provider/one_shot.rs` → qualsiasi chiamata LLM non-conversazionale (mai creare chiamate reqwest ad-hoc)
+  - `utils/retry.rs` → qualsiasi operazione di rete che richiede retry (mai scrivere loop retry custom)
+  - `storage/db.rs` → qualsiasi operazione SQLite (mai aprire nuove connessioni)
+  - `web/auth.rs` → qualsiasi check auth/rate-limit (mai reimplementare)
+  - `tools/registry.rs` → registrazione tool (segui il pattern esistente esattamente)
+  - `channels/traits.rs` → astrazione canale (implementa il trait, non inventare nuovi flussi)
+- **Refactor > duplica**: se due moduli condividono >20 righe di logica simile, estrai una funzione o trait condiviso.
+- **CSS**: riusa i design token di `static/css/style.css`. Mai hardcodare colori, spaziature o font. Usa variabili CSS (`var(--*)`).
+- **JS**: prima di scrivere un nuovo pattern UI, controlla se esiste già in un altro file JS della pagina.
+
+### Analisi Strutturale Prima di Ogni Implementazione
+
+**Obbligatorio** prima di creare qualsiasi nuovo file o struct: esegui questa analisi.
+
+#### Step 1 — Cerca duplicati strutturali
+Quando ti viene chiesto di aggiungere `XyzHandler`, `XyzClient`, `XyzProcessor` o simili,
+cerca nel codebase pattern con la stessa forma:
+```
+rg "struct.*Handler" src/
+rg "struct.*Client" src/
+rg "async fn execute" src/
+rg "async fn run" src/
+```
+
+Se trovi 2+ struct con metodi simili → vai a Step 2. Altrimenti procedi normalmente.
+
+#### Step 2 — Valuta se esiste già un'astrazione
+Chiediti:
+- Esiste già un trait che queste struct potrebbero implementare?
+- Se non esiste, dovrei crearne uno prima?
+- Le struct esistenti andrebbero refactorate per implementarlo?
+
+Criteri per creare un nuovo trait:
+- 2+ implementazioni esistenti o pianificate
+- I metodi core sono identici nella firma (anche se diversi nell'implementazione)
+- Il codice chiamante potrebbe usare `dyn Trait` o `impl Trait` invece di tipi concreti
+
+#### Step 3 — Proponi prima di scrivere
+Se individui un'opportunità di astrazione, **fermati e proponi** prima di implementare:
+
+> "Ho notato che `EmailSender` e `TelegramSender` hanno entrambi `send(msg)` e `name()`.
+> Prima di aggiungere `SlackSender`, propongo di estrarre un trait `MessageSender`.
+> Vuoi che proceda con il refactor, o aggiungo `SlackSender` direttamente?"
+
+Non fare il refactor silenziosamente. Non ignorare l'opportunità. Sempre segnala e chiedi.
+
+### Interfacce e Astrazioni
+
+- **Definisci sempre un trait prima** di implementare oggetti con comportamento simile. Il trait va in `{dominio}/traits.rs`.
+- Gli oggetti concreti non devono mai dipendere da altri oggetti concreti — solo da astrazioni (trait o `Arc<dyn Trait>`).
+- Se due struct condividono campi o comportamenti, considera un trait condiviso o una struct base.
+- **Quando creare un trait vs una funzione libera**:
+  - Trait: quando esistono o esisteranno più implementazioni (es. più provider, più canali).
+  - Funzione libera: quando la logica è unica e non ha varianti polimorfiche.
+- **Extend over replace**: aggiungi varianti a enum esistenti, metodi a impl esistenti, campi a struct esistenti. Non creare tipi paralleli.
+- **Enum esaustivi**: quando aggiungi una variante a un enum, cerca tutti i `match` su quell'enum nel codebase e gestisci il nuovo caso. Non usare `_ =>` per nascondere i casi mancanti.
+
+### Naming Conventions
+
+- **Funzioni**: `snake_case`, verbo + sostantivo (`send_message`, `load_skill`, `parse_config`).
+- **Struct/Trait/Enum**: `PascalCase`, sostantivo (`SkillLoader`, `ProviderError`, `ChannelKind`).
+- **Costanti**: `SCREAMING_SNAKE_CASE` (`MAX_RETRY_COUNT`, `DEFAULT_TIMEOUT_SECS`).
+- **Varianti di enum**: `PascalCase`, concise e non ridondanti (`Provider::Anthropic` non `Provider::AnthropicProvider`).
+- **Booleani**: inizia con `is_`, `has_`, `can_`, `should_` (`is_enabled`, `has_vision`, `can_retry`).
+- **Evita abbreviazioni** non standard: `config` va bene, `cfg` solo se è il nome del modulo Rust. Mai `mgr`, `hlpr`, `proc`.
+- **Nomi coerenti tra Rust e JS**: se un concetto si chiama `skill` in Rust, non chiamarlo `plugin` nel JS.
+
+### Struttura degli `impl` Block
+
+Mantieni un ordine coerente all'interno di ogni `impl`:
+
+```
+1. Costruttori (new, from_config, default)
+2. Metodi pubblici principali (logica core)
+3. Metodi pubblici di utilità (getter, helper pubblici)
+4. Metodi privati (logica interna)
+```
+
+- Un solo `impl` per struct/trait per file, salvo casi eccezionali (`impl From<X>` separato è accettabile).
+- Se l'impl supera ~150 righe, valuta se ha troppe responsabilità → split del file.
+
+### Dimensioni dei File
+
+- **Hard limit**: nessun file Rust oltre 500 righe. Se un file si avvicina a 400 righe, pianifica uno split.
+- **Target**: 200-300 righe per file. Una responsabilità per file.
+- **Come splittare**: estrai in una directory-submodule (es. pattern `tools/sandbox/`). Il `mod.rs` rimane thin: solo re-export + orchestrazione.
+- **File JS**: stesso limite di 500 righe. I file grandi esistenti (automations.js, chat.js) sono grandfathered, ma le nuove feature vanno in file separati.
+- **Mai compattare arbitrariamente**: non unire file piccoli "per semplicità". Ogni file ha una ragione di esistere.
+
+### Organizzazione delle Cartelle
+
+- Segui la struttura esistente del progetto — non creare nuove cartelle senza discuterne.
+- Raggruppa per **dominio/feature**, non per tipo di file (`/agent/`, `/tools/`, `/channels/` — non `/structs/`, `/helpers/`).
+- I moduli pubblici espongono le API via `mod.rs` con re-export espliciti (`pub use`).
+- I tipi condivisi tra più moduli vanno in `{dominio}/types.rs` o `{dominio}/mod.rs`, non duplicati.
+- I file di test restano separati dal codice produzione: `#[cfg(test)] mod tests` per unit test, `tests/` per integration test.
+
+### Commenti e Documentazione
+
+**Cosa documentare (obbligatorio):**
+- Ogni `pub fn`, `pub struct`, `pub trait`, `pub enum` → doc comment `///`.
+- Ogni modulo pubblico (`mod.rs`) → `//! Module-level doc` che spiega il dominio in 1-2 righe.
+- Ogni campo di struct non ovvio → commento inline `//`.
+- Blocchi di logica complessa o non ovvia → commento `//` prima del blocco che spiega il **perché**.
+
+**Come scrivere i commenti:**
+- I commenti spiegano il **perché**, non il **cosa** — il codice deve essere autoesplicativo.
+- ❌ `// incrementa il contatore` → ✅ `// il rate limiter usa finestre da 60s, resetta qui`
+- ❌ `// crea il provider` → ✅ `// usa ReliableProvider per avere failover automatico`
+- Per le `pub fn`, la prima riga del `///` è il sommario (una frase). Poi riga vuota, poi dettagli se necessari.
+- Documenta i **casi d'errore** rilevanti: `/// Returns Err if the vault is locked or the key is missing.`
+
+**Cosa NON fare:**
+- Niente commenti TODO abbandonati — o risolvi subito o apri un issue tracciato nel roadmap.
+- Niente codice commentato lasciato nel codebase — usa git per la storia.
+- Niente commenti che riformulano il codice (`// calls send_message` sopra `send_message()`).
+
+### Dead Code e Feature Discipline
+
+- **Niente codice morto**: se una funzione non è usata, rimuovila. Non aggiungere `#[allow(dead_code)]` salvo casi documentati.
+- **Niente feature sperimentali nascoste**: se una feature è WIP, deve stare in un branch, non nel main commentata o dietro un flag non documentato.
+- **`#[cfg(feature = "...")]`**: usalo solo per feature genuinamente opzionali e documentale in `Cargo.toml` con una descrizione.
+- **Import inutilizzati**: rimuovili sempre. `cargo check` li segnala — non ignorarli.
+
+---
+
 ## CLI Commands
 
 ```
@@ -355,13 +495,6 @@ homun service install        # Install as OS service (launchd/systemd)
 5. Migrations in `migrations/` are auto-applied on startup.
 
 ## Development Conventions
-
-### File Size Discipline
-- **Hard limit**: no Rust file over 500 lines. If a file approaches 400 lines, plan a split.
-- **Target**: 200-300 lines per file. One concern per file.
-- **When splitting**: extract into a submodule directory (e.g., `tools/sandbox/` pattern). Keep the `mod.rs` as thin re-export + orchestration.
-- **JS files**: same 500-line limit. Large pages (automations.js, chat.js) are grandfathered but new features go in separate files.
-- **Never compact arbitrarily**: do not merge small files "for simplicity". Each file has a reason to exist.
 
 ### Research Before Building
 Before implementing a new component or feature domain:
@@ -402,6 +535,7 @@ Before implementing a new component or feature domain:
 - **Every bug fix** requires a regression test.
 - **Integration tests** in `tests/` for cross-module behavior.
 - Tests are the only reliable validation for AI-generated code.
+- In tests, `.unwrap()` è accettabile — ma aggiungi un commento se l'unwrap non è ovvio (`// safe: test data is always valid`).
 
 ### Code Quality Gates
 - `cargo check` runs automatically after edits (via Claude Code hook).
@@ -409,19 +543,21 @@ Before implementing a new component or feature domain:
 - If `cargo check` fails after an edit, fix immediately before continuing.
 - Never skip or ignore compiler warnings.
 
-### DRY — Don't Repeat Yourself
-- **Before creating anything new**: search the codebase for existing code that does something similar. Extend it, don't duplicate.
-- **Common patterns already exist** — reuse them:
-  - `provider/one_shot.rs` → any non-conversational LLM call (don't create ad-hoc reqwest calls)
-  - `utils/retry.rs` → any network operation that needs retry (don't write custom retry loops)
-  - `storage/db.rs` → any SQLite operation (don't open new connections)
-  - `web/auth.rs` → any auth/rate-limit check (don't reimplement)
-  - `tools/registry.rs` → tool registration (follow the existing pattern exactly)
-  - `channels/traits.rs` → channel abstraction (implement the trait, don't invent new flows)
-- **Refactor over duplicate**: if two modules share >20 lines of similar logic, extract a shared function or trait.
-- **Extend over replace**: add variants to existing enums, methods to existing impls, fields to existing structs. Don't create parallel types.
-- **CSS**: reuse design tokens from `static/css/style.css`. Never hardcode colors, spacing, or font sizes. Use CSS variables (`var(--*)`).
-- **JS**: check if a similar UI pattern already exists in another page's JS before writing new code.
+### Checklist Pre-Consegna
+
+Prima di dichiarare una feature completa, verifica:
+
+- [ ] `cargo check` passa senza warning
+- [ ] `cargo clippy` passa senza warning
+- [ ] `cargo test` passa — nessun test ignorato o disabilitato
+- [ ] Nessun `unwrap()` in codice produzione
+- [ ] Nessun `TODO` abbandonato nel codice
+- [ ] Nessun `println!` — solo `tracing::*`
+- [ ] Ogni `pub fn`/`pub struct`/`pub trait` ha un `///` doc comment
+- [ ] Il file non supera 500 righe — se sì, hai pianificato lo split?
+- [ ] La logica è già presente altrove nel codebase? (DRY check)
+- [ ] I nomi di funzioni/struct/variabili rispettano le naming conventions?
+- [ ] `docs/UNIFIED-ROADMAP.md` aggiornato con le task completate
 
 ### Roadmap Tracking
 - **After completing a feature or significant change**, update `docs/UNIFIED-ROADMAP.md`:
@@ -439,6 +575,8 @@ Before implementing a new component or feature domain:
 - **CSS tokens only**: use `var(--accent)`, `var(--surface-*)`, `var(--text-*)` etc. Never hardcode values.
 - Use `/ux-review` and `/new-screen` commands for UI work.
 
+---
+
 ## What NOT to Do
 
 - Do NOT use `println!` — use `tracing::info!`, `tracing::debug!`, etc.
@@ -448,6 +586,11 @@ Before implementing a new component or feature domain:
 - Do NOT add Python/Node.js deps to the core binary.
 - Do NOT use `.clone()` excessively — prefer references and borrows.
 - Do NOT panic in library code — return `Result`.
+- Do NOT use `_ =>` in match expressions to hide enum variants non gestite — gestiscile esplicitamente.
+- Do NOT lasciare codice morto o commentato nel main branch.
+- Do NOT creare tipi paralleli se esiste già un tipo che puoi estendere.
+
+---
 
 ## Project Status
 
@@ -471,6 +614,8 @@ Before implementing a new component or feature domain:
 
 See `docs/UNIFIED-ROADMAP.md` for the full 4-phase plan.
 
+---
+
 ## Important Directories
 
 - `~/.homun/` — Data dir (config, db, memory)
@@ -490,6 +635,8 @@ See `docs/UNIFIED-ROADMAP.md` for the full 4-phase plan.
 - `~/.homun/brain/INSTRUCTIONS.md` — Learned instructions (consolidation)
 - `~/.homun/MEMORY.md` — Long-term memory (consolidation)
 - `~/.homun/memory/YYYY-MM-DD.md` — Daily memory files
+
+---
 
 ## Integration Points — Where New Code Plugs In
 
@@ -536,6 +683,8 @@ Quick reference for adding new components without re-reading the whole codebase.
 2. Optional `scripts/` dir for executable scripts
 3. Loaded automatically by `src/skills/loader.rs`
 
+---
+
 ## Grandfathered Files (Pre-Convention)
 
 These files exceed the 500-line limit and predate the convention. Do NOT split them unless explicitly asked — they work as-is. New code within them should follow conventions; new features should go in separate files.
@@ -554,6 +703,8 @@ These files exceed the 500-line limit and predate the convention. Do NOT split t
 
 **JS (>500 lines):**
 - `chat.js` (2.9K), `automations.js` (2.5K), `setup.js` (2.5K), `mcp.js` (1.7K), `skills.js` (1K)
+
+---
 
 ## Git Commit Guidelines
 

@@ -39,17 +39,6 @@ impl SlackChannel {
         !self.config.app_token.is_empty()
     }
 
-    /// Check if a Slack user ID is allowed to interact.
-    fn is_user_allowed(&self, user_id: &str) -> bool {
-        if self.config.allow_from.is_empty() {
-            return false;
-        }
-        self.config
-            .allow_from
-            .iter()
-            .any(|u| u == "*" || u == user_id)
-    }
-
     /// Get the bot's own user ID (to ignore own messages).
     async fn get_bot_user_id(&self) -> Result<String> {
         let resp = self
@@ -243,10 +232,7 @@ impl SlackChannel {
                 if user.is_empty() || user == bot_user_id {
                     continue;
                 }
-                if !self.is_user_allowed(user) {
-                    tracing::debug!("Slack: ignoring unauthorized user: {user}");
-                    continue;
-                }
+                // Auth is handled by the gateway — channels are transport-only.
 
                 let raw_text = event
                     .get("text")
@@ -471,9 +457,6 @@ impl SlackChannel {
                         if msg.bot_id.is_some() {
                             continue;
                         }
-                        if !self.is_user_allowed(user) {
-                            continue;
-                        }
                         if text.is_empty() || ts <= last_ts {
                             continue;
                         }
@@ -694,31 +677,7 @@ mod tests {
         assert_eq!(ch.name(), "slack");
     }
 
-    #[test]
-    fn empty_allowlist_denies_everyone() {
-        let ch = SlackChannel::new(make_config());
-        assert!(!ch.is_user_allowed("U12345"));
-        assert!(!ch.is_user_allowed("anyone"));
-    }
-
-    #[test]
-    fn wildcard_allows_everyone() {
-        let mut config = make_config();
-        config.allow_from = vec!["*".to_string()];
-        let ch = SlackChannel::new(config);
-        assert!(ch.is_user_allowed("U12345"));
-        assert!(ch.is_user_allowed("anyone"));
-    }
-
-    #[test]
-    fn specific_allowlist_filters() {
-        let mut config = make_config();
-        config.allow_from = vec!["U111".to_string(), "U222".to_string()];
-        let ch = SlackChannel::new(config);
-        assert!(ch.is_user_allowed("U111"));
-        assert!(ch.is_user_allowed("U222"));
-        assert!(!ch.is_user_allowed("U333"));
-    }
+    // Auth tests removed — authorization is now handled by the gateway (agent/auth.rs)
 
     #[test]
     fn socket_mode_detection() {

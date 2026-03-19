@@ -184,7 +184,7 @@ impl EmailApprovalHandler {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, PartialEq)]
-enum Command {
+pub(crate) enum Command {
     Approve,
     Reject,
     List,
@@ -195,7 +195,7 @@ enum Command {
 ///
 /// Examples: "ok" → (Approve, None), "ok 2" → (Approve, Some(1)), "rifiuta 3" → (Reject, Some(2))
 /// The index is 0-based internally (user types 1-based).
-fn parse_command_and_index(lower: &str) -> (Command, Option<usize>) {
+pub(crate) fn parse_command_and_index(lower: &str) -> (Command, Option<usize>) {
     let parts: Vec<&str> = lower.split_whitespace().collect();
     if parts.is_empty() {
         return (Command::Modify, None);

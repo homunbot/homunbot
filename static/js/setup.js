@@ -1825,6 +1825,19 @@ if (chModal && channelCards.length > 0) {
         emailModeSelect.addEventListener('change', updateEmailModeFields);
     }
 
+    // Chat channel behavior: show/hide notify fields based on response mode
+    var chResponseMode = document.getElementById('ch-response-mode');
+    if (chResponseMode) {
+        chResponseMode.addEventListener('change', function () {
+            var mode = chResponseMode.value;
+            var showNotify = mode === 'assisted';
+            var notifyCh = document.getElementById('ch-notify-channel-group');
+            var notifyCid = document.getElementById('ch-notify-chatid-group');
+            if (notifyCh) notifyCh.style.display = showNotify ? 'block' : 'none';
+            if (notifyCid) notifyCid.style.display = showNotify ? 'block' : 'none';
+        });
+    }
+
     // --- Channel subtitles (service description) ---
     const SUBTITLES = {
         telegram: 'Telegram Bot API \u2014 create a bot with @BotFather, paste the token, add your User ID (from @userinfobot).',
@@ -1922,6 +1935,10 @@ if (chModal && channelCards.length > 0) {
         if (chWebHostGroup) chWebHostGroup.style.display = isWeb ? 'block' : 'none';
         if (chWebPortGroup) chWebPortGroup.style.display = isWeb ? 'block' : 'none';
         if (chWaPairing) chWaPairing.style.display = 'none';
+        // Chat channel behavior group (response mode + notify)
+        var isChatChannel = ['telegram', 'whatsapp', 'discord', 'slack'].indexOf(currentChannel) >= 0;
+        var chBehaviorGroup = document.getElementById('ch-behavior-group');
+        if (chBehaviorGroup) chBehaviorGroup.style.display = isChatChannel ? 'block' : 'none';
         // Email notify/trigger shown by updateEmailModeFields
         if (chEmailNotifyGroup) chEmailNotifyGroup.style.display = 'none';
         if (chEmailTriggerGroup) chEmailTriggerGroup.style.display = 'none';
@@ -1984,6 +2001,12 @@ if (chModal && channelCards.length > 0) {
             if (triggerEl) triggerEl.value = card.dataset.emailTriggerWord || '';
             updateEmailModeFields();
         }
+
+        // Persona & tone from card data attributes
+        var personaEl = document.getElementById('ch-persona');
+        if (personaEl) personaEl.value = card.dataset.persona || 'bot';
+        var toneEl = document.getElementById('ch-tone');
+        if (toneEl) toneEl.value = card.dataset.toneOfVoice || '';
 
         // Reset test result
         chTestResult.textContent = '';
@@ -2069,6 +2092,11 @@ if (chModal && channelCards.length > 0) {
                         notifyChannelSelect.dispatchEvent(new Event('change'));
                     }
                 }
+                // Persona & tone from API
+                var pEl = document.getElementById('ch-persona');
+                if (pEl && data.persona) pEl.value = data.persona;
+                var toEl = document.getElementById('ch-tone');
+                if (toEl && data.tone_of_voice !== undefined) toEl.value = data.tone_of_voice;
             })
             .catch(function() { /* silently use card data fallback */ });
     }
@@ -2165,6 +2193,21 @@ if (chModal && channelCards.length > 0) {
                 if (emailUser) payload.username = emailUser.value.trim();
                 if (emailPass) payload.password = emailPass.value;
                 if (emailFrom) payload.from_address = emailFrom.value.trim();
+            }
+            // Chat channel behavior (response mode + notify)
+            var chBehaviorGroup = document.getElementById('ch-behavior-group');
+            if (chBehaviorGroup && chBehaviorGroup.style.display !== 'none') {
+                var rmEl = document.getElementById('ch-response-mode');
+                if (rmEl && rmEl.value) payload.response_mode = rmEl.value;
+                var ncEl = document.getElementById('ch-notify-channel');
+                if (ncEl && ncEl.value) payload.notify_channel = ncEl.value;
+                var ncidEl = document.getElementById('ch-notify-chatid');
+                if (ncidEl && ncidEl.value) payload.notify_chat_id = ncidEl.value;
+                // Persona & tone
+                var personaEl = document.getElementById('ch-persona');
+                if (personaEl) payload.persona = personaEl.value;
+                var toneEl = document.getElementById('ch-tone');
+                if (toneEl) payload.tone_of_voice = toneEl.value.trim();
             }
             // Email mode/notify/trigger
             if (chEmailBehaviorGroup && chEmailBehaviorGroup.style.display !== 'none') {

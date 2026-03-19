@@ -335,7 +335,7 @@ async fn get_memory_history(
     let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
     let rows: Vec<crate::storage::MemoryChunkRow> = sqlx::query_as(
-        "SELECT id, date, source, heading, content, memory_type, created_at \
+        "SELECT id, date, source, heading, content, memory_type, created_at, contact_id \
          FROM memory_chunks WHERE memory_type = 'history' \
          ORDER BY created_at DESC LIMIT ? OFFSET ?",
     )

@@ -64,16 +64,6 @@ impl Channel for WhatsAppChannel {
         inbound_tx: mpsc::Sender<InboundMessage>,
         outbound_rx: mpsc::Receiver<OutboundMessage>,
     ) -> Result<()> {
-        let allow_from: HashSet<String> = self.config.allow_from.iter().cloned().collect();
-
-        // SAFETY: if allow_from is empty, reject ALL messages (fail-closed).
-        if allow_from.is_empty() {
-            tracing::error!(
-                "WhatsApp allow_from is empty! For safety, the bot will NOT respond to anyone. \
-                 Set [channels.whatsapp] allow_from = [\"your_phone_number\"] in config.toml"
-            );
-        }
-
         // Proactive messaging info
         if !self.config.phone_number.is_empty() {
             tracing::info!(
@@ -113,12 +103,11 @@ impl Channel for WhatsAppChannel {
         loop {
             tracing::info!(
                 db_path = %self.config.db_path,
-                allow_from = ?self.config.allow_from,
                 "WhatsApp channel starting session (reconnect mode)"
             );
 
             match self
-                .run_session(&inbound_tx, &outbound_rx, &allow_from, &db_path)
+                .run_session(&inbound_tx, &outbound_rx, &db_path)
                 .await
             {
                 Ok(()) => {
@@ -146,11 +135,8 @@ impl WhatsAppChannel {
         &self,
         inbound_tx: &mpsc::Sender<InboundMessage>,
         outbound_rx: &Arc<tokio::sync::Mutex<Option<mpsc::Receiver<OutboundMessage>>>>,
-        allow_from: &HashSet<String>,
         db_path: &std::path::Path,
     ) -> Result<()> {
-        let allow_all = false; // NEVER allow all — always require explicit allow_from
-
         // Initialize WhatsApp backend storage
         let backend = Arc::new(
             SqliteStore::new(&db_path.to_string_lossy())
@@ -170,7 +156,6 @@ impl WhatsAppChannel {
         let sent_ids: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
 
         let inbound_tx_clone = inbound_tx.clone();
-        let allow_from_clone = allow_from.clone();
         let sent_ids_for_handler = sent_ids.clone();
 
         // Track when the bot connects to apply grace period
@@ -196,7 +181,6 @@ impl WhatsAppChannel {
             )
             .on_event(move |event, client| {
                 let inbound_tx = inbound_tx_clone.clone();
-                let allow_from = allow_from_clone.clone();
                 let sent_ids = sent_ids_for_handler.clone();
                 let is_ready = is_ready_for_handler.clone();
                 let connect_time = connect_time_for_handler.clone();
@@ -243,8 +227,6 @@ impl WhatsAppChannel {
                                 info,
                                 client,
                                 &inbound_tx,
-                                &allow_from,
-                                allow_all,
                                 &sent_ids,
                                 &bot_name,
                             )
@@ -360,8 +342,6 @@ async fn handle_message(
     info: wa_rs_core::types::message::MessageInfo,
     client: Arc<wa_rs::Client>,
     inbound_tx: &mpsc::Sender<InboundMessage>,
-    allow_from: &HashSet<String>,
-    allow_all: bool,
     sent_ids: &Mutex<HashSet<String>>,
     bot_name: &str,
 ) {
@@ -394,7 +374,9 @@ async fn handle_message(
             tracing::debug!(msg_id = %info.id, "Skipping bot-sent echo");
             return;
         }
-        tracing::debug!(msg_id = %info.id, "Processing self-message (not a bot echo)");
+        // Messages sent by the user from their phone — ignore, don't let the bot respond
+        tracing::debug!(msg_id = %info.id, "Skipping self-message (sent from phone, not bot)");
+        return;
     }
 
     // Unwrap wrappers (ephemeral, view-once, document_with_caption, edited)
@@ -450,30 +432,7 @@ async fn handle_message(
         .map(|j| j.user.clone())
         .filter(|u| !u.is_empty());
 
-    let chat_user = if !chat_jid.user.is_empty() {
-        Some(chat_jid.user.clone())
-    } else {
-        None
-    };
-
-    // --- SAFETY CHECK 4: Access control ---
-    if !allow_all && !is_self_message {
-        let authorized = allow_from.contains(&sender_id)
-            || sender_alt_id
-                .as_ref()
-                .is_some_and(|alt| allow_from.contains(alt))
-            || chat_user.as_ref().is_some_and(|cu| allow_from.contains(cu));
-
-        if !authorized {
-            tracing::warn!(
-                sender_id = %sender_id,
-                sender_alt = ?sender_alt_id,
-                chat = %chat_jid,
-                "WhatsApp: unauthorized sender, ignoring"
-            );
-            return;
-        }
-    }
+    // Auth is handled by the gateway — channels are transport-only.
 
     let display_sender_id = sender_alt_id.unwrap_or(sender_id.clone());
 

@@ -59,7 +59,20 @@ impl MemorySearcher {
     /// Returns the top `top_k` most relevant chunks, sorted by score (highest first).
     ///
     /// If FTS5 fails (e.g., special characters in query), falls back to vector-only search.
+    ///
+    /// When `contact_id` is provided, results are filtered to include both
+    /// contact-scoped chunks (matching the contact) and global chunks (contact_id IS NULL).
     pub async fn search(&mut self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
+        self.search_scoped(query, top_k, None).await
+    }
+
+    /// Search with optional contact scoping.
+    pub async fn search_scoped(
+        &mut self,
+        query: &str,
+        top_k: usize,
+        contact_id: Option<i64>,
+    ) -> Result<Vec<SearchResult>> {
         // Run vector search (always works)
         let vector_results = self.engine.search(query, CANDIDATES_PER_SOURCE).await?;
 
@@ -77,7 +90,7 @@ impl MemorySearcher {
                     "FTS5 search failed, using vector-only results"
                 );
                 // Fallback: use vector results only
-                return self.search_vector_only(&vector_results, top_k).await;
+                return self.search_vector_only(&vector_results, top_k, contact_id).await;
             }
         };
 
@@ -100,14 +113,20 @@ impl MemorySearcher {
         let results: Vec<SearchResult> = merged_ids
             .into_iter()
             .filter_map(|(id, score)| {
-                chunk_map.get(&id).map(|chunk| {
+                chunk_map.get(&id).and_then(|chunk| {
+                    // Contact scoping: include global chunks + contact-specific chunks
+                    if let Some(cid) = contact_id {
+                        if chunk.contact_id.is_some() && chunk.contact_id != Some(cid) {
+                            return None; // belongs to a different contact
+                        }
+                    }
                     // Apply temporal decay based on chunk age
                     let decayed_score =
                         apply_temporal_decay(score, &chunk.date, now, DEFAULT_HALF_LIFE_DAYS);
-                    SearchResult {
+                    Some(SearchResult {
                         chunk: chunk.clone(),
                         score: decayed_score,
-                    }
+                    })
                 })
             })
             .collect();
@@ -128,6 +147,7 @@ impl MemorySearcher {
         &mut self,
         vector_results: &[(i64, f32)],
         top_k: usize,
+        contact_id: Option<i64>,
     ) -> Result<Vec<SearchResult>> {
         if vector_results.is_empty() {
             return Ok(Vec::new());
@@ -150,9 +170,17 @@ impl MemorySearcher {
         let results = top_ids
             .into_iter()
             .filter_map(|(id, score)| {
-                chunk_map.get(&id).map(|chunk| SearchResult {
-                    chunk: chunk.clone(),
-                    score,
+                chunk_map.get(&id).and_then(|chunk| {
+                    // Contact scoping
+                    if let Some(cid) = contact_id {
+                        if chunk.contact_id.is_some() && chunk.contact_id != Some(cid) {
+                            return None;
+                        }
+                    }
+                    Some(SearchResult {
+                        chunk: chunk.clone(),
+                        score,
+                    })
                 })
             })
             .collect();

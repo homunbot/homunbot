@@ -360,11 +360,12 @@ function buildConversationItem(conversation) {
         inp.setAttribute('aria-label', 'Rename conversation');
         inp.addEventListener('click', function(e) { e.stopPropagation(); });
         inp.addEventListener('input', function() { renameDraft = inp.value; });
+        let committed = false;
         inp.addEventListener('keydown', async function(e) {
-            if (e.key === 'Enter') { e.preventDefault(); await commitRenameConversation(conversation); }
-            else if (e.key === 'Escape') { e.preventDefault(); cancelRenameConversation(); }
+            if (e.key === 'Enter') { e.preventDefault(); committed = true; await commitRenameConversation(conversation); }
+            else if (e.key === 'Escape') { e.preventDefault(); committed = true; cancelRenameConversation(); }
         });
-        inp.addEventListener('blur', async function() { await commitRenameConversation(conversation); });
+        inp.addEventListener('blur', async function() { if (!committed) await commitRenameConversation(conversation); });
         item.appendChild(inp);
         setTimeout(function() { inp.focus(); inp.select(); }, 0);
     } else {
@@ -516,15 +517,24 @@ function cancelRenameConversation() {
 async function commitRenameConversation(conversation) {
     if (renamingConversationId !== conversation.conversation_id) return;
     const nextTitle = String(renameDraft || '').trim();
+    const oldTitle = conversation.title;
+
+    // Optimistic update: set new title locally, close input immediately
     renamingConversationId = null;
     renameDraft = '';
+    conversation.title = nextTitle;
+    const conv = conversations.find(c => c.conversation_id === conversation.conversation_id);
+    if (conv) conv.title = nextTitle;
     renderConversationList();
+
     try {
         await updateConversation(conversation.conversation_id, { title: nextTitle });
-        await refreshConversationList();
-        showToast('Conversation renamed', 'success');
     } catch (e) {
+        // Rollback on failure
         console.error('Failed to rename conversation:', e);
+        conversation.title = oldTitle;
+        if (conv) conv.title = oldTitle;
+        renderConversationList();
         showToast('Failed to rename conversation', 'error');
     }
 }

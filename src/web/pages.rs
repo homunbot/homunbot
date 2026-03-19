@@ -48,6 +48,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/account", get(account_page))
         .route("/maintenance", get(maintenance_page))
         .route("/logs", get(logs_page))
+        .route("/onboarding", get(onboarding_page))
 }
 
 // ─── Shared layout pieces ───────────────────────────────────────
@@ -195,10 +196,11 @@ fn content_subnav(active: &str) -> String {
                 <div class="subnav-section">Automazione</div>
                 <a href="/automations" class="sidebar-subnav-link{0}">Automations</a>
                 <a href="/workflows" class="sidebar-subnav-link{1}">Workflows</a>
+                <div class="subnav-section">Persone</div>
+                <a href="/contacts" class="sidebar-subnav-link{2}">Contacts</a>
                 <div class="subnav-section">Conoscenza</div>
-                <a href="/memory" class="sidebar-subnav-link{2}">Memory</a>
-                <a href="/knowledge" class="sidebar-subnav-link{3}">Knowledge</a>
-                <a href="/contacts" class="sidebar-subnav-link{4}">Contacts</a>
+                <a href="/memory" class="sidebar-subnav-link{3}">Memory</a>
+                <a href="/knowledge" class="sidebar-subnav-link{4}">Knowledge</a>
                 <div class="subnav-section">Ecosystem</div>
                 <a href="/skills" class="sidebar-subnav-link{5}">Skills</a>
                 <a href="/mcp" class="sidebar-subnav-link{6}">MCP Servers</a>
@@ -206,9 +208,9 @@ fn content_subnav(active: &str) -> String {
             </aside>"#,
             a("automations"),
             a("workflows"),
+            a("contacts"),
             a("memory"),
             a("knowledge"),
-            a("contacts"),
             a("skills"),
             a("mcp"),
             a("vault"),
@@ -1003,7 +1005,7 @@ async fn appearance_page(State(state): State<Arc<AppState>>) -> Html<String> {
         "Appearance",
         "appearance",
         &body,
-        &["appearance.js"],
+        &["accent-utils.js", "appearance.js"],
     ))
 }
 
@@ -1068,6 +1070,57 @@ async fn channels_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <label>Allowed Users</label>
                             <input type="text" id="ch-allow-from" name="allow_from" class="input" placeholder="User IDs, comma-separated">
                             <div class="form-hint" id="ch-allow-from-hint">Only these users can interact with the bot.</div>
+                        </div>
+
+                        <!-- Behavior (response mode + notify) — all chat channels -->
+                        <div id="ch-behavior-group" style="display:none;">
+                            <div class="modal-section-label">Behavior</div>
+                            <div class="form-row--2">
+                                <div class="form-group">
+                                    <label for="ch-response-mode">Response Mode</label>
+                                    <select id="ch-response-mode" name="response_mode" class="input">
+                                        <option value="">Automatic (default)</option>
+                                        <option value="assisted">Assisted (draft + approval)</option>
+                                        <option value="on_demand">On-Demand (save, no response)</option>
+                                        <option value="silent">Silent (drop messages)</option>
+                                    </select>
+                                    <div class="form-hint">How Homun responds on this channel.</div>
+                                </div>
+                                <div class="form-group" id="ch-notify-channel-group" style="display:none;">
+                                    <label for="ch-notify-channel">Notify Channel</label>
+                                    <select id="ch-notify-channel" name="notify_channel" class="input">
+                                        <option value="">None</option>
+                                        <option value="web">Web UI</option>
+                                        <option value="telegram">Telegram</option>
+                                        <option value="discord">Discord</option>
+                                        <option value="slack">Slack</option>
+                                        <option value="whatsapp">WhatsApp</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="form-group" id="ch-notify-chatid-group" style="display:none;">
+                                <label for="ch-notify-chatid">Notify Chat ID</label>
+                                <input type="text" id="ch-notify-chatid" name="notify_chat_id" class="input" placeholder="Chat/user ID on notify channel">
+                                <div class="form-hint">Where to send drafts for approval. Use "web" for Web UI.</div>
+                            </div>
+                            <div class="modal-section-label" style="margin-top:16px">Persona</div>
+                            <div class="form-row--2">
+                                <div class="form-group">
+                                    <label for="ch-persona">Persona</label>
+                                    <select id="ch-persona" name="persona" class="input">
+                                        <option value="bot">Bot (default)</option>
+                                        <option value="owner">Owner (impersonate you)</option>
+                                        <option value="company">Company</option>
+                                        <option value="custom">Custom</option>
+                                    </select>
+                                    <div class="form-hint">How the agent presents itself on this channel.</div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="ch-tone">Tone of Voice</label>
+                                    <input type="text" id="ch-tone" name="tone_of_voice" class="input" placeholder="e.g. informal, friendly, Italian">
+                                    <div class="form-hint">Default tone for this channel (contacts can override).</div>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- Discord default channel -->
@@ -2338,22 +2391,78 @@ async fn logs_page() -> Html<String> {
 // ─── Contacts ─────────────────────────────────────────────────────
 
 async fn contacts_page(State(_state): State<Arc<AppState>>) -> Html<String> {
-    let body = r#"<main class="content">
+    let body = r##"<main class="content">
         <div class="content-inner">
             <div class="page-header">
-                <h1>Contacts</h1>
-                <p class="page-subtitle">Personal CRM — manage contacts, identities, relationships, and events</p>
+                <div class="page-title-group">
+                    <h1 class="page-title">Contacts</h1>
+                    <span class="badge badge-info" id="contacts-count">0</span>
+                </div>
+                <div class="actions">
+                    <input type="text" id="contact-search" placeholder="Search contacts..." class="input" style="width:260px">
+                    <button class="btn btn-primary btn-sm" id="add-contact-btn">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"><path d="M8 3v10M3 8h10"/></svg>New Contact
+                    </button>
+                </div>
             </div>
-            <div class="contacts-toolbar" style="display:flex;gap:12px;margin-bottom:24px;align-items:center">
-                <input type="text" id="contact-search" placeholder="Search contacts..." class="input" style="flex:1;max-width:400px">
-                <button class="btn btn-primary" id="add-contact-btn">+ New Contact</button>
-            </div>
+
+            <section class="section" id="contact-create-panel" style="display:none">
+                <h2>New Contact</h2>
+                <form id="contact-form" class="form form--full">
+                    <div class="form-row--2">
+                        <div class="form-group">
+                            <label for="cf-name">Name *</label>
+                            <input id="cf-name" name="name" class="input" type="text" required placeholder="Full name">
+                        </div>
+                        <div class="form-group">
+                            <label for="cf-nickname">Nickname</label>
+                            <input id="cf-nickname" name="nickname" class="input" type="text" placeholder="Short name or handle">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="cf-bio">Bio</label>
+                        <textarea id="cf-bio" name="bio" class="input" rows="2" placeholder="Who is this person? Role, context..."></textarea>
+                    </div>
+                    <div class="form-row--2">
+                        <div class="form-group">
+                            <label for="cf-birthday">Birthday</label>
+                            <input id="cf-birthday" name="birthday" class="input" type="date">
+                        </div>
+                        <div class="form-group">
+                            <label for="cf-channel">Preferred Channel</label>
+                            <select id="cf-channel" name="preferred_channel" class="input">
+                                <option value="">—</option>
+                                <option value="telegram">telegram</option>
+                                <option value="whatsapp">whatsapp</option>
+                                <option value="discord">discord</option>
+                                <option value="slack">slack</option>
+                                <option value="email">email</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="cf-tone">Tone of Voice</label>
+                        <input id="cf-tone" name="tone_of_voice" class="input" type="text" placeholder="e.g. formal, informal, friendly, professional">
+                    </div>
+                    <div class="form-group">
+                        <label>Channel Identities</label>
+                        <div class="form-hint">How can Homun reach this person? Add their phone, username, or email.</div>
+                        <div id="form-identities"></div>
+                        <button type="button" class="btn btn-ghost btn-sm" id="add-identity-row-btn" style="margin-top:4px">+ Add identity</button>
+                    </div>
+                    <div class="form-group" style="display:flex;gap:8px;margin-top:8px">
+                        <button type="submit" class="btn btn-primary btn-sm">Create</button>
+                        <button type="button" class="btn btn-ghost btn-sm" id="cancel-create-btn">Cancel</button>
+                    </div>
+                </form>
+            </section>
+
             <div id="contacts-list" class="contacts-grid"></div>
             <div id="contact-detail" style="display:none"></div>
-            <div id="contact-form-modal" class="modal" style="display:none"></div>
+            <div id="contact-edit-modal" class="modal"></div>
             <div id="pending-section" style="margin-top:32px"></div>
         </div>
-    </main>"#;
+    </main>"##;
     Html(page_html("Contacts", "contacts", body, &["contacts.js"]))
 }
 
@@ -3654,8 +3763,13 @@ fn build_channels_cards_html(config: &crate::config::Config) -> String {
                 .and_then(|a| a.trigger_word.as_deref())
                 .unwrap_or("");
 
+            // Persona & tone per channel (via unified ChannelBehavior)
+            let behavior = config.channels.behavior_for(ch.name);
+            let ch_persona = behavior.map(|b| b.persona()).unwrap_or("bot");
+            let ch_tone = behavior.map(|b| b.tone_of_voice()).unwrap_or("");
+
             format!(
-                r##"<div class="{classes}" data-channel="{name}" data-display="{display}" data-configured="{configured}" data-enabled="{enabled}" data-has-token="{has_token}" data-token-mask="{token_mask}" data-allow-from="{allow_from}" data-phone="{phone}" data-discord-channel="{discord_channel}" data-slack-channel="{slack_channel}" data-web-host="{web_host}" data-web-port="{web_port}" data-is-web="{is_web}" data-email-imap-host="{email_imap_host}" data-email-imap-port="{email_imap_port}" data-email-smtp-host="{email_smtp_host}" data-email-smtp-port="{email_smtp_port}" data-email-username="{email_username}" data-email-from="{email_from}" data-email-mode="{email_mode}" data-email-notify-channel="{email_notify_channel}" data-email-notify-chat-id="{email_notify_chat_id}" data-email-trigger-word="{email_trigger_word}">
+                r##"<div class="{classes}" data-channel="{name}" data-display="{display}" data-configured="{configured}" data-enabled="{enabled}" data-has-token="{has_token}" data-token-mask="{token_mask}" data-allow-from="{allow_from}" data-phone="{phone}" data-discord-channel="{discord_channel}" data-slack-channel="{slack_channel}" data-web-host="{web_host}" data-web-port="{web_port}" data-is-web="{is_web}" data-email-imap-host="{email_imap_host}" data-email-imap-port="{email_imap_port}" data-email-smtp-host="{email_smtp_host}" data-email-smtp-port="{email_smtp_port}" data-email-username="{email_username}" data-email-from="{email_from}" data-email-mode="{email_mode}" data-email-notify-channel="{email_notify_channel}" data-email-notify-chat-id="{email_notify_chat_id}" data-email-trigger-word="{email_trigger_word}" data-persona="{ch_persona}" data-tone-of-voice="{ch_tone}">
                     <div class="provider-card-header">
                         <div class="provider-card-info">
                             <span class="channel-icon">{icon}</span>
@@ -4565,5 +4679,34 @@ async fn maintenance_page() -> Html<String> {
         "maintenance",
         body,
         &["maintenance.js"],
+    ))
+}
+
+// ─── Onboarding ─────────────────────────────────────────────────
+
+async fn onboarding_page() -> Html<String> {
+    let body = r##"<main class="content">
+            <div class="content-inner">
+                <div class="ob-shell">
+                    <nav class="ob-stepper" id="ob-stepper"></nav>
+                    <div class="ob-phase-area" id="ob-phase-area"></div>
+                    <div class="ob-nav" id="ob-nav">
+                        <button class="btn btn-ghost" id="ob-back" style="visibility:hidden">← Back</button>
+                        <div class="ob-nav-right">
+                            <a href="#" class="ob-skip" id="ob-skip">Skip setup</a>
+                            <button class="btn btn-primary" id="ob-next">Get started →</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
+        </main>"##;
+
+    Html(page_html(
+        "Welcome",
+        "onboarding",
+        body,
+        &["accent-utils.js", "onboarding.js"],
     ))
 }

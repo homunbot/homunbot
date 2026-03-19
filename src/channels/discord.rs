@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -50,9 +49,6 @@ impl Channel for DiscordChannel {
         inbound_tx: mpsc::Sender<InboundMessage>,
         outbound_rx: mpsc::Receiver<OutboundMessage>,
     ) -> Result<()> {
-        let allow_from: HashSet<String> = self.config.allow_from.iter().cloned().collect();
-        let allow_all = allow_from.is_empty();
-
         if self.config.default_channel_id.is_empty() {
             tracing::warn!(
                 "Discord: default_channel_id not set — proactive messaging disabled. \
@@ -61,8 +57,6 @@ impl Channel for DiscordChannel {
         }
 
         tracing::info!(
-            allow_from = ?self.config.allow_from,
-            allow_all,
             default_channel_id = %self.config.default_channel_id,
             "Discord channel starting"
         );
@@ -71,8 +65,6 @@ impl Channel for DiscordChannel {
 
         let handler = Handler {
             inbound_tx,
-            allow_from,
-            allow_all,
             mention_required,
             bot_user_id: Arc::new(AtomicU64::new(0)),
             health: self.health.clone(),
@@ -111,8 +103,6 @@ impl TypeMapKey for OutboundRxKey {
 /// Serenity event handler — receives Discord events and routes messages to the agent.
 struct Handler {
     inbound_tx: mpsc::Sender<InboundMessage>,
-    allow_from: HashSet<String>,
-    allow_all: bool,
     mention_required: bool,
     bot_user_id: Arc<AtomicU64>,
     health: Option<Arc<ChannelHealthTracker>>,
@@ -129,15 +119,7 @@ impl EventHandler for Handler {
         let sender_id = msg.author.id.to_string();
         let chat_id = msg.channel_id.to_string();
 
-        // Access control
-        if !self.allow_all && !self.allow_from.contains(&sender_id) {
-            tracing::warn!(
-                sender_id = %sender_id,
-                chat_id = %chat_id,
-                "Discord: unauthorized user, ignoring"
-            );
-            return;
-        }
+        // Auth is handled by the gateway — channels are transport-only.
 
         let mut text = msg.content.clone();
 

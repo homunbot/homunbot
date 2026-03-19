@@ -16,7 +16,10 @@ pub mod whatsapp;
 #[cfg(feature = "channel-email")]
 pub mod email;
 
+pub mod mcp_channel;
+
 pub use cli::CliChannel;
+pub use mcp_channel::McpChannel;
 pub use slack::SlackChannel;
 
 #[cfg(feature = "channel-telegram")]

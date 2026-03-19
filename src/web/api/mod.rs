@@ -15,6 +15,7 @@ mod logs;
 mod maintenance;
 mod mcp;
 mod memory;
+mod onboarding;
 mod permissions;
 mod providers;
 mod sandbox;
@@ -68,7 +69,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .merge(usage::routes())
         .merge(workflows::routes())
         .merge(business::routes())
-        .merge(contacts::routes());
+        .merge(contacts::routes())
+        .merge(onboarding::routes());
 
     // --- Knowledge Base (RAG) ---
     #[cfg(feature = "embeddings")]

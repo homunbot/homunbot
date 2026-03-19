@@ -513,6 +513,7 @@ async fn test_provider(
         // Disable thinking for connection test — reasoning models would consume
         // the entire 12-token budget on thinking blocks, returning no text.
         think: Some(false),
+        priority: crate::provider::RequestPriority::Normal,
     };
 
     let result =

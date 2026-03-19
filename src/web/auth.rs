@@ -287,6 +287,22 @@ pub async fn auth_middleware(
                         roles: session.roles,
                         auth_method: AuthMethod::Session,
                     });
+
+                    // Redirect to onboarding if not yet completed and no provider set up
+                    // (existing users who already have a provider are auto-skipped)
+                    let path = req.uri().path();
+                    let config = state.config.read().await;
+                    let needs_onboarding = !config.ui.onboarding_completed
+                        && config.agent.model.is_empty()
+                        && !path.starts_with("/onboarding")
+                        && !path.starts_with("/api/")
+                        && !path.starts_with("/static/")
+                        && !path.starts_with("/ws/");
+                    drop(config);
+                    if needs_onboarding {
+                        return Redirect::to("/onboarding").into_response();
+                    }
+
                     return next.run(req).await;
                 }
             }
