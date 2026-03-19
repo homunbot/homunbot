@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
+use chrono::Datelike;
 use serde::Deserialize;
 
 use crate::config::Config;
@@ -31,6 +32,8 @@ pub struct ConsolidationResult {
     pub secrets_stored: usize,
     /// New chunk IDs + text from memory_chunks — need HNSW indexing after consolidation.
     pub new_chunks: Vec<(i64, String)>,
+    /// Chunk IDs pruned during budget enforcement — need HNSW removal.
+    pub pruned_chunk_ids: Vec<i64>,
 }
 
 /// Result of a session compaction run
@@ -49,9 +52,60 @@ struct ConsolidationResponseV2 {
     #[serde(default)]
     memory_update: String,
     #[serde(default)]
-    instructions: Vec<String>,
+    instructions: Vec<ScoredInstruction>,
     #[serde(default)]
     vault_entries: Vec<VaultEntry>,
+}
+
+/// An instruction with an importance score (1-5).
+///
+/// Accepts both `{"text": "...", "importance": N}` and plain `"string"` (importance defaults to 3).
+#[derive(Debug)]
+struct ScoredInstruction {
+    text: String,
+    /// Importance 1-5: 1=trivial, 3=normal, 5=critical behavioral rule.
+    importance: i32,
+}
+
+impl<'de> serde::Deserialize<'de> for ScoredInstruction {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de;
+
+        struct ScoredInstructionVisitor;
+
+        impl<'de> de::Visitor<'de> for ScoredInstructionVisitor {
+            type Value = ScoredInstruction;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a string or {\"text\": \"...\", \"importance\": N}")
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<Self::Value, E> {
+                Ok(ScoredInstruction { text: v.to_string(), importance: 3 })
+            }
+
+            fn visit_map<M: de::MapAccess<'de>>(self, mut map: M) -> std::result::Result<Self::Value, M::Error> {
+                let mut text = None;
+                let mut importance = 3i32;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "text" => text = Some(map.next_value()?),
+                        "importance" => importance = map.next_value()?,
+                        _ => { let _ = map.next_value::<serde::de::IgnoredAny>()?; }
+                    }
+                }
+                Ok(ScoredInstruction {
+                    text: text.unwrap_or_default(),
+                    importance,
+                })
+            }
+        }
+
+        deserializer.deserialize_any(ScoredInstructionVisitor)
+    }
 }
 
 /// A secret detected in conversation that should be stored encrypted.
@@ -89,6 +143,8 @@ impl MemoryConsolidator {
         memory_window: u32,
         provider: &dyn Provider,
         model: &str,
+        contact_id: Option<i64>,
+        agent_id: Option<&str>,
     ) -> Result<ConsolidationResult> {
         // How many to keep in active session
         let keep_count = (memory_window / 2) as i64;
@@ -113,6 +169,7 @@ impl MemoryConsolidator {
                 instructions_learned: 0,
                 secrets_stored: 0,
                 new_chunks: Vec::new(),
+                pruned_chunk_ids: Vec::new(),
             });
         }
 
@@ -311,8 +368,13 @@ impl MemoryConsolidator {
 
         // --- 2. Save learned instructions to INSTRUCTIONS.md ---
         // DEDUPLICATION: Skip instructions similar to existing ones
-        let new_instructions =
-            deduplicate_instructions(&parsed.instructions, &existing_instructions);
+        let instruction_texts: Vec<String> = parsed.instructions.iter().map(|i| i.text.clone()).collect();
+        let new_instruction_texts =
+            deduplicate_instructions(&instruction_texts, &existing_instructions);
+        // Keep the ScoredInstructions that survived deduplication
+        let new_instructions: Vec<&ScoredInstruction> = parsed.instructions.iter()
+            .filter(|i| new_instruction_texts.contains(&i.text))
+            .collect();
         let instructions_learned = new_instructions.len();
         if !new_instructions.is_empty() {
             tracing::info!(
@@ -320,7 +382,8 @@ impl MemoryConsolidator {
                 deduplicated = instructions_learned,
                 "Saving deduplicated instructions"
             );
-            self.append_instructions_md(&new_instructions)?;
+            let texts: Vec<String> = new_instructions.iter().map(|i| i.text.clone()).collect();
+            self.append_instructions_md(&texts)?;
         }
 
         // --- 3. Append to HISTORY.md and daily memory file ---
@@ -346,6 +409,7 @@ impl MemoryConsolidator {
                 .await?;
 
             // Also insert into memory_chunks for hybrid search
+            // History entries get default importance 2 (routine summaries)
             let chunk_id = self
                 .db
                 .insert_memory_chunk(
@@ -354,35 +418,41 @@ impl MemoryConsolidator {
                     "consolidation",
                     &history_entry,
                     "history",
-                    None, // TODO: resolve contact_id from session_key
+                    contact_id,
+                    agent_id,
+                    2,
                 )
                 .await?;
             new_chunk_ids.push((chunk_id, history_entry.clone()));
         }
 
         // Insert memory facts as a separate chunk (so they're independently searchable)
+        // Memory facts get default importance 3 (user profile data)
         if memory_updated {
             let chunk_id = self
                 .db
-                .insert_memory_chunk(&today, session_key, "memory", &memory_update, "fact", None)
+                .insert_memory_chunk(&today, session_key, "memory", &memory_update, "fact", contact_id, agent_id, 3)
                 .await?;
             new_chunk_ids.push((chunk_id, memory_update.clone()));
         }
 
-        // Insert each learned instruction as its own chunk
-        for instruction in &parsed.instructions {
+        // Insert each learned instruction as its own chunk (with LLM-assigned importance)
+        for instruction in &new_instructions {
+            let importance = instruction.importance.clamp(1, 5);
             let chunk_id = self
                 .db
                 .insert_memory_chunk(
                     &today,
                     session_key,
                     "instruction",
-                    instruction,
+                    &instruction.text,
                     "instruction",
-                    None, // TODO: resolve contact_id from session_key
+                    contact_id,
+                    agent_id,
+                    importance,
                 )
                 .await?;
-            new_chunk_ids.push((chunk_id, instruction.clone()));
+            new_chunk_ids.push((chunk_id, instruction.text.clone()));
         }
 
         // --- 6. Update last_consolidated pointer ---
@@ -409,7 +479,152 @@ impl MemoryConsolidator {
             instructions_learned,
             secrets_stored,
             new_chunks: new_chunk_ids,
+            pruned_chunk_ids: Vec::new(), // Pruning happens in the caller
         })
+    }
+
+    /// Prune memory chunks if total count exceeds the budget.
+    ///
+    /// Returns IDs of deleted chunks (for HNSW index cleanup).
+    /// A budget of 0 means no limit.
+    pub async fn prune_if_over_budget(&self, max_chunks: u32) -> Result<Vec<i64>> {
+        if max_chunks == 0 {
+            return Ok(Vec::new());
+        }
+        let count = self.db.count_memory_chunks().await?;
+        if count <= max_chunks as i64 {
+            return Ok(Vec::new());
+        }
+        self.db.prune_memory_chunks_to_budget(max_chunks).await
+    }
+
+    /// Create a hierarchical summary for a completed time period.
+    ///
+    /// Checks if a week/month boundary was crossed since the last consolidation,
+    /// and if so, summarizes all chunks in that period into a digest.
+    /// Summaries are stored in `memory_summaries` for search augmentation.
+    pub async fn maybe_summarize_period(
+        &self,
+        provider: &dyn Provider,
+        model: &str,
+        contact_id: Option<i64>,
+        agent_id: Option<&str>,
+    ) -> Result<()> {
+        let today = chrono::Local::now().date_naive();
+
+        // Check if last week needs summarization (only on Monday or later)
+        if today.weekday() == chrono::Weekday::Mon
+            || today.weekday() == chrono::Weekday::Tue
+        {
+            let last_monday = today
+                - chrono::Duration::days(today.weekday().num_days_from_monday() as i64)
+                - chrono::Duration::weeks(1);
+            let last_sunday = last_monday + chrono::Duration::days(6);
+            let start = last_monday.format("%Y-%m-%d").to_string();
+            let end = last_sunday.format("%Y-%m-%d").to_string();
+
+            if !self.db.has_memory_summary("week", &start).await? {
+                self.summarize_range("week", &start, &end, provider, model, contact_id, agent_id)
+                    .await?;
+            }
+        }
+
+        // Check if last month needs summarization (only in first 3 days of new month)
+        if today.day() <= 3 {
+            let last_month = if today.month() == 1 {
+                chrono::NaiveDate::from_ymd_opt(today.year() - 1, 12, 1)
+            } else {
+                chrono::NaiveDate::from_ymd_opt(today.year(), today.month() - 1, 1)
+            };
+            if let Some(month_start) = last_month {
+                let month_end = if today.month() == 1 {
+                    chrono::NaiveDate::from_ymd_opt(today.year() - 1, 12, 31)
+                } else {
+                    chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1)
+                        .and_then(|d| d.checked_sub_days(chrono::Days::new(1)))
+                };
+                if let Some(month_end) = month_end {
+                    let start = month_start.format("%Y-%m-%d").to_string();
+                    let end = month_end.format("%Y-%m-%d").to_string();
+                    if !self.db.has_memory_summary("month", &start).await? {
+                        self.summarize_range("month", &start, &end, provider, model, contact_id, agent_id)
+                            .await?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Summarize all memory chunks in a date range into a single digest.
+    #[allow(clippy::too_many_arguments)]
+    async fn summarize_range(
+        &self,
+        period: &str,
+        start_date: &str,
+        end_date: &str,
+        provider: &dyn Provider,
+        model: &str,
+        contact_id: Option<i64>,
+        agent_id: Option<&str>,
+    ) -> Result<()> {
+        let chunks = self.db.load_chunks_in_range(start_date, end_date).await?;
+        if chunks.is_empty() {
+            return Ok(());
+        }
+
+        // Build text from chunks
+        let chunks_text = chunks
+            .iter()
+            .map(|c| format!("[{}] {}: {}", c.date, c.memory_type, c.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let system_prompt = format!(
+            "You are a memory summarizer. Summarize the following {period} of memory entries \
+             ({start_date} to {end_date}) into a concise digest (3-10 sentences).\n\n\
+             Focus on:\n\
+             - Key events and decisions\n\
+             - Important facts learned about the user\n\
+             - Patterns or recurring themes\n\
+             - Pending items or unresolved topics\n\n\
+             Write in the same language as the entries. Output ONLY the summary."
+        );
+
+        let request = ChatRequest {
+            messages: vec![
+                ChatMessage::system(&system_prompt),
+                ChatMessage::user(&chunks_text),
+            ],
+            tools: vec![],
+            model: model.to_string(),
+            max_tokens: 1024,
+            temperature: 0.3,
+            think: None,
+            priority: RequestPriority::Low,
+        };
+
+        let response = provider
+            .chat(request)
+            .await
+            .context("Period summarization LLM call failed")?;
+
+        if let Some(summary) = response.content.filter(|s| !s.trim().is_empty()) {
+            self.db
+                .insert_memory_summary(period, start_date, end_date, &summary, contact_id, agent_id)
+                .await?;
+            tracing::info!(
+                period,
+                start_date,
+                end_date,
+                chunks = chunks.len(),
+                summary_len = summary.len(),
+                "Created hierarchical memory summary"
+            );
+        }
+
+        Ok(())
     }
 
     // --- File operations for MEMORY.md / HISTORY.md ---
@@ -725,13 +940,18 @@ fn build_consolidation_prompt_v2(
    IMPORTANT: never include passwords, tokens, or secrets in this field — use vault_entries instead.
 
 3. **Extract instructions**: ONLY behavioral directives the user explicitly taught you.
+   Each instruction must include an **importance** score (1-5):
+   - 1 = minor preference, rarely relevant
+   - 2 = useful habit, situational
+   - 3 = standard behavioral rule
+   - 4 = important directive, frequently relevant
+   - 5 = critical rule, must always follow
 
    ✅ CORRECT instructions (add to `instructions`):
-   - "Always run clippy before committing"
-   - "Use Telegram for urgent messages"
-   - "Never commit without tests"
-   - "From now on, respond in Italian"
-   - "Remember to check the vault before asking for passwords"
+   - {{"text": "Always run clippy before committing", "importance": 4}}
+   - {{"text": "Use Telegram for urgent messages", "importance": 3}}
+   - {{"text": "Never commit without tests", "importance": 5}}
+   - {{"text": "Respond in Italian", "importance": 4}}
 
    ❌ NOT instructions (these are FACTS — add to `memory_update`):
    - "Figli: Claudio (2008), Gaia (2010)" ← This is a FACT about family
@@ -751,7 +971,7 @@ Return ONLY valid JSON (no markdown fences, no tool calls, no code blocks):
 {{
   "history_entry": "...",
   "memory_update": "...",
-  "instructions": ["Always do X before Y", ...],
+  "instructions": [{{"text": "Always do X before Y", "importance": 4}}, ...],
   "vault_entries": [{{"key": "aws_password", "value": "actual_secret"}}]
 }}
 
@@ -914,6 +1134,7 @@ mod tests {
 
     #[test]
     fn test_parse_v2_full_response() {
+        // Test with plain string instructions (backwards compat)
         let json = r#"{
             "history_entry": "[2025-02-16 14:30] User discussed Rust project.",
             "memory_update": "User is a Rust developer. AWS password: vault://aws_password",
@@ -924,13 +1145,32 @@ mod tests {
         assert!(parsed.history_entry.contains("Rust"));
         assert!(parsed.memory_update.contains("vault://aws_password"));
         assert_eq!(parsed.instructions.len(), 1);
-        assert_eq!(
-            parsed.instructions[0],
-            "Always run clippy before committing"
-        );
+        assert_eq!(parsed.instructions[0].text, "Always run clippy before committing");
+        assert_eq!(parsed.instructions[0].importance, 3); // default
         assert_eq!(parsed.vault_entries.len(), 1);
         assert_eq!(parsed.vault_entries[0].key, "aws_password");
         assert_eq!(parsed.vault_entries[0].value, "s3cret123");
+    }
+
+    #[test]
+    fn test_parse_v2_scored_instructions() {
+        let json = r#"{
+            "history_entry": "summary",
+            "memory_update": "",
+            "instructions": [
+                {"text": "Never commit without tests", "importance": 5},
+                {"text": "Use Italian", "importance": 4},
+                "Plain instruction"
+            ],
+            "vault_entries": []
+        }"#;
+        let parsed = parse_consolidation_response_v2(json);
+        assert_eq!(parsed.instructions.len(), 3);
+        assert_eq!(parsed.instructions[0].text, "Never commit without tests");
+        assert_eq!(parsed.instructions[0].importance, 5);
+        assert_eq!(parsed.instructions[1].importance, 4);
+        assert_eq!(parsed.instructions[2].text, "Plain instruction");
+        assert_eq!(parsed.instructions[2].importance, 3); // default for plain string
     }
 
     #[test]

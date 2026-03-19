@@ -76,6 +76,8 @@ pub struct AgentLoop {
     /// Wrapped in RwLock so MCP background startup can inject it after Arc wrapping.
     #[cfg(feature = "browser")]
     browser_session: RwLock<Option<Arc<crate::tools::browser::BrowserSession>>>,
+    /// Agent definition ID (e.g. "default", "coder"). Used for memory scoping.
+    agent_id: Option<String>,
     /// Per-agent instructions injected into the system prompt (from `AgentDefinition`).
     agent_instructions: String,
     /// Per-agent tool allowlist.  Empty = all tools visible.
@@ -244,6 +246,7 @@ impl AgentLoop {
             db,
             #[cfg(feature = "browser")]
             browser_session: RwLock::new(None),
+            agent_id: None,
             agent_instructions: String::new(),
             allowed_tools: Vec::new(),
             allowed_skills: Vec::new(),
@@ -255,6 +258,7 @@ impl AgentLoop {
     /// Sets per-agent instructions, tool filter, and skill filter.
     /// Must be called before the first `process_message`.
     pub fn with_agent_definition(mut self, def: &super::definition::AgentDefinition) -> Self {
+        self.agent_id = Some(def.id.clone());
         self.agent_instructions = def.instructions.clone();
         self.allowed_tools = def.allowed_tools.clone();
         self.allowed_skills = def.allowed_skills.clone();
@@ -628,8 +632,9 @@ impl AgentLoop {
         // Only available with embeddings feature
         #[cfg(feature = "embeddings")]
         if let Some(ref searcher_mutex) = self.memory_searcher {
+            let memory_contact_id = self.resolve_contact_from_session(session_key).await;
             let mut searcher = searcher_mutex.lock().await;
-            match searcher.search(&prompt_content, 5).await {
+            match searcher.search_scoped_full(&prompt_content, 5, memory_contact_id, self.agent_id.as_deref()).await {
                 Ok(results) if !results.is_empty() => {
                     let memories_text = results
                         .iter()
@@ -2193,6 +2198,7 @@ impl AgentLoop {
         let cfg = self.config.read().await;
         let window = cfg.agent.consolidation_threshold;
         let memory_window = cfg.agent.memory_window;
+        let max_memory_chunks = cfg.agent.max_memory_chunks;
         let model = cfg.agent.model.clone();
         drop(cfg);
         let provider = self.provider.read().await.clone();
@@ -2200,16 +2206,22 @@ impl AgentLoop {
         #[cfg(feature = "embeddings")]
         let searcher = self.memory_searcher.clone();
 
+        // Resolve contact_id from session_key (format: "channel:chat_id")
+        let contact_id = self.resolve_contact_from_session(&session_key).await;
+        let agent_id = self.agent_id.clone();
+
         // Check if consolidation is needed (quick DB query)
         match memory.should_consolidate(&session_key, window).await {
             Ok(true) => {
                 tracing::info!(
                     session = %session_key,
+                    ?contact_id,
+                    ?agent_id,
                     "Memory consolidation threshold reached, spawning background task"
                 );
                 tokio::spawn(async move {
                     match memory
-                        .consolidate(&session_key, window, provider.as_ref(), &model)
+                        .consolidate(&session_key, window, provider.as_ref(), &model, contact_id, agent_id.as_deref())
                         .await
                     {
                         Ok(result) => {
@@ -2227,7 +2239,7 @@ impl AgentLoop {
                             // Only available with embeddings feature
                             #[cfg(feature = "embeddings")]
                             if !result.new_chunks.is_empty() {
-                                if let Some(searcher_mutex) = searcher {
+                                if let Some(ref searcher_mutex) = searcher {
                                     let mut s = searcher_mutex.lock().await;
                                     let mut indexed = 0;
                                     let mut skipped = 0;
@@ -2281,6 +2293,45 @@ impl AgentLoop {
                                 }
                             }
 
+                            // Budget pruning: remove low-value chunks if over limit
+                            if max_memory_chunks > 0 {
+                                match memory.prune_if_over_budget(max_memory_chunks).await {
+                                    Ok(pruned_ids) if !pruned_ids.is_empty() => {
+                                        tracing::info!(
+                                            pruned = pruned_ids.len(),
+                                            budget = max_memory_chunks,
+                                            "Pruned memory chunks to stay within budget"
+                                        );
+                                        // Remove pruned chunks from HNSW index
+                                        #[cfg(feature = "embeddings")]
+                                        if let Some(ref searcher_mutex) = searcher {
+                                            let mut s = searcher_mutex.lock().await;
+                                            for id in &pruned_ids {
+                                                s.engine_mut().remove(*id);
+                                            }
+                                            let _ = s.save_index();
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "Memory pruning failed");
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            // Hierarchical summarization: create weekly/monthly digests
+                            if let Err(e) = memory
+                                .maybe_summarize_period(
+                                    provider.as_ref(),
+                                    &model,
+                                    contact_id,
+                                    agent_id.as_deref(),
+                                )
+                                .await
+                            {
+                                tracing::warn!(error = %e, "Period summarization failed");
+                            }
+
                             // Session compaction: prune old messages after consolidation
                             Self::try_compact(
                                 &memory,
@@ -2316,6 +2367,26 @@ impl AgentLoop {
                 tracing::warn!(error = %e, "Failed to check consolidation status");
             }
         }
+    }
+
+    /// Resolve contact_id from a session key (format: "channel:chat_id").
+    ///
+    /// Parses the session key into channel + sender_id, then looks up the
+    /// contact in the database. Returns `None` if parsing fails or no contact found.
+    async fn resolve_contact_from_session(&self, session_key: &str) -> Option<i64> {
+        let (channel, chat_id) = session_key.split_once(':')?;
+        // Normalize email channel keys (e.g. "email:inbox@foo" → "email")
+        let channel_key = if channel.starts_with("email") {
+            "email"
+        } else {
+            channel
+        };
+        self.db
+            .find_contact_by_identity(channel_key, chat_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|c| c.id)
     }
 
     /// Try to compact session if message count exceeds memory_window.

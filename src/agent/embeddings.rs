@@ -379,6 +379,18 @@ impl EmbeddingEngine {
         Ok(())
     }
 
+    /// Remove a vector from the HNSW index by its chunk ID.
+    ///
+    /// USearch supports lazy removal — the slot is marked as deleted
+    /// and reclaimed on the next save/load cycle.
+    pub fn remove(&mut self, chunk_id: i64) {
+        if let Err(e) = self.index.remove(chunk_id as u64) {
+            tracing::debug!(chunk_id, error = %e, "Failed to remove chunk from HNSW (may not exist)");
+        } else if self.count > 0 {
+            self.count -= 1;
+        }
+    }
+
     /// Number of vectors currently in the index.
     pub fn len(&self) -> usize {
         self.count

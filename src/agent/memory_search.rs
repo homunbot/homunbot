@@ -66,12 +66,26 @@ impl MemorySearcher {
         self.search_scoped(query, top_k, None).await
     }
 
-    /// Search with optional contact scoping.
+    /// Search with optional contact and agent scoping.
+    ///
+    /// When `contact_id` is provided, results include global + contact-specific chunks.
+    /// When `agent_id` is provided, results include global + agent-specific chunks.
     pub async fn search_scoped(
         &mut self,
         query: &str,
         top_k: usize,
         contact_id: Option<i64>,
+    ) -> Result<Vec<SearchResult>> {
+        self.search_scoped_full(query, top_k, contact_id, None).await
+    }
+
+    /// Search with full scoping: contact + agent.
+    pub async fn search_scoped_full(
+        &mut self,
+        query: &str,
+        top_k: usize,
+        contact_id: Option<i64>,
+        agent_id: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
         // Run vector search (always works)
         let vector_results = self.engine.search(query, CANDIDATES_PER_SOURCE).await?;
@@ -90,7 +104,7 @@ impl MemorySearcher {
                     "FTS5 search failed, using vector-only results"
                 );
                 // Fallback: use vector results only
-                return self.search_vector_only(&vector_results, top_k, contact_id).await;
+                return self.search_vector_only(&vector_results, top_k, contact_id, agent_id).await;
             }
         };
 
@@ -120,12 +134,20 @@ impl MemorySearcher {
                             return None; // belongs to a different contact
                         }
                     }
-                    // Apply temporal decay based on chunk age
+                    // Agent scoping: include global chunks + agent-specific chunks
+                    if let Some(aid) = agent_id {
+                        if chunk.agent_id.is_some() && chunk.agent_id.as_deref() != Some(aid) {
+                            return None; // belongs to a different agent
+                        }
+                    }
+                    // Apply temporal decay and importance weighting
                     let decayed_score =
                         apply_temporal_decay(score, &chunk.date, now, DEFAULT_HALF_LIFE_DAYS);
+                    // Importance multiplier: 3 = neutral (1.0x), 5 = 1.67x, 1 = 0.33x
+                    let importance_factor = chunk.importance as f64 / 3.0;
                     Some(SearchResult {
                         chunk: chunk.clone(),
-                        score: decayed_score,
+                        score: decayed_score * importance_factor,
                     })
                 })
             })
@@ -148,6 +170,7 @@ impl MemorySearcher {
         vector_results: &[(i64, f32)],
         top_k: usize,
         contact_id: Option<i64>,
+        agent_id: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
         if vector_results.is_empty() {
             return Ok(Vec::new());
@@ -174,6 +197,12 @@ impl MemorySearcher {
                     // Contact scoping
                     if let Some(cid) = contact_id {
                         if chunk.contact_id.is_some() && chunk.contact_id != Some(cid) {
+                            return None;
+                        }
+                    }
+                    // Agent scoping
+                    if let Some(aid) = agent_id {
+                        if chunk.agent_id.is_some() && chunk.agent_id.as_deref() != Some(aid) {
                             return None;
                         }
                     }
