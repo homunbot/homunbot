@@ -133,11 +133,11 @@
                 document.getElementById('af-concurrency').value = a.max_concurrency || 0;
             }
         }
-        modal.style.display = '';
+        modal.classList.add('open');
     }
 
     function closeModal() {
-        modal.style.display = 'none';
+        modal.classList.remove('open');
         state.editingId = null;
     }
 
@@ -232,9 +232,9 @@
         if (delBtn) return deleteAgent(delBtn.dataset.delete);
     });
 
-    modal.addEventListener('click', function (e) {
-        if (e.target === modal) closeModal();
-    });
+    // Close modal on backdrop click
+    var backdrop = document.getElementById('modal-backdrop');
+    if (backdrop) backdrop.addEventListener('click', closeModal);
 
     // ── Init ─────────────────────────────────────────────────────────
 

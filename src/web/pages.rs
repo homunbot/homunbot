@@ -4731,15 +4731,21 @@ async fn agents_page(State(_state): State<Arc<AppState>>) -> Html<String> {
                 </div>
             </div>
 
+            <div class="callout callout--info" style="margin-bottom:24px">
+                <strong>Multi-Agent</strong> &mdash; Define specialized agents with different models, instructions, and tool access.
+                Messages are routed to agents by: <strong>contact override</strong> &rarr; <strong>channel default</strong> &rarr; <strong>LLM classifier</strong> &rarr; <strong>default agent</strong>.
+                Assign agents to channels in <a href="/channels">Channels</a> or to contacts in <a href="/contacts">Contacts</a>.
+            </div>
+
             <section class="section" id="routing-section">
-                <h2>Routing</h2>
-                <div class="form form--inline">
+                <h2>LLM Classifier</h2>
+                <p class="section-desc">When enabled, a fast model analyzes each message and automatically picks the best agent. Only active when no static routing (contact/channel) matches first.</p>
+                <div class="form form--inline" style="margin-top:12px">
                     <div class="form-group">
                         <label for="classifier-model">Classifier Model</label>
                         <select id="classifier-model" class="input">
-                            <option value="">Disabled (config-only routing)</option>
+                            <option value="">Disabled (static routing only)</option>
                         </select>
-                        <small class="form-help">Fast model that classifies messages and picks the right agent.</small>
                     </div>
                     <button class="btn btn-sm" id="save-routing-btn">Save</button>
                 </div>
@@ -4749,56 +4755,60 @@ async fn agents_page(State(_state): State<Arc<AppState>>) -> Html<String> {
                 <h2>Agent Definitions</h2>
                 <div class="provider-grid" id="agent-grid">
                     <div class="empty-state" id="agents-empty">
-                        <p>No custom agents defined. The default agent handles all messages.</p>
-                        <p>Create agents to specialize handling by channel, contact, or message type.</p>
+                        <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                        <p>No custom agents defined yet.</p>
+                        <p>The <strong>default</strong> agent handles all messages. Create specialized agents to route different tasks to different models or instructions.</p>
                     </div>
                 </div>
             </section>
+        </div>
+    </main>
 
-            <!-- Create/Edit Modal -->
-            <div class="modal-overlay" id="agent-modal" style="display:none">
-                <div class="modal">
-                    <div class="modal-header">
-                        <h2 id="modal-title">New Agent</h2>
-                        <button class="btn btn-ghost btn-sm" id="modal-close">&times;</button>
+    <!-- Create/Edit Modal (uses design system .modal pattern) -->
+    <div class="modal" id="agent-modal">
+        <div class="modal-backdrop" id="modal-backdrop"></div>
+        <div class="modal-content" style="max-width:520px">
+            <div class="modal-header">
+                <h2 class="modal-title" id="modal-title">New Agent</h2>
+                <button class="modal-close" id="modal-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:20px 24px;overflow-y:auto">
+                <form id="agent-form" class="form">
+                    <div class="form-group">
+                        <label for="af-id">Agent ID</label>
+                        <input id="af-id" name="id" class="input" type="text" placeholder="e.g. coder, researcher" pattern="[a-z0-9_-]+" required>
+                        <small class="form-help">Lowercase identifier. Used in config and routing rules.</small>
                     </div>
-                    <form id="agent-form" class="form">
-                        <div class="form-group">
-                            <label for="af-id">Agent ID</label>
-                            <input id="af-id" name="id" class="input" type="text" placeholder="e.g. coder, researcher" pattern="[a-z0-9_-]+" required>
-                            <small class="form-help">Lowercase, no spaces. Used in config and routing.</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="af-model">Model</label>
-                            <select id="af-model" name="model" class="input">
-                                <option value="">Inherit from global</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="af-instructions">Instructions</label>
-                            <textarea id="af-instructions" name="instructions" class="input" rows="4" placeholder="Task-oriented instructions for this agent..."></textarea>
-                        </div>
-                        <div class="form-row--2">
-                            <div class="form-group">
-                                <label for="af-tools">Allowed Tools</label>
-                                <input id="af-tools" name="tools" class="input" placeholder="shell, file_read (empty = all)">
-                                <small class="form-help">Comma-separated. Empty = all tools.</small>
-                            </div>
-                            <div class="form-group">
-                                <label for="af-concurrency">Max Concurrency</label>
-                                <input id="af-concurrency" name="max_concurrency" class="input" type="number" min="0" value="0">
-                                <small class="form-help">0 = use global setting.</small>
-                            </div>
-                        </div>
-                        <div class="form-actions">
-                            <button type="submit" class="btn btn-primary">Save</button>
-                            <button type="button" class="btn btn-ghost" id="modal-cancel">Cancel</button>
-                        </div>
-                    </form>
-                </div>
+                    <div class="form-group">
+                        <label for="af-model">Model</label>
+                        <select id="af-model" name="model" class="input">
+                            <option value="">Inherit from global</option>
+                        </select>
+                        <small class="form-help">LLM model for this agent. Leave empty to use the global model.</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="af-instructions">Instructions</label>
+                        <textarea id="af-instructions" name="instructions" class="input" rows="4" placeholder="e.g. You are a code expert. Always write tests first. Verify compilation before responding."></textarea>
+                        <small class="form-help">Task-oriented prompt injected into this agent's system prompt.</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="af-tools">Allowed Tools</label>
+                        <input id="af-tools" name="tools" class="input" placeholder="e.g. shell, file_read, file_write">
+                        <small class="form-help">Comma-separated tool names. Empty = all tools available.</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="af-concurrency">Max Concurrency</label>
+                        <input id="af-concurrency" name="max_concurrency" class="input" type="number" min="0" value="0">
+                        <small class="form-help">Max parallel LLM requests for this agent. 0 = global default.</small>
+                    </div>
+                    <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;padding-top:16px;border-top:1px solid var(--border)">
+                        <button type="button" class="btn btn-ghost" id="modal-cancel">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Save Agent</button>
+                    </div>
+                </form>
             </div>
         </div>
-    </main>"##;
+    </div>"##;
 
     Html(page_html("Agents", "agents", body, &["model-loader.js", "agents.js"]))
 }
