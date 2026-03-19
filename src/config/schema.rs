@@ -27,6 +27,9 @@ pub struct Config {
     /// Empty = single implicit "default" agent from `[agent]`.
     #[serde(default)]
     pub agents: HashMap<String, AgentDefinitionConfig>,
+    /// Multi-agent routing configuration.
+    #[serde(default)]
+    pub routing: RoutingConfig,
 }
 
 impl Config {
@@ -399,6 +402,19 @@ pub struct AgentDefinitionConfig {
     /// Fallback models.  Empty = use global fallbacks.
     #[serde(default)]
     pub fallback_models: Vec<String>,
+}
+
+/// Multi-agent routing configuration.
+///
+/// When `classifier_model` is set and 2+ agents are defined, the router
+/// uses a fast LLM call to classify incoming messages and pick the best agent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RoutingConfig {
+    /// Fast model for LLM-based agent classification.
+    /// Example: `"anthropic/claude-haiku"`.
+    /// Empty = LLM routing disabled, only config-based routing.
+    pub classifier_model: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]

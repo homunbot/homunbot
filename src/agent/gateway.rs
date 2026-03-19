@@ -809,13 +809,15 @@ impl Gateway {
                             let known = known.clone();
 
                             tokio::spawn(async move {
-                                // Route to the right agent (MAG-2)
+                                // Route to the right agent (MAG-2 config + MAG-3 LLM)
                                 let cfg = routing_cfg.read().await;
                                 let agent = registry.route(
                                     prepared.ctx.contact.as_ref(),
                                     &prepared.channel_name,
                                     &cfg,
-                                ).clone();
+                                    &prepared.session_key,
+                                    &prepared.inbound.content,
+                                ).await.clone();
                                 drop(cfg);
                                 dispatch_to_agent(
                                     prepared, agent, senders, stream_tx, db, locks, known,

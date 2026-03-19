@@ -1,8 +1,13 @@
-//! Multi-agent registry and config-based router.
+//! Multi-agent registry with config-based and LLM-based routing.
 //!
 //! Holds one `AgentLoop` per `AgentDefinition` and routes incoming
-//! messages to the right agent based on contact override, channel
-//! default, or fallback to "default".
+//! messages to the right agent.  Routing priority:
+//!
+//! 1. `contact.agent_override`
+//! 2. `channel.default_agent`
+//! 3. Session cache (previous LLM decision for this session)
+//! 4. LLM classifier (optional, requires `routing.classifier_model`)
+//! 5. Fallback → "default"
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,12 +25,14 @@ use crate::tools::ToolRegistry;
 use super::definition::AgentDefinition;
 use super::AgentLoop;
 
-/// Pool of named agent loops with config-based routing.
-///
-/// Each agent has its own provider (potentially a different LLM model)
-/// but shares the same `ToolRegistry`, `SessionManager`, `Config`, and `Database`.
+/// Pool of named agent loops with config + LLM routing.
 pub struct AgentRegistry {
     agents: HashMap<String, Arc<AgentLoop>>,
+    /// Agent definitions (kept for building the classifier prompt).
+    definitions: HashMap<String, AgentDefinition>,
+    /// In-memory cache: session_key → agent_id (from LLM classification).
+    /// Resets on restart.  No persistence needed.
+    session_cache: RwLock<HashMap<String, String>>,
 }
 
 impl AgentRegistry {
@@ -72,7 +79,11 @@ impl AgentRegistry {
 
         drop(cfg);
 
-        Ok(Self { agents })
+        Ok(Self {
+            agents,
+            definitions,
+            session_cache: RwLock::new(HashMap::new()),
+        })
     }
 
     /// Look up an agent by ID.
@@ -115,12 +126,16 @@ impl AgentRegistry {
     /// Priority:
     /// 1. `contact.agent_override` — per-contact override
     /// 2. `channel.default_agent` — per-channel default
-    /// 3. Fallback → "default"
-    pub fn route(
+    /// 3. Session cache — previous LLM decision for this session
+    /// 4. LLM classifier — fast model picks the agent (if configured)
+    /// 5. Fallback → "default"
+    pub async fn route(
         &self,
         contact: Option<&Contact>,
         channel_name: &str,
         config: &Config,
+        session_key: &str,
+        message: &str,
     ) -> &Arc<AgentLoop> {
         // 1. Contact override
         if let Some(contact) = contact {
@@ -163,8 +178,113 @@ impl AgentRegistry {
             }
         }
 
-        // 3. Fallback
+        // 3. Session cache (previous LLM decision)
+        {
+            let cache = self.session_cache.read().await;
+            if let Some(cached_id) = cache.get(session_key) {
+                if let Some(agent) = self.agents.get(cached_id) {
+                    tracing::debug!(
+                        agent = %cached_id,
+                        session = %session_key,
+                        "Routing via session cache"
+                    );
+                    return agent;
+                }
+            }
+        }
+
+        // 4. LLM classifier (only if configured and 2+ agents)
+        if self.agents.len() > 1 && !config.routing.classifier_model.is_empty() {
+            if let Some(agent_id) = self.classify_message(message, config).await {
+                if let Some(agent) = self.agents.get(&agent_id) {
+                    // Cache the decision for this session
+                    self.session_cache
+                        .write()
+                        .await
+                        .insert(session_key.to_string(), agent_id.clone());
+
+                    tracing::info!(
+                        agent = %agent_id,
+                        session = %session_key,
+                        "Routing via LLM classifier"
+                    );
+                    return agent;
+                }
+            }
+        }
+
+        // 5. Fallback
         self.default_agent()
+    }
+
+    /// Use a fast LLM to classify which agent should handle the message.
+    ///
+    /// Returns `None` on error or timeout (caller falls back to default).
+    async fn classify_message(&self, message: &str, config: &Config) -> Option<String> {
+        // Build the classification prompt
+        let mut agent_list = String::new();
+        for (id, def) in &self.definitions {
+            let desc = if def.instructions.is_empty() {
+                "General-purpose assistant".to_string()
+            } else {
+                // Truncate long instructions to keep the prompt small
+                let instr = &def.instructions;
+                if instr.len() > 200 {
+                    format!("{}...", &instr[..200])
+                } else {
+                    instr.to_string()
+                }
+            };
+            agent_list.push_str(&format!("- {id}: {desc}\n"));
+        }
+
+        let system_prompt = format!(
+            "You are a message router. Given a user message, pick the most appropriate agent.\n\n\
+             Available agents:\n{agent_list}\n\
+             Reply with ONLY the agent id (e.g. \"default\" or \"coder\"). No explanation."
+        );
+
+        // Truncate very long messages to save classifier tokens
+        let user_msg = if message.len() > 500 {
+            format!("{}...", &message[..500])
+        } else {
+            message.to_string()
+        };
+
+        let req = crate::provider::OneShotRequest {
+            system_prompt,
+            user_message: user_msg,
+            max_tokens: 32,
+            temperature: 0.0,
+            timeout_secs: 5,
+            model: Some(config.routing.classifier_model.clone()),
+            images: Vec::new(),
+        };
+
+        match crate::provider::llm_one_shot(config, req).await {
+            Ok(resp) => {
+                let agent_id = resp.content.trim().to_lowercase();
+                // Validate: must be a known agent id
+                if self.agents.contains_key(&agent_id) {
+                    tracing::debug!(
+                        agent = %agent_id,
+                        latency_ms = resp.latency.as_millis(),
+                        "LLM classifier chose agent"
+                    );
+                    Some(agent_id)
+                } else {
+                    tracing::warn!(
+                        raw_response = %resp.content.trim(),
+                        "LLM classifier returned unknown agent id, ignoring"
+                    );
+                    None
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "LLM classifier failed, falling back to default");
+                None
+            }
+        }
     }
 }
 
@@ -211,5 +331,21 @@ tools = ["shell"]
         assert_eq!(coder.model, "openai/gpt-4o");
         assert_eq!(coder.instructions, "Write tests.");
         assert_eq!(coder.tools, vec!["shell"]);
+    }
+
+    #[test]
+    fn routing_config_parsing() {
+        let toml = r#"
+[routing]
+classifier_model = "anthropic/claude-haiku"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.routing.classifier_model, "anthropic/claude-haiku");
+    }
+
+    #[test]
+    fn routing_config_empty_by_default() {
+        let config = Config::default();
+        assert!(config.routing.classifier_model.is_empty());
     }
 }
