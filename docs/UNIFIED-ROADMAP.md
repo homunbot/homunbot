@@ -91,13 +91,13 @@ La strategia è **consolidare il nucleo e aprirlo al mondo esterno** in ordine d
 
 | # | Task | Effort | Note |
 |---|------|--------|------|
-| MEM-1 | **Contact-aware consolidation** | 2 giorni | Risolvere `contact_id` da `session_key` nel consolidator (TODO in memory.rs:357). Chunks inseriti con il contact_id corretto. Prerequisito per scoping vero |
-| MEM-2 | **Agent-scoped memory chunks** | 2 giorni | Aggiungere `agent_id TEXT` a `memory_chunks` (migration). Consolidation inserisce l'agent_id dall'AgentLoop corrente. `search_scoped()` filtra per agent_id + contact_id + globale |
-| MEM-3 | **Importance scoring** | 3 giorni | Modificare prompt consolidazione v2: LLM assegna peso 1-5 a ogni fatto/istruzione. Campo `importance` su `memory_chunks`. Score finale = RRF × importance × temporal_decay. Upgrade qualità retrieval |
-| MEM-4 | **Memory budget + pruning** | 2 giorni | Config `memory.max_chunks` (default 1000). Quando superato, prune chunks con score più basso (low importance × old). Background job periodico o post-consolidation |
-| MEM-5 | **Hierarchical summarization** | 3 giorni | Post-processor: daily entries → weekly digest → monthly archive. Riduce search space per query temporali. Tabella `memory_summaries` con `period` (day/week/month) |
+| MEM-1 | **Contact-aware consolidation** | ✅ DONE 2026-03-19 | `consolidate()` riceve `contact_id` dal caller. `resolve_contact_from_session()` parsa session_key → channel:chat_id → contact. Memory search usa `search_scoped()` con contact_id |
+| MEM-2 | **Agent-scoped memory chunks** | ✅ DONE 2026-03-19 | Migration 027: `agent_id TEXT` su `memory_chunks`. `search_scoped_full()` filtra per agent_id + contact_id. AgentLoop passa `agent_definition.id` a consolidation |
+| MEM-3 | **Importance scoring** | ✅ DONE 2026-03-19 | Migration 028: `importance INTEGER DEFAULT 3`. LLM assegna 1-5 via `ScoredInstruction` (con backward compat per plain string). Score finale = RRF × (importance/3) × temporal_decay |
+| MEM-4 | **Memory budget + pruning** | ✅ DONE 2026-03-19 | Config `agent.max_memory_chunks` (default 1000). Post-consolidation: `prune_memory_chunks_to_budget()` elimina chunks con importance basso + vecchi. HNSW index aggiornato |
+| MEM-5 | **Hierarchical summarization** | ✅ DONE 2026-03-19 | Migration 029: tabella `memory_summaries`. `maybe_summarize_period()` crea digest settimanali (lunedì) e mensili (primi 3 giorni mese). LLM summarization idempotente |
 
-Sequenza: MEM-1 → MEM-2 → MEM-3 → MEM-4 → MEM-5. MEM-1 è prerequisito per MEM-2.
+Sequenza completata: MEM-1 → MEM-2 → MEM-3 → MEM-4 → MEM-5.
 
 #### 1B. Sicurezza Prompt Injection (P0)
 
@@ -113,9 +113,9 @@ Stato: SEC-6/7/8/11/12/13/14/15 tutti ✅ DONE. Scudo anti-injection completo.
 
 | # | Task | Effort | Note |
 |---|------|--------|------|
-| TST-1 | **E2E Playwright CI** | 1 settimana | CHAT-7: smoke suite per Web UI in CI (chat, automations, settings) |
-| TST-3 | **Channel integration tests** | 1 settimana | ✅ DONE (2026-03-18) — 8 integration test in channels/mod.rs: health lifecycle, capabilities coverage, degradation/recovery, proactive routing, Slack Socket Mode toggle, config defaults |
-| TST-4 | **CI sandbox validation** | 2 giorni | Push e trigger workflow GitHub Actions su runner reali |
+| TST-1 | **E2E Playwright CI** | ✅ DONE 2026-03-19 | `e2e-ci.yml`: automated on push/PR (web UI paths). Builds binary, starts server in setup mode (no LLM), runs `e2e_ci_suite.sh` (UI-structural smoke). Server auto-start/stop, artifact upload. Manual `e2e-smoke.yml` retained for full LLM-powered suite |
+| TST-3 | **Channel integration tests** | ✅ DONE (2026-03-18) | 8 integration test in channels/mod.rs: health lifecycle, capabilities coverage, degradation/recovery, proactive routing, Slack Socket Mode toggle, config defaults |
+| TST-4 | **CI sandbox validation** | ✅ DONE (2026-03-18) | `sandbox-validation.yml`: automated on push/PR (sandbox paths). Linux native (bwrap), runtime image build, cross-platform E2E (Linux/Windows/macOS) |
 
 #### 1D. UX Beta (P1)
 
@@ -143,17 +143,17 @@ Stato: SEC-6/7/8/11/12/13/14/15 tutti ✅ DONE. Scudo anti-injection completo.
 
 | # | Task | Effort | Note |
 |---|------|--------|------|
-| REM-1 | **Remote access story ufficiale** | 3 giorni | `docs/REMOTE-ACCESS.md` con 3 pattern testati: SSH tunnel, Tailscale Serve, Caddy/nginx reverse proxy |
-| REM-2 | **X-Forwarded-For awareness** | 1 giorno | Rate limiting corretto dietro reverse proxy |
-| REM-3 | **Trusted device model** | 1 settimana | Device enrollment esplicito (browser fingerprint + approval). Oltre il semplice login session |
-| REM-4 | **Session hardening per remoto** | 3 giorni | CSRF token, session binding a IP/device, configurable session lifetime |
+| REM-1 | **Remote access story ufficiale** | ✅ DONE 2026-03-19 | `docs/REMOTE-ACCESS.md`: 3 pattern (SSH tunnel, Tailscale Serve, Caddy/nginx reverse proxy), security checklist, device approval flow docs, config examples |
+| REM-2 | **X-Forwarded-For awareness** | ✅ DONE 2026-03-19 | `extract_client_ip()` in auth.rs: parsa X-Forwarded-For (leftmost IP) quando `trust_x_forwarded_for = true`. Entrambi i rate limiter (auth + API) aggiornati. Default false per sicurezza |
+| REM-3 | **Trusted device model** | ✅ DONE 2026-03-19 | Migration 030: `trusted_devices` table. Fingerprint = SHA-256(user_id + User-Agent). Login handler: blocca device sconosciuti con codice 6 cifre. `device_approve_handler` per OTP approval. API: `/v1/devices` (list/approve/revoke). Login page: UI code input per device approval. Config: `require_device_approval` (default false) |
+| REM-4 | **Session hardening per remoto** | ✅ DONE 2026-03-19 | CSRF: token in `WebSession` + `homun_csrf` cookie (JS-readable) + `csrf_guard_middleware` valida `X-CSRF-Token`. Session binding: IP + User-Agent catturati al login, warning su drift. TTL configurabile via `session_ttl_secs`. SameSite=Strict. 5 nuovi test |
 
 #### 2B. API Esterne Compatibili (P1)
 
 | # | Task | Effort | Note |
 |---|------|--------|------|
-| API-1 | **OpenAI Chat Completions compat** | 1 settimana | `POST /v1/chat/completions` con bearer auth, streaming SSE, model routing |
-| API-2 | **Session routing API** | 3 giorni | `session_id` parameter, create/resume sessions via API |
+| API-1 | **OpenAI Chat Completions compat** | ✅ DONE 2026-03-19 | `POST /v1/chat/completions` in `openai.rs`. Full agent loop (tools, memory, skills). Non-streaming (JSON) + streaming (SSE). Bearer auth. Session routing via `session_id`. Filtra stream a content-only (skip tool events). Compatible con Python `openai` SDK |
+| API-2 | **Session routing API** | ✅ DONE 2026-03-19 | `sessions.rs`: GET/POST/DELETE `/v1/sessions`, GET `/v1/sessions/{id}/messages`. Prefisso `api:` per distinguere da `web:`. CRUD completo con message history |
 | API-3 | **API docs (OpenAPI spec)** | 3 giorni | Swagger/OpenAPI per tutti i 50+ endpoint |
 
 #### 2C. Trust Model Esplicito (P1)
