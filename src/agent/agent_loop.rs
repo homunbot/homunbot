@@ -9,7 +9,8 @@ use crate::bus::OutboundMessage;
 use crate::config::Config;
 use crate::provider::xml_dispatcher;
 use crate::provider::{
-    ChatMessage, ChatRequest, Provider, ToolCallFunction, ToolCallSerialized, Usage,
+    ChatMessage, ChatRequest, Provider, RequestPriority, ToolCallFunction, ToolCallSerialized,
+    Usage,
 };
 use crate::security::{redact, redact_vault_values};
 use crate::session::SessionManager;
@@ -75,6 +76,12 @@ pub struct AgentLoop {
     /// Wrapped in RwLock so MCP background startup can inject it after Arc wrapping.
     #[cfg(feature = "browser")]
     browser_session: RwLock<Option<Arc<crate::tools::browser::BrowserSession>>>,
+    /// Per-agent instructions injected into the system prompt (from `AgentDefinition`).
+    agent_instructions: String,
+    /// Per-agent tool allowlist.  Empty = all tools visible.
+    allowed_tools: Vec<String>,
+    /// Per-agent skill allowlist.  Empty = all skills visible.
+    allowed_skills: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -187,7 +194,7 @@ impl AgentLoop {
         provider: Arc<dyn Provider>,
         config: Arc<RwLock<Config>>,
         session_manager: SessionManager,
-        tool_registry: ToolRegistry,
+        tool_registry: Arc<RwLock<ToolRegistry>>,
         db: Database,
     ) -> Self {
         let cfg = config.read().await;
@@ -226,7 +233,7 @@ impl AgentLoop {
             config,
             context,
             session_manager,
-            tool_registry: Arc::new(RwLock::new(tool_registry)),
+            tool_registry,
             memory,
             message_tx: None,
             skill_registry: None,
@@ -237,7 +244,21 @@ impl AgentLoop {
             db,
             #[cfg(feature = "browser")]
             browser_session: RwLock::new(None),
+            agent_instructions: String::new(),
+            allowed_tools: Vec::new(),
+            allowed_skills: Vec::new(),
         }
+    }
+
+    /// Apply an `AgentDefinition` to this agent loop.
+    ///
+    /// Sets per-agent instructions, tool filter, and skill filter.
+    /// Must be called before the first `process_message`.
+    pub fn with_agent_definition(mut self, def: &super::definition::AgentDefinition) -> Self {
+        self.agent_instructions = def.instructions.clone();
+        self.allowed_tools = def.allowed_tools.clone();
+        self.allowed_skills = def.allowed_skills.clone();
+        self
     }
 
     /// Set the outbound message sender for proactive messaging (MessageTool).
@@ -286,6 +307,12 @@ impl AgentLoop {
     /// Called after SkillRegistry::scan_and_load() has loaded installed skills.
     pub async fn set_skills_summary(&self, summary: String) {
         self.context.set_skills_summary(summary).await;
+    }
+
+    /// Sync variant of `set_skills_summary` for use in non-async contexts
+    /// (e.g. `AgentRegistry::for_each_mut`).  Safe only when no readers hold the lock.
+    pub fn set_skills_summary_sync(&mut self, summary: String) {
+        self.context.set_skills_summary_sync(summary);
     }
 
     /// Set the shared skill registry for on-demand skill body loading.
@@ -349,6 +376,11 @@ impl AgentLoop {
     /// even in native function calling mode (where ctx.tools is empty).
     pub async fn set_registered_tool_names(&self, names: Vec<String>) {
         self.context.set_registered_tool_names(names).await;
+    }
+
+    /// Sync variant of `set_registered_tool_names`.
+    pub fn set_registered_tool_names_sync(&mut self, names: Vec<String>) {
+        self.context.set_registered_tool_names_sync(names);
     }
 
     /// Get the names of all registered tools (for workflow step prompts).
@@ -680,14 +712,61 @@ impl AgentLoop {
             .set_mcp_suggestions(build_mcp_suggestions(&config, &prompt_content))
             .await;
 
-        // Inject contact context for known senders (CTB-5)
-        let contact_ctx =
-            crate::contacts::context::build_contact_context(&self.db, channel, chat_id)
+        // Single contact lookup — used for both contact context and persona resolution
+        let channel_key = if channel.starts_with("email:") {
+            "email"
+        } else {
+            channel
+        };
+        let contact = self
+            .db
+            .find_contact_by_identity(channel_key, chat_id)
+            .await
+            .ok()
+            .flatten();
+
+        // Inject contact context for known senders (CTB-5) or unknown sender hint
+        let contact_ctx = if let Some(ref c) = contact {
+            crate::contacts::context::build_contact_context_from(&self.db, c)
                 .await
-                .ok()
-                .flatten()
-                .unwrap_or_default();
+                .unwrap_or_default()
+        } else if channel != "web" && channel != "cli" {
+            crate::contacts::context::build_unknown_sender_context(channel, chat_id)
+        } else {
+            String::new()
+        };
         self.context.set_contact_context(contact_ctx).await;
+
+        // Resolve persona (contact > channel > "bot") and inject into prompt
+        {
+            let config = self.config.read().await;
+            let behavior = config.channels.behavior_for(channel);
+            let ch_persona = behavior.map(|b| b.persona()).unwrap_or("bot");
+            let ch_tone = behavior.map(|b| b.tone_of_voice()).unwrap_or("");
+            let user_name = &config.agent.user_name;
+            let persona = crate::agent::persona::resolve_persona(
+                contact.as_ref(),
+                ch_persona,
+                ch_tone,
+                user_name,
+            );
+            let mut persona_text = persona.prompt_prefix;
+            if !persona.tone_of_voice.is_empty() {
+                if !persona_text.is_empty() {
+                    persona_text.push('\n');
+                }
+                persona_text
+                    .push_str(&format!("Tone of voice: {}", persona.tone_of_voice));
+            }
+            self.context.set_persona_context(persona_text).await;
+        }
+
+        // Per-agent instructions (from AgentDefinition).
+        if !self.agent_instructions.is_empty() {
+            self.context
+                .set_agent_instructions(&self.agent_instructions)
+                .await;
+        }
 
         // Build initial messages for the LLM
         // Get tool definitions for the LLM (built-in tools + skills as tools)
@@ -725,6 +804,15 @@ impl AgentLoop {
 
         if !blocked_set.is_empty() {
             tool_defs.retain(|td| !blocked_set.contains(td.function.name.as_str()));
+        }
+
+        // Per-agent tool allowlist (from AgentDefinition).
+        if !self.allowed_tools.is_empty() {
+            tool_defs.retain(|td| {
+                self.allowed_tools
+                    .iter()
+                    .any(|a| a == &td.function.name)
+            });
         }
 
         if browser_routing.browser_required() {
@@ -964,6 +1052,7 @@ impl AgentLoop {
                 max_tokens: config.agent.effective_max_tokens(active_model),
                 temperature: config.agent.effective_temperature(active_model),
                 think: effective_think,
+                priority: RequestPriority::High,
             };
 
             // Estimate context size for debugging
@@ -1051,6 +1140,7 @@ impl AgentLoop {
                                 max_tokens: config.agent.effective_max_tokens(active_model),
                                 temperature: config.agent.effective_temperature(active_model),
                                 think: None,
+                                priority: RequestPriority::High,
                             };
                             let retry_response = tokio::select! {
                                 response = provider.chat(retry_request) => response,
@@ -1084,6 +1174,7 @@ impl AgentLoop {
                                 max_tokens: config.agent.effective_max_tokens(active_model),
                                 temperature: config.agent.effective_temperature(active_model),
                                 think: effective_think,
+                                priority: RequestPriority::High,
                             };
                             let fallback_response = tokio::select! {
                                 response = provider.chat(request2) => response,
@@ -1166,6 +1257,7 @@ impl AgentLoop {
                                     max_tokens: config.agent.effective_max_tokens(active_model),
                                     temperature: config.agent.effective_temperature(active_model),
                                     think: None,
+                                    priority: RequestPriority::High,
                                 };
                                 let retry_response = tokio::select! {
                                     response = provider.chat(retry_request) => response,
@@ -1805,6 +1897,7 @@ impl AgentLoop {
                 max_tokens: config.agent.effective_max_tokens(&selected_model),
                 temperature: config.agent.effective_temperature(&selected_model),
                 think: None,
+                priority: RequestPriority::Normal,
             };
 
             match tokio::select! {

@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 use serde::Deserialize;
 
 use crate::config::Config;
-use crate::provider::{ChatMessage, ChatRequest, Provider};
+use crate::provider::{ChatMessage, ChatRequest, Provider, RequestPriority};
 use crate::security::redact_vault_values;
 use crate::storage::Database;
 
@@ -194,6 +194,7 @@ impl MemoryConsolidator {
             max_tokens: 4096,
             temperature: 0.3,
             think: None,
+            priority: RequestPriority::Low,
         };
 
         let response = provider
@@ -353,6 +354,7 @@ impl MemoryConsolidator {
                     "consolidation",
                     &history_entry,
                     "history",
+                    None, // TODO: resolve contact_id from session_key
                 )
                 .await?;
             new_chunk_ids.push((chunk_id, history_entry.clone()));
@@ -362,7 +364,7 @@ impl MemoryConsolidator {
         if memory_updated {
             let chunk_id = self
                 .db
-                .insert_memory_chunk(&today, session_key, "memory", &memory_update, "fact")
+                .insert_memory_chunk(&today, session_key, "memory", &memory_update, "fact", None)
                 .await?;
             new_chunk_ids.push((chunk_id, memory_update.clone()));
         }
@@ -377,6 +379,7 @@ impl MemoryConsolidator {
                     "instruction",
                     instruction,
                     "instruction",
+                    None, // TODO: resolve contact_id from session_key
                 )
                 .await?;
             new_chunk_ids.push((chunk_id, instruction.clone()));
@@ -630,6 +633,7 @@ impl MemoryConsolidator {
             max_tokens: 1024,
             temperature: 0.2,
             think: None,
+            priority: RequestPriority::Low,
         };
 
         let response = provider

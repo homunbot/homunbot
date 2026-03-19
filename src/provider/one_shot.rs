@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 
 use crate::config::Config;
-use crate::provider::traits::{ChatContentPart, ChatMessage, ChatRequest};
+use crate::provider::traits::{ChatContentPart, ChatMessage, ChatRequest, RequestPriority};
 
 /// An image to include in a multimodal one-shot request.
 pub struct ImageInput {
@@ -107,6 +107,7 @@ pub async fn llm_one_shot(config: &Config, req: OneShotRequest) -> Result<OneSho
         // Reasoning models (Claude Sonnet 4+) default to thinking-on, which
         // consumes output budget and can produce empty text content.
         think: Some(false),
+        priority: RequestPriority::Normal,
     };
 
     tracing::debug!(

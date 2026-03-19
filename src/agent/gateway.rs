@@ -48,6 +48,20 @@ use super::AgentLoop;
 /// Maximum restart attempts before giving up on a channel.
 const MAX_CHANNEL_RESTARTS: u32 = 10;
 
+// Auth is now centralized in agent/auth.rs — no per-channel allow_from merge needed.
+
+/// Shared outbound routing table: channel_name → sender.
+/// Wrapped in `Arc<RwLock>` so the channel command handler can add new entries at runtime.
+pub type SharedOutboundSenders =
+    Arc<RwLock<Vec<(String, mpsc::Sender<OutboundMessage>)>>>;
+
+/// Command to start a channel at runtime (hot-reload after config/pairing).
+#[derive(Debug)]
+pub enum ChannelCommand {
+    /// Start a channel by name (reads fresh config from the shared Arc).
+    Start { channel: String },
+}
+
 /// A running channel: name + task handle + outbound sender
 struct ChannelHandle {
     name: String,
@@ -165,7 +179,7 @@ where
 /// (future) ──┘
 /// ```
 pub struct Gateway {
-    agent: Arc<AgentLoop>,
+    registry: Arc<super::registry::AgentRegistry>,
     config: Arc<RwLock<Config>>,
     #[allow(dead_code)]
     session_manager: SessionManager,
@@ -188,11 +202,14 @@ pub struct Gateway {
     business_engine: Option<Arc<crate::business::engine::BusinessEngine>>,
     /// Channel health tracker for circuit breaker + auto-restart
     channel_health: Arc<ChannelHealthTracker>,
+    /// Resolved agent definitions (from config `[agents.*]` or synthesized "default").
+    /// Stored for MAG-2 routing and web API introspection.
+    agent_definitions: HashMap<String, super::definition::AgentDefinition>,
 }
 
 impl Gateway {
     pub fn new(
-        agent: Arc<AgentLoop>,
+        registry: Arc<super::registry::AgentRegistry>,
         config: Arc<RwLock<Config>>,
         session_manager: SessionManager,
         cron_scheduler: Arc<CronScheduler>,
@@ -200,7 +217,7 @@ impl Gateway {
         db: Database,
     ) -> Self {
         Self {
-            agent,
+            registry,
             config,
             session_manager,
             cron_scheduler,
@@ -216,7 +233,13 @@ impl Gateway {
             workflow_event_rx: None,
             business_engine: None,
             channel_health: Arc::new(ChannelHealthTracker::new()),
+            agent_definitions: HashMap::new(),
         }
+    }
+
+    /// Get resolved agent definitions (populated after `run()` starts).
+    pub fn agent_definitions(&self) -> &HashMap<String, super::definition::AgentDefinition> {
+        &self.agent_definitions
     }
 
     /// Get channel health tracker (for sharing with web server).
@@ -261,7 +284,16 @@ impl Gateway {
         // The Arc is passed to WebServer so web UI changes propagate to the agent.
         let config = self.config.read().await.clone();
 
+        // Resolve agent definitions from config (MAG-1).
+        self.agent_definitions = super::definition::AgentDefinition::resolve_all(&config);
+        tracing::info!(
+            count = self.agent_definitions.len(),
+            agents = ?self.agent_definitions.keys().collect::<Vec<_>>(),
+            "Agent definitions resolved"
+        );
+
         let (inbound_tx, mut inbound_rx) = mpsc::channel::<InboundMessage>(100);
+        let (channel_cmd_tx, mut channel_cmd_rx) = mpsc::channel::<ChannelCommand>(10);
         let mut channels: Vec<ChannelHandle> = Vec::new();
 
         // --- Start Telegram channel ---
@@ -402,6 +434,24 @@ impl Gateway {
             }
         }
 
+        // --- Start MCP channels ---
+        for (name, mcp_cfg) in &config.channels.mcp {
+            if !mcp_cfg.enabled {
+                continue;
+            }
+            let channel_name = format!("mcp:{name}");
+            let cfg = mcp_cfg.clone();
+            let ch_name = channel_name.clone();
+            let ch = spawn_monitored_channel(
+                &channel_name,
+                &self.channel_health,
+                inbound_tx.clone(),
+                move || Box::new(crate::channels::McpChannel::new(ch_name.clone(), cfg.clone())),
+            );
+            channels.push(ch);
+            tracing::info!(name = %name, "MCP channel registered");
+        }
+
         // --- Start Web UI server ---
         #[cfg(feature = "web-ui")]
         if config.channels.web.enabled {
@@ -417,15 +467,17 @@ impl Gateway {
             let web_db = self.db.clone();
             let web_health_tracker = self.health_tracker.clone();
             let web_channel_health = self.channel_health.clone();
+            let web_channel_cmd_tx = channel_cmd_tx.clone();
             let web_workflow_engine = self.workflow_engine.clone();
             let web_business_engine = self.business_engine.clone();
             let web_estop_handles = self.estop_handles.clone();
-            let web_tool_registry = self.agent.tool_registry_handle();
+            let default_agent = self.registry.default_agent();
+            let web_tool_registry = default_agent.tool_registry_handle();
             // Share the memory searcher with the web server for hybrid search API
             #[cfg(feature = "embeddings")]
-            let web_memory_searcher = self.agent.memory_searcher_handle();
+            let web_memory_searcher = default_agent.memory_searcher_handle();
             #[cfg(feature = "embeddings")]
-            let web_rag_engine = self.agent.rag_engine_handle();
+            let web_rag_engine = default_agent.rag_engine_handle();
 
             let handle = tokio::spawn(async move {
                 let mut server =
@@ -443,6 +495,7 @@ impl Gateway {
                 }
                 server.set_estop_handles(web_estop_handles);
                 server.set_tool_registry(web_tool_registry);
+                server.set_channel_cmd_tx(web_channel_cmd_tx);
                 #[cfg(feature = "embeddings")]
                 if let Some(searcher) = web_memory_searcher {
                     server.set_memory_searcher(searcher);
@@ -528,6 +581,7 @@ impl Gateway {
 
         // Keep one sender for scheduler/system events, then drop our main copy.
         let scheduler_inbound_tx = inbound_tx.clone();
+        let cmd_inbound_tx = inbound_tx.clone(); // For channel command handler
         drop(inbound_tx);
 
         let active = channels.len();
@@ -540,11 +594,13 @@ impl Gateway {
         println!("🧪 Homun gateway running ({active} channel(s) + cron).{web_url}");
         println!("Press Ctrl+C to stop.");
 
-        // Build outbound routing table: channel_name → sender
-        let outbound_senders: Vec<(String, mpsc::Sender<OutboundMessage>)> = channels
-            .iter()
-            .map(|ch| (ch.name.clone(), ch.outbound_tx.clone()))
-            .collect();
+        // Build outbound routing table: channel_name → sender (shared for hot-reload)
+        let outbound_senders: SharedOutboundSenders = Arc::new(RwLock::new(
+            channels
+                .iter()
+                .map(|ch| (ch.name.clone(), ch.outbound_tx.clone()))
+                .collect(),
+        ));
 
         // --- Build pairing config: channel_name → (pairing_required, allow_from set) ---
         let pairing_manager = Arc::new(PairingManager::new(self.db.clone()));
@@ -601,6 +657,26 @@ impl Gateway {
                     ),
                 );
             }
+            // MCP channels
+            for (name, mcp_cfg) in &ch.mcp {
+                if mcp_cfg.enabled {
+                    pairing_config.insert(
+                        format!("mcp:{name}"),
+                        (
+                            mcp_cfg.pairing_required,
+                            mcp_cfg.allow_from.iter().cloned().collect(),
+                        ),
+                    );
+                }
+            }
+        }
+
+        // Merge contact identities into pairing allow_from sets
+        for (ch_name, (_pairing, allow_set)) in &mut pairing_config {
+            let channel_key = if ch_name.starts_with("email:") { "email" } else { ch_name.as_str() };
+            if let Ok(ids) = self.db.contact_identifiers_for_channel(channel_key).await {
+                allow_set.extend(ids);
+            }
         }
 
         // --- Safety: warn if enabled channels have empty allow_from and no pairing ---
@@ -616,6 +692,7 @@ impl Gateway {
                 "whatsapp" => config.channels.whatsapp.enabled,
                 _ if ch_name.starts_with("email:") => true, // already in active accounts
                 "email" => config.channels.email.enabled,
+                _ if ch_name.starts_with("mcp:") => true, // already filtered by enabled
                 _ => false,
             };
             if enabled && allow_set.is_empty() && !pairing_required {
@@ -637,25 +714,34 @@ impl Gateway {
             }
         });
 
-        // --- Build email notify routing table ---
-        // Maps "email:<account>" → (notify_channel, notify_chat_id) for assisted/on_demand
-        let mut email_notify_routes: HashMap<String, (String, String)> = HashMap::new();
+        // --- Build approval notify routing table ---
+        // Maps channel_name → (notify_channel, notify_chat_id) for assisted mode
+        let mut approval_routes: HashMap<String, (String, String)> = HashMap::new();
         {
+            // Email accounts
             let mut email_cfg = config.channels.clone();
             email_cfg.migrate_legacy_email();
             for (name, acc) in &email_cfg.emails {
                 if let (Some(ch), Some(cid)) = (&acc.notify_channel, &acc.notify_chat_id) {
-                    email_notify_routes.insert(format!("email:{name}"), (ch.clone(), cid.clone()));
+                    approval_routes.insert(format!("email:{name}"), (ch.clone(), cid.clone()));
+                }
+            }
+            // Chat channels (via unified ChannelBehavior)
+            for ch_name in &["telegram", "whatsapp", "discord", "slack"] {
+                if let Some(b) = config.channels.behavior_for(ch_name) {
+                    if let (Some(nc), Some(ncid)) = (b.notify_channel(), b.notify_chat_id()) {
+                        approval_routes.insert(ch_name.to_string(), (nc.to_string(), ncid.to_string()));
+                    }
                 }
             }
         }
 
         // --- Email approval handler ---
-        let approval_handler = EmailApprovalHandler::new(self.db.clone(), &email_notify_routes);
+        let approval_handler = EmailApprovalHandler::new(self.db.clone(), &approval_routes);
 
         // --- RAG engine handle for file ingestion ---
         #[cfg(feature = "embeddings")]
-        let routing_rag_engine = self.agent.rag_engine_handle();
+        let routing_rag_engine = self.registry.default_agent().rag_engine_handle();
 
         // --- Debounce + per-session lock infrastructure ---
         let debounce_config = DebounceConfig::from_agent_config(
@@ -665,7 +751,7 @@ impl Gateway {
         let session_locks: SessionLocks = Arc::new(std::sync::Mutex::new(HashMap::new()));
 
         // --- Main message routing loop ---
-        let agent = self.agent.clone();
+        let registry = self.registry.clone();
         let senders_for_routing = outbound_senders.clone();
         let web_stream_tx = self.web_stream_tx.take();
         let web_stream_tx_for_wf = web_stream_tx.clone();
@@ -673,10 +759,27 @@ impl Gateway {
         let routing_config = self.config.clone();
 
         let channel_health = self.channel_health.clone();
-        // Track known (channel, chat_id) pairs from inbound messages.
+        // Track known (channel, chat_id) pairs from inbound messages + contacts.
         // Outbound messages to unknown pairs are blocked as a safety measure.
+        let mut seed: HashSet<(String, String)> = HashSet::new();
+        // Pre-seed from contact identities so proactive messages to known contacts work.
+        if let Ok(identities) = self.db.all_contact_identities().await {
+            for ident in &identities {
+                let chat_id = if ident.channel == "whatsapp" && !ident.identifier.contains('@') {
+                    // Normalize phone to WhatsApp JID
+                    let num = ident.identifier.replace(['+', ' ', '-'], "");
+                    format!("{num}@s.whatsapp.net")
+                } else {
+                    ident.identifier.clone()
+                };
+                seed.insert((ident.channel.clone(), chat_id));
+            }
+            if !seed.is_empty() {
+                tracing::info!(count = seed.len(), "Pre-seeded known chat IDs from contacts");
+            }
+        }
         let known_chat_ids: Arc<std::sync::Mutex<HashSet<(String, String)>>> =
-            Arc::new(std::sync::Mutex::new(HashSet::new()));
+            Arc::new(std::sync::Mutex::new(seed));
         let known_chat_ids_for_routing = known_chat_ids.clone();
 
         let routing_loop = tokio::spawn(async move {
@@ -686,7 +789,8 @@ impl Gateway {
             // Debounce pipeline: routing loop → debounce_tx → debouncer → dispatch
             let (debounce_tx, debounce_rx) = mpsc::channel::<PreparedMessage>(100);
             {
-                let agent = agent.clone();
+                let registry = registry.clone();
+                let routing_cfg = routing_config.clone();
                 let senders = senders_for_routing.clone();
                 let stream_tx = web_stream_tx.clone();
                 let db = routing_db.clone();
@@ -696,7 +800,8 @@ impl Gateway {
                 tokio::spawn(async move {
                     MessageDebouncer::new(debounce_config, debounce_rx)
                         .run(move |prepared| {
-                            let agent = agent.clone();
+                            let registry = registry.clone();
+                            let routing_cfg = routing_cfg.clone();
                             let senders = senders.clone();
                             let stream_tx = stream_tx.clone();
                             let db = db.clone();
@@ -704,6 +809,14 @@ impl Gateway {
                             let known = known.clone();
 
                             tokio::spawn(async move {
+                                // Route to the right agent (MAG-2)
+                                let cfg = routing_cfg.read().await;
+                                let agent = registry.route(
+                                    prepared.ctx.contact.as_ref(),
+                                    &prepared.channel_name,
+                                    &cfg,
+                                ).clone();
+                                drop(cfg);
                                 dispatch_to_agent(
                                     prepared, agent, senders, stream_tx, db, locks, known,
                                 )
@@ -778,37 +891,61 @@ impl Gateway {
                     continue;
                 }
 
-                // --- DM Pairing check ---
+                // --- Unified authorization check ---
                 if !is_system {
                     if let Some((pairing_required, allow_from)) = pairing_config.get(&channel_name)
                     {
-                        if *pairing_required {
-                            match pairing_manager
-                                .check_sender(
-                                    &channel_name,
-                                    &inbound.sender_id,
-                                    None,
-                                    &inbound.content,
-                                    true,
-                                    allow_from,
-                                )
-                                .await
-                            {
-                                Ok(Some(response)) => {
-                                    let outbound = OutboundMessage {
-                                        channel: channel_name.clone(),
-                                        chat_id: chat_id.clone(),
-                                        content: response,
-                                        metadata: None,
-                                    };
-                                    route_outbound(outbound, &senders_for_routing, &known_chat_ids)
+                        match crate::agent::auth::check_authorization(
+                            &routing_db,
+                            &channel_name,
+                            &inbound.sender_id,
+                            allow_from,
+                            *pairing_required,
+                        )
+                        .await
+                        {
+                            crate::agent::auth::AuthDecision::Authorized => {}
+                            crate::agent::auth::AuthDecision::NeedsPairing => {
+                                // Hand off to OTP pairing flow
+                                match pairing_manager
+                                    .check_sender(
+                                        &channel_name,
+                                        &inbound.sender_id,
+                                        None,
+                                        &inbound.content,
+                                        true,
+                                        allow_from,
+                                    )
+                                    .await
+                                {
+                                    Ok(Some(response)) => {
+                                        let outbound = OutboundMessage {
+                                            channel: channel_name.clone(),
+                                            chat_id: chat_id.clone(),
+                                            content: response,
+                                            metadata: None,
+                                        };
+                                        route_outbound(
+                                            outbound,
+                                            &senders_for_routing,
+                                            &known_chat_ids,
+                                        )
                                         .await;
-                                    continue;
+                                        continue;
+                                    }
+                                    Ok(None) => {} // Sender verified via user_identities
+                                    Err(e) => {
+                                        tracing::error!(error = %e, "Pairing check failed");
+                                    }
                                 }
-                                Ok(None) => {} // Sender is trusted, proceed
-                                Err(e) => {
-                                    tracing::error!(error = %e, "Pairing check failed");
-                                }
+                            }
+                            crate::agent::auth::AuthDecision::Rejected => {
+                                tracing::warn!(
+                                    channel = %channel_name,
+                                    sender = %inbound.sender_id,
+                                    "Unauthorized sender — rejecting (fail-closed)"
+                                );
+                                continue;
                             }
                         }
                     }
@@ -916,7 +1053,7 @@ impl Gateway {
                             let injected = EmailApprovalHandler::build_modification_context(
                                 &pending, &feedback,
                             );
-                            let modify_agent = agent.clone();
+                            let modify_agent = registry.default_agent().clone();
                             let modify_senders = senders_for_routing.clone();
                             let modify_known = known_chat_ids.clone();
                             let modify_db = routing_db.clone();
@@ -980,6 +1117,117 @@ impl Gateway {
                         }
                         ApprovalAction::NotApplicable => {
                             // Not an approval command — continue to normal processing
+                        }
+                    }
+                }
+
+                // --- Chat channel approval interception (generic pending_responses) ---
+                // Check if this message is an approve/reject for a chat channel draft.
+                if !is_system {
+                    use super::email_approval::{parse_command_and_index, Command};
+                    if let Ok(pending_list) = routing_db
+                        .list_pending_responses_for_notify(&channel_name, &chat_id)
+                        .await
+                    {
+                        if !pending_list.is_empty() {
+                            let lower = inbound.content.trim().to_lowercase();
+                            let (cmd, idx) = parse_command_and_index(&lower);
+                            let target = idx
+                                .and_then(|i| pending_list.get(i))
+                                .or_else(|| pending_list.first());
+
+                            match cmd {
+                                Command::Approve => {
+                                    if let Some(p) = target {
+                                        // Send the draft to the original channel
+                                        let draft = p.draft_response.clone().unwrap_or_default();
+                                        let out = OutboundMessage {
+                                            channel: p.channel.clone(),
+                                            chat_id: p.chat_id.clone(),
+                                            content: draft,
+                                            metadata: None,
+                                        };
+                                        route_outbound(out, &senders_for_routing, &known_chat_ids)
+                                            .await;
+                                        let _ = routing_db
+                                            .update_pending_response_status(p.id, "approved")
+                                            .await;
+                                        let confirm = OutboundMessage {
+                                            channel: channel_name.clone(),
+                                            chat_id: chat_id.clone(),
+                                            content: format!(
+                                                "✅ Message sent to {} on {}",
+                                                p.chat_id, p.channel
+                                            ),
+                                            metadata: None,
+                                        };
+                                        route_outbound(
+                                            confirm,
+                                            &senders_for_routing,
+                                            &known_chat_ids,
+                                        )
+                                        .await;
+                                    }
+                                    continue;
+                                }
+                                Command::Reject => {
+                                    if let Some(p) = target {
+                                        let _ = routing_db
+                                            .update_pending_response_status(p.id, "rejected")
+                                            .await;
+                                        let confirm = OutboundMessage {
+                                            channel: channel_name.clone(),
+                                            chat_id: chat_id.clone(),
+                                            content: "❌ Draft discarded".to_string(),
+                                            metadata: None,
+                                        };
+                                        route_outbound(
+                                            confirm,
+                                            &senders_for_routing,
+                                            &known_chat_ids,
+                                        )
+                                        .await;
+                                    }
+                                    continue;
+                                }
+                                Command::List => {
+                                    for (i, p) in pending_list.iter().enumerate() {
+                                        let preview = p
+                                            .draft_response
+                                            .as_deref()
+                                            .unwrap_or("[no draft]");
+                                        let preview = if preview.len() > 300 {
+                                            &preview[..300]
+                                        } else {
+                                            preview
+                                        };
+                                        let out = OutboundMessage {
+                                            channel: channel_name.clone(),
+                                            chat_id: chat_id.clone(),
+                                            content: format!(
+                                                "[{}/{}] **{}** → `{}`:\n{}",
+                                                i + 1,
+                                                pending_list.len(),
+                                                p.channel,
+                                                p.chat_id,
+                                                preview
+                                            ),
+                                            metadata: None,
+                                        };
+                                        route_outbound(
+                                            out,
+                                            &senders_for_routing,
+                                            &known_chat_ids,
+                                        )
+                                        .await;
+                                    }
+                                    continue;
+                                }
+                                Command::Modify => {
+                                    // For chat channels, treat modify as normal message
+                                    // (let it flow through to the agent)
+                                }
+                            }
                         }
                     }
                 }
@@ -1080,32 +1328,26 @@ impl Gateway {
                 }
 
                 // --- Contact resolution + response mode routing (CTB-3) ---
+                let resolved_contact = routing_db
+                    .find_contact_by_identity(&channel_name, &inbound.sender_id)
+                    .await
+                    .ok()
+                    .flatten();
                 let (contact_id, contact_response_mode) = {
-                    let contact = routing_db
-                        .find_contact_by_identity(&channel_name, &inbound.sender_id)
-                        .await
-                        .ok()
-                        .flatten();
-                    if let Some(c) = &contact {
+                    if let Some(c) = &resolved_contact {
                         let mode = if c.response_mode != "automatic" && !c.response_mode.is_empty()
                         {
                             c.response_mode.clone()
                         } else {
-                            // Channel default from config
+                            // Channel default from config (via unified ChannelBehavior)
                             let cfg = routing_config.read().await;
-                            let ch_mode = match channel_name.as_str() {
-                                "telegram" => &cfg.channels.telegram.response_mode,
-                                "discord" => &cfg.channels.discord.response_mode,
-                                "slack" => &cfg.channels.slack.response_mode,
-                                s if s.starts_with("whatsapp") => {
-                                    &cfg.channels.whatsapp.response_mode
-                                }
-                                _ => &String::new(),
-                            };
+                            let ch_mode = cfg.channels.behavior_for(&channel_name)
+                                .map(|b| b.response_mode())
+                                .unwrap_or("automatic");
                             if ch_mode.is_empty() {
                                 "automatic".to_string()
                             } else {
-                                ch_mode.clone()
+                                ch_mode.to_string()
                             }
                         };
                         (Some(c.id), Some(mode))
@@ -1137,17 +1379,19 @@ impl Gateway {
                     _ => {} // automatic and assisted proceed
                 }
 
-                // --- Email assisted/approval routing ---
-                // If the email requires approval, route the agent's response to the
-                // notify channel (e.g. Telegram) instead of back to the email sender.
-                let email_notify = if channel_name.starts_with("email:") {
+                // --- Assisted mode: route agent response to notify channel for approval ---
+                // Works for any channel (email, telegram, whatsapp, discord, slack).
+                let approval_notify = if effective_mode == "assisted" {
+                    approval_routes.get(&channel_name).cloned()
+                } else if channel_name.starts_with("email:") {
+                    // Email also checks metadata.requires_approval (set by email channel)
                     let requires_approval = inbound
                         .metadata
                         .as_ref()
                         .map(|m| m.requires_approval)
                         .unwrap_or(false);
                     if requires_approval {
-                        email_notify_routes.get(&channel_name).cloned()
+                        approval_routes.get(&channel_name).cloned()
                     } else {
                         None
                     }
@@ -1156,7 +1400,7 @@ impl Gateway {
                 };
 
                 // Extract email metadata for draft storage (before inbound is moved)
-                let email_meta = if email_notify.is_some() {
+                let email_meta = if approval_notify.is_some() {
                     inbound.metadata.as_ref().map(|m| {
                         (
                             m.email_account.clone().unwrap_or_default(),
@@ -1167,12 +1411,12 @@ impl Gateway {
                 } else {
                     None
                 };
-                let email_from = if email_notify.is_some() {
+                let email_from = if approval_notify.is_some() {
                     Some(inbound.sender_id.clone())
                 } else {
                     None
                 };
-                let email_body_preview = if email_notify.is_some() {
+                let email_body_preview = if approval_notify.is_some() {
                     let body = &inbound.content;
                     Some(body.chars().take(500).collect::<String>())
                 } else {
@@ -1207,7 +1451,7 @@ impl Gateway {
                     ctx: DispatchContext {
                         is_system,
                         is_automation: is_automation_context,
-                        email_notify,
+                        approval_notify,
                         email_meta,
                         email_from,
                         email_body_preview,
@@ -1219,6 +1463,7 @@ impl Gateway {
                         inbound_metadata,
                         contact_id,
                         contact_response_mode,
+                        contact: resolved_contact,
                     },
                 };
 
@@ -1305,6 +1550,11 @@ impl Gateway {
                         chat_id = %outbound.chat_id,
                         "Routing tool-originated message"
                     );
+                    // Tool-originated messages (send_message tool) are trusted —
+                    // pre-register the chat_id so route_outbound won't block them.
+                    if let Ok(mut known) = known_for_tools.lock() {
+                        known.insert((outbound.channel.clone(), outbound.chat_id.clone()));
+                    }
                     route_outbound(outbound, &senders_for_tools, &known_for_tools).await;
                 }
             }))
@@ -1370,6 +1620,43 @@ impl Gateway {
             None
         };
 
+        // --- Channel command handler: hot-start channels at runtime ---
+        let cmd_config = self.config.clone();
+        let cmd_health = self.channel_health.clone();
+        let cmd_senders = outbound_senders.clone();
+        let cmd_db = self.db.clone();
+        let channel_cmd_loop = tokio::spawn(async move {
+            while let Some(cmd) = channel_cmd_rx.recv().await {
+                match cmd {
+                    ChannelCommand::Start { channel } => {
+                        // Check if already running
+                        if cmd_health.is_available(&channel) {
+                            tracing::info!(channel = %channel, "Channel already running, skipping start");
+                            continue;
+                        }
+
+                        let config = cmd_config.read().await.clone();
+                        let handle = start_channel_by_name(
+                            &channel,
+                            &config,
+                            &cmd_health,
+                            cmd_inbound_tx.clone(),
+                            Some(&cmd_db),
+                        );
+                        if let Some(ch) = handle {
+                            tracing::info!(channel = %channel, "Hot-started channel via command");
+                            cmd_senders.write().await.push((ch.name.clone(), ch.outbound_tx));
+                            // Keep the JoinHandle alive by leaking it (it self-manages via
+                            // spawn_monitored_channel's restart loop).
+                            std::mem::forget(ch.handle);
+                        } else {
+                            tracing::warn!(channel = %channel, "Could not start channel (not enabled or missing config)");
+                        }
+                    }
+                }
+            }
+        });
+
         // Wait for shutdown signal (Ctrl+C or SIGTERM).
         // First signal triggers graceful shutdown, second forces immediate exit.
         shutdown_signal().await;
@@ -1382,6 +1669,7 @@ impl Gateway {
         // 2. Stop accepting new messages
         routing_loop.abort();
         cron_loop.abort();
+        channel_cmd_loop.abort();
         if let Some(handle) = tool_msg_loop {
             handle.abort();
         }
@@ -1465,7 +1753,7 @@ async fn shutdown_signal() {
 async fn dispatch_to_agent(
     prepared: PreparedMessage,
     agent: Arc<AgentLoop>,
-    senders: Vec<(String, mpsc::Sender<OutboundMessage>)>,
+    senders: SharedOutboundSenders,
     stream_tx: Option<mpsc::Sender<StreamMessage>>,
     task_db: Database,
     session_locks: SessionLocks,
@@ -1586,52 +1874,83 @@ async fn dispatch_to_agent(
     };
     let run_output = content.clone();
 
-    // If email with approval, save draft + format notification
-    let outbound = if let Some((notify_ch, notify_cid)) = ctx.email_notify {
+    // If assisted mode, save draft + format notification for approval
+    let outbound = if let Some((notify_ch, notify_cid)) = ctx.approval_notify {
         tracing::info!(
-            email_channel = %channel_name,
+            source_channel = %channel_name,
             notify_channel = %notify_ch,
-            "Saving email draft and routing to notify channel"
+            "Saving draft and routing to notify channel for approval"
         );
 
-        let notify_key = format!("{notify_ch}:{notify_cid}");
-        let pending_id = uuid::Uuid::new_v4().to_string();
+        if channel_name.starts_with("email:") {
+            // Email: use email_pending table (has email-specific fields)
+            let notify_key = format!("{notify_ch}:{notify_cid}");
+            let pending_id = uuid::Uuid::new_v4().to_string();
+            let (account_name, subject, message_id) = ctx.email_meta.unwrap_or_default();
+            let from_address = ctx.email_from.unwrap_or_default();
+            let body_preview = ctx.email_body_preview;
 
-        let (account_name, subject, message_id) = ctx.email_meta.unwrap_or_default();
-        let from_address = ctx.email_from.unwrap_or_default();
-        let body_preview = ctx.email_body_preview;
+            let row = EmailPendingRow {
+                id: pending_id,
+                account_name,
+                from_address,
+                subject,
+                body_preview,
+                message_id,
+                draft_response: Some(content),
+                status: "pending".to_string(),
+                notify_session_key: Some(notify_key.clone()),
+                created_at: String::new(),
+                updated_at: None,
+            };
 
-        let row = EmailPendingRow {
-            id: pending_id,
-            account_name,
-            from_address,
-            subject,
-            body_preview,
-            message_id,
-            draft_response: Some(content),
-            status: "pending".to_string(),
-            notify_session_key: Some(notify_key.clone()),
-            created_at: String::new(),
-            updated_at: None,
-        };
+            if let Err(e) = task_db.insert_email_pending(&row).await {
+                tracing::error!(error = %e, "Failed to save email draft");
+            }
 
-        if let Err(e) = task_db.insert_email_pending(&row).await {
-            tracing::error!(error = %e, "Failed to save email draft");
-        }
+            let total = task_db
+                .load_pending_for_notify(&notify_key)
+                .await
+                .map(|v| v.len())
+                .unwrap_or(1);
 
-        let total = task_db
-            .load_pending_for_notify(&notify_key)
-            .await
-            .map(|v| v.len())
-            .unwrap_or(1);
+            let formatted = EmailApprovalHandler::format_draft_notification(&row, total, total);
 
-        let formatted = EmailApprovalHandler::format_draft_notification(&row, total, total);
+            OutboundMessage {
+                channel: notify_ch,
+                chat_id: notify_cid,
+                content: formatted,
+                metadata: None,
+            }
+        } else {
+            // Chat channels: use generic pending_responses table
+            let preview = if content.len() > 500 { &content[..500] } else { &content };
+            let _ = task_db
+                .insert_pending_response_with_notify(
+                    ctx.contact_id,
+                    &channel_name,
+                    &chat_id,
+                    &inbound.content,
+                    Some(&content),
+                    Some(&notify_ch),
+                    Some(&notify_cid),
+                )
+                .await;
 
-        OutboundMessage {
-            channel: notify_ch,
-            chat_id: notify_cid,
-            content: formatted,
-            metadata: None,
+            let formatted = format!(
+                "📨 **{ch}** draft for `{sender}`:\n\n{draft}\n\n\
+                 Reply **ok** to send, **rifiuta** to discard, or type feedback to modify.",
+                ch = channel_name,
+                sender = chat_id,
+                draft = preview,
+            );
+
+            OutboundMessage {
+                channel: notify_ch,
+                chat_id: notify_cid,
+                content: formatted,
+                metadata: None,
+            }
         }
     } else {
         OutboundMessage {
@@ -1821,10 +2140,96 @@ fn infer_automation_id(inbound: &InboundMessage) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Start a channel by name from the current config.
+/// Returns `None` if the channel is not enabled or config is incomplete.
+fn start_channel_by_name(
+    name: &str,
+    config: &Config,
+    health: &Arc<ChannelHealthTracker>,
+    inbound_tx: mpsc::Sender<InboundMessage>,
+    #[allow(unused_variables)]
+    db: Option<&Database>,
+) -> Option<ChannelHandle> {
+    /// Resolve an encrypted token from the vault.
+    fn resolve_token(channel_key: &str, token: &str) -> String {
+        if token == "***ENCRYPTED***" || token.is_empty() {
+            if let Ok(secrets) = crate::storage::global_secrets() {
+                let key = crate::storage::SecretKey::channel_token(channel_key);
+                if let Ok(Some(real)) = secrets.get(&key) {
+                    return real;
+                }
+            }
+            String::new()
+        } else {
+            token.to_string()
+        }
+    }
+
+    match name {
+        #[cfg(feature = "channel-telegram")]
+        "telegram" if config.channels.telegram.enabled => {
+            let mut cfg = config.channels.telegram.clone();
+            cfg.token = resolve_token("telegram", &cfg.token);
+            if cfg.token.is_empty() || cfg.token == "***ENCRYPTED***" {
+                return None;
+            }
+            Some(spawn_monitored_channel(
+                "telegram", health, inbound_tx,
+                move || Box::new(TelegramChannel::new(cfg.clone())),
+            ))
+        }
+        #[cfg(feature = "channel-discord")]
+        "discord" if config.channels.discord.enabled => {
+            let mut cfg = config.channels.discord.clone();
+            cfg.token = resolve_token("discord", &cfg.token);
+            if cfg.token.is_empty() || cfg.token == "***ENCRYPTED***" {
+                return None;
+            }
+            let health_for_dc = health.clone();
+            Some(spawn_monitored_channel(
+                "discord", health, inbound_tx,
+                move || Box::new(DiscordChannel::new(cfg.clone()).with_health(health_for_dc.clone())),
+            ))
+        }
+        #[cfg(feature = "channel-whatsapp")]
+        "whatsapp" if config.channels.whatsapp.enabled => {
+            let cfg = config.channels.whatsapp.clone();
+            Some(spawn_monitored_channel(
+                "whatsapp", health, inbound_tx,
+                move || Box::new(WhatsAppChannel::new(cfg.clone())),
+            ))
+        }
+        "slack" if config.channels.slack.enabled => {
+            let mut cfg = config.channels.slack.clone();
+            cfg.token = resolve_token("slack", &cfg.token);
+            cfg.app_token = resolve_token("slack_app", &cfg.app_token);
+            if cfg.token.is_empty() || cfg.token == "***ENCRYPTED***" {
+                return None;
+            }
+            Some(spawn_monitored_channel(
+                "slack", health, inbound_tx,
+                move || Box::new(SlackChannel::new(cfg.clone())),
+            ))
+        }
+        name if name.starts_with("mcp:") => {
+            let mcp_name = name.strip_prefix("mcp:").unwrap_or("").to_string();
+            let cfg = config.channels.mcp.get(&mcp_name)?;
+            if !cfg.enabled { return None; }
+            let cfg = cfg.clone();
+            let ch_name = name.to_string();
+            Some(spawn_monitored_channel(
+                name, health, inbound_tx,
+                move || Box::new(crate::channels::McpChannel::new(ch_name.clone(), cfg.clone())),
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// After approving/rejecting a draft, show the next pending one if any.
 async fn show_next_pending(
     db: &Database,
-    senders: &[(String, mpsc::Sender<OutboundMessage>)],
+    senders: &SharedOutboundSenders,
     channel: &str,
     chat_id: &str,
     known: &KnownChatIds,
@@ -1889,7 +2294,7 @@ impl InboundRateLimiter {
 
 async fn route_outbound(
     outbound: OutboundMessage,
-    senders: &[(String, mpsc::Sender<OutboundMessage>)],
+    senders: &SharedOutboundSenders,
     known: &KnownChatIds,
 ) {
     let channel_name = outbound.channel.clone();
@@ -1927,8 +2332,9 @@ async fn route_outbound(
         channel_name.clone()
     };
 
+    let senders_guard = senders.read().await;
     let mut routed = false;
-    for (name, tx) in senders {
+    for (name, tx) in senders_guard.iter() {
         if *name == sender_key || *name == channel_name {
             if let Err(e) = tx.send(outbound).await {
                 tracing::error!(

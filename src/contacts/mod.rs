@@ -54,10 +54,17 @@ pub struct Contact {
     pub nameday: Option<String>,
     pub preferred_channel: Option<String>,
     pub response_mode: String,
+    pub tone_of_voice: String,
     pub tags: String,
     pub avatar_url: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Per-contact persona override: bot, owner, company, custom. NULL = use channel default.
+    pub persona_override: Option<String>,
+    /// Custom persona instructions (used when persona_override = "custom").
+    pub persona_instructions: String,
+    /// Per-contact agent routing override (MAG-2). NULL = use channel default.
+    pub agent_override: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -105,6 +112,10 @@ pub struct PendingResponse {
     pub status: String,
     pub created_at: String,
     pub expires_at: Option<String>,
+    /// Channel where the draft notification was sent for approval.
+    pub notify_channel: Option<String>,
+    /// Chat ID on the notify channel.
+    pub notify_chat_id: Option<String>,
 }
 
 /// Upcoming event with contact name for display.

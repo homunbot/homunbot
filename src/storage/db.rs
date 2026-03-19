@@ -245,6 +245,41 @@ impl Database {
         )
         .await?;
 
+        Self::apply_migration(
+            pool,
+            "021_pending_notify",
+            include_str!("../../migrations/021_pending_notify.sql"),
+        )
+        .await?;
+
+        Self::apply_migration(
+            pool,
+            "022_contact_tone",
+            include_str!("../../migrations/022_contact_tone.sql"),
+        )
+        .await?;
+
+        Self::apply_migration(
+            pool,
+            "023_persona",
+            include_str!("../../migrations/023_persona.sql"),
+        )
+        .await?;
+
+        Self::apply_migration(
+            pool,
+            "024_memory_contact_scope",
+            include_str!("../../migrations/024_memory_contact_scope.sql"),
+        )
+        .await?;
+
+        Self::apply_migration(
+            pool,
+            "025_contact_agent_override",
+            include_str!("../../migrations/025_contact_agent_override.sql"),
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -798,16 +833,18 @@ impl Database {
         heading: &str,
         content: &str,
         memory_type: &str,
+        contact_id: Option<i64>,
     ) -> Result<i64> {
         let result = sqlx::query(
-            "INSERT INTO memory_chunks (date, source, heading, content, memory_type)
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO memory_chunks (date, source, heading, content, memory_type, contact_id)
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(date)
         .bind(source)
         .bind(heading)
         .bind(content)
         .bind(memory_type)
+        .bind(contact_id)
         .execute(&self.pool)
         .await
         .context("Failed to insert memory chunk")?;
@@ -824,7 +861,7 @@ impl Database {
         // Build a parameterized IN clause
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let query = format!(
-            "SELECT id, date, source, heading, content, memory_type, created_at
+            "SELECT id, date, source, heading, content, memory_type, created_at, contact_id
              FROM memory_chunks WHERE id IN ({})
              ORDER BY created_at DESC",
             placeholders.join(",")
@@ -874,7 +911,7 @@ impl Database {
     /// Load all memory chunks (for re-embedding after model change).
     pub async fn load_all_memory_chunks(&self) -> Result<Vec<MemoryChunkRow>> {
         let rows = sqlx::query_as::<_, MemoryChunkRow>(
-            "SELECT id, date, source, heading, content, memory_type, created_at
+            "SELECT id, date, source, heading, content, memory_type, created_at, contact_id
              FROM memory_chunks ORDER BY id",
         )
         .fetch_all(&self.pool)
@@ -2297,6 +2334,8 @@ pub struct MemoryChunkRow {
     pub content: String,
     pub memory_type: String,
     pub created_at: String,
+    /// Contact associated with this memory chunk (NULL = global).
+    pub contact_id: Option<i64>,
 }
 
 // ─── RAG Knowledge Base Row Types ────────────────────────────────

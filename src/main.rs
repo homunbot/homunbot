@@ -862,6 +862,7 @@ async fn main() -> Result<()> {
             // Wrap config in Arc for AgentLoop (no web server sharing in CLI mode,
             // but AgentLoop requires Arc<RwLock<Config>> for API uniformity)
             let shared_config = Arc::new(tokio::sync::RwLock::new(config));
+            let tool_registry = Arc::new(tokio::sync::RwLock::new(tool_registry));
             let mut agent = agent::AgentLoop::new(
                 provider,
                 shared_config.clone(),
@@ -1113,89 +1114,97 @@ async fn main() -> Result<()> {
                 .iter()
                 .map(|s| s.to_string())
                 .collect();
-            let mut agent = if let Some(p) = provider {
-                let mut a = agent::AgentLoop::new(
-                    p,
+            let tool_registry = Arc::new(tokio::sync::RwLock::new(tool_registry));
+
+            // Build multi-agent registry (MAG-2).
+            // If no provider is configured, registry stays None → setup-only mode.
+            let mut registry = if provider.is_some() {
+                let definitions = agent::AgentDefinition::resolve_all(&config);
+                let reg = agent::AgentRegistry::build(
+                    definitions,
                     shared_config.clone(),
                     session_manager.clone(),
                     tool_registry,
                     db,
                 )
-                .await;
-                a.set_message_tx(tool_msg_tx);
-                a.set_registered_tool_names(tool_names).await;
-
-                // Initialize memory searcher (vector + FTS5 hybrid search)
-                #[cfg(feature = "embeddings")]
-                {
-                    let cfg = shared_config.read().await;
-                    if let Some(searcher) = try_create_memory_searcher(db_for_searcher, &cfg) {
-                        a.set_memory_searcher(searcher);
-                    }
-                    if let Some(ref rag) = rag_engine {
-                        a.set_rag_engine(rag.clone());
-                    }
-                }
-
-                Some(a)
+                .await?;
+                Some(reg)
             } else {
                 None
             };
 
-            // Load installed skills and inject into the agent's system prompt
+            // Load installed skills
             let mut skill_registry = skills::SkillRegistry::new();
             if let Err(e) = skill_registry.scan_and_load().await {
                 tracing::warn!(error = %e, "Failed to load skills");
             }
-
-            // Wrap in Arc<RwLock<>> so the agent can activate skills on-demand
             let skill_registry = Arc::new(tokio::sync::RwLock::new(skill_registry));
 
-            if let Some(ref mut a) = agent {
-                {
-                    let reg = skill_registry.read().await;
-                    if !reg.is_empty() {
-                        a.set_skills_summary(reg.build_prompt_summary()).await;
-                        tracing::info!(
-                            skills = reg.len(),
-                            "Skills loaded into agent context (gateway)"
-                        );
+            // Prepare shared context for all agents
+            let active_channels = config.channels.active_channels_with_chat_ids();
+            let channel_refs: Vec<(&str, &str)> = active_channels
+                .iter()
+                .map(|(name, id)| (name.as_str(), id.as_str()))
+                .collect();
+            let email_accounts: Vec<(String, crate::config::EmailMode)> = config
+                .channels
+                .active_email_accounts()
+                .into_iter()
+                .map(|(name, acc)| (name.clone(), acc.mode.clone()))
+                .collect();
+
+            // Apply setters to every agent in the registry
+            if let Some(ref mut reg) = registry {
+                // Memory searcher + RAG (shared across all agents)
+                #[cfg(feature = "embeddings")]
+                let (memory_searcher, rag_for_agents) = {
+                    let cfg = shared_config.read().await;
+                    let searcher = try_create_memory_searcher(db_for_searcher, &cfg);
+                    (searcher, rag_engine.clone())
+                };
+
+                let skills_summary = {
+                    let sr = skill_registry.read().await;
+                    if !sr.is_empty() {
+                        tracing::info!(skills = sr.len(), "Skills loaded into agent context (gateway)");
+                        Some(sr.build_prompt_summary())
+                    } else {
+                        None
                     }
-                }
-                a.set_skill_registry(skill_registry.clone());
+                };
 
-                // Inject available channels info for cross-channel messaging
-                let active_channels = config.channels.active_channels_with_chat_ids();
-                if !active_channels.is_empty() {
-                    let channel_refs: Vec<(&str, &str)> = active_channels
-                        .iter()
-                        .map(|(name, id)| (name.as_str(), id.as_str()))
-                        .collect();
-                    a.set_channels_info(&channel_refs);
-                    tracing::info!(
-                        channels = ?active_channels.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
-                        "Cross-channel routing info injected into agent context"
-                    );
-                }
+                reg.for_each_mut(|a| {
+                    a.set_message_tx(tool_msg_tx.clone());
 
-                // Inject email account info (name + mode) into system prompt
-                let email_accounts: Vec<(String, crate::config::EmailMode)> = config
-                    .channels
-                    .active_email_accounts()
-                    .into_iter()
-                    .map(|(name, acc)| (name.clone(), acc.mode.clone()))
-                    .collect();
-                if !email_accounts.is_empty() {
-                    a.set_email_accounts_info(&email_accounts);
-                    tracing::info!(
-                        accounts = ?email_accounts.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
-                        "Email account info injected into agent context"
-                    );
-                }
+                    if let Some(ref summary) = skills_summary {
+                        // set_skills_summary is async but we're in a sync closure.
+                        // Use the blocking handle — safe because RwLock is uncontended here.
+                        a.set_skills_summary_sync(summary.clone());
+                    }
+                    a.set_skill_registry(skill_registry.clone());
+                    a.set_registered_tool_names_sync(tool_names.clone());
+
+                    if !active_channels.is_empty() {
+                        a.set_channels_info(&channel_refs);
+                    }
+                    if !email_accounts.is_empty() {
+                        a.set_email_accounts_info(&email_accounts);
+                    }
+
+                    #[cfg(feature = "embeddings")]
+                    {
+                        if let Some(ref searcher) = memory_searcher {
+                            a.set_memory_searcher(searcher.clone());
+                        }
+                        if let Some(ref rag) = rag_for_agents {
+                            a.set_rag_engine(rag.clone());
+                        }
+                    }
+                });
             }
 
             // If no provider, start a setup-only Web UI and wait
-            let Some(agent) = agent else {
+            let Some(registry) = registry else {
                 #[cfg(feature = "web-ui")]
                 {
                     let web_config = config.clone();
@@ -1226,11 +1235,14 @@ async fn main() -> Result<()> {
                 }
             };
 
-            // Get the shared handles before wrapping agent in Arc
-            let skills_summary_handle = agent.skills_summary_handle();
-            let (bootstrap_content_handle, bootstrap_files_handle) = agent.bootstrap_handles();
+            // Get the shared handles from the default agent before Arc wrapping
+            let default_agent = registry.default_agent();
+            let skills_summary_handle = default_agent.skills_summary_handle();
+            let (bootstrap_content_handle, bootstrap_files_handle) =
+                default_agent.bootstrap_handles();
 
-            let agent = Arc::new(agent);
+            let registry = Arc::new(registry);
+            let agent = registry.default_agent().clone();
 
             // Create SubagentManager and bind it to the SpawnTool (late initialization via OnceCell)
             let (subagent_result_tx, _subagent_result_rx) = tokio::sync::mpsc::channel(50);
@@ -1316,7 +1328,7 @@ async fn main() -> Result<()> {
             #[cfg(feature = "mcp")]
             let agent_for_mcp_deferred = agent.clone();
             let mut gateway = agent::Gateway::new(
-                agent,
+                registry,
                 shared_config,
                 session_manager,
                 cron_scheduler,

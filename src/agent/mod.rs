@@ -1,6 +1,10 @@
 mod agent_loop;
 mod attachment_router;
+pub mod auth;
 pub mod bootstrap_watcher;
+pub mod definition;
+pub(crate) mod persona;
+pub mod registry;
 mod browser_task_plan;
 mod context;
 pub mod debounce;
@@ -24,6 +28,8 @@ pub mod index_meta;
 pub mod memory_search;
 
 pub use agent_loop::AgentLoop;
+pub use definition::AgentDefinition;
+pub use registry::AgentRegistry;
 pub use bootstrap_watcher::{
     BootstrapContent, BootstrapFiles, BootstrapWatcher, WatcherHandle as BootstrapWatcherHandle,
 };

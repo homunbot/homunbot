@@ -10,8 +10,9 @@ mod sections;
 
 pub use builder::SystemPromptBuilder;
 pub use sections::{
-    BusinessSection, ContactsSection, IdentitySection, MemorySection, PromptSection,
-    RuntimeSection, SafetySection, SkillsSection, ToolsSection, WorkspaceSection,
+    AgentInstructionsSection, BusinessSection, ContactsSection, IdentitySection, MemorySection,
+    PersonaSection, PromptSection, RuntimeSection, SafetySection, SkillsSection, ToolsSection,
+    WorkspaceSection,
 };
 
 use std::path::Path;
@@ -46,6 +47,10 @@ pub struct PromptContext<'a> {
     pub channels_info: &'a str,
     /// Contact profile for the current message sender (CTB-5)
     pub contact_context: &'a str,
+    /// Persona prompt prefix (from persona resolver)
+    pub persona_context: &'a str,
+    /// Per-agent instructions (from `AgentDefinition.instructions`).
+    pub agent_instructions: &'a str,
 }
 
 /// Tool information for prompt generation.

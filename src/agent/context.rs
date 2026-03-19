@@ -61,6 +61,10 @@ pub struct ContextBuilder {
     registered_tool_names: RwLock<Vec<String>>,
     /// Contact context for the current message sender (CTB-5).
     contact_context: RwLock<String>,
+    /// Persona prompt prefix (resolved per-message from contact > channel > "bot").
+    persona_context: RwLock<String>,
+    /// Per-agent instructions from `AgentDefinition`.
+    agent_instructions: RwLock<String>,
 }
 
 impl ContextBuilder {
@@ -82,6 +86,8 @@ impl ContextBuilder {
             model_name: RwLock::new(config.agent.model.clone()),
             registered_tool_names: RwLock::new(Vec::new()),
             contact_context: RwLock::new(String::new()),
+            persona_context: RwLock::new(String::new()),
+            agent_instructions: RwLock::new(String::new()),
         }
     }
 
@@ -154,6 +160,11 @@ impl ContextBuilder {
         *guard = summary;
     }
 
+    /// Sync variant for use in non-async contexts (uncontended lock).
+    pub fn set_skills_summary_sync(&self, summary: String) {
+        *self.skills_summary.blocking_write() = summary;
+    }
+
     /// Get a shared handle to the skills summary for hot-reload updates.
     pub fn skills_summary_handle(&self) -> Arc<RwLock<String>> {
         self.skills_summary.clone()
@@ -207,6 +218,16 @@ impl ContextBuilder {
         *self.contact_context.write().await = ctx;
     }
 
+    /// Update the persona prompt prefix (called per-message after persona resolution).
+    pub async fn set_persona_context(&self, ctx: String) {
+        *self.persona_context.write().await = ctx;
+    }
+
+    /// Set per-agent instructions (from `AgentDefinition.instructions`).
+    pub async fn set_agent_instructions(&self, instructions: &str) {
+        *self.agent_instructions.write().await = instructions.to_string();
+    }
+
     /// Update the model name shown in the system prompt (called on hot-reload).
     pub async fn set_model_name(&self, model: String) {
         *self.model_name.write().await = model;
@@ -215,6 +236,11 @@ impl ContextBuilder {
     /// Set the names of all registered tools (for routing rules in system prompt).
     pub async fn set_registered_tool_names(&self, names: Vec<String>) {
         *self.registered_tool_names.write().await = names;
+    }
+
+    /// Sync variant for use in non-async contexts (uncontended lock).
+    pub fn set_registered_tool_names_sync(&self, names: Vec<String>) {
+        *self.registered_tool_names.blocking_write() = names;
     }
 
     /// Append additional tool names (called when deferred MCP tools register).
@@ -320,6 +346,8 @@ impl ContextBuilder {
         let model_name = self.model_name.read().await;
         let registered_tool_names = self.registered_tool_names.read().await;
         let contact_context = self.contact_context.read().await;
+        let persona_context = self.persona_context.read().await;
+        let agent_instructions = self.agent_instructions.read().await;
 
         // Build PromptContext
         let ctx = PromptContext {
@@ -337,6 +365,8 @@ impl ContextBuilder {
             prompt_mode: PromptMode::Full,
             channels_info: &self.channels_info,
             contact_context: &contact_context,
+            persona_context: &persona_context,
+            agent_instructions: &agent_instructions,
         };
 
         // Build prompt using modular system

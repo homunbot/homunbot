@@ -22,6 +22,11 @@ pub struct Config {
     pub ui: UiConfig,
     pub business: BusinessConfig,
     pub skills: SkillsConfig,
+    /// Named agent definitions.
+    /// Parsed from `[agents.<id>]` TOML sections.
+    /// Empty = single implicit "default" agent from `[agent]`.
+    #[serde(default)]
+    pub agents: HashMap<String, AgentDefinitionConfig>,
 }
 
 impl Config {
@@ -354,6 +359,46 @@ pub struct AgentConfig {
     /// When reached the agent gracefully stops. At 80% a wrap-up hint is
     /// injected. Set to 0 for unlimited (backward-compatible default).
     pub max_session_tokens: u32,
+    /// Maximum concurrent LLM requests per provider.
+    /// Controls the semaphore size in `QueuedProvider`.
+    /// - Ollama / local models: keep at 1 (serial).
+    /// - Cloud APIs (Anthropic, OpenAI, etc.): 5–10.
+    /// Default: 0 = auto-detect (1 for Ollama, 5 for cloud).
+    pub llm_max_concurrent: usize,
+    /// User's display name (set during onboarding).
+    #[serde(default)]
+    pub user_name: String,
+    /// User's IANA timezone (e.g. "Europe/Rome"). Auto-detected during onboarding.
+    #[serde(default)]
+    pub timezone: String,
+}
+
+/// Per-agent configuration parsed from `[agents.<id>]` TOML sections.
+///
+/// Fields left empty/zero inherit from the global `[agent]` section at
+/// runtime via [`AgentDefinition::effective_*`](crate::agent::AgentDefinition) helpers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentDefinitionConfig {
+    /// LLM model string.  Empty = inherit from `[agent].model`.
+    pub model: String,
+    /// Task-oriented instructions appended to the system prompt.
+    pub instructions: String,
+    /// Allowed tool names.  Empty = all tools visible.
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// Allowed skill names.  Empty = all skills visible.
+    #[serde(default)]
+    pub skills: Vec<String>,
+    /// Per-agent concurrency.  0 = use global `llm_max_concurrent`.
+    pub max_concurrency: usize,
+    /// Temperature override.
+    pub temperature: Option<f32>,
+    /// Max-tokens override.
+    pub max_tokens: Option<u32>,
+    /// Fallback models.  Empty = use global fallbacks.
+    #[serde(default)]
+    pub fallback_models: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -401,6 +446,9 @@ impl Default for AgentConfig {
             debounce_max_batch: 10,
             loop_detection_window: 8,
             max_session_tokens: 0,
+            llm_max_concurrent: 0,
+            user_name: String::new(),
+            timezone: String::new(),
         }
     }
 }
@@ -651,6 +699,25 @@ impl ProvidersConfig {
 
 // --- Channel Config ---
 
+/// Unified interface for channel behavior settings.
+///
+/// All channel configs implement this trait. Callers use
+/// [`ChannelsConfig::behavior_for`] to get a `&dyn ChannelBehavior`
+/// for any channel by name — no match on channel names needed.
+pub trait ChannelBehavior {
+    fn persona(&self) -> &str;
+    fn tone_of_voice(&self) -> &str;
+    fn response_mode(&self) -> &str;
+    fn notify_channel(&self) -> Option<&str>;
+    fn notify_chat_id(&self) -> Option<&str>;
+    fn allow_from(&self) -> &[String];
+    fn pairing_required(&self) -> bool;
+    /// Named agent to handle messages on this channel.  Empty = "default".
+    fn default_agent(&self) -> &str {
+        ""
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TelegramConfig {
@@ -669,6 +736,32 @@ pub struct TelegramConfig {
     /// Empty or "automatic" = respond immediately. Options: automatic, assisted, on_demand, silent.
     #[serde(default)]
     pub response_mode: String,
+    /// Channel to send draft notifications to when in assisted mode (e.g. "web").
+    #[serde(default)]
+    pub notify_channel: Option<String>,
+    /// Chat ID on the notify channel for draft notifications.
+    #[serde(default)]
+    pub notify_chat_id: Option<String>,
+    /// Persona: how the agent presents itself. Options: bot, owner, company, custom.
+    #[serde(default = "default_persona")]
+    pub persona: String,
+    /// Default tone of voice for this channel (overridden by contact tone).
+    #[serde(default)]
+    pub tone_of_voice: String,
+    /// Named agent to handle messages on this channel.  Empty = "default".
+    #[serde(default)]
+    pub default_agent: String,
+}
+
+impl ChannelBehavior for TelegramConfig {
+    fn persona(&self) -> &str { &self.persona }
+    fn tone_of_voice(&self) -> &str { &self.tone_of_voice }
+    fn response_mode(&self) -> &str { &self.response_mode }
+    fn notify_channel(&self) -> Option<&str> { self.notify_channel.as_deref() }
+    fn notify_chat_id(&self) -> Option<&str> { self.notify_chat_id.as_deref() }
+    fn allow_from(&self) -> &[String] { &self.allow_from }
+    fn pairing_required(&self) -> bool { self.pairing_required }
+    fn default_agent(&self) -> &str { &self.default_agent }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -695,6 +788,32 @@ pub struct WhatsAppConfig {
     /// Default response mode for contacts on this channel.
     #[serde(default)]
     pub response_mode: String,
+    /// Channel to send draft notifications to when in assisted mode.
+    #[serde(default)]
+    pub notify_channel: Option<String>,
+    /// Chat ID on the notify channel for draft notifications.
+    #[serde(default)]
+    pub notify_chat_id: Option<String>,
+    /// Persona: how the agent presents itself. Options: bot, owner, company, custom.
+    #[serde(default = "default_persona")]
+    pub persona: String,
+    /// Default tone of voice for this channel (overridden by contact tone).
+    #[serde(default)]
+    pub tone_of_voice: String,
+    /// Named agent to handle messages on this channel.  Empty = "default".
+    #[serde(default)]
+    pub default_agent: String,
+}
+
+impl ChannelBehavior for WhatsAppConfig {
+    fn persona(&self) -> &str { &self.persona }
+    fn tone_of_voice(&self) -> &str { &self.tone_of_voice }
+    fn response_mode(&self) -> &str { &self.response_mode }
+    fn notify_channel(&self) -> Option<&str> { self.notify_channel.as_deref() }
+    fn notify_chat_id(&self) -> Option<&str> { self.notify_chat_id.as_deref() }
+    fn allow_from(&self) -> &[String] { &self.allow_from }
+    fn pairing_required(&self) -> bool { self.pairing_required }
+    fn default_agent(&self) -> &str { &self.default_agent }
 }
 
 fn default_bot_name() -> String {
@@ -712,6 +831,11 @@ impl Default for WhatsAppConfig {
             pairing_required: false,
             bot_name: default_bot_name(),
             response_mode: String::new(),
+            notify_channel: None,
+            notify_chat_id: None,
+            persona: default_persona(),
+            tone_of_voice: String::new(),
+            default_agent: String::new(),
         }
     }
 }
@@ -749,6 +873,32 @@ pub struct DiscordConfig {
     /// Default response mode for contacts on this channel.
     #[serde(default)]
     pub response_mode: String,
+    /// Channel to send draft notifications to when in assisted mode.
+    #[serde(default)]
+    pub notify_channel: Option<String>,
+    /// Chat ID on the notify channel for draft notifications.
+    #[serde(default)]
+    pub notify_chat_id: Option<String>,
+    /// Persona: how the agent presents itself. Options: bot, owner, company, custom.
+    #[serde(default = "default_persona")]
+    pub persona: String,
+    /// Default tone of voice for this channel (overridden by contact tone).
+    #[serde(default)]
+    pub tone_of_voice: String,
+    /// Named agent to handle messages on this channel.  Empty = "default".
+    #[serde(default)]
+    pub default_agent: String,
+}
+
+impl ChannelBehavior for DiscordConfig {
+    fn persona(&self) -> &str { &self.persona }
+    fn tone_of_voice(&self) -> &str { &self.tone_of_voice }
+    fn response_mode(&self) -> &str { &self.response_mode }
+    fn notify_channel(&self) -> Option<&str> { self.notify_channel.as_deref() }
+    fn notify_chat_id(&self) -> Option<&str> { self.notify_chat_id.as_deref() }
+    fn allow_from(&self) -> &[String] { &self.allow_from }
+    fn pairing_required(&self) -> bool { self.pairing_required }
+    fn default_agent(&self) -> &str { &self.default_agent }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -818,6 +968,32 @@ pub struct SlackConfig {
     /// Default response mode for contacts on this channel.
     #[serde(default)]
     pub response_mode: String,
+    /// Channel to send draft notifications to when in assisted mode.
+    #[serde(default)]
+    pub notify_channel: Option<String>,
+    /// Chat ID on the notify channel for draft notifications.
+    #[serde(default)]
+    pub notify_chat_id: Option<String>,
+    /// Persona: how the agent presents itself. Options: bot, owner, company, custom.
+    #[serde(default = "default_persona")]
+    pub persona: String,
+    /// Default tone of voice for this channel (overridden by contact tone).
+    #[serde(default)]
+    pub tone_of_voice: String,
+    /// Named agent to handle messages on this channel.  Empty = "default".
+    #[serde(default)]
+    pub default_agent: String,
+}
+
+impl ChannelBehavior for SlackConfig {
+    fn persona(&self) -> &str { &self.persona }
+    fn tone_of_voice(&self) -> &str { &self.tone_of_voice }
+    fn response_mode(&self) -> &str { &self.response_mode }
+    fn notify_channel(&self) -> Option<&str> { self.notify_channel.as_deref() }
+    fn notify_chat_id(&self) -> Option<&str> { self.notify_chat_id.as_deref() }
+    fn allow_from(&self) -> &[String] { &self.allow_from }
+    fn pairing_required(&self) -> bool { self.pairing_required }
+    fn default_agent(&self) -> &str { &self.default_agent }
 }
 
 /// Email response mode for an account.
@@ -891,6 +1067,15 @@ pub struct EmailAccountConfig {
     /// Delay in seconds between sending successive responses (default: 30).
     #[serde(default = "default_send_delay_secs")]
     pub send_delay_secs: u64,
+    /// Persona: how the agent presents itself. Options: bot, owner, company, custom.
+    #[serde(default = "default_persona")]
+    pub persona: String,
+    /// Default tone of voice for this channel (overridden by contact tone).
+    #[serde(default)]
+    pub tone_of_voice: String,
+    /// Named agent to handle messages on this channel.  Empty = "default".
+    #[serde(default)]
+    pub default_agent: String,
 }
 
 fn default_batch_threshold() -> u32 {
@@ -901,6 +1086,23 @@ fn default_batch_window_secs() -> u64 {
 }
 fn default_send_delay_secs() -> u64 {
     30
+}
+
+impl ChannelBehavior for EmailAccountConfig {
+    fn persona(&self) -> &str { &self.persona }
+    fn tone_of_voice(&self) -> &str { &self.tone_of_voice }
+    fn response_mode(&self) -> &str {
+        match self.mode {
+            EmailMode::Automatic => "automatic",
+            EmailMode::Assisted => "assisted",
+            EmailMode::OnDemand => "on_demand",
+        }
+    }
+    fn notify_channel(&self) -> Option<&str> { self.notify_channel.as_deref() }
+    fn notify_chat_id(&self) -> Option<&str> { self.notify_chat_id.as_deref() }
+    fn allow_from(&self) -> &[String] { &self.allow_from }
+    fn pairing_required(&self) -> bool { self.pairing_required }
+    fn default_agent(&self) -> &str { &self.default_agent }
 }
 
 impl Default for EmailAccountConfig {
@@ -926,6 +1128,9 @@ impl Default for EmailAccountConfig {
             batch_threshold: default_batch_threshold(),
             batch_window_secs: default_batch_window_secs(),
             send_delay_secs: default_send_delay_secs(),
+            persona: default_persona(),
+            tone_of_voice: String::new(),
+            default_agent: String::new(),
         }
     }
 }
@@ -1025,6 +1230,9 @@ impl EmailConfig {
             batch_threshold: default_batch_threshold(),
             batch_window_secs: default_batch_window_secs(),
             send_delay_secs: default_send_delay_secs(),
+            persona: default_persona(),
+            tone_of_voice: String::new(),
+            default_agent: String::new(),
         }
     }
 }
@@ -1041,9 +1249,36 @@ pub struct ChannelsConfig {
     pub email: EmailConfig,
     /// Multi-account email configuration. Keys are account names.
     pub emails: HashMap<String, EmailAccountConfig>,
+    /// MCP-based channels. Keys are channel names (e.g. "sms", "matrix").
+    /// Each channel bridges an MCP server to the gateway pipeline.
+    #[serde(default)]
+    pub mcp: HashMap<String, McpChannelConfig>,
 }
 
 impl ChannelsConfig {
+    /// Get the behavior interface for any channel by name.
+    ///
+    /// This is the **single point of lookup** for behavior fields (persona, tone,
+    /// response_mode, notify, allow_from, pairing). All code that needs these
+    /// fields should use this method instead of matching on channel names.
+    pub fn behavior_for(&self, channel: &str) -> Option<&dyn ChannelBehavior> {
+        match channel {
+            "telegram" => Some(&self.telegram),
+            "whatsapp" => Some(&self.whatsapp),
+            "discord" => Some(&self.discord),
+            "slack" => Some(&self.slack),
+            name if name.starts_with("email:") => {
+                let account = name.strip_prefix("email:").unwrap_or("");
+                self.emails.get(account).map(|a| a as &dyn ChannelBehavior)
+            }
+            name if name.starts_with("mcp:") => {
+                let mcp_name = name.strip_prefix("mcp:").unwrap_or("");
+                self.mcp.get(mcp_name).map(|m| m as &dyn ChannelBehavior)
+            }
+            _ => None,
+        }
+    }
+
     /// Migrate legacy `[channels.email]` into `[channels.emails.default]` if needed.
     ///
     /// Call this once after loading config. If the legacy `email` field is
@@ -1185,6 +1420,67 @@ impl Default for ToolsConfig {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_persona() -> String {
+    "bot".to_string()
+}
+
+/// Configuration for an MCP-based messaging channel.
+///
+/// MCP channels bridge an MCP server's messaging capabilities into the
+/// gateway pipeline. They go through the same auth, persona, and
+/// response_mode system as native channels.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct McpChannelConfig {
+    pub enabled: bool,
+    /// MCP server name (must be configured in MCP settings).
+    pub server: String,
+    /// Persona: how the agent presents itself. Options: bot, owner, company, custom.
+    #[serde(default = "default_persona")]
+    pub persona: String,
+    /// Default tone of voice for this channel.
+    #[serde(default)]
+    pub tone_of_voice: String,
+    /// Allowed sender identifiers.
+    #[serde(default)]
+    pub allow_from: Vec<String>,
+    /// Default response mode.
+    #[serde(default)]
+    pub response_mode: String,
+    /// Require OTP pairing for unknown senders (default: false).
+    #[serde(default)]
+    pub pairing_required: bool,
+    /// Named agent to handle messages on this channel.  Empty = "default".
+    #[serde(default)]
+    pub default_agent: String,
+}
+
+impl ChannelBehavior for McpChannelConfig {
+    fn persona(&self) -> &str { &self.persona }
+    fn tone_of_voice(&self) -> &str { &self.tone_of_voice }
+    fn response_mode(&self) -> &str { &self.response_mode }
+    fn notify_channel(&self) -> Option<&str> { None }
+    fn notify_chat_id(&self) -> Option<&str> { None }
+    fn allow_from(&self) -> &[String] { &self.allow_from }
+    fn pairing_required(&self) -> bool { self.pairing_required }
+    fn default_agent(&self) -> &str { &self.default_agent }
+}
+
+impl Default for McpChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            server: String::new(),
+            persona: default_persona(),
+            tone_of_voice: String::new(),
+            allow_from: Vec::new(),
+            response_mode: String::new(),
+            pairing_required: false,
+            default_agent: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1815,6 +2111,9 @@ impl Default for ExecutionSandboxConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
+    /// Whether the onboarding wizard has been completed.
+    #[serde(default)]
+    pub onboarding_completed: bool,
     /// Theme: "light", "dark", or "system"
     pub theme: String,
     /// Preferred UI/assistant language: "system", "en", "it"
@@ -1826,6 +2125,7 @@ pub struct UiConfig {
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
+            onboarding_completed: false,
             theme: "system".to_string(),
             language: "system".to_string(),
             accent: "moss".to_string(),

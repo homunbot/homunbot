@@ -197,6 +197,26 @@ pub struct FunctionDefinition {
     pub parameters: serde_json::Value,
 }
 
+/// Priority level for LLM requests.
+///
+/// Higher priority requests are served first when the per-provider
+/// concurrency semaphore is contended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RequestPriority {
+    /// Background tasks: heartbeat pings, memory consolidation, daily summaries.
+    Low = 0,
+    /// Automated work: subagent tasks, automations, scheduled jobs.
+    Normal = 1,
+    /// Interactive: user chat messages that need low latency.
+    High = 2,
+}
+
+impl Default for RequestPriority {
+    fn default() -> Self {
+        Self::Normal
+    }
+}
+
 /// Chat request parameters
 #[derive(Clone)]
 pub struct ChatRequest {
@@ -208,6 +228,9 @@ pub struct ChatRequest {
     /// Thinking/reasoning toggle: `Some(true)` = enable, `Some(false)` = disable,
     /// `None` = provider default.
     pub think: Option<bool>,
+    /// Queue priority — used by `QueuedProvider` to order concurrent requests.
+    /// Defaults to `Normal`; set to `High` for user-facing chat.
+    pub priority: RequestPriority,
 }
 
 /// A streaming chunk from the LLM

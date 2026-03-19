@@ -22,8 +22,12 @@ pub struct ContactUpdate {
     pub nameday: Option<String>,
     pub preferred_channel: Option<String>,
     pub response_mode: Option<String>,
+    pub tone_of_voice: Option<String>,
     pub tags: Option<String>,
     pub avatar_url: Option<String>,
+    pub persona_override: Option<String>,
+    pub persona_instructions: Option<String>,
+    pub agent_override: Option<String>,
 }
 
 // ── Contacts CRUD ───────────────────────────────────────────────────
@@ -41,13 +45,14 @@ impl Database {
         preferred_channel: Option<&str>,
         response_mode: Option<&str>,
         tags: Option<&str>,
+        tone_of_voice: Option<&str>,
     ) -> Result<i64> {
         let mode = response_mode.unwrap_or("automatic");
         let tags_val = tags.unwrap_or("[]");
 
         let id = sqlx::query_scalar::<_, i64>(
-            "INSERT INTO contacts (name, nickname, bio, notes, birthday, nameday, preferred_channel, response_mode, tags)
-             VALUES (?, ?, COALESCE(?, ''), COALESCE(?, ''), ?, ?, ?, ?, ?)
+            "INSERT INTO contacts (name, nickname, bio, notes, birthday, nameday, preferred_channel, response_mode, tags, tone_of_voice)
+             VALUES (?, ?, COALESCE(?, ''), COALESCE(?, ''), ?, ?, ?, ?, ?, COALESCE(?, ''))
              RETURNING id",
         )
         .bind(name)
@@ -59,6 +64,7 @@ impl Database {
         .bind(preferred_channel)
         .bind(mode)
         .bind(tags_val)
+        .bind(tone_of_voice)
         .fetch_one(self.pool())
         .await
         .context("Failed to insert contact")?;
@@ -118,8 +124,12 @@ impl Database {
         maybe_set!(nameday);
         maybe_set!(preferred_channel);
         maybe_set!(response_mode);
+        maybe_set!(tone_of_voice);
         maybe_set!(tags);
         maybe_set!(avatar_url);
+        maybe_set!(persona_override);
+        maybe_set!(persona_instructions);
+        maybe_set!(agent_override);
 
         if sets.is_empty() {
             return Ok(false);
@@ -178,6 +188,14 @@ impl Database {
         Ok(id)
     }
 
+    /// Load all contact identities across all contacts (for pre-seeding known chat IDs).
+    pub async fn all_contact_identities(&self) -> Result<Vec<ContactIdentity>> {
+        sqlx::query_as::<_, ContactIdentity>("SELECT * FROM contact_identities ORDER BY channel")
+            .fetch_all(self.pool())
+            .await
+            .context("Failed to list all contact identities")
+    }
+
     pub async fn list_contact_identities(&self, contact_id: i64) -> Result<Vec<ContactIdentity>> {
         sqlx::query_as::<_, ContactIdentity>(
             "SELECT * FROM contact_identities WHERE contact_id = ? ORDER BY channel",
@@ -203,6 +221,40 @@ impl Database {
         .fetch_optional(self.pool())
         .await
         .context("Failed to find contact by identity")
+    }
+
+    /// Load all identifiers for a given channel (for merging into allow_from).
+    ///
+    /// For WhatsApp, returns both the raw identifier AND the normalized phone
+    /// number (digits only) since `allow_from` and sender_id use raw digits.
+    pub async fn contact_identifiers_for_channel(&self, channel: &str) -> Result<Vec<String>> {
+        let rows = sqlx::query_scalar::<_, String>(
+            "SELECT identifier FROM contact_identities WHERE channel = ?",
+        )
+        .bind(channel)
+        .fetch_all(self.pool())
+        .await
+        .context("Failed to load contact identifiers for channel")?;
+
+        let mut result: Vec<String> = Vec::new();
+        for id in rows {
+            // For WhatsApp, also add normalized phone (digits only)
+            if channel == "whatsapp" {
+                let normalized = id.replace(['+', ' ', '-'], "");
+                // Strip @s.whatsapp.net suffix if present
+                let normalized = normalized
+                    .strip_suffix("@s.whatsapp.net")
+                    .unwrap_or(&normalized)
+                    .to_string();
+                if normalized != id && !result.contains(&normalized) {
+                    result.push(normalized);
+                }
+            }
+            if !result.contains(&id) {
+                result.push(id);
+            }
+        }
+        Ok(result)
     }
 
     pub async fn delete_contact_identity(&self, id: i64) -> Result<bool> {
@@ -418,19 +470,53 @@ impl Database {
         inbound_content: &str,
         draft_response: Option<&str>,
     ) -> Result<i64> {
+        self.insert_pending_response_with_notify(
+            contact_id, channel, chat_id, inbound_content, draft_response, None, None,
+        )
+        .await
+    }
+
+    pub async fn insert_pending_response_with_notify(
+        &self,
+        contact_id: Option<i64>,
+        channel: &str,
+        chat_id: &str,
+        inbound_content: &str,
+        draft_response: Option<&str>,
+        notify_channel: Option<&str>,
+        notify_chat_id: Option<&str>,
+    ) -> Result<i64> {
         let id = sqlx::query_scalar::<_, i64>(
-            "INSERT INTO pending_responses (contact_id, channel, chat_id, inbound_content, draft_response)
-             VALUES (?, ?, ?, ?, ?) RETURNING id",
+            "INSERT INTO pending_responses (contact_id, channel, chat_id, inbound_content, draft_response, notify_channel, notify_chat_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
         )
         .bind(contact_id)
         .bind(channel)
         .bind(chat_id)
         .bind(inbound_content)
         .bind(draft_response)
+        .bind(notify_channel)
+        .bind(notify_chat_id)
         .fetch_one(self.pool())
         .await
         .context("Failed to insert pending response")?;
         Ok(id)
+    }
+
+    /// Load pending responses that were routed to a specific notify channel+chat_id.
+    pub async fn list_pending_responses_for_notify(
+        &self,
+        notify_channel: &str,
+        notify_chat_id: &str,
+    ) -> Result<Vec<PendingResponse>> {
+        sqlx::query_as::<_, PendingResponse>(
+            "SELECT * FROM pending_responses WHERE notify_channel = ? AND notify_chat_id = ? AND status = 'pending' ORDER BY created_at ASC",
+        )
+        .bind(notify_channel)
+        .bind(notify_chat_id)
+        .fetch_all(self.pool())
+        .await
+        .context("Failed to list pending responses for notify")
     }
 
     pub async fn list_pending_responses(
@@ -504,6 +590,7 @@ mod tests {
                 Some("telegram"),
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -515,17 +602,20 @@ mod tests {
         assert_eq!(c.nickname.as_deref(), Some("marco"));
         assert_eq!(c.bio, "CTO");
         assert_eq!(c.response_mode, "automatic");
+        assert_eq!(c.tone_of_voice, "");
 
         // Update
         let upd = ContactUpdate {
             bio: Some("CTO di AcmeCorp".into()),
             response_mode: Some("assisted".into()),
+            tone_of_voice: Some("formale e professionale".into()),
             ..Default::default()
         };
         assert!(db.update_contact(id, &upd).await.unwrap());
         let c = db.load_contact(id).await.unwrap().unwrap();
         assert_eq!(c.bio, "CTO di AcmeCorp");
         assert_eq!(c.response_mode, "assisted");
+        assert_eq!(c.tone_of_voice, "formale e professionale");
 
         // List
         let all = db.list_contacts(None).await.unwrap();
@@ -546,7 +636,7 @@ mod tests {
     async fn test_identities() {
         let (db, _dir) = test_db().await;
         let cid = db
-            .insert_contact("Test", None, None, None, None, None, None, None, None)
+            .insert_contact("Test", None, None, None, None, None, None, None, None, None)
             .await
             .unwrap();
 
@@ -586,11 +676,11 @@ mod tests {
     async fn test_relationships() {
         let (db, _dir) = test_db().await;
         let a = db
-            .insert_contact("Alice", None, None, None, None, None, None, None, None)
+            .insert_contact("Alice", None, None, None, None, None, None, None, None, None)
             .await
             .unwrap();
         let b = db
-            .insert_contact("Bob", None, None, None, None, None, None, None, None)
+            .insert_contact("Bob", None, None, None, None, None, None, None, None, None)
             .await
             .unwrap();
 
@@ -618,7 +708,7 @@ mod tests {
     async fn test_events() {
         let (db, _dir) = test_db().await;
         let cid = db
-            .insert_contact("Test", None, None, None, None, None, None, None, None)
+            .insert_contact("Test", None, None, None, None, None, None, None, None, None)
             .await
             .unwrap();
 
@@ -650,7 +740,7 @@ mod tests {
     async fn test_cascade_delete() {
         let (db, _dir) = test_db().await;
         let cid = db
-            .insert_contact("Cascade", None, None, None, None, None, None, None, None)
+            .insert_contact("Cascade", None, None, None, None, None, None, None, None, None)
             .await
             .unwrap();
         db.insert_contact_identity(cid, "email", "a@b.com", None)
@@ -670,7 +760,7 @@ mod tests {
     async fn test_pending_responses() {
         let (db, _dir) = test_db().await;
         let cid = db
-            .insert_contact("Sender", None, None, None, None, None, None, None, None)
+            .insert_contact("Sender", None, None, None, None, None, None, None, None, None)
             .await
             .unwrap();
 
@@ -698,5 +788,42 @@ mod tests {
             .unwrap());
         let r = db.load_pending_response(pid).await.unwrap().unwrap();
         assert_eq!(r.status, "approved");
+    }
+
+    #[tokio::test]
+    async fn test_contact_identifiers_for_channel() {
+        let (db, _dir) = test_db().await;
+        let cid = db
+            .insert_contact("Test", None, None, None, None, None, None, None, None, None)
+            .await
+            .unwrap();
+
+        // Add identities for different channels
+        db.insert_contact_identity(cid, "telegram", "12345", None)
+            .await
+            .unwrap();
+        db.insert_contact_identity(cid, "whatsapp", "+39 333 1234567", None)
+            .await
+            .unwrap();
+        db.insert_contact_identity(cid, "discord", "user#1234", None)
+            .await
+            .unwrap();
+
+        // Telegram: returns exact identifier
+        let tg = db.contact_identifiers_for_channel("telegram").await.unwrap();
+        assert_eq!(tg, vec!["12345"]);
+
+        // WhatsApp: returns normalized digits AND original
+        let wa = db.contact_identifiers_for_channel("whatsapp").await.unwrap();
+        assert!(wa.contains(&"393331234567".to_string())); // normalized
+        assert!(wa.contains(&"+39 333 1234567".to_string())); // original
+
+        // Discord: returns exact identifier
+        let dc = db.contact_identifiers_for_channel("discord").await.unwrap();
+        assert_eq!(dc, vec!["user#1234"]);
+
+        // Unknown channel: empty
+        let empty = db.contact_identifiers_for_channel("unknown").await.unwrap();
+        assert!(empty.is_empty());
     }
 }

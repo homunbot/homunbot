@@ -24,13 +24,16 @@ impl SystemPromptBuilder {
     /// Create a builder with default sections in standard order.
     pub fn with_defaults() -> Self {
         use super::{
-            BusinessSection, ContactsSection, IdentitySection, MemorySection, RuntimeSection,
-            SafetySection, SkillsSection, ToolsSection, WorkspaceSection,
+            AgentInstructionsSection, BusinessSection, ContactsSection, IdentitySection,
+            MemorySection, PersonaSection, RuntimeSection, SafetySection, SkillsSection,
+            ToolsSection, WorkspaceSection,
         };
 
         Self {
             sections: vec![
                 Box::new(IdentitySection),
+                Box::new(PersonaSection),
+                Box::new(AgentInstructionsSection),
                 Box::new(ToolsSection),
                 Box::new(SafetySection),
                 Box::new(SkillsSection),
@@ -116,6 +119,8 @@ impl<'a> PromptContext<'a> {
             prompt_mode: mode,
             channels_info: self.channels_info,
             contact_context: self.contact_context,
+            persona_context: self.persona_context,
+            agent_instructions: self.agent_instructions,
         }
     }
 }
@@ -142,6 +147,8 @@ mod tests {
             prompt_mode: PromptMode::Full,
             channels_info: "",
             contact_context: "",
+            persona_context: "",
+            agent_instructions: "",
         }
     }
 

@@ -580,6 +580,58 @@ impl PromptSection for BusinessSection {
 }
 
 // ============================================================================
+// PERSONA SECTION
+// ============================================================================
+
+/// Injects persona-specific instructions into the system prompt.
+///
+/// When the agent operates in "owner", "company", or "custom" persona mode,
+/// this section adds instructions before the identity/contacts sections.
+pub struct PersonaSection;
+
+impl PromptSection for PersonaSection {
+    fn name(&self) -> &str {
+        "persona"
+    }
+
+    fn build(&self, ctx: &PromptContext<'_>) -> Result<String> {
+        if ctx.persona_context.is_empty() {
+            return Ok(String::new());
+        }
+        Ok(format!(
+            "## Response Persona\n\n{}\n",
+            ctx.persona_context,
+        ))
+    }
+}
+
+// ============================================================================
+// AGENT INSTRUCTIONS SECTION
+// ============================================================================
+
+/// Per-agent task-oriented instructions from `AgentDefinition`.
+///
+/// Injected after the persona section so agent-specific behavior is
+/// layered on top of the persona identity.
+pub struct AgentInstructionsSection;
+
+impl PromptSection for AgentInstructionsSection {
+    fn name(&self) -> &str {
+        "agent_instructions"
+    }
+
+    fn build(&self, ctx: &PromptContext<'_>) -> Result<String> {
+        if ctx.agent_instructions.is_empty() {
+            return Ok(String::new());
+        }
+        Ok(format!(
+            "## Agent Instructions\n\n{}\n",
+            ctx.agent_instructions,
+        ))
+    }
+}
+
+// ============================================================================
 // CONTACTS SECTION
 // ============================================================================
 
@@ -595,9 +647,14 @@ impl PromptSection for ContactsSection {
         if ctx.contact_context.is_empty() {
             return Ok(String::new());
         }
+        let tone_hint = if ctx.contact_context.contains("Tone of voice:") {
+            " Adapt your communication style to match the specified tone of voice."
+        } else {
+            ""
+        };
         Ok(format!(
             "## Current Contact\n\n{}\n\nUse this info to personalize your response. \
-             Address the contact by name when appropriate.\n",
+             Address the contact by name when appropriate.{tone_hint}\n",
             ctx.contact_context,
         ))
     }
@@ -628,6 +685,8 @@ mod tests {
             prompt_mode: PromptMode::Full,
             channels_info: "",
             contact_context: "",
+            persona_context: "",
+            agent_instructions: "",
         }
     }
 

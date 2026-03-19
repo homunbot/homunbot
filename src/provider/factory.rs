@@ -11,6 +11,7 @@ use crate::config::Config;
 use crate::storage;
 
 use super::health::ProviderHealthTracker;
+use super::queued::QueuedProvider;
 use super::traits::Provider;
 use super::{AnthropicProvider, OllamaProvider, OpenAICompatProvider, ReliableProvider};
 
@@ -93,7 +94,31 @@ fn create_provider_for_model_with_fallbacks(
     } else {
         reliable
     };
-    Ok(Arc::new(reliable))
+    let reliable: Arc<dyn Provider> = Arc::new(reliable);
+
+    // Wrap with concurrency limiter.
+    // 0 = auto-detect: 1 for local (Ollama), 5 for cloud APIs.
+    let max_concurrent = if config.agent.llm_max_concurrent > 0 {
+        config.agent.llm_max_concurrent
+    } else if is_local_provider(primary_model) {
+        1
+    } else {
+        5
+    };
+
+    tracing::info!(
+        max_concurrent,
+        primary_model = %primary_model,
+        "LLM queue enabled"
+    );
+
+    Ok(Arc::new(QueuedProvider::new(reliable, max_concurrent)))
+}
+
+/// Returns `true` for models that run on local hardware (Ollama, vLLM).
+fn is_local_provider(model: &str) -> bool {
+    let m = model.to_lowercase();
+    m.starts_with("ollama/") || m.starts_with("vllm/")
 }
 
 /// Create a single LLM provider instance for a given model string.

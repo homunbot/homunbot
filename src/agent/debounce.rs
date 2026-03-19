@@ -33,7 +33,8 @@ pub struct PreparedMessage {
 pub struct DispatchContext {
     pub is_system: bool,
     pub is_automation: bool,
-    pub email_notify: Option<(String, String)>,
+    /// Approval routing: (notify_channel, notify_chat_id) for assisted mode on any channel.
+    pub approval_notify: Option<(String, String)>,
     pub email_meta: Option<(String, Option<String>, Option<String>)>,
     pub email_from: Option<String>,
     pub email_body_preview: Option<String>,
@@ -47,6 +48,8 @@ pub struct DispatchContext {
     pub contact_id: Option<i64>,
     /// Response mode for this message (contact override > channel default > "automatic").
     pub contact_response_mode: Option<String>,
+    /// Resolved contact for agent routing (MAG-2).
+    pub contact: Option<crate::contacts::Contact>,
 }
 
 // ── Config ──────────────────────────────────────────────────────────
@@ -309,7 +312,7 @@ mod tests {
             ctx: DispatchContext {
                 is_system: false,
                 is_automation: false,
-                email_notify: None,
+                approval_notify: None,
                 email_meta: None,
                 email_from: None,
                 email_body_preview: None,
@@ -321,6 +324,7 @@ mod tests {
                 inbound_metadata: None,
                 contact_id: None,
                 contact_response_mode: None,
+                contact: None,
             },
         }
     }

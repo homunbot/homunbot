@@ -33,9 +33,11 @@ impl Tool for ContactsTool {
     }
 
     fn description(&self) -> &str {
-        "Manage the personal contact book. Search contacts by name, resolve relationships \
-         (e.g. 'la mamma di Felicia'), view details, create/update contacts, add channel \
-         identities, relationships, events (birthdays, anniversaries), and check upcoming events."
+        "Personal contact book. IMPORTANT: when the user asks to send a message to someone, \
+         use action='send' with their name to resolve the preferred channel and chat_id, \
+         then use send_message with the returned channel and chat_id. \
+         Other actions: search, resolve, get, create, update, add_identity, add_relationship, \
+         add_event, upcoming."
     }
 
     fn parameters(&self) -> Value {
@@ -66,6 +68,10 @@ impl Tool for ContactsTool {
                 "response_mode": {
                     "type": "string",
                     "enum": ["automatic", "assisted", "on_demand", "silent"]
+                },
+                "tone_of_voice": {
+                    "type": "string",
+                    "description": "How to talk to this person (e.g. formal, informal, friendly, professional, technical)"
                 },
                 "tags": { "type": "string", "description": "JSON array of tags" },
                 "channel": { "type": "string", "description": "Channel type (for add_identity)" },
@@ -183,9 +189,14 @@ impl ContactsTool {
                 let identities = self.db.list_contact_identities(id).await?;
                 let relationships = self.db.list_contact_relationships(id).await?;
                 let events = self.db.list_contact_events(id).await?;
+                let tone = if c.tone_of_voice.is_empty() {
+                    "-".to_string()
+                } else {
+                    c.tone_of_voice.clone()
+                };
                 let output = format!(
                     "Contact #{}: {}\nNickname: {}\nBio: {}\nNotes: {}\nBirthday: {}\n\
-                     Channel: {}\nMode: {}\nTags: {}\n\
+                     Channel: {}\nMode: {}\nTone: {}\nTags: {}\n\
                      Identities: {}\nRelationships: {}\nEvents: {}",
                     c.id,
                     c.name,
@@ -195,6 +206,7 @@ impl ContactsTool {
                     c.birthday.as_deref().unwrap_or("-"),
                     c.preferred_channel.as_deref().unwrap_or("-"),
                     c.response_mode,
+                    tone,
                     c.tags,
                     format_identities(&identities),
                     format_relationships(&relationships),
@@ -232,6 +244,7 @@ impl ContactsTool {
                 args["preferred_channel"].as_str(),
                 args["response_mode"].as_str(),
                 args["tags"].as_str(),
+                args["tone_of_voice"].as_str(),
             )
             .await?;
         Ok(ToolResult {
@@ -257,8 +270,12 @@ impl ContactsTool {
             nameday: args["nameday"].as_str().map(|s| s.to_string()),
             preferred_channel: args["preferred_channel"].as_str().map(|s| s.to_string()),
             response_mode: args["response_mode"].as_str().map(|s| s.to_string()),
+            tone_of_voice: args["tone_of_voice"].as_str().map(|s| s.to_string()),
             tags: args["tags"].as_str().map(|s| s.to_string()),
             avatar_url: args["avatar_url"].as_str().map(|s| s.to_string()),
+            persona_override: args["persona_override"].as_str().map(|s| s.to_string()),
+            persona_instructions: args["persona_instructions"].as_str().map(|s| s.to_string()),
+            agent_override: args["agent_override"].as_str().map(|s| s.to_string()),
         };
         let updated = self.db.update_contact(id, &upd).await?;
         Ok(ToolResult {
@@ -401,15 +418,40 @@ impl ContactsTool {
         match contact {
             Some(c) => {
                 let channel = c.preferred_channel.as_deref().unwrap_or("unknown");
-                // Return instructions for the agent to route the message
-                Ok(ToolResult {
-                    output: format!(
-                        "Send to {} via {channel}. Use the send_message tool with \
-                         channel=\"{channel}\" and the message content. Contact #{}: {}",
-                        c.name, c.id, c.name,
-                    ),
-                    is_error: false,
-                })
+                // Find the identity for the preferred channel
+                let identities = self.db.list_contact_identities(c.id).await.unwrap_or_default();
+                let identity = identities.iter().find(|i| i.channel == channel);
+
+                if let Some(ident) = identity {
+                    let chat_id = if channel == "whatsapp" && !ident.identifier.contains('@') {
+                        let num = ident.identifier.replace(['+', ' ', '-'], "");
+                        format!("{num}@s.whatsapp.net")
+                    } else {
+                        ident.identifier.clone()
+                    };
+                    Ok(ToolResult {
+                        output: format!(
+                            "Ready to send to {name} via {channel}. \
+                             Use send_message with channel=\"{channel}\" chat_id=\"{chat_id}\" \
+                             and your message content.",
+                            name = c.name,
+                        ),
+                        is_error: false,
+                    })
+                } else {
+                    let available = identities.iter()
+                        .map(|i| format!("{}:{}", i.channel, i.identifier))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    Ok(ToolResult {
+                        output: format!(
+                            "Contact {} has no {channel} identity. Available: {avail}. \
+                             Set preferred_channel or add a {channel} identity first.",
+                            c.name, avail = if available.is_empty() { "none".into() } else { available },
+                        ),
+                        is_error: true,
+                    })
+                }
             }
             None => Ok(ToolResult {
                 output: "Contact not found. Create it first or provide a valid contact_id.".into(),
