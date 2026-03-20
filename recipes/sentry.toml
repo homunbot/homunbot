@@ -1,0 +1,68 @@
+id = "sentry"
+display_name = "Sentry"
+subtitle = "Error tracking and performance monitoring"
+icon = "sentry"
+category = "Developer"
+auth_mode = "api_key"
+capability_intro = "View errors, track issues, and monitor application performance"
+setup_guide = """
+## How to get a Sentry Auth Token
+
+### Step 1: Access Sentry settings
+1. Go to [sentry.io](https://sentry.io/) and log in
+2. Click your avatar (top-left) → **Organization Settings**
+
+### Step 2: Create an Auth Token
+1. Go to **Auth Tokens** (under Developer Settings)
+2. Click **Create New Token**
+3. Name it `Homun Assistant`
+4. Select scopes:
+   - `project:read` — view projects
+   - `event:read` — view error events
+   - `issue:read` — view and search issues
+   - `org:read` — view organization info
+5. Click **Create Token**
+6. **Copy the token** — it's shown only once
+
+### Organization slug
+Your org slug is the URL part: `sentry.io/organizations/{your-org-slug}/`
+
+You can leave the organization field empty if you only belong to one organization.
+
+### What Homun can access
+- Error events and stack traces
+- Issue search and filtering
+- Release and deployment info
+- Performance monitoring data
+
+> Use read-only scopes for safety. Homun doesn't need write access to be useful.
+"""
+
+[mcp]
+command = "npx"
+args = ["-y", "@sentry/mcp-server"]
+transport = "stdio"
+
+[success]
+title = "Sentry connected"
+body = "You can now ask: Show recent errors / What's the top issue in project X?"
+
+[[fields]]
+id = "auth_token"
+label = "Sentry Auth Token"
+help = "Authentication token with read scopes"
+secret = true
+required = true
+input = "password"
+source_hint = "sentry.io → Settings → Auth Tokens → Create New Token"
+env_key = "SENTRY_ACCESS_TOKEN"
+
+[[fields]]
+id = "organization"
+label = "Organization Slug"
+help = "Your Sentry organization slug (optional if only one org)"
+secret = false
+required = false
+input = "text"
+source_hint = "The slug in your URL: sentry.io/organizations/{slug}/"
+env_key = "SENTRY_ORGANIZATION"

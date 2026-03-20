@@ -5,6 +5,27 @@ icon = "github"
 category = "Developer"
 auth_mode = "api_key"
 capability_intro = "Manage repositories, issues, and pull requests"
+deprecated_notice = "The underlying npm package is deprecated. It still works but may be removed in the future."
+setup_guide = """
+## How to get a GitHub Personal Access Token
+
+1. Open [github.com/settings/tokens](https://github.com/settings/tokens)
+2. Click **Generate new token** → **Generate new token (classic)**
+3. Give it a descriptive name, e.g. `Homun Assistant`
+4. Set an expiration (90 days recommended, or no expiration)
+5. Select scopes:
+   - **repo** — full control of private repositories
+   - **read:org** — read org and team membership
+   - **read:user** — read user profile data
+6. Click **Generate token**
+7. **Copy the token immediately** — it won't be shown again
+
+> The token starts with `ghp_`. Paste it in the field on the left.
+
+### Fine-grained tokens (alternative)
+
+GitHub also supports fine-grained personal access tokens with more granular permissions. Go to **Settings → Developer settings → Personal access tokens → Fine-grained tokens** to create one with repository-level access control.
+"""
 
 [mcp]
 command = "npx"

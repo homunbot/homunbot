@@ -47,6 +47,7 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/approvals", get(approvals_page))
         .route("/account", get(account_page))
+        .route("/api-keys", get(api_keys_page))
         .route("/maintenance", get(maintenance_page))
         .route("/logs", get(logs_page))
         .route("/onboarding", get(onboarding_page))
@@ -109,6 +110,7 @@ const SETTINGS_PAGES: &[&str] = &[
     "file-access",
     "shell",
     "sandbox",
+    "api-keys",
     "approvals",
     "maintenance",
     "logs",
@@ -234,9 +236,10 @@ fn content_subnav(active: &str) -> String {
                 <a href="/file-access" class="sidebar-subnav-link{5}">File Access</a>
                 <a href="/shell" class="sidebar-subnav-link{6}">Shell</a>
                 <a href="/sandbox" class="sidebar-subnav-link{7}">Sandbox</a>
+                <a href="/api-keys" class="sidebar-subnav-link{8}">API Keys</a>
                 <div class="subnav-section">Sistema</div>
-                <a href="/maintenance" class="sidebar-subnav-link{8}">Database</a>
-                <a href="/logs" class="sidebar-subnav-link{9}">Logs</a>
+                <a href="/maintenance" class="sidebar-subnav-link{9}">Database</a>
+                <a href="/logs" class="sidebar-subnav-link{10}">Logs</a>
             </aside>"#,
             a("settings"),
             a("appearance"),
@@ -246,6 +249,7 @@ fn content_subnav(active: &str) -> String {
             a("file-access"),
             a("shell"),
             a("sandbox"),
+            a("api-keys"),
             a("maintenance"),
             a("logs"),
         )
@@ -2187,6 +2191,7 @@ async fn mcp_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     </div>
                 </div>
             </div>
+        <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
         </main>"#
     );
 
@@ -3996,38 +4001,14 @@ async fn account_page(State(state): State<Arc<AppState>>) -> Html<String> {
                     </details>
                 </section>
 
-                <!-- Webhook Tokens Section -->
+                <!-- API Keys — managed on dedicated page -->
                 <section class="section">
                     <div class="section-header">
-                        <h2>Webhook Tokens</h2>
-                        <span class="badge" id="tokens-count">0</span>
+                        <h2>API Keys</h2>
                     </div>
                     <p style="color:var(--muted);margin-bottom:1rem;font-size:0.875rem">
-                        Create tokens to allow external services to send messages to your assistant.
+                        <a href="/api-keys" style="color:var(--accent)">Manage API keys →</a>
                     </p>
-                    <div class="item-list" id="tokens-list">
-                        <div class="empty-state" id="tokens-empty">
-                            <p>No webhook tokens</p>
-                        </div>
-                    </div>
-
-                    <!-- Create Token Form -->
-                    <details class="details-collapse" style="margin-top:1rem">
-                        <summary class="btn btn-secondary btn-sm">+ Create Token</summary>
-                        <form id="create-token-form" class="form" style="margin-top:1rem">
-                            <div class="form-row form-row--2">
-                                <div class="form-group">
-                                    <label>Token Name</label>
-                                    <input type="text" id="token-name" class="input" placeholder="e.g., Home Assistant">
-                                </div>
-                                <div class="form-group">
-                                    <label>Webhook URL (after creation)</label>
-                                    <input type="text" id="webhook-url-preview" class="input" readonly value="POST /api/v1/webhook/{{token}}">
-                                </div>
-                            </div>
-                            <button type="submit" class="btn btn-primary btn-sm">Create Token</button>
-                        </form>
-                    </details>
                 </section>
 
                 <!-- Trusted Devices (REM-3) -->
@@ -4718,6 +4699,81 @@ pub async fn setup_wizard_page() -> Html<String> {
     "##;
 
     Html(standalone_page("Setup", body))
+}
+
+// ─── API Keys ────────────────────────────────────────────────────
+
+async fn api_keys_page() -> Html<String> {
+    let body = r#"<main class="content">
+            <div class="content-inner">
+                <div class="page-header">
+                    <div class="page-title-group">
+                        <h1 class="page-title">API Keys</h1>
+                        <span class="badge badge-neutral" id="keys-count">0</span>
+                    </div>
+                    <button class="btn btn-primary btn-sm" id="create-key-btn">+ Create Key</button>
+                </div>
+
+                <!-- Create form (hidden by default) -->
+                <section class="section" id="create-form-section" style="display:none">
+                    <div class="section-header"><h2>New API Key</h2></div>
+                    <form id="create-key-form" class="form">
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="key-name">Name</label>
+                                <input type="text" id="key-name" class="input" placeholder="My Integration" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="key-scope">Scope</label>
+                                <select id="key-scope" class="input">
+                                    <option value="admin">Admin — full access</option>
+                                    <option value="write">Write — read + write</option>
+                                    <option value="read">Read — read-only</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row--2">
+                            <div class="form-group">
+                                <label for="key-expiry">Expires</label>
+                                <select id="key-expiry" class="input">
+                                    <option value="">Never</option>
+                                    <option value="7d">7 days</option>
+                                    <option value="30d" selected>30 days</option>
+                                    <option value="90d">90 days</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="display:flex;align-items:flex-end">
+                                <button type="submit" class="btn btn-primary btn-sm">Generate Key</button>
+                                <button type="button" class="btn btn-ghost btn-sm" id="cancel-create-btn" style="margin-left:var(--space-2)">Cancel</button>
+                            </div>
+                        </div>
+                    </form>
+                </section>
+
+                <!-- One-time token reveal -->
+                <section class="section" id="token-reveal-section" style="display:none">
+                    <div class="section-header"><h2>Your New API Key</h2></div>
+                    <p class="form-hint" style="margin-bottom:var(--space-3)">Copy this key now — you won't be able to see it again.</p>
+                    <div style="display:flex;gap:var(--space-2);align-items:center">
+                        <code class="input" id="revealed-token" style="flex:1;font-family:var(--font-mono);user-select:all"></code>
+                        <button class="btn btn-secondary btn-sm" id="copy-token-btn">Copy</button>
+                        <button class="btn btn-ghost btn-sm" id="dismiss-reveal-btn">Done</button>
+                    </div>
+                </section>
+
+                <!-- Keys list -->
+                <section class="section">
+                    <div class="section-header"><h2>Active Keys</h2></div>
+                    <div class="item-list" id="keys-list">
+                        <div class="empty-state" id="keys-empty">
+                            <p>No API keys yet. Create one to access the API programmatically.</p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>"#;
+
+    Html(page_html("API Keys", "api-keys", body, &["api-keys.js"]))
 }
 
 // ─── Maintenance ─────────────────────────────────────────────────

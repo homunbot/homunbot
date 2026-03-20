@@ -1,0 +1,59 @@
+id = "google-maps"
+display_name = "Google Maps"
+subtitle = "Geocoding, directions, and places"
+icon = "google-maps"
+category = "Utility"
+auth_mode = "api_key"
+capability_intro = "Search places, get directions, and geocode addresses"
+deprecated_notice = "The underlying npm package is deprecated. It still works but may be removed in the future."
+setup_guide = """
+## How to get a Google Maps API Key
+
+### Step 1: Create or select a Google Cloud project
+1. Go to [console.cloud.google.com](https://console.cloud.google.com/)
+2. Select an existing project or create a new one
+
+### Step 2: Enable Maps APIs
+1. Go to **APIs & Services → Library**
+2. Enable these APIs:
+   - **Geocoding API** — convert addresses to coordinates
+   - **Directions API** — route planning
+   - **Places API** — search for businesses and landmarks
+   - **Distance Matrix API** — travel time calculations
+
+### Step 3: Create an API key
+1. Go to **APIs & Services → Credentials**
+2. Click **Create Credentials → API Key**
+3. Copy the key
+
+### Step 4: Restrict the key (recommended)
+1. Click on the API key to edit it
+2. Under **API restrictions**, select **Restrict key**
+3. Select only the Maps APIs you enabled
+4. Click **Save**
+
+### Pricing
+- Google gives $200/month free credit (covers ~28,000 geocoding requests)
+- Set a billing alert to avoid unexpected charges
+
+> Restrict your API key to Maps APIs only for security. The free tier is generous for personal use.
+"""
+
+[mcp]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-google-maps"]
+transport = "stdio"
+
+[success]
+title = "Google Maps connected"
+body = "You can now ask: Find restaurants near... / How do I get to...? / What's the address of...?"
+
+[[fields]]
+id = "api_key"
+label = "Google Maps API Key"
+help = "API key with Maps APIs enabled"
+secret = true
+required = true
+input = "password"
+source_hint = "Google Cloud Console → APIs & Services → Credentials"
+env_key = "GOOGLE_MAPS_API_KEY"

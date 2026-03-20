@@ -1,0 +1,83 @@
+id = "wordpress"
+display_name = "WordPress"
+subtitle = "Posts, pages, and site management"
+icon = "wordpress"
+category = "CMS"
+auth_mode = "api_key"
+capability_intro = "Manage posts, pages, media, and WordPress settings"
+setup_guide = """
+## How to set up WordPress access
+
+### For self-hosted WordPress
+
+#### Step 1: Enable Application Passwords
+Application Passwords are built into WordPress 5.6+. They should be enabled by default.
+
+#### Step 2: Create an Application Password
+1. Log in to your WordPress admin panel
+2. Go to **Users → Profile** (or your user profile)
+3. Scroll down to **Application Passwords**
+4. Enter a name: `Homun Assistant`
+5. Click **Add New Application Password**
+6. **Copy the password** — it's shown only once (spaces are optional, you can remove them)
+
+#### Step 3: Enter your credentials
+- **WordPress URL**: your site URL (e.g. `https://myblog.com`)
+- **Username**: your WordPress admin username
+- **Application Password**: the password you just generated
+
+### For WordPress.com
+WordPress.com has native MCP support:
+1. Go to **Settings → Security → Application Passwords**
+2. Follow the same process as above
+3. Use your WordPress.com site URL
+
+### What Homun can manage
+- **Posts** — create, edit, publish, delete
+- **Pages** — create and manage static pages
+- **Media** — upload and manage images/files
+- **Comments** — moderate and respond
+- **Categories/Tags** — organize content
+- **Users** — manage (with admin access)
+
+> Application Passwords are scoped to the REST API and don't give wp-admin access.
+"""
+
+[mcp]
+command = "npx"
+args = ["-y", "@node2flow/wordpress-mcp"]
+transport = "stdio"
+
+[success]
+title = "WordPress connected"
+body = "You can now ask: Create a new post about... / Show my recent drafts / Update the homepage"
+
+[[fields]]
+id = "url"
+label = "WordPress URL"
+help = "Your WordPress site URL"
+secret = false
+required = true
+input = "url"
+source_hint = "e.g. https://myblog.com or https://myblog.wordpress.com"
+env_key = "WORDPRESS_URL"
+
+[[fields]]
+id = "username"
+label = "Username"
+help = "WordPress admin username"
+secret = false
+required = true
+input = "text"
+source_hint = "Your WordPress login username"
+env_key = "WORDPRESS_USERNAME"
+
+[[fields]]
+id = "app_password"
+label = "Application Password"
+help = "Application password (not your login password)"
+secret = true
+required = true
+input = "password"
+source_hint = "WordPress Admin → Users → Profile → Application Passwords"
+env_key = "WORDPRESS_APP_PASSWORD"

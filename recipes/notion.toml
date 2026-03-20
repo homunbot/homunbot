@@ -5,6 +5,29 @@ icon = "notion"
 category = "Productivity"
 auth_mode = "mcp_oauth"
 capability_intro = "Access and manage your Notion pages and databases"
+setup_guide = """
+## How to connect Notion
+
+Notion uses **MCP OAuth 2.1** with automatic authentication — no manual token setup required.
+
+### What happens when you click Connect
+1. A Notion authorization page opens in your browser
+2. You choose which pages and databases to share
+3. The access token is saved automatically
+
+### What Homun can access
+- **Pages** you explicitly share during authorization
+- **Databases** and their contents
+- **Blocks** (paragraphs, to-dos, headings, etc.)
+- **Search** across your authorized workspace
+
+### Tips
+- You can always change which pages are shared by reconnecting
+- Notion's OAuth uses **PKCE** for security — no client secret needed
+- The token refreshes automatically
+
+> Just click **Connect to Notion** and authorize access. No credentials to copy!
+"""
 
 [mcp]
 transport = "http"

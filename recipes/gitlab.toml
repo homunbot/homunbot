@@ -5,10 +5,31 @@ icon = "gitlab"
 category = "Developer"
 auth_mode = "api_key"
 capability_intro = "Manage GitLab projects, merge requests, issues, and pipelines"
+setup_guide = """
+## How to get a GitLab Personal Access Token
+
+### For gitlab.com
+1. Go to [gitlab.com/-/user_settings/personal_access_tokens](https://gitlab.com/-/user_settings/personal_access_tokens)
+2. Click **Add new token**
+3. Name: `Homun Assistant`
+4. Expiration: set a date (recommended: 1 year)
+5. Select scopes:
+   - **api** — full API access
+   - **read_repository** — read repo contents
+6. Click **Create personal access token**
+7. **Copy the token** — it won't be shown again
+
+### For self-hosted GitLab
+1. Go to your GitLab instance → **Preferences → Access Tokens**
+2. Follow the same steps as above
+3. Enter your GitLab API URL in the optional field (e.g. `https://gitlab.example.com/api/v4`)
+
+> Leave the API URL field empty if you use gitlab.com.
+"""
 
 [mcp]
 command = "npx"
-args = ["-y", "mcp-server-gitlab"]
+args = ["-y", "@zereight/mcp-gitlab"]
 transport = "stdio"
 
 [success]
@@ -26,11 +47,11 @@ source_hint = "GitLab → Preferences → Access Tokens → Add new token (api s
 env_key = "GITLAB_PERSONAL_ACCESS_TOKEN"
 
 [[fields]]
-id = "gitlab_url"
-label = "GitLab URL"
-help = "GitLab instance URL (leave empty for gitlab.com)"
+id = "gitlab_api_url"
+label = "GitLab API URL"
+help = "GitLab API URL (leave empty for gitlab.com)"
 secret = false
 required = false
 input = "text"
-source_hint = "e.g. https://gitlab.example.com (default: https://gitlab.com)"
-env_key = "GITLAB_URL"
+source_hint = "e.g. https://gitlab.example.com/api/v4 (default: https://gitlab.com/api/v4)"
+env_key = "GITLAB_API_URL"

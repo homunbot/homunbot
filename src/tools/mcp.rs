@@ -273,12 +273,32 @@ impl Tool for McpClientTool {
                     &server_config,
                     &sandbox_config,
                     &self.mcp_tool_name,
-                    args,
+                    args.clone(),
                 )
                 .await
                 {
                     Ok(output) => return Ok(ToolResult::success(output)),
                     Err(e) => {
+                        // On auth errors, attempt OAuth token refresh and retry once
+                        let err_msg = format!("{e:#}");
+                        if is_auth_error(&err_msg) {
+                            match try_refresh_and_retry(
+                                &self.server_name,
+                                &server_config,
+                                &sandbox_config,
+                                &self.mcp_tool_name,
+                                args,
+                            )
+                            .await
+                            {
+                                Ok(output) => return Ok(ToolResult::success(output)),
+                                Err(retry_err) => {
+                                    return Ok(ToolResult::error(format!(
+                                        "MCP tool error (token refresh failed): {retry_err}"
+                                    )));
+                                }
+                            }
+                        }
                         return Ok(ToolResult::error(format!("MCP tool error: {e}")));
                     }
                 }
@@ -425,12 +445,9 @@ impl McpManager {
                 }
                 Err(e) => {
                     let err_detail = format!("{e:#}");
-                    let is_auth_error = err_detail.contains("AuthRequired")
-                        || err_detail.contains("invalid_token")
-                        || err_detail.contains("401");
 
                     // Try OAuth token refresh + reconnect for auth failures
-                    if is_auth_error {
+                    if is_auth_error(&err_detail) {
                         if let Some(server_cfg) = servers.get(&name) {
                             tracing::info!(server = %name, "Auth error detected, attempting OAuth token refresh");
                             match super::mcp_token_refresh::try_refresh_for_server(
@@ -705,6 +722,51 @@ async fn connect_http(
     };
 
     Ok((McpPeer::new(service), tools, info))
+}
+
+/// Check if an error message indicates an authentication/authorization failure.
+fn is_auth_error(err_msg: &str) -> bool {
+    err_msg.contains("AuthRequired")
+        || err_msg.contains("invalid_token")
+        || err_msg.contains("401")
+        || err_msg.contains("Unauthorized")
+        || err_msg.contains("token expired")
+        || err_msg.contains("token_expired")
+}
+
+/// Attempt OAuth token refresh and retry a failed tool call.
+///
+/// Used when a `call_tool_once` fails with an auth error — refreshes the token
+/// via the provider-specific flow (Google, Notion), persists the new token in
+/// the vault, and retries the tool call once with fresh credentials.
+async fn try_refresh_and_retry(
+    server_name: &str,
+    server_config: &McpServerConfig,
+    sandbox_config: &ExecutionSandboxConfig,
+    tool_name: &str,
+    args: Value,
+) -> Result<String> {
+    tracing::info!(server = %server_name, "Auth error on tool call, attempting OAuth token refresh");
+
+    let refresh = super::mcp_token_refresh::try_refresh_for_server(server_name, server_config)
+        .await
+        .with_context(|| {
+            format!("OAuth token refresh failed for MCP server '{server_name}'")
+        })?;
+
+    // Persist refreshed tokens to vault
+    persist_refreshed_tokens(server_name, server_config, &refresh);
+
+    // Build a config with the fresh access token for the retry
+    let mut retry_config = server_config.clone();
+    if let Some(ref auth_key) = retry_config.auth_env_key {
+        retry_config
+            .env
+            .insert(auth_key.clone(), refresh.access_token.clone());
+    }
+
+    tracing::info!(server = %server_name, "Token refreshed, retrying tool call");
+    call_tool_once(server_name, &retry_config, sandbox_config, tool_name, args).await
 }
 
 pub async fn call_tool_once(

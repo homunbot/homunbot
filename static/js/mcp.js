@@ -139,6 +139,15 @@
         if (!elModalOverlay) return;
         restoreInstallPanelHome();
         elModalOverlay.classList.remove('active');
+        // Clean up split-pane layout (set by connections.js)
+        var modal = document.getElementById('mcp-modal');
+        if (modal) modal.classList.remove('skill-modal--split');
+        var splitBody = document.getElementById('conn-split-body');
+        if (splitBody) splitBody.remove();
+        var modalContent = document.getElementById('mcp-modal-content');
+        if (modalContent) modalContent.style.display = '';
+        var modalBody = modalContent ? modalContent.parentElement : null;
+        if (modalBody) modalBody.style.padding = '';
     }
 
     function syncInstallPanelVisibility() {

@@ -5,10 +5,45 @@ icon = "slack"
 category = "Communication"
 auth_mode = "api_key"
 capability_intro = "Read messages and interact with your Slack workspace"
+setup_guide = """
+## How to get a Slack Bot Token
+
+### Step 1: Create a Slack App
+1. Go to [api.slack.com/apps](https://api.slack.com/apps)
+2. Click **Create New App → From scratch**
+3. Name it (e.g. `Homun`) and select your workspace
+
+### Step 2: Configure Bot permissions
+1. Go to **OAuth & Permissions** in the sidebar
+2. Under **Bot Token Scopes**, add:
+   - `channels:history` — read public channel messages
+   - `channels:read` — list channels
+   - `chat:write` — send messages
+   - `users:read` — read user info
+   - `search:read` — search messages (optional)
+
+### Step 3: Install the app
+1. Go to **Install App** in the sidebar
+2. Click **Install to Workspace**
+3. Review permissions and click **Allow**
+
+### Step 4: Copy the token
+1. After installation, you'll see the **Bot User OAuth Token**
+2. It starts with `xoxb-`
+3. Copy it and paste it in the field on the left
+
+### Step 5: Find your Team ID
+1. Open Slack in your browser
+2. The URL looks like: `https://app.slack.com/client/{TEAM_ID}/...`
+3. Copy the `T`-prefixed ID (e.g. `T0123456789`)
+4. Or: in the Slack app, go to your workspace name → **Settings** → scroll to **Workspace ID**
+
+> The bot can only access channels it's been invited to. Use `/invite @Homun` in a channel to give it access.
+"""
 
 [mcp]
 command = "npx"
-args = ["-y", "@modelcontextprotocol/server-slack"]
+args = ["-y", "slack-mcp-server"]
 transport = "stdio"
 
 [success]
@@ -23,4 +58,14 @@ secret = true
 required = true
 input = "password"
 source_hint = "Slack API → Your App → OAuth & Permissions → Bot User OAuth Token"
-env_key = "SLACK_BOT_TOKEN"
+env_key = "SLACK_MCP_XOXB_TOKEN"
+
+[[fields]]
+id = "team_id"
+label = "Slack Team ID"
+help = "Your workspace's Team ID (starts with T)"
+secret = false
+required = true
+input = "text"
+source_hint = "Slack URL: app.slack.com/client/{TEAM_ID}/... or Workspace Settings"
+env_key = "SLACK_MCP_TEAM_ID"

@@ -1,0 +1,70 @@
+id = "home-assistant"
+display_name = "Home Assistant"
+subtitle = "Smart home control and automation"
+icon = "home-assistant"
+category = "Smart Home"
+auth_mode = "api_key"
+capability_intro = "Control lights, sensors, switches, and home automations"
+setup_guide = """
+## How to set up Home Assistant access
+
+### Step 1: Find your Home Assistant URL
+Your HA instance URL is typically:
+- **Local**: `http://homeassistant.local:8123`
+- **Nabu Casa**: `https://your-id.ui.nabu.casa`
+- **Custom**: your configured domain/IP
+
+### Step 2: Create a Long-Lived Access Token
+1. Open Home Assistant in your browser
+2. Click your profile picture (bottom-left sidebar)
+3. Scroll down to **Long-Lived Access Tokens**
+4. Click **Create Token**
+5. Name it `Homun Assistant`
+6. Click **OK**
+7. **Copy the token** — it's shown only once
+
+### What Homun can control
+- **Lights** — turn on/off, brightness, color
+- **Switches** — toggle on/off
+- **Climate** — temperature, mode
+- **Sensors** — read temperature, humidity, etc.
+- **Scenes** — activate predefined scenes
+- **Automations** — trigger or toggle automations
+- **Scripts** — run Home Assistant scripts
+
+### Security notes
+- The token has full access to your HA instance
+- It doesn't expire unless you revoke it
+- Use a separate user account with limited permissions if preferred
+
+> Make sure your Home Assistant instance is reachable from where Homun is running.
+"""
+
+[mcp]
+command = "npx"
+args = ["-y", "home-assistant-mcp-server"]
+transport = "stdio"
+
+[success]
+title = "Home Assistant connected"
+body = "You can now ask: Turn on the living room lights / What's the temperature?"
+
+[[fields]]
+id = "url"
+label = "Home Assistant URL"
+help = "Your Home Assistant instance URL"
+secret = false
+required = true
+input = "url"
+source_hint = "e.g. http://homeassistant.local:8123 or https://your-id.ui.nabu.casa"
+env_key = "HASS_URL"
+
+[[fields]]
+id = "token"
+label = "Long-Lived Access Token"
+help = "Access token from Home Assistant profile"
+secret = true
+required = true
+input = "password"
+source_hint = "Home Assistant → Profile → Long-Lived Access Tokens → Create Token"
+env_key = "HASS_TOKEN"

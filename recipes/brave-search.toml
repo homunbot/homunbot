@@ -1,0 +1,52 @@
+id = "brave-search"
+display_name = "Brave Search"
+subtitle = "Web search, news, and local results"
+icon = "brave"
+category = "Search"
+auth_mode = "api_key"
+capability_intro = "Search the web, find news, and get local business results"
+setup_guide = """
+## How to get a Brave Search API Key
+
+### Step 1: Create a Brave account
+1. Go to [brave.com/search/api](https://brave.com/search/api/)
+2. Click **Get Started** or **Get API Key**
+3. Create an account or sign in
+
+### Step 2: Choose a plan
+1. The **Free** plan gives you 2,000 queries/month
+2. Paid plans offer more queries and additional features
+3. Select a plan and complete registration
+
+### Step 3: Copy your API key
+1. Go to your [API dashboard](https://api.search.brave.com/app/keys)
+2. Your API key is shown on the dashboard
+3. Copy it and paste it in the field on the left
+
+### Available features
+- **Web Search** — general web results
+- **News Search** — recent news articles
+- **Local Search** — businesses and places nearby
+- **AI Summaries** — AI-generated answer snippets (paid plans)
+
+> The free plan is generous for personal use. No credit card required.
+"""
+
+[mcp]
+command = "npx"
+args = ["-y", "@brave/brave-search-mcp-server"]
+transport = "stdio"
+
+[success]
+title = "Brave Search connected"
+body = "You can now ask: Search the web for... / What are the latest news about...?"
+
+[[fields]]
+id = "api_key"
+label = "Brave API Key"
+help = "API key from Brave Search dashboard"
+secret = true
+required = true
+input = "password"
+source_hint = "brave.com/search/api → Dashboard → API Keys"
+env_key = "BRAVE_API_KEY"

@@ -1,0 +1,80 @@
+id = "spotify"
+display_name = "Spotify"
+subtitle = "Music, playlists, and playback control"
+icon = "spotify"
+category = "Entertainment"
+auth_mode = "api_key"
+capability_intro = "Search music, manage playlists, and control playback"
+setup_guide = """
+## How to get Spotify API credentials
+
+### Step 1: Create a Spotify Developer app
+1. Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
+2. Log in with your Spotify account
+3. Click **Create App**
+4. Fill in:
+   - **App name**: `Homun Assistant`
+   - **App description**: `Personal AI assistant`
+   - **Redirect URI**: `http://localhost:8888/callback`
+5. Check the **Web API** checkbox
+6. Click **Save**
+
+### Step 2: Get your Client ID and Secret
+1. Open your app from the dashboard
+2. Click **Settings**
+3. You'll see:
+   - **Client ID** — copy this
+   - **Client Secret** — click "View client secret" and copy
+
+### Step 3: Get a Refresh Token
+You need a refresh token for persistent access:
+1. Use the [Spotify Authorization Guide](https://developer.spotify.com/documentation/web-api/tutorials/code-flow) to complete the OAuth flow
+2. Exchange the authorization code for a refresh token
+
+### Required scopes
+- `user-read-playback-state` — see what's playing
+- `user-modify-playback-state` — play/pause/skip
+- `playlist-read-private` — read your playlists
+- `playlist-modify-public` — create/edit playlists
+
+> A Spotify Premium account is required for playback control features.
+"""
+
+[mcp]
+command = "npx"
+args = ["-y", "@tbrgeek/spotify-mcp-server"]
+transport = "stdio"
+
+[success]
+title = "Spotify connected"
+body = "You can now ask: What's playing? / Search for songs by... / Add to my playlist"
+
+[[fields]]
+id = "client_id"
+label = "Spotify Client ID"
+help = "Client ID from Spotify Developer Dashboard"
+secret = false
+required = true
+input = "text"
+source_hint = "developer.spotify.com/dashboard → Your App → Settings"
+env_key = "SPOTIFY_CLIENT_ID"
+
+[[fields]]
+id = "client_secret"
+label = "Spotify Client Secret"
+help = "Client Secret from Spotify Developer Dashboard"
+secret = true
+required = true
+input = "password"
+source_hint = "developer.spotify.com/dashboard → Your App → Settings → View client secret"
+env_key = "SPOTIFY_CLIENT_SECRET"
+
+[[fields]]
+id = "refresh_token"
+label = "Spotify Refresh Token"
+help = "OAuth refresh token for persistent access"
+secret = true
+required = true
+input = "password"
+source_hint = "Obtained via OAuth authorization code flow"
+env_key = "SPOTIFY_REFRESH_TOKEN"

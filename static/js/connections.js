@@ -30,6 +30,20 @@
         'google-calendar': '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2z"/></svg>',
         notion: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L18.19 2.168c-.42-.326-.98-.7-2.055-.606L3.13 2.655c-.466.046-.56.28-.373.466l1.703 1.087zm.793 3.358v13.913c0 .746.373 1.026 1.213.98l14.523-.84c.84-.046.933-.56.933-1.166V6.63c0-.606-.233-.933-.746-.886l-15.177.886c-.56.047-.746.327-.746.933zm14.337.7c.093.42 0 .84-.42.886l-.7.14v10.264c-.606.326-1.166.513-1.633.513-.746 0-.933-.233-1.493-.933l-4.573-7.178v6.94l1.446.327s0 .84-1.166.84l-3.218.186c-.093-.186 0-.653.326-.746l.84-.233V9.854L7.822 9.76c-.093-.42.14-1.026.793-1.073l3.452-.233 4.76 7.27v-6.43l-1.213-.14c-.093-.513.28-.886.746-.933l3.228-.186z"/></svg>',
         slack: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zm-1.27 0a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.163 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.163 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.163 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zm0-1.27a2.527 2.527 0 0 1-2.52-2.523 2.527 2.527 0 0 1 2.52-2.52h6.315A2.528 2.528 0 0 1 24 15.163a2.528 2.528 0 0 1-2.522 2.523h-6.315z"/></svg>',
+        google: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z"/></svg>',
+        'google-maps': '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>',
+        gitlab: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M23.955 13.587l-1.342-4.135-2.664-8.189a.455.455 0 0 0-.867 0L16.418 9.45H7.582L4.918 1.263a.455.455 0 0 0-.867 0L1.386 9.452.044 13.587a.924.924 0 0 0 .331 1.023L12 23.054l11.625-8.443a.92.92 0 0 0 .33-1.024"/></svg>',
+        linear: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3.357 16.643a10.2 10.2 0 0 1-.899-1.604l6.468-6.469a.5.5 0 0 1 .707 0l1.797 1.797a.5.5 0 0 0 .707 0l5.283-5.283a10.2 10.2 0 0 1 1.604.899L11.37 13.54a.5.5 0 0 1-.707 0l-1.797-1.797a.5.5 0 0 0-.707 0l-4.802 4.9zm-1.4-3.974A9.959 9.959 0 0 1 2 12C2 6.477 6.477 2 12 2c.91 0 1.795.122 2.634.35l-4.04 4.04a.5.5 0 0 0 0 .706l1.797 1.798a.5.5 0 0 1 0 .707L7.109 14.88a.5.5 0 0 1-.707 0l-1.797-1.797a.5.5 0 0 0-.707 0l-1.94 1.587zM12 22C6.477 22 2 17.523 2 12c0-.177.005-.353.014-.528l3.668-3.668a.5.5 0 0 1 .707 0l1.797 1.797a.5.5 0 0 0 .707 0L14.18 4.31c.23.077.456.163.678.257l-6.47 6.47a.5.5 0 0 1-.706 0L5.884 9.24a.5.5 0 0 0-.707 0L2.483 11.93C2.926 17.49 7.438 22 12 22z"/></svg>',
+        jira: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11.571 11.513H0a5.218 5.218 0 0 0 5.232 5.215h2.13v2.057A5.215 5.215 0 0 0 12.575 24V12.518a1.005 1.005 0 0 0-1.005-1.005zm5.723-5.756H5.736a5.215 5.215 0 0 0 5.215 5.214h2.129v2.058a5.218 5.218 0 0 0 5.215 5.214V6.758a1.001 1.001 0 0 0-1.001-1.001zM23 .262H11.443a5.215 5.215 0 0 0 5.214 5.215h2.129v2.057A5.215 5.215 0 0 0 24 12.749V1.263A1.001 1.001 0 0 0 23 .262z"/></svg>',
+        reddit: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0zm5.01 4.744c.688 0 1.25.561 1.25 1.249a1.25 1.25 0 0 1-2.498.056l-2.597-.547-.8 3.747c1.824.07 3.48.632 4.674 1.488.308-.309.73-.491 1.207-.491.968 0 1.754.786 1.754 1.754 0 .716-.435 1.333-1.052 1.598.047.28.07.564.07.852 0 3.073-3.407 5.568-7.608 5.568S3.8 17.525 3.8 14.452c0-.292.025-.581.073-.864a1.749 1.749 0 0 1-1.023-1.588c0-.968.786-1.754 1.754-1.754.463 0 .898.196 1.207.49 1.207-.883 2.878-1.43 4.744-1.487l.885-4.182a.342.342 0 0 1 .14-.197.35.35 0 0 1 .238-.042l2.906.617a1.214 1.214 0 0 1 1.108-.701zM9.25 12C8.561 12 8 12.562 8 13.25c0 .687.561 1.248 1.25 1.248.687 0 1.248-.561 1.248-1.249 0-.688-.561-1.249-1.249-1.249zm5.5 0c-.687 0-1.248.561-1.248 1.25 0 .687.561 1.248 1.249 1.248.688 0 1.249-.561 1.249-1.249 0-.687-.562-1.249-1.25-1.249zm-5.466 3.99a.327.327 0 0 0-.231.094.33.33 0 0 0 0 .463c.842.842 2.484.913 2.961.913.477 0 2.105-.056 2.961-.913a.361.361 0 0 0 0-.463.327.327 0 0 0-.464 0c-.547.533-1.684.73-2.512.73-.828 0-1.979-.196-2.512-.73a.326.326 0 0 0-.232-.095z"/></svg>',
+        brave: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0L3.6 4.8v9.6L12 24l8.4-9.6V4.8L12 0zm5.4 13.2L12 19.8l-5.4-6.6V6.6L12 3l5.4 3.6v6.6z"/></svg>',
+        stripe: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.976 9.15c-2.172-.806-3.356-1.426-3.356-2.409 0-.831.683-1.305 1.901-1.305 2.227 0 4.515.858 6.09 1.631l.89-5.494C18.252.975 15.697 0 12.165 0 9.667 0 7.589.654 6.104 1.872 4.56 3.147 3.757 4.992 3.757 7.218c0 4.039 2.467 5.76 6.476 7.219 2.585.92 3.445 1.574 3.445 2.583 0 .98-.84 1.545-2.354 1.545-1.875 0-4.965-.921-6.99-2.109l-.9 5.555C5.175 22.99 8.385 24 11.714 24c2.641 0 4.843-.624 6.328-1.813 1.664-1.305 2.525-3.236 2.525-5.732 0-4.128-2.524-5.851-6.591-7.305z"/></svg>',
+        spotify: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>',
+        twitter: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>',
+        sentry: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.91 2.505c-.873-1.448-2.972-1.448-3.844 0L6.572 8.17a8.66 8.66 0 0 1 4.857 5.593h-1.963a6.773 6.773 0 0 0-3.844-4.453L3.28 13.31a4.882 4.882 0 0 1 2.878 3.193H3.036a.538.538 0 0 1-.491-.323.57.57 0 0 1 .06-.59L4.527 12.6a2.99 2.99 0 0 0-1.82-.623l-1.9 3.15c-.873 1.449.181 3.29 1.86 3.29h4.41a6.88 6.88 0 0 0-3.502-5.467l1.04-1.724a8.858 8.858 0 0 1 4.498 7.191h3.9a10.63 10.63 0 0 0-5.902-9.063l1.525-2.532c4.29 2.118 7.084 6.39 7.34 11.195h1.963c-.262-5.617-3.576-10.535-8.628-12.89l1.04-1.725c5.95 2.884 9.836 8.665 10.168 15.015h1.963C21.07 10.87 16.752 4.912 10.598 2.026z"/></svg>',
+        todoist: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 0H3C1.35 0 0 1.35 0 3v18c0 1.65 1.35 3 3 3h18c1.65 0 3-1.35 3-3V3c0-1.65-1.35-3-3-3zM5.1 17.1l1.4-1.4c.2-.2.5-.2.7 0l1.8 1.8 5.8-5.8c.2-.2.5-.2.7 0l1.4 1.4c.2.2.2.5 0 .7l-7.2 7.2c-.2.2-.5.2-.7 0L5.1 17.8c-.2-.2-.2-.5 0-.7zm0-5l1.4-1.4c.2-.2.5-.2.7 0l1.8 1.8 5.8-5.8c.2-.2.5-.2.7 0l1.4 1.4c.2.2.2.5 0 .7l-7.2 7.2c-.2.2-.5.2-.7 0L5.1 12.8c-.2-.2-.2-.5 0-.7z"/></svg>',
+        'home-assistant': '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L3 9v12h6v-6h6v6h6V9l-9-7zm0 2.5L19 11v8h-2v-6H7v6H5v-8l7-6.5z"/></svg>',
+        wordpress: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.158 12.786l-2.698 7.84c.806.236 1.657.365 2.54.365 1.047 0 2.051-.18 2.986-.51-.024-.039-.046-.08-.065-.124l-2.762-7.57zM3.009 12c0 3.56 2.07 6.634 5.068 8.093L3.788 8.341A8.943 8.943 0 0 0 3.009 12zm17.159-1.067c0-1.112-.4-1.882-.742-2.48-.456-.742-.884-1.37-.884-2.112 0-.828.627-1.6 1.513-1.6.04 0 .078.005.117.008A8.959 8.959 0 0 0 12 3.009c-3.233 0-6.077 1.656-7.749 4.17.218.006.423.01.6.01.97 0 2.478-.118 2.478-.118.5-.03.56.706.059.766 0 0-.504.059-1.065.089l3.388 10.08 2.036-6.107-1.45-3.973c-.5-.03-0.974-.089-.974-.089-.5-.03-.442-.795.059-.766 0 0 1.537.118 2.45.118.97 0 2.478-.118 2.478-.118.5-.03.56.706.06.766 0 0-.505.059-1.066.089l3.363 10.003.928-3.1c.401-1.289.707-2.213.707-3.012zM20.991 12c0 2.738-1.023 5.213-2.703 7.103A8.947 8.947 0 0 0 20.991 12zM12 22.5C6.201 22.5 1.5 17.799 1.5 12S6.201 1.5 12 1.5 22.5 6.201 22.5 12 17.799 22.5 12 22.5zm0-22C5.649.5.5 5.649.5 12S5.649 23.5 12 23.5 23.5 18.351 23.5 12 18.351.5 12 .5z"/></svg>',
         default: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>',
     };
 
@@ -172,6 +186,7 @@
             var authLabel = (item.auth_mode === 'oauth' || item.auth_mode === 'mcp_oauth') ? 'OAuth' : 'API Key';
             var authBadge = '<span class="badge badge-neutral">' + escapeHtml(authLabel) + '</span>';
             var toolCount = active.length > 0 && item.connection_status && item.connection_status.tool_count ? ' \u00b7 ' + item.connection_status.tool_count + ' tools' : '';
+            var deprecatedBadge = item.deprecated_notice ? '<span class="badge badge-warning" title="' + escapeHtml(item.deprecated_notice) + '">Deprecated</span>' : '';
 
             html += '<div class="conn-card' + (active.length > 0 ? ' conn-card--connected' : '') + '" data-recipe-id="' + escapeHtml(item.id) + '">' +
                 '<div class="conn-card-header">' +
@@ -185,7 +200,7 @@
                     '<p class="conn-card-intro">' + escapeHtml(item.capability_intro) + '</p>' +
                 '</div>' +
                 '<div class="conn-card-footer">' +
-                    '<div class="conn-card-badges">' + statusBadge + authBadge + toolCount + '</div>' +
+                    '<div class="conn-card-badges">' + statusBadge + authBadge + deprecatedBadge + toolCount + '</div>' +
                     '<button class="btn btn-sm ' + (active.length > 0 ? 'btn-secondary' : 'btn-primary') + ' conn-action-btn" data-recipe-id="' + escapeHtml(item.id) + '">' +
                         (active.length > 0 ? 'Manage' : 'Connect') +
                     '</button>' +
@@ -388,6 +403,7 @@
         var modalMeta = document.getElementById('mcp-modal-meta');
         var modalContent = document.getElementById('mcp-modal-content');
         var modalFooter = document.getElementById('mcp-modal-footer');
+        var modal = document.getElementById('mcp-modal');
 
         if (!modalOverlay || !modalContent) return;
 
@@ -399,14 +415,48 @@
             modalMeta.textContent = '';
             modalMeta.insertAdjacentHTML('beforeend',
                 '<span class="badge badge-neutral">' + escapeHtml(recipe.category) + '</span> ' +
-                '<span class="badge badge-neutral">' + escapeHtml(recipe.auth_mode === 'oauth' ? 'OAuth' : 'API Key') + '</span>'
+                '<span class="badge badge-neutral">' + escapeHtml(recipe.auth_mode === 'oauth' || recipe.auth_mode === 'mcp_oauth' ? 'OAuth' : 'API Key') + '</span>'
             );
         }
 
-        modalContent.textContent = '';
-        modalContent.insertAdjacentHTML('beforeend',
-            '<form id="conn-form" class="form">' + fieldsHtml + '</form>'
-        );
+        var hasGuide = recipe.setup_guide && recipe.setup_guide.trim();
+
+        // Toggle split-pane mode
+        if (modal) modal.classList.toggle('skill-modal--split', !!hasGuide);
+
+        var modalBody = modalContent.parentElement; // .skill-modal-body
+
+        if (hasGuide) {
+            // Render guide markdown
+            var guideHtml = '';
+            if (typeof marked !== 'undefined') {
+                guideHtml = marked.parse(recipe.setup_guide);
+            } else {
+                guideHtml = '<pre>' + escapeHtml(recipe.setup_guide) + '</pre>';
+            }
+
+            // Split-pane: fields left, guide right
+            modalBody.style.padding = '0';
+            modalContent.textContent = '';
+            modalContent.style.display = 'none';
+            modalBody.insertAdjacentHTML('beforeend',
+                '<div class="skill-modal-split-body" id="conn-split-body">' +
+                    '<div class="skill-modal-split-left">' +
+                        '<form id="conn-form" class="form">' + fieldsHtml + '</form>' +
+                    '</div>' +
+                    '<div class="skill-modal-split-right">' +
+                        '<div class="conn-guide-content">' + guideHtml + '</div>' +
+                    '</div>' +
+                '</div>'
+            );
+        } else {
+            // Standard single-column
+            modalContent.style.display = '';
+            modalContent.textContent = '';
+            modalContent.insertAdjacentHTML('beforeend',
+                '<form id="conn-form" class="form">' + fieldsHtml + '</form>'
+            );
+        }
 
         modalFooter.textContent = '';
         modalFooter.insertAdjacentHTML('beforeend',

@@ -13,13 +13,35 @@ use super::{ConnectionRecipe, ConnectionStatus, RecipeMcpConfig};
 // ── Bundled recipes (compiled into the binary) ───────────────────────
 
 const BUNDLED_RECIPES: &[(&str, &str)] = &[
+    (
+        "brave-search",
+        include_str!("../../recipes/brave-search.toml"),
+    ),
     ("github", include_str!("../../recipes/github.toml")),
+    ("gitlab", include_str!("../../recipes/gitlab.toml")),
+    (
+        "google-maps",
+        include_str!("../../recipes/google-maps.toml"),
+    ),
     (
         "google-workspace",
         include_str!("../../recipes/google-workspace.toml"),
     ),
+    (
+        "home-assistant",
+        include_str!("../../recipes/home-assistant.toml"),
+    ),
+    ("jira", include_str!("../../recipes/jira.toml")),
+    ("linear", include_str!("../../recipes/linear.toml")),
     ("notion", include_str!("../../recipes/notion.toml")),
+    ("reddit", include_str!("../../recipes/reddit.toml")),
+    ("sentry", include_str!("../../recipes/sentry.toml")),
     ("slack", include_str!("../../recipes/slack.toml")),
+    ("spotify", include_str!("../../recipes/spotify.toml")),
+    ("stripe", include_str!("../../recipes/stripe.toml")),
+    ("todoist", include_str!("../../recipes/todoist.toml")),
+    ("twitter", include_str!("../../recipes/twitter.toml")),
+    ("wordpress", include_str!("../../recipes/wordpress.toml")),
 ];
 
 /// Load all connection recipes: bundled + user-created (~/.homun/recipes/).
@@ -166,20 +188,46 @@ mod tests {
     fn bundled_recipes_parse_successfully() {
         let recipes = load_all_recipes();
         assert!(
-            recipes.len() >= 4,
-            "Expected at least 4 bundled recipes, got {}",
+            recipes.len() >= 17,
+            "Expected at least 17 bundled recipes, got {}",
             recipes.len()
         );
 
         // Verify all required ids exist
         let ids: Vec<&str> = recipes.iter().map(|r| r.id.as_str()).collect();
-        assert!(ids.contains(&"github"), "Missing github recipe");
-        assert!(
-            ids.contains(&"google-workspace"),
-            "Missing google-workspace"
-        );
-        assert!(ids.contains(&"notion"), "Missing notion recipe");
-        assert!(ids.contains(&"slack"), "Missing slack recipe");
+        for expected in [
+            "brave-search",
+            "github",
+            "gitlab",
+            "google-maps",
+            "google-workspace",
+            "home-assistant",
+            "jira",
+            "linear",
+            "notion",
+            "reddit",
+            "sentry",
+            "slack",
+            "spotify",
+            "stripe",
+            "todoist",
+            "twitter",
+            "wordpress",
+        ] {
+            assert!(ids.contains(&expected), "Missing recipe: {expected}");
+        }
+    }
+
+    #[test]
+    fn bundled_recipes_have_setup_guides() {
+        let recipes = load_all_recipes();
+        for recipe in &recipes {
+            assert!(
+                !recipe.setup_guide.is_empty(),
+                "Recipe '{}' is missing setup_guide",
+                recipe.id
+            );
+        }
     }
 
     #[test]

@@ -5,6 +5,25 @@ icon = "linear"
 category = "Project Management"
 auth_mode = "api_key"
 capability_intro = "Manage Linear issues, projects, and track progress"
+setup_guide = """
+## How to get a Linear API Key
+
+1. Open [linear.app](https://linear.app) and log in
+2. Click your avatar (bottom-left) → **Settings**
+3. Go to **API** in the sidebar
+4. Under **Personal API keys**, click **Create key**
+5. Give it a label (e.g. `Homun Assistant`)
+6. Click **Create**
+7. **Copy the key** — it's shown only once
+
+### What the key can access
+- Your issues, projects, and cycles
+- Team information and labels
+- Comments and attachments
+- Roadmap and initiative data
+
+> The API key gives access to everything in your Linear workspace that your account can see.
+"""
 
 [mcp]
 command = "npx"
@@ -23,4 +42,4 @@ secret = true
 required = true
 input = "password"
 source_hint = "Linear → Settings → API → Personal API keys"
-env_key = "LINEAR_API_KEY"
+env_key = "LINEAR_ACCESS_TOKEN"

@@ -1,0 +1,100 @@
+id = "twitter"
+display_name = "Twitter / X"
+subtitle = "Tweets, search, and timeline"
+icon = "twitter"
+category = "Social"
+auth_mode = "api_key"
+capability_intro = "Search tweets, read timelines, and post updates"
+setup_guide = """
+## How to get Twitter/X API credentials
+
+### Step 1: Apply for API access
+1. Go to [developer.x.com](https://developer.x.com/)
+2. Sign in with your X (Twitter) account
+3. Apply for a developer account if you don't have one
+4. Select the **Free** tier (1,500 tweets/month read access)
+
+### Step 2: Create a project and app
+1. Go to the [Developer Portal Dashboard](https://developer.x.com/en/portal/dashboard)
+2. Create a new **Project**
+3. Within the project, create an **App**
+4. Name it (e.g. `Homun Assistant`)
+
+### Step 3: Configure app settings
+When asked for a **Callback URL**, enter:
+```
+https://localhost
+```
+This URL is not used — it's only required by X during app setup.
+
+Set the **App permissions** to **Read** (or Read and Write if you have a paid plan).
+
+### Step 4: Generate keys and tokens
+Go to your app's **Keys and Tokens** tab. You need **4 values** from 2 sections:
+
+**Section 1 — Consumer Keys:**
+1. Click **Regenerate** (or copy if already shown)
+2. Copy the **API Key** → paste in field 1
+3. Copy the **API Key Secret** → paste in field 2
+
+**Section 2 — Authentication Tokens:**
+1. Click **Generate** (this section may need to be generated the first time)
+2. Copy the **Access Token** → paste in field 3
+3. Copy the **Access Token Secret** → paste in field 4
+
+### API tiers
+- **Free**: read-only, 1,500 tweets/month
+- **Basic** ($200/month): read + write, 10,000 tweets/month
+- **Pro** ($5,000/month): full access, analytics
+
+> All 4 credentials are shown only once when generated — save them immediately. If lost, you can regenerate them.
+"""
+
+[mcp]
+command = "npx"
+args = ["-y", "@enescinar/twitter-mcp"]
+transport = "stdio"
+
+[success]
+title = "Twitter/X connected"
+body = "You can now ask: Search tweets about... / Show trending topics"
+
+[[fields]]
+id = "api_key"
+label = "API Key"
+help = "Consumer API key from X Developer Portal"
+secret = true
+required = true
+input = "password"
+source_hint = "developer.x.com → Dashboard → Your App → Keys and Tokens → Consumer Keys"
+env_key = "API_KEY"
+
+[[fields]]
+id = "api_secret_key"
+label = "API Secret Key"
+help = "Consumer API secret key"
+secret = true
+required = true
+input = "password"
+source_hint = "developer.x.com → Dashboard → Your App → Keys and Tokens → Consumer Keys"
+env_key = "API_SECRET_KEY"
+
+[[fields]]
+id = "access_token"
+label = "Access Token"
+help = "OAuth access token for your account"
+secret = true
+required = true
+input = "password"
+source_hint = "developer.x.com → Dashboard → Your App → Keys and Tokens → Authentication Tokens"
+env_key = "ACCESS_TOKEN"
+
+[[fields]]
+id = "access_token_secret"
+label = "Access Token Secret"
+help = "OAuth access token secret"
+secret = true
+required = true
+input = "password"
+source_hint = "developer.x.com → Dashboard → Your App → Keys and Tokens → Authentication Tokens"
+env_key = "ACCESS_TOKEN_SECRET"

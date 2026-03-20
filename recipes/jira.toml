@@ -5,10 +5,38 @@ icon = "jira"
 category = "Project Management"
 auth_mode = "api_key"
 capability_intro = "Search and manage Jira issues, view sprints and boards"
+setup_guide = """
+## How to set up Jira (Atlassian) access
+
+### Step 1: Find your site name
+Your site name is the subdomain in your Jira URL: `https://{site-name}.atlassian.net`
+
+For example, if your URL is `https://acme.atlassian.net`, the site name is `acme`.
+
+### Step 2: Create an API Token
+1. Go to [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
+2. Click **Create API token**
+3. Label: `Homun Assistant`
+4. Click **Create**
+5. **Copy the token** immediately
+
+### Step 3: Enter your credentials
+- **Site Name**: just the subdomain (e.g. `acme`, NOT the full URL)
+- **Email**: the email you use to log into Jira
+- **API Token**: the token you just created
+
+### What Homun can access
+- Issues, epics, and stories (search, view, create, update)
+- Sprint boards and backlogs
+- Project metadata and workflows
+- Comments and attachments
+
+> The API token uses your account's permissions — Homun can access the same projects you can.
+"""
 
 [mcp]
 command = "npx"
-args = ["-y", "mcp-server-atlassian"]
+args = ["-y", "@aashari/mcp-server-atlassian-jira"]
 transport = "stdio"
 
 [success]
@@ -16,14 +44,14 @@ title = "Jira connected"
 body = "You can now ask: Show open bugs in project X / What's in the current sprint?"
 
 [[fields]]
-id = "atlassian_url"
-label = "Atlassian URL"
-help = "Your Atlassian instance URL"
+id = "atlassian_site_name"
+label = "Atlassian Site Name"
+help = "Your Atlassian subdomain (e.g. 'acme' from acme.atlassian.net)"
 secret = false
 required = true
 input = "text"
-source_hint = "e.g. https://yourteam.atlassian.net"
-env_key = "ATLASSIAN_URL"
+source_hint = "The subdomain in your URL: https://{site-name}.atlassian.net"
+env_key = "ATLASSIAN_SITE_NAME"
 
 [[fields]]
 id = "atlassian_email"
@@ -33,7 +61,7 @@ secret = false
 required = true
 input = "text"
 source_hint = "The email you use to log into Jira"
-env_key = "ATLASSIAN_EMAIL"
+env_key = "ATLASSIAN_USER_EMAIL"
 
 [[fields]]
 id = "atlassian_token"

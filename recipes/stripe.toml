@@ -1,0 +1,57 @@
+id = "stripe"
+display_name = "Stripe"
+subtitle = "Payments, customers, and invoices"
+icon = "stripe"
+category = "Finance"
+auth_mode = "api_key"
+capability_intro = "Manage payments, customers, subscriptions, and invoices"
+setup_guide = """
+## How to get a Stripe API Key
+
+### Step 1: Access your Stripe Dashboard
+1. Go to [dashboard.stripe.com](https://dashboard.stripe.com/)
+2. Log in or create an account
+
+### Step 2: Get your API key
+1. Click **Developers** in the top navigation
+2. Go to **API keys**
+3. You'll see two keys:
+   - **Publishable key** (starts with `pk_`) — NOT this one
+   - **Secret key** (starts with `sk_`) — use this one
+
+### Important: Use a Restricted Key
+For security, create a **restricted key** instead of using your secret key:
+1. Click **Create restricted key**
+2. Name it `Homun Assistant`
+3. Grant permissions for what you need:
+   - **Customers** — Read
+   - **Charges** — Read
+   - **Invoices** — Read/Write
+   - **Subscriptions** — Read
+4. Click **Create key**
+
+### Test vs Live mode
+- **Test mode** keys (start with `sk_test_`) are safe for experimenting
+- **Live mode** keys (start with `sk_live_`) access real data
+
+> Use a restricted key with minimal permissions. Never share your full secret key.
+"""
+
+[mcp]
+command = "npx"
+args = ["-y", "@stripe/mcp", "--tools=all"]
+transport = "stdio"
+
+[success]
+title = "Stripe connected"
+body = "You can now ask: Show my recent payments / List customers / Create an invoice"
+
+[[fields]]
+id = "secret_key"
+label = "Stripe Secret Key"
+help = "Secret key or restricted key from Stripe Dashboard"
+secret = true
+required = true
+input = "password"
+source_hint = "Stripe Dashboard → Developers → API keys"
+env_key = "STRIPE_SECRET_KEY"

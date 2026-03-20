@@ -1,10 +1,43 @@
 id = "google-workspace"
 display_name = "Google Workspace"
-subtitle = "Gmail, Calendar, and more"
+subtitle = "Gmail, Calendar, Drive, and more"
 icon = "google"
 category = "Productivity"
 auth_mode = "oauth"
-capability_intro = "Access Gmail, Calendar, and other Google Workspace services"
+capability_intro = "Access Gmail, Calendar, Drive, and other Google Workspace services"
+setup_guide = """
+## How to set up Google Workspace OAuth
+
+### Step 1: Create a Google Cloud project
+1. Go to [console.cloud.google.com](https://console.cloud.google.com/)
+2. Click the project dropdown at the top → **New Project**
+3. Name it (e.g. `Homun Assistant`) and click **Create**
+
+### Step 2: Enable APIs
+1. Go to **APIs & Services → Library**
+2. Search and enable:
+   - **Gmail API**
+   - **Google Calendar API**
+   - **Google Drive API** (if you want Drive access)
+
+### Step 3: Configure OAuth consent screen
+1. Go to **APIs & Services → OAuth consent screen**
+2. Choose **External** (or Internal if using Google Workspace org)
+3. Fill in the app name and your email
+4. Add scopes: `gmail.readonly`, `calendar.readonly`, `calendar.events`, `drive.readonly`
+5. Add yourself as a test user
+
+### Step 4: Create OAuth credentials
+1. Go to **APIs & Services → Credentials**
+2. Click **Create Credentials → OAuth client ID**
+3. Application type: **Web application**
+4. Add the **Redirect URI** shown in the form on the left
+5. Click **Create**
+6. Copy the **Client ID** and **Client Secret**
+
+### Step 5: Get the Refresh Token
+Click the **Authorize with Google** button on the left after entering your Client ID and Secret. This will open a consent screen — approve access, and the refresh token will be saved automatically.
+"""
 
 [mcp]
 command = "npx"
@@ -13,7 +46,7 @@ transport = "stdio"
 
 [success]
 title = "Google Workspace connected"
-body = "You can now ask: Show me my unread emails / What meetings do I have today?"
+body = "You can now ask: Show my unread emails / What meetings do I have today? / Find my recent Drive documents"
 
 [[fields]]
 id = "client_id"

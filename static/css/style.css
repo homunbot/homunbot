@@ -5446,6 +5446,84 @@ html, body {
     margin-left: 4px;
 }
 
+/* ── Split-pane modal (connection setup guide) ─────────── */
+.skill-modal.skill-modal--split {
+    width: 1060px;
+}
+.skill-modal--split .skill-modal-body {
+    overflow: hidden;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.skill-modal-split-body {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
+}
+.skill-modal-split-left {
+    flex: 0 0 420px;
+    padding: 20px 24px;
+    overflow-y: auto;
+}
+.skill-modal-split-right {
+    flex: 1;
+    padding: 20px 24px;
+    overflow-y: auto;
+    border-left: 1px solid var(--border);
+    background: var(--surface-inset);
+}
+.conn-guide-content { font-size: 13px; line-height: 1.7; color: var(--t2); }
+.conn-guide-content h2 { font-size: 15px; font-weight: 700; color: var(--t1); margin: 20px 0 8px; }
+.conn-guide-content h3 { font-size: 13px; font-weight: 700; color: var(--t1); margin: 16px 0 6px; }
+.conn-guide-content p { margin-bottom: 10px; }
+.conn-guide-content ol,
+.conn-guide-content ul { padding-left: 20px; margin-bottom: 12px; }
+.conn-guide-content li { margin-bottom: 6px; }
+.conn-guide-content code {
+    background: var(--surface);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 12px;
+}
+.conn-guide-content pre {
+    background: var(--surface);
+    padding: 10px 14px;
+    border-radius: var(--r-sm);
+    overflow-x: auto;
+    margin-bottom: 12px;
+}
+.conn-guide-content pre code { background: none; padding: 0; }
+.conn-guide-content blockquote {
+    border-left: 3px solid var(--accent);
+    margin: 12px 0;
+    padding: 8px 14px;
+    background: var(--surface);
+    border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    color: var(--t2);
+}
+.conn-guide-content blockquote p { margin-bottom: 4px; }
+.conn-guide-content a { color: var(--accent); text-decoration: underline; }
+.conn-guide-content strong { color: var(--t1); }
+@media (max-width: 767px) {
+    .skill-modal.skill-modal--split { width: 90vw; }
+    .skill-modal-split-body { flex-direction: column; }
+    .skill-modal-split-left {
+        flex: none;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        max-height: 45vh;
+    }
+    .skill-modal-split-right {
+        flex: 1;
+        border-left: none;
+        max-height: 45vh;
+    }
+}
+
 /* Skill Creator panel */
 .skill-creator-panel {
     background: var(--surface);

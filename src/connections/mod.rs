@@ -25,6 +25,13 @@ pub struct ConnectionRecipe {
     pub auth_mode: String,
     /// One-line intro shown in the catalog card.
     pub capability_intro: String,
+    /// Step-by-step setup guide (markdown). Shown alongside the connect form.
+    #[serde(default)]
+    pub setup_guide: String,
+    /// Optional deprecation notice. When set, the card shows a warning badge
+    /// and the notice text is shown in the setup guide.
+    #[serde(default)]
+    pub deprecated_notice: String,
     /// Human-facing credential fields.
     #[serde(default)]
     pub fields: Vec<RecipeField>,

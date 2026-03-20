@@ -1,0 +1,53 @@
+id = "todoist"
+display_name = "Todoist"
+subtitle = "Tasks, projects, and productivity"
+icon = "todoist"
+category = "Productivity"
+auth_mode = "api_key"
+capability_intro = "Manage tasks, projects, labels, and track your productivity"
+setup_guide = """
+## How to get a Todoist API Token
+
+### Step 1: Open Todoist settings
+1. Go to [todoist.com](https://todoist.com/) and log in
+2. Click your avatar (top-right) → **Settings**
+
+### Step 2: Find your API token
+1. Go to **Integrations** tab
+2. Scroll down to **Developer**
+3. Your **API token** is shown here
+4. Click **Copy** to copy it
+
+### What Homun can access
+- **Tasks** — create, complete, update, delete
+- **Projects** — list, create, organize
+- **Labels** — tag and filter tasks
+- **Comments** — add notes to tasks
+- **Sections** — organize tasks within projects
+
+### Tips
+- The API token gives full access to your Todoist account
+- Changes made through the API sync instantly across all devices
+- Works with both free and Pro accounts
+
+> Your API token is already generated — just copy it from Settings → Integrations → Developer.
+"""
+
+[mcp]
+command = "npx"
+args = ["-y", "todoist-mcp-server"]
+transport = "stdio"
+
+[success]
+title = "Todoist connected"
+body = "You can now ask: Show my tasks for today / Add a task to... / What's overdue?"
+
+[[fields]]
+id = "api_token"
+label = "Todoist API Token"
+help = "API token from Todoist settings"
+secret = true
+required = true
+input = "password"
+source_hint = "todoist.com → Settings → Integrations → Developer → API token"
+env_key = "TODOIST_API_TOKEN"
