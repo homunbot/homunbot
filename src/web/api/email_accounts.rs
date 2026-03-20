@@ -8,6 +8,7 @@ use axum::Router;
 use serde::Deserialize;
 
 use super::super::server::AppState;
+use crate::web::auth::{check_write, AuthUser};
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -164,8 +165,10 @@ struct EmailAccountRequest {
 /// Create or update an email account.
 async fn configure_email_account(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<EmailAccountRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_write(&auth)?;
     let mut config = state.config.read().await.clone();
 
     let acc = config
@@ -263,8 +266,10 @@ struct EmailAccountNameRequest {
 /// Deactivate an email account (keeps config, sets enabled=false).
 async fn deactivate_email_account(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<EmailAccountNameRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_write(&auth)?;
     let mut config = state.config.read().await.clone();
 
     let acc = config
@@ -290,7 +295,9 @@ async fn deactivate_email_account(
 async fn delete_email_account(
     Path(name): Path<String>,
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_write(&auth)?;
     let mut config = state.config.read().await.clone();
 
     if config.channels.emails.remove(&name).is_none() {
@@ -319,8 +326,10 @@ async fn delete_email_account(
 /// Test IMAP/SMTP connection for an email account.
 async fn test_email_account(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<EmailAccountNameRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_write(&auth)?;
     let config = state.config.read().await;
     let acc = config
         .channels
@@ -422,8 +431,10 @@ async fn test_imap_connection(
 /// POST /api/v1/channels/email/trigger-word
 /// Body: { "account": "default" }  (optional, defaults to "default")
 async fn generate_or_get_trigger_word(
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_write(&auth)?;
     let account = req
         .get("account")
         .and_then(|v| v.as_str())

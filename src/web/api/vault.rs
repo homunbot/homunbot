@@ -6,6 +6,7 @@ use axum::Router;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use super::super::auth::{check_admin, AuthUser};
 use super::super::server::AppState;
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
@@ -80,8 +81,10 @@ struct SetVaultRequest {
 
 async fn set_vault_secret(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<SetVaultRequest>,
 ) -> Result<Json<OkResponse>, StatusCode> {
+    check_admin(&auth)?;
     // Validate key: lowercase alphanumeric + underscore only
     if req.key.is_empty()
         || !req
@@ -234,8 +237,10 @@ async fn do_reveal_secret(key: &str) -> Result<Json<RevealResponse>, StatusCode>
 
 async fn delete_vault_secret(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Path(key): Path<String>,
 ) -> Result<Json<OkResponse>, StatusCode> {
+    check_admin(&auth)?;
     let secrets =
         crate::storage::global_secrets().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let secret_key = crate::storage::SecretKey::custom(&format!("vault.{key}"));

@@ -8,6 +8,7 @@ use axum::Router;
 use serde::{Deserialize, Serialize};
 
 use super::super::server::AppState;
+use crate::web::auth::{check_write, AuthUser};
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -96,8 +97,10 @@ struct MemoryCleanupResponse {
 
 async fn run_memory_cleanup(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<MemoryCleanupRequest>,
 ) -> Result<Json<MemoryCleanupResponse>, StatusCode> {
+    check_write(&auth)?;
     let db = match state.db.as_ref() {
         Some(db) => db,
         None => return Err(StatusCode::SERVICE_UNAVAILABLE),
@@ -180,8 +183,10 @@ struct PutMemoryFileRequest {
 }
 
 async fn put_memory_file(
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<PutMemoryFileRequest>,
 ) -> Result<Json<OkResponse>, StatusCode> {
+    check_write(&auth)?;
     let data_dir = crate::config::Config::data_dir();
     let brain_dir = data_dir.join("brain");
     let path = match req.file.as_str() {
@@ -384,8 +389,10 @@ struct PutInstructionsRequest {
 }
 
 async fn put_instructions(
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<PutInstructionsRequest>,
 ) -> Result<Json<OkResponse>, StatusCode> {
+    check_write(&auth)?;
     let data_dir = crate::config::Config::data_dir();
     let brain_dir = data_dir.join("brain");
     let path = brain_dir.join("INSTRUCTIONS.md");

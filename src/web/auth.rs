@@ -5,6 +5,7 @@
 //! SEC-4: Bearer token auth for programmatic access
 
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -266,6 +267,58 @@ impl AuthUser {
             AuthMethod::BearerToken { scope } => scope != "read",
         }
     }
+
+    /// Check if this auth context has admin-level access.
+    ///
+    /// Session users are always admin; Bearer tokens need `scope == "admin"`.
+    pub fn is_admin(&self) -> bool {
+        match &self.auth_method {
+            AuthMethod::Session => true,
+            AuthMethod::BearerToken { scope } => scope == "admin",
+        }
+    }
+}
+
+/// Reject with 403 if the auth context does not allow writes.
+pub fn require_write(auth: &AuthUser) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if auth.can_write() {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Read-only token cannot perform write operations"})),
+        ))
+    }
+}
+
+/// Reject with 403 if the auth context is not admin.
+pub fn require_admin(auth: &AuthUser) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if auth.is_admin() {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Admin scope required"})),
+        ))
+    }
+}
+
+/// Like [`require_write`] but returns bare `StatusCode` for handlers that use that error type.
+pub fn check_write(auth: &AuthUser) -> Result<(), StatusCode> {
+    if auth.can_write() {
+        Ok(())
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+
+/// Like [`require_admin`] but returns bare `StatusCode` for handlers that use that error type.
+pub fn check_admin(auth: &AuthUser) -> Result<(), StatusCode> {
+    if auth.is_admin() {
+        Ok(())
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
 }
 
 // ─── Auth Middleware ────────────────────────────────────────────
@@ -377,7 +430,42 @@ pub async fn auth_middleware(
             if let Some(db) = &state.db {
                 if let Ok(Some(token_row)) = db.load_webhook_token(&token).await {
                     if token_row.enabled {
-                        if let Ok(Some(user_row)) = db.lookup_user_by_webhook_token(&token).await {
+                        // Check token expiry (SEC-4b)
+                        let is_expired = token_row.expires_at.as_deref().is_some_and(|ea| {
+                            chrono::DateTime::parse_from_rfc3339(ea)
+                                .map(|expiry| chrono::Utc::now() > expiry)
+                                .unwrap_or(false)
+                        });
+                        if is_expired {
+                            return (
+                                StatusCode::UNAUTHORIZED,
+                                Json(serde_json::json!({"error": "Token expired"})),
+                            )
+                                .into_response();
+                        }
+
+                        // Per-token rate limiting (SEC-4c)
+                        if let Err(retry_after) =
+                            state.token_rate_limiter.check(token.clone()).await
+                        {
+                            return (
+                                StatusCode::TOO_MANY_REQUESTS,
+                                [(
+                                    "Retry-After",
+                                    retry_after.as_secs().max(1).to_string(),
+                                )],
+                                Json(serde_json::json!({
+                                    "error": "rate_limited",
+                                    "message": "Too many requests for this token.",
+                                    "retry_after_secs": retry_after.as_secs().max(1)
+                                })),
+                            )
+                                .into_response();
+                        }
+
+                        if let Ok(Some(user_row)) =
+                            db.lookup_user_by_webhook_token(&token).await
+                        {
                             // Update last_used (fire and forget)
                             let db_clone = db.clone();
                             let token_clone = token.clone();
@@ -484,14 +572,16 @@ fn generate_approval_code() -> String {
 
 // ─── Rate Limiter ──────────────────────────────────────────────
 
-/// Simple in-memory rate limiter per IP address.
-pub struct RateLimiter {
-    state: RwLock<HashMap<IpAddr, (u32, Instant)>>,
+/// Generic in-memory sliding-window rate limiter.
+///
+/// Defaults to `IpAddr` key (per-IP limiting). Use `RateLimiter<String>` for per-token limiting.
+pub struct RateLimiter<K: Eq + Hash + Clone + Send + Sync = IpAddr> {
+    state: RwLock<HashMap<K, (u32, Instant)>>,
     max_requests: u32,
     window: Duration,
 }
 
-impl RateLimiter {
+impl<K: Eq + Hash + Clone + Send + Sync> RateLimiter<K> {
     pub fn new(max_requests: u32, window_secs: u64) -> Self {
         Self {
             state: RwLock::new(HashMap::new()),
@@ -500,12 +590,12 @@ impl RateLimiter {
         }
     }
 
-    /// Check if a request from this IP is allowed. Returns remaining count or retry-after duration.
-    pub async fn check(&self, ip: IpAddr) -> std::result::Result<u32, Duration> {
+    /// Check if a request with this key is allowed. Returns remaining count or retry-after duration.
+    pub async fn check(&self, key: K) -> std::result::Result<u32, Duration> {
         let mut state = self.state.write().await;
         let now = Instant::now();
 
-        let entry = state.entry(ip).or_insert((0, now));
+        let entry = state.entry(key).or_insert((0, now));
 
         // Reset window if expired
         if now.duration_since(entry.1) >= self.window {
@@ -1383,5 +1473,111 @@ mod tests {
         // Each session gets a unique CSRF token
         assert_ne!(csrf1, csrf2);
         assert!(!csrf1.is_empty());
+    }
+
+    // ─── is_admin / require_write / require_admin tests ──────────
+
+    fn make_user(method: AuthMethod) -> AuthUser {
+        AuthUser {
+            user_id: "u1".into(),
+            username: "test".into(),
+            roles: vec!["user".into()],
+            auth_method: method,
+        }
+    }
+
+    #[test]
+    fn test_session_is_admin() {
+        let u = make_user(AuthMethod::Session);
+        assert!(u.is_admin());
+        assert!(u.can_write());
+    }
+
+    #[test]
+    fn test_bearer_admin_is_admin() {
+        let u = make_user(AuthMethod::BearerToken {
+            scope: "admin".into(),
+        });
+        assert!(u.is_admin());
+        assert!(u.can_write());
+    }
+
+    #[test]
+    fn test_bearer_write_not_admin() {
+        let u = make_user(AuthMethod::BearerToken {
+            scope: "write".into(),
+        });
+        assert!(!u.is_admin());
+        assert!(u.can_write());
+    }
+
+    #[test]
+    fn test_bearer_read_cannot_write() {
+        let u = make_user(AuthMethod::BearerToken {
+            scope: "read".into(),
+        });
+        assert!(!u.is_admin());
+        assert!(!u.can_write());
+    }
+
+    #[test]
+    fn test_require_write_allows_session() {
+        let u = make_user(AuthMethod::Session);
+        assert!(require_write(&u).is_ok());
+    }
+
+    #[test]
+    fn test_require_write_rejects_read() {
+        let u = make_user(AuthMethod::BearerToken {
+            scope: "read".into(),
+        });
+        assert!(require_write(&u).is_err());
+    }
+
+    #[test]
+    fn test_require_admin_rejects_write() {
+        let u = make_user(AuthMethod::BearerToken {
+            scope: "write".into(),
+        });
+        assert!(require_admin(&u).is_err());
+    }
+
+    #[test]
+    fn test_require_admin_allows_admin_token() {
+        let u = make_user(AuthMethod::BearerToken {
+            scope: "admin".into(),
+        });
+        assert!(require_admin(&u).is_ok());
+    }
+
+    #[test]
+    fn test_check_write_returns_status_code() {
+        let u = make_user(AuthMethod::BearerToken {
+            scope: "read".into(),
+        });
+        assert_eq!(check_write(&u), Err(StatusCode::FORBIDDEN));
+    }
+
+    #[test]
+    fn test_check_admin_returns_status_code() {
+        let u = make_user(AuthMethod::BearerToken {
+            scope: "write".into(),
+        });
+        assert_eq!(check_admin(&u), Err(StatusCode::FORBIDDEN));
+    }
+
+    #[tokio::test]
+    async fn test_token_rate_limiter_generic() {
+        // Verify the generic RateLimiter works with String keys (per-token)
+        let rl = RateLimiter::<String>::new(2, 60);
+        let tok = "wh_abc123".to_string();
+
+        assert!(rl.check(tok.clone()).await.is_ok());
+        assert!(rl.check(tok.clone()).await.is_ok());
+        assert!(rl.check(tok.clone()).await.is_err());
+
+        // Different token should be independent
+        let tok2 = "wh_xyz789".to_string();
+        assert!(rl.check(tok2).await.is_ok());
     }
 }

@@ -7,6 +7,7 @@ use axum::routing::get;
 use axum::Router;
 use serde::Deserialize;
 
+use crate::web::auth::{require_write, AuthUser};
 use crate::web::server::AppState;
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
@@ -98,8 +99,10 @@ async fn list_businesses_api(
 /// POST /api/v1/business
 async fn create_business_api(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<CreateBusinessRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_write(&auth).map_err(|(s, j)| (s, j.0.to_string()))?;
     let engine = state.business_engine.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "Business engine not available".into(),

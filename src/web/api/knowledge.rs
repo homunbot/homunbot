@@ -9,6 +9,7 @@ mod inner {
     use axum::routing::get;
     use axum::Router;
 
+    use crate::web::auth::{check_write, AuthUser};
     use crate::web::server::AppState;
 
     pub(crate) fn routes() -> Router<Arc<AppState>> {
@@ -70,8 +71,12 @@ mod inner {
     /// DELETE /api/v1/knowledge/sources?id=N
     async fn delete_knowledge_source(
         State(state): State<Arc<AppState>>,
+        axum::Extension(auth): axum::Extension<AuthUser>,
         Query(params): Query<HashMap<String, String>>,
     ) -> impl IntoResponse {
+        if let Err(status) = check_write(&auth) {
+            return status.into_response();
+        }
         let Some(ref rag) = state.rag_engine else {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -163,8 +168,12 @@ mod inner {
     /// POST /api/v1/knowledge/ingest -- multipart file upload
     async fn ingest_knowledge(
         State(state): State<Arc<AppState>>,
+        axum::Extension(auth): axum::Extension<AuthUser>,
         mut multipart: Multipart,
     ) -> impl IntoResponse {
+        if let Err(status) = check_write(&auth) {
+            return status.into_response();
+        }
         let Some(ref rag) = state.rag_engine else {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -221,8 +230,12 @@ mod inner {
     /// POST /api/v1/knowledge/ingest-directory -- index a server-side folder
     async fn ingest_knowledge_directory(
         State(state): State<Arc<AppState>>,
+        axum::Extension(auth): axum::Extension<AuthUser>,
         Json(req): Json<serde_json::Value>,
     ) -> impl IntoResponse {
+        if let Err(status) = check_write(&auth) {
+            return status.into_response();
+        }
         let Some(ref rag) = state.rag_engine else {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -278,8 +291,12 @@ mod inner {
     /// POST /api/v1/knowledge/reveal -- reveal a sensitive chunk (optionally with TOTP)
     async fn reveal_knowledge_chunk(
         State(state): State<Arc<AppState>>,
+        axum::Extension(auth): axum::Extension<AuthUser>,
         Json(req): Json<serde_json::Value>,
     ) -> impl IntoResponse {
+        if let Err(status) = check_write(&auth) {
+            return status.into_response();
+        }
         let Some(ref rag) = state.rag_engine else {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,

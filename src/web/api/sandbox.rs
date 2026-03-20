@@ -7,6 +7,7 @@ use axum::routing::get;
 use axum::Router;
 use serde::{Deserialize, Serialize};
 
+use crate::web::auth::{check_admin, AuthUser};
 use crate::web::server::AppState;
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
@@ -52,8 +53,10 @@ async fn get_execution_sandbox(
 /// Update process execution sandbox configuration.
 async fn put_execution_sandbox(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(sandbox): Json<crate::config::ExecutionSandboxConfig>,
 ) -> Result<Json<crate::config::ExecutionSandboxConfig>, (StatusCode, String)> {
+    check_admin(&auth).map_err(|s| (s, "Admin scope required".into()))?;
     let sandbox = normalize_execution_sandbox(sandbox)?;
     let mut config = state.config.write().await;
     config.security.execution_sandbox = sandbox;

@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 
-use crate::web::auth::AuthUser;
+use crate::web::auth::{AuthUser, require_admin};
 use crate::web::server::AppState;
 
 /// Register device management routes under `/v1/devices`.
@@ -41,9 +41,10 @@ async fn list_devices(
 /// POST /api/v1/devices/{id}/approve — approve a pending device from an existing session.
 async fn approve_device(
     State(state): State<Arc<AppState>>,
-    axum::Extension(_auth): axum::Extension<AuthUser>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Path(device_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_admin(&auth).map_err(|(s, j)| (s, j.0.to_string()))?;
     let db = state
         .db
         .as_ref()
@@ -65,9 +66,10 @@ async fn approve_device(
 /// DELETE /api/v1/devices/{id} — revoke a trusted device.
 async fn revoke_device(
     State(state): State<Arc<AppState>>,
-    axum::Extension(_auth): axum::Extension<AuthUser>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Path(device_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_admin(&auth).map_err(|(s, j)| (s, j.0.to_string()))?;
     let db = state
         .db
         .as_ref()

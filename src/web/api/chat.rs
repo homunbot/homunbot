@@ -11,6 +11,7 @@ use axum::routing::get;
 use axum::Router;
 use serde::{Deserialize, Serialize};
 
+use super::super::auth::{check_write, AuthUser};
 use super::super::server::AppState;
 use crate::utils::reasoning_filter::strip_reasoning;
 use crate::utils::text::truncate_str;
@@ -443,7 +444,9 @@ async fn list_chat_conversations(
 
 async fn create_chat_conversation(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
 ) -> Result<Json<ChatConversationSummary>, StatusCode> {
+    check_write(&auth)?;
     let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     let conversation_id = uuid::Uuid::new_v4().to_string();
     let session_key = web_session_key(&conversation_id);
@@ -518,8 +521,10 @@ async fn update_chat_conversation(
 
 async fn delete_chat_conversation(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Path(conversation_id): Path<String>,
 ) -> Result<Json<OkResponse>, StatusCode> {
+    check_write(&auth)?;
     let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     let session_key = web_session_key(&conversation_id);
 
@@ -687,8 +692,10 @@ async fn get_chat_uploaded_file(
 /// Clear chat history for the web session
 async fn clear_chat_history(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Query(q): Query<ChatConversationQuery>,
 ) -> Result<Json<OkResponse>, StatusCode> {
+    check_write(&auth)?;
     let db = state.db.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     let conversation_id = chat_conversation_id(&q);
     let session_key = web_session_key(&conversation_id);

@@ -8,6 +8,7 @@ use axum::routing::get;
 use axum::Router;
 use serde::{Deserialize, Serialize};
 
+use crate::web::auth::{require_write, AuthUser};
 use crate::web::server::AppState;
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
@@ -340,8 +341,10 @@ async fn list_automations(
 /// POST /api/v1/automations
 async fn create_automation(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<CreateAutomationRequest>,
 ) -> Result<Json<crate::storage::AutomationRow>, (StatusCode, String)> {
+    require_write(&auth).map_err(|(s, j)| (s, j.0.to_string()))?;
     let db = state.db.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "Database not available".to_string(),
@@ -606,7 +609,9 @@ async fn patch_automation(
 async fn delete_automation(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_write(&auth).map_err(|(s, j)| (s, j.0.to_string()))?;
     let db = state.db.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "Database not available".to_string(),

@@ -6,6 +6,9 @@ use axum::extract::State;
 use axum::response::Json;
 use serde::{Deserialize, Serialize};
 
+use axum::http::StatusCode;
+
+use crate::web::auth::{check_write, AuthUser};
 use crate::web::server::AppState;
 
 // ── Types ────────────────────────────────────────────────────────
@@ -1005,20 +1008,22 @@ async fn try_generate_install_guide_with_llm(
 
 pub(super) async fn mcp_install_guide(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<McpInstallGuideRequest>,
-) -> Json<McpInstallGuideResponse> {
+) -> Result<Json<McpInstallGuideResponse>, StatusCode> {
+    check_write(&auth)?;
     let config = state.config.read().await.clone();
     let language = GuideLanguage::from_request(req.language.as_deref());
     let docs = fetch_install_docs_context(&req).await;
     match try_generate_install_guide_with_llm(&config, &req, docs.as_ref(), language).await {
-        Ok(out) => Json(out),
+        Ok(out) => Ok(Json(out)),
         Err(e) => {
             let mut out =
                 build_fallback_install_guide(&req, docs.as_ref(), Some(e.to_string()), language);
             if docs.is_some() {
                 out.source = "docs".to_string();
             }
-            Json(out)
+            Ok(Json(out))
         }
     }
 }

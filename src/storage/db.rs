@@ -1996,32 +1996,42 @@ impl Database {
     // --- Webhook tokens ---
 
     /// Create a new webhook token for a user.
+    ///
+    /// `expires_at` is an optional RFC-3339 timestamp; `None` means the token never expires.
     pub async fn create_webhook_token(
         &self,
         token: &str,
         user_id: &str,
         name: &str,
         scope: &str,
+        expires_at: Option<&str>,
     ) -> Result<()> {
-        sqlx::query("INSERT INTO webhook_tokens (token, user_id, name, scope) VALUES (?, ?, ?, ?)")
-            .bind(token)
-            .bind(user_id)
-            .bind(name)
-            .bind(scope)
-            .execute(&self.pool)
-            .await
-            .context("Failed to create webhook token")?;
+        sqlx::query(
+            "INSERT INTO webhook_tokens (token, user_id, name, scope, expires_at) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(token)
+        .bind(user_id)
+        .bind(name)
+        .bind(scope)
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await
+        .context("Failed to create webhook token")?;
 
         Ok(())
     }
 
     /// Look up a webhook token and return the associated user.
+    ///
+    /// Returns `None` if the token is disabled or expired.
     pub async fn lookup_user_by_webhook_token(&self, token: &str) -> Result<Option<UserRow>> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT u.id, u.username, u.roles, u.password_hash, u.created_at, u.updated_at, u.metadata
              FROM users u
              JOIN webhook_tokens wt ON u.id = wt.user_id
-             WHERE wt.token = ? AND wt.enabled = 1",
+             WHERE wt.token = ? AND wt.enabled = 1
+               AND (wt.expires_at IS NULL OR wt.expires_at > datetime('now'))",
         )
         .bind(token)
         .fetch_optional(&self.pool)
@@ -2045,7 +2055,7 @@ impl Database {
     /// Load all webhook tokens for a user.
     pub async fn load_webhook_tokens(&self, user_id: &str) -> Result<Vec<WebhookTokenRow>> {
         let rows = sqlx::query_as::<_, WebhookTokenRow>(
-            "SELECT token, user_id, name, enabled, scope, last_used, created_at
+            "SELECT token, user_id, name, enabled, scope, last_used, created_at, expires_at
              FROM webhook_tokens WHERE user_id = ?
              ORDER BY created_at DESC",
         )
@@ -2083,13 +2093,30 @@ impl Database {
     /// Load a single webhook token by its value.
     pub async fn load_webhook_token(&self, token: &str) -> Result<Option<WebhookTokenRow>> {
         let row = sqlx::query_as::<_, WebhookTokenRow>(
-            "SELECT token, user_id, name, enabled, scope, last_used, created_at
+            "SELECT token, user_id, name, enabled, scope, last_used, created_at, expires_at
              FROM webhook_tokens WHERE token = ?",
         )
         .bind(token)
         .fetch_optional(&self.pool)
         .await
         .context("Failed to load webhook token")?;
+
+        Ok(row)
+    }
+
+    /// Find a webhook token by its prefix (first 16 characters).
+    ///
+    /// Used by management endpoints that receive a `token_id` instead of the full token.
+    pub async fn find_token_by_prefix(&self, prefix: &str) -> Result<Option<WebhookTokenRow>> {
+        let pattern = format!("{prefix}%");
+        let row = sqlx::query_as::<_, WebhookTokenRow>(
+            "SELECT token, user_id, name, enabled, scope, last_used, created_at, expires_at
+             FROM webhook_tokens WHERE token LIKE ?",
+        )
+        .bind(pattern)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to find webhook token by prefix")?;
 
         Ok(row)
     }
@@ -2817,6 +2844,7 @@ pub struct WebhookTokenRow {
     pub scope: String,
     pub last_used: Option<String>,
     pub created_at: String,
+    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize)]

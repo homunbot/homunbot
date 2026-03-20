@@ -2,6 +2,8 @@ use axum::http::StatusCode;
 use axum::response::Json;
 use serde::{Deserialize, Serialize};
 
+use crate::web::auth::{require_write, AuthUser};
+
 // ── Request / response types ─────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -222,8 +224,10 @@ fn build_github_mcp_oauth_url(
 // ── Google OAuth handlers ────────────────────────────────────────
 
 pub(super) async fn start_google_mcp_oauth(
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<GoogleMcpOauthStartRequest>,
 ) -> Result<Json<GoogleMcpOauthStartResponse>, (StatusCode, Json<serde_json::Value>)> {
+    require_write(&auth)?;
     if req.client_id.trim().is_empty() || req.redirect_uri.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -253,8 +257,10 @@ pub(super) async fn start_google_mcp_oauth(
 }
 
 pub(super) async fn exchange_google_mcp_oauth_code(
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<GoogleMcpOauthExchangeRequest>,
 ) -> Result<Json<GoogleMcpOauthExchangeResponse>, (StatusCode, Json<serde_json::Value>)> {
+    require_write(&auth)?;
     if req.client_id.trim().is_empty()
         || req.client_secret.trim().is_empty()
         || req.code.trim().is_empty()
@@ -359,8 +365,10 @@ pub(super) async fn exchange_google_mcp_oauth_code(
 // ── GitHub OAuth handlers ────────────────────────────────────────
 
 pub(super) async fn start_github_mcp_oauth(
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<GitHubMcpOauthStartRequest>,
 ) -> Result<Json<GitHubMcpOauthStartResponse>, (StatusCode, Json<serde_json::Value>)> {
+    require_write(&auth)?;
     if req.client_id.trim().is_empty() || req.redirect_uri.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -390,8 +398,10 @@ pub(super) async fn start_github_mcp_oauth(
 }
 
 pub(super) async fn exchange_github_mcp_oauth_code(
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<GitHubMcpOauthExchangeRequest>,
 ) -> Result<Json<GitHubMcpOauthExchangeResponse>, (StatusCode, Json<serde_json::Value>)> {
+    require_write(&auth)?;
     if req.client_id.trim().is_empty()
         || req.client_secret.trim().is_empty()
         || req.code.trim().is_empty()
@@ -596,8 +606,10 @@ async fn register_mcp_client(
 
 /// Start Notion MCP OAuth 2.1: register client + generate PKCE + build auth URL.
 pub(super) async fn start_notion_mcp_oauth(
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<NotionMcpOauthStartRequest>,
 ) -> Result<Json<NotionMcpOauthStartResponse>, (StatusCode, Json<serde_json::Value>)> {
+    require_write(&auth)?;
     if req.redirect_uri.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -645,8 +657,10 @@ pub(super) async fn start_notion_mcp_oauth(
 
 /// Exchange Notion MCP OAuth 2.1 code for tokens (with PKCE verifier).
 pub(super) async fn exchange_notion_mcp_oauth_code(
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<NotionMcpOauthExchangeRequest>,
 ) -> Result<Json<NotionMcpOauthExchangeResponse>, (StatusCode, Json<serde_json::Value>)> {
+    require_write(&auth)?;
     if req.code.trim().is_empty()
         || req.code_verifier.trim().is_empty()
         || req.client_id.trim().is_empty()

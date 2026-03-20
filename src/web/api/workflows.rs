@@ -7,6 +7,7 @@ use axum::routing::get;
 use axum::Router;
 use serde::Deserialize;
 
+use crate::web::auth::{require_write, AuthUser};
 use crate::web::server::AppState;
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
@@ -90,8 +91,10 @@ async fn list_workflows_api(
 /// POST /api/v1/workflows
 async fn create_workflow_api(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<crate::workflows::WorkflowCreateRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_write(&auth).map_err(|(s, j)| (s, j.0.to_string()))?;
     let engine = state.workflow_engine.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "Workflow engine not available".into(),
@@ -124,7 +127,9 @@ async fn get_workflow_api(
 async fn approve_workflow_api(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_write(&auth).map_err(|(s, j)| (s, j.0.to_string()))?;
     let engine = state.workflow_engine.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "Workflow engine not available".into(),
@@ -140,7 +145,9 @@ async fn approve_workflow_api(
 async fn cancel_workflow_api(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_write(&auth).map_err(|(s, j)| (s, j.0.to_string()))?;
     let engine = state.workflow_engine.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "Workflow engine not available".into(),
@@ -156,7 +163,9 @@ async fn cancel_workflow_api(
 async fn delete_workflow_api(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_write(&auth).map_err(|(s, j)| (s, j.0.to_string()))?;
     let engine = state.workflow_engine.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "Workflow engine not available".into(),
@@ -172,7 +181,9 @@ async fn delete_workflow_api(
 async fn restart_workflow_api(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_write(&auth).map_err(|(s, j)| (s, j.0.to_string()))?;
     let engine = state.workflow_engine.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "Workflow engine not available".into(),

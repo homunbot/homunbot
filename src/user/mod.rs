@@ -203,16 +203,19 @@ impl UserManager {
     }
 
     /// Create a webhook token for a user with a given scope (e.g., "admin", "read").
+    ///
+    /// `expires_at` is an optional RFC-3339 timestamp; `None` means the token never expires.
     pub async fn create_webhook_token(
         &self,
         user_id: &str,
         name: &str,
         scope: &str,
+        expires_at: Option<&str>,
     ) -> Result<String> {
         // Generate a secure random token
         let token = format!("wh_{}", Uuid::new_v4().simple());
         self.db
-            .create_webhook_token(&token, user_id, name, scope)
+            .create_webhook_token(&token, user_id, name, scope, expires_at)
             .await?;
         Ok(token)
     }

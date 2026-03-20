@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::helpers::{mcp_env_preview, normalize_mcp_capabilities};
 use super::{McpServerEnvView, McpServerView};
+use crate::web::auth::{require_write, AuthUser};
 use crate::web::server::AppState;
 
 // ── Local OkResponse ─────────────────────────────────────────────
@@ -198,8 +199,10 @@ pub(crate) struct McpServerUpsertRequest {
 
 pub(super) async fn upsert_mcp_server(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<McpServerUpsertRequest>,
 ) -> Result<Json<OkResponse>, StatusCode> {
+    require_write(&auth).map_err(|_| StatusCode::FORBIDDEN)?;
     let mut config = state.config.read().await.clone();
     let exists = config.mcp.servers.contains_key(&req.name);
     if exists && !req.overwrite.unwrap_or(false) {
@@ -371,7 +374,9 @@ pub(super) async fn test_mcp_server(
 pub(super) async fn delete_mcp_server(
     Path(name): Path<String>,
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
 ) -> Result<Json<OkResponse>, StatusCode> {
+    require_write(&auth).map_err(|_| StatusCode::FORBIDDEN)?;
     let mut config = state.config.read().await.clone();
     if config.mcp.servers.remove(&name).is_none() {
         return Err(StatusCode::NOT_FOUND);

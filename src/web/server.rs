@@ -66,6 +66,8 @@ pub struct AppState {
     pub auth_rate_limiter: Arc<auth::RateLimiter>,
     /// Rate limiter for general API — 60 req/min per IP (SEC-3).
     pub api_rate_limiter: Arc<auth::RateLimiter>,
+    /// Rate limiter for Bearer token API calls — 60 req/min per token (SEC-4c).
+    pub token_rate_limiter: Arc<auth::RateLimiter<String>>,
     /// Tool registry — shared with AgentLoop for listing registered tools.
     pub tool_registry: Option<Arc<tokio::sync::RwLock<crate::tools::ToolRegistry>>>,
     /// Channel command sender — for hot-starting channels after config/pairing.
@@ -263,6 +265,7 @@ impl WebServer {
 
         let auth_rate_limiter = Arc::new(auth::RateLimiter::new(auth_rate_limit, 60));
         let api_rate_limiter = Arc::new(auth::RateLimiter::new(rate_limit, 60));
+        let token_rate_limiter = Arc::new(auth::RateLimiter::<String>::new(rate_limit, 60));
 
         let state = Arc::new(AppState {
             config: self.config,
@@ -284,6 +287,7 @@ impl WebServer {
             session_store: session_store.clone(),
             auth_rate_limiter: auth_rate_limiter.clone(),
             api_rate_limiter: api_rate_limiter.clone(),
+            token_rate_limiter: token_rate_limiter.clone(),
             tool_registry: self.tool_registry,
             channel_cmd_tx: self.channel_cmd_tx,
         });
@@ -359,6 +363,7 @@ impl WebServer {
             let session_store_clone = session_store.clone();
             let auth_rl = auth_rate_limiter.clone();
             let api_rl = api_rate_limiter.clone();
+            let token_rl = token_rate_limiter.clone();
             let state_for_cleanup = state.clone();
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(300));
@@ -369,6 +374,7 @@ impl WebServer {
                     }
                     auth_rl.cleanup().await;
                     api_rl.cleanup().await;
+                    token_rl.cleanup().await;
                     // Expire web chat runs stuck in "running" for >10 min (orphaned).
                     state_for_cleanup.web_runs.expire_stale_runs(600);
                 }

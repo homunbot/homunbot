@@ -1,6 +1,6 @@
 # Homun — Unified Roadmap
 
-> Last updated: 2026-03-18
+> Last updated: 2026-03-20
 > Consolidamento di: ROADMAP.md, IMPLEMENTATION-GAPS.md, openclaw-connections-vs-homun-detailed.md
 > Obiettivo: piano unico orientato a **prodotto industriale**, sicurezza-first, senza legacy o feature completate.
 
@@ -12,11 +12,11 @@
 |---------|--------|
 | LOC Rust | ~87,400 |
 | LOC Frontend | ~19,000 (JS) + ~10,000 (CSS) |
-| Test | 750 passing |
+| Test | 762 passing |
 | Canali | 7 (CLI, Telegram✅, Discord⚠️, WhatsApp⚠️, Slack⚠️, Email✅, Web✅) |
 | Tool built-in | ~20 |
-| Web UI Pages | 20 |
-| MCP Recipes bundled | 6 (github, google-workspace, gmail, google-calendar, notion, slack) |
+| Web UI Pages | 21 |
+| MCP Recipes bundled | 17 (github, google-workspace, google-maps, notion, slack, gitlab, linear, jira, reddit, brave-search, spotify, stripe, twitter, sentry, todoist, home-assistant, wordpress) |
 | Provider LLM | 14 |
 | Release | Alpha v0.2 (REL-1..12 tutti ✅ DONE) |
 
@@ -40,7 +40,7 @@ La strategia è **consolidare il nucleo e aprirlo al mondo esterno** in ordine d
 - Web UI locale più ricca di qualsiasi competitor
 - Agent Skills standard (unico personal assistant a supportarlo)
 - Sandbox always-on multi-platform (macOS Seatbelt, Linux bwrap, Windows Job, Docker)
-- MCP recipes con OAuth curato (Google, GitHub, Notion)
+- MCP recipes con OAuth curato (17 servizi verificati, setup guides, runtime token refresh)
 - Workflow engine persistente (più potente di OpenClaw Lobster)
 - RAG personale con vault-gated access (né OpenClaw né ZeroClaw ce l'hanno)
 - Security: exfiltration guard, content source labeling, email framing, vault 2FA
@@ -163,18 +163,40 @@ Stato: SEC-6/7/8/11/12/13/14/15 tutti ✅ DONE. Scudo anti-injection completo.
 | TRS-1 | **Trust model doc** | ✅ DONE 2026-03-19 | `docs/TRUST-MODEL.md`: 8 principal types (local admin, remote admin, API client, channel sender, webhook, MCP, agent, cron). Trust boundaries, content trust levels, security controls summary |
 | TRS-2 | **Vault access audit log** | ✅ DONE | Migration 019, fire-and-forget audit, `GET /v1/vault/audit` |
 
+#### 2C-bis. API Access Management (P1)
+
+| # | Task | Effort | Note |
+|---|------|--------|------|
+| AAM-1 | **Scope enforcement globale** | ✅ DONE 2026-03-20 | `require_write()`/`require_admin()`/`check_write()`/`check_admin()` in auth.rs. Applicato a tutti i mutating handler (~40 endpoint): workflows, contacts, memory, knowledge, email_accounts, mcp/crud, mcp/oauth, mcp/install, skills, automations, chat, vault, sandbox, maintenance, devices, business, account. Bearer token scope (admin/write/read) enforced, session = sempre admin |
+| AAM-2 | **Token expiry** | ✅ DONE 2026-03-20 | Migration 031: `expires_at TEXT` su `webhook_tokens`. Dual check: Rust middleware (chrono parse) + SQL WHERE clause. API `expires_in` (7d/30d/90d/never) → RFC-3339 `expires_at` |
+| AAM-3 | **Token masking + token_id** | ✅ DONE 2026-03-20 | Lista token: `token_id` (primi 16 char) + `display_token` (mascherato `wh_****…abcd`). Token completo visibile solo alla creazione. Delete/toggle via `find_token_by_prefix()` |
+| AAM-4 | **Per-token rate limiting** | ✅ DONE 2026-03-20 | `RateLimiter<K>` generico (default IpAddr). `token_rate_limiter: RateLimiter<String>` in AppState, 60 req/min per token. Check nel Bearer auth flow |
+| AAM-5 | **Pagina Web UI API Keys** | ✅ DONE 2026-03-20 | `/api-keys` page con create form (name, scope, expiry), one-time token reveal + copy, lista chiavi con badges (scope, expiry, enabled), toggle/delete. `static/js/api-keys.js` (~220 righe). Sezione token rimossa da account page |
+
 #### 2D. MCP Recipes Expansion (P1)
 
 | # | Task | Effort | Note |
 |---|------|--------|------|
-| RCP-1 | **Google Drive recipe** | ✅ DONE 2026-03-19 | `recipes/google-drive.toml`: OAuth, @anthropic/mcp-server-gdrive |
-| RCP-2 | **Google Calendar recipe** | ✅ DONE | Parte di google-workspace.toml |
-| RCP-3 | **Linear recipe** | ✅ DONE 2026-03-19 | `recipes/linear.toml`: API key, mcp-server-linear |
-| RCP-4 | **Jira recipe** | ✅ DONE 2026-03-19 | `recipes/jira.toml`: API key + URL, mcp-server-atlassian |
-| RCP-5 | **Reddit recipe** | ✅ DONE 2026-03-19 | `recipes/reddit.toml`: OAuth, mcp-server-reddit |
-| RCP-6 | **GitLab recipe** | ✅ DONE 2026-03-19 | `recipes/gitlab.toml`: API key + optional URL, mcp-server-gitlab |
+| RCP-1 | **Google services consolidation** | ✅ DONE 2026-03-20 | Consolidated gmail, google-calendar, google-drive into `google-workspace.toml` (covers Gmail, Calendar, Drive via single OAuth). 3 recipes removed, 1 unified |
+| RCP-3 | **Linear recipe** | ✅ DONE 2026-03-20 | `recipes/linear.toml`: API key, `mcp-linear` (env: LINEAR_ACCESS_TOKEN) |
+| RCP-4 | **Jira recipe** | ✅ DONE 2026-03-20 | `recipes/jira.toml`: API key + site name, `@aashari/mcp-server-atlassian-jira` (env: ATLASSIAN_SITE_NAME, ATLASSIAN_USER_EMAIL, ATLASSIAN_API_TOKEN) |
+| RCP-5 | **Reddit recipe** | ✅ DONE 2026-03-20 | `recipes/reddit.toml`: OAuth (5 fields), `reddit-mcp-server` |
+| RCP-6 | **GitLab recipe** | ✅ DONE 2026-03-20 | `recipes/gitlab.toml`: API key + optional URL, `@zereight/mcp-gitlab` (env: GITLAB_API_URL) |
+| RCP-7 | **Brave Search recipe** | ✅ DONE 2026-03-20 | `recipes/brave-search.toml`: API key, `@anthropic/brave-search-mcp-server` |
+| RCP-8 | **Spotify recipe** | ✅ DONE 2026-03-20 | `recipes/spotify.toml`: OAuth (client_id + secret + refresh_token), `mcp-spotify` |
+| RCP-9 | **Stripe recipe** | ✅ DONE 2026-03-20 | `recipes/stripe.toml`: API key, `@stripe/agent-toolkit` |
+| RCP-10 | **Twitter/X recipe** | ✅ DONE 2026-03-20 | `recipes/twitter.toml`: OAuth 1.0a (4 keys), `@enescinar/twitter-mcp`. ⚠️ Only 2 tools — look for more complete MCP |
+| RCP-11 | **Sentry recipe** | ✅ DONE 2026-03-20 | `recipes/sentry.toml`: API key + org slug, `mcp-server-sentry` (env: SENTRY_ACCESS_TOKEN) |
+| RCP-12 | **Todoist recipe** | ✅ DONE 2026-03-20 | `recipes/todoist.toml`: API key, `mcp-server-todoist` |
+| RCP-13 | **Home Assistant recipe** | ✅ DONE 2026-03-20 | `recipes/home-assistant.toml`: URL + token, `mcp-server-home-assistant` |
+| RCP-14 | **Google Maps recipe** | ✅ DONE 2026-03-20 | `recipes/google-maps.toml`: API key, `@modelcontextprotocol/server-google-maps`. ⚠️ Deprecated pkg |
+| RCP-15 | **WordPress recipe** | ✅ DONE 2026-03-20 | `recipes/wordpress.toml`: URL + username + app password, `mcp-wordpress` |
+| RCP-V1 | **NPM package verification** | ✅ DONE 2026-03-20 | All 17 recipes verified against npm registry. Fixed 7 wrong package names, 6 wrong env vars. Added `deprecated_notice` field + UI badge for deprecated packages (GitHub, Google Maps) |
+| RCP-UX1 | **Setup guides for all recipes** | ✅ DONE 2026-03-20 | `setup_guide` field added to `ConnectionRecipe`. All 17 recipes have detailed markdown step-by-step guides |
+| RCP-UX2 | **Split-pane connect modal** | ✅ DONE 2026-03-20 | Form fields left, setup guide right (marked.js for markdown). Independent scrolling. Mobile stacks vertically. `.skill-modal--split` CSS modifier |
+| RCP-FN1 | **Runtime OAuth token refresh** | ✅ DONE 2026-03-20 | `is_auth_error()` detection + `try_refresh_and_retry()` in `tools/mcp.rs`. On auth error during tool call: auto-refresh OAuth token (Google/Notion) and retry once. Fixes Notion disconnection issue |
 
-Target: **10 recipes bundled** (5 existing + 5 new).
+Target: **17 verified recipes bundled** — all done. Google services consolidated (3→1).
 
 #### 2E. Installer Nativi (P1)
 
@@ -194,25 +216,25 @@ Target: **10 recipes bundled** (5 existing + 5 new).
 
 #### 3A. Sito Web Prodotto
 
-| # | Task | Effort |
-|---|------|--------|
-| WEB-1 | Landing page (hero, features, CTA download) | 1 settimana |
-| WEB-2 | Pagina download (detect OS, link per piattaforma) | 3 giorni |
-| WEB-3 | Pagina features (screenshot/GIF per macro-feature) | 1 settimana |
-| WEB-7 | Dominio + hosting (homun.dev, Cloudflare Pages) | 1 giorno |
+| # | Task | Effort | Note |
+|---|------|--------|------|
+| WEB-1 | Landing page (hero, features, CTA download) | 1 settimana | ⚠️ Esiste (Vite + Tailwind, repo `website/`) — da rivedere |
+| WEB-2 | Pagina download (detect OS, link per piattaforma) | 3 giorni | ⚠️ Da rivedere |
+| WEB-3 | Pagina features (screenshot/GIF per macro-feature) | 1 settimana | ⚠️ Da rivedere |
+| WEB-7 | Dominio + hosting (homun.dev, Cloudflare Pages) | 1 giorno | ✅ DONE |
 
 #### 3B. Docs Site
 
-| # | Task | Effort |
-|---|------|--------|
-| DOC-1 | Infrastruttura (MkDocs Material, docs.homun.dev) | 2 giorni |
-| DOC-2 | Guida installazione per piattaforma | 3 giorni |
-| DOC-3 | Guida configurazione (ogni sezione config.toml) | 3 giorni |
-| DOC-4 | Guida canali (setup per ogni canale con screenshot) | 1 settimana |
-| DOC-5 | Guida automazioni (builder + NLP + template gallery) | 3 giorni |
-| DOC-6 | Guida skills/MCP | 3 giorni |
-| DOC-8 | Troubleshooting/FAQ (top 20 problemi) | 3 giorni |
-| DOC-9 | Contributing guide | 2 giorni |
+| # | Task | Effort | Note |
+|---|------|--------|------|
+| DOC-1 | Infrastruttura (Next.js, docs.homun.dev) | 2 giorni | ✅ DONE — repo `homun-docs/`, Next.js + MDX, Dockerized |
+| DOC-2 | Guida installazione per piattaforma | 3 giorni | ✅ DONE — source.mdx, docker.mdx, service.mdx |
+| DOC-3 | Guida configurazione (ogni sezione config.toml) | 3 giorni | ✅ DONE — providers.mdx, security.mdx, remote-access.mdx |
+| DOC-4 | Guida canali (setup per ogni canale con screenshot) | 1 settimana | ✅ DONE — 7 canali documentati (telegram, discord, slack, whatsapp, email, web, cli) |
+| DOC-5 | Guida automazioni (builder + NLP + template gallery) | 3 giorni | ✅ DONE — automations.mdx |
+| DOC-6 | Guida skills/MCP | 3 giorni | ✅ DONE — skills.mdx |
+| DOC-8 | Troubleshooting/FAQ (top 20 problemi) | 3 giorni | ✅ DONE — troubleshooting/index.mdx |
+| DOC-9 | Contributing guide | 2 giorni | ⏳ TODO |
 
 #### 3C. App Mobile (Flutter)
 

@@ -6,6 +6,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use serde::{Deserialize, Serialize};
 
+use super::super::auth::{require_admin, AuthUser};
 use super::super::server::AppState;
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
@@ -137,8 +138,10 @@ struct PurgeResponse {
 
 async fn purge_tables(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<PurgeRequest>,
 ) -> Result<Json<PurgeResponse>, (axum::http::StatusCode, String)> {
+    require_admin(&auth).map_err(|(s, j)| (s, j.0.to_string()))?;
     // Find the domain group
     let group = DOMAIN_GROUPS
         .iter()

@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 use super::super::server::AppState;
 use crate::contacts::db::ContactUpdate;
 use crate::storage::Database;
+use crate::web::auth::{require_write, AuthUser};
 
 type ApiErr = (StatusCode, Json<Value>);
 
@@ -135,8 +136,10 @@ async fn list_contacts(
 
 async fn create_contact(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(body): Json<CreateContactRequest>,
 ) -> Result<Json<ContactResponse>, ApiErr> {
+    require_write(&auth)?;
     let db = require_db(&state)?;
     let id = db
         .insert_contact(
@@ -196,9 +199,11 @@ async fn get_contact(
 
 async fn update_contact(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Path(id): Path<i64>,
     Json(body): Json<ContactUpdate>,
 ) -> Result<Json<crate::contacts::Contact>, ApiErr> {
+    require_write(&auth)?;
     let db = require_db(&state)?;
     let updated = db.update_contact(id, &body).await.map_err(internal)?;
     if !updated {
@@ -222,8 +227,10 @@ async fn update_contact(
 
 async fn delete_contact(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiErr> {
+    require_write(&auth)?;
     let db = require_db(&state)?;
     let deleted = db.delete_contact(id).await.map_err(internal)?;
     if deleted {
@@ -249,9 +256,11 @@ async fn list_identities(
 
 async fn add_identity(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Path(contact_id): Path<i64>,
     Json(body): Json<AddIdentityRequest>,
 ) -> Result<Json<Value>, ApiErr> {
+    require_write(&auth)?;
     let db = require_db(&state)?;
     let id = db
         .insert_contact_identity(
@@ -267,8 +276,10 @@ async fn add_identity(
 
 async fn remove_identity(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiErr> {
+    require_write(&auth)?;
     let db = require_db(&state)?;
     let deleted = db.delete_contact_identity(id).await.map_err(internal)?;
     if deleted {
@@ -294,9 +305,11 @@ async fn list_relationships(
 
 async fn add_relationship(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Path(from_id): Path<i64>,
     Json(body): Json<AddRelationshipRequest>,
 ) -> Result<Json<Value>, ApiErr> {
+    require_write(&auth)?;
     let db = require_db(&state)?;
     let id = db
         .insert_contact_relationship(
@@ -314,8 +327,10 @@ async fn add_relationship(
 
 async fn remove_relationship(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiErr> {
+    require_write(&auth)?;
     let db = require_db(&state)?;
     let deleted = db.delete_contact_relationship(id).await.map_err(internal)?;
     if deleted {
@@ -341,9 +356,11 @@ async fn list_events(
 
 async fn add_event(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Path(contact_id): Path<i64>,
     Json(body): Json<AddEventRequest>,
 ) -> Result<Json<Value>, ApiErr> {
+    require_write(&auth)?;
     let db = require_db(&state)?;
     let id = db
         .insert_contact_event(
@@ -362,8 +379,10 @@ async fn add_event(
 
 async fn remove_event(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiErr> {
+    require_write(&auth)?;
     let db = require_db(&state)?;
     let deleted = db.delete_contact_event(id).await.map_err(internal)?;
     if deleted {
@@ -415,8 +434,10 @@ async fn list_pending(
 
 async fn approve_pending(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiErr> {
+    require_write(&auth)?;
     let db = require_db(&state)?;
     let updated = db
         .update_pending_response_status(id, "approved")
@@ -434,8 +455,10 @@ async fn approve_pending(
 
 async fn reject_pending(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiErr> {
+    require_write(&auth)?;
     let db = require_db(&state)?;
     let updated = db
         .update_pending_response_status(id, "rejected")

@@ -8,6 +8,7 @@ use axum::Router;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
+use super::super::auth::{check_write, AuthUser};
 use super::super::server::AppState;
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
@@ -150,8 +151,10 @@ fn install_security_view(
 }
 
 async fn install_skill(
+    axum::Extension(auth): axum::Extension<AuthUser>,
     Json(req): Json<InstallRequest>,
 ) -> Result<Json<InstallResponse>, StatusCode> {
+    check_write(&auth)?;
     let security_options = crate::skills::InstallSecurityOptions { force: req.force };
     let result = if let Some(slug) = req.source.strip_prefix("clawhub:") {
         let hub = crate::skills::ClawHubInstaller::new();
@@ -582,8 +585,10 @@ struct DeleteSkillResponse {
 async fn delete_skill(
     Path(name): Path<String>,
     State(state): State<Arc<AppState>>,
-) -> Json<DeleteSkillResponse> {
-    match crate::skills::SkillInstaller::remove(&name).await {
+    axum::Extension(auth): axum::Extension<AuthUser>,
+) -> Result<Json<DeleteSkillResponse>, StatusCode> {
+    check_write(&auth)?;
+    Ok(match crate::skills::SkillInstaller::remove(&name).await {
         Ok(()) => {
             let mut message = format!("Skill '{}' removed", name);
             if let Some(db) = &state.db {
@@ -611,7 +616,7 @@ async fn delete_skill(
             ok: false,
             message: e.to_string(),
         }),
-    }
+    })
 }
 
 // --- Catalog cache ---
