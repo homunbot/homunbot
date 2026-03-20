@@ -1,0 +1,510 @@
+/* ═══ AUTOMATIONS PAGE ═══ */
+.automation-textarea {
+    resize: vertical;
+    min-height: 110px;
+}
+
+.automation-row {
+    align-items: flex-start;
+    gap: 16px;
+}
+
+.automation-block {
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.automation-block:last-child {
+    border-bottom: none;
+}
+
+.automation-block .item-row {
+    border-bottom: none;
+}
+
+.automation-row .item-info {
+    align-items: flex-start;
+}
+
+.automation-main {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.automation-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.automation-name {
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--t1);
+}
+
+.automation-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.automation-chip {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--t3);
+    background: var(--surface-inset);
+    border: 1px solid var(--border-subtle);
+    padding: 2px 8px;
+    border-radius: var(--r-pill);
+    white-space: nowrap;
+}
+
+.automation-actions {
+    margin-left: auto;
+    justify-content: flex-end;
+    align-self: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.automation-row--selected {
+    background: var(--accent-light);
+}
+
+.automation-inline-editor {
+    display: none;
+    background: var(--surface-inset);
+    border-top: 1px dashed var(--border);
+    padding: 14px 18px;
+}
+
+.automation-inline-editor--open {
+    display: block;
+}
+
+.automation-inline-error {
+    margin-top: 6px;
+    color: var(--err);
+    font-size: 12px;
+}
+
+.automation-detail-line {
+    font-size: 12px;
+    color: var(--t3);
+    line-height: 1.35;
+}
+
+.automation-detail-line--error {
+    color: var(--err);
+    font-weight: 600;
+}
+
+/* ─── Flow renderer (n8n-style) ─────────────────────────────── */
+
+/* Mini strip bar between item row and editor */
+.automation-flow-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    border-top: 1px solid var(--border-subtle);
+    background: var(--surface-subtle);
+}
+
+.automation-flow-mini {
+    flex: 1;
+    min-width: 0;
+    height: 26px;
+    display: flex;
+    align-items: center;
+}
+
+.automation-flow-mini:empty {
+    display: none;
+}
+
+.automation-flow-expand-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    color: var(--t3);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, transform 0.2s;
+    flex-shrink: 0;
+}
+
+.automation-flow-expand-btn:hover {
+    background: var(--surface-hover);
+    color: var(--t1);
+}
+
+.automation-flow-expand-btn svg {
+    transition: transform 0.2s ease;
+}
+
+.automation-flow-expand-btn--open svg {
+    transform: rotate(180deg);
+}
+
+/* Expanded canvas (n8n-style dark workspace) */
+.automation-flow-canvas {
+    border-top: 1px solid var(--border);
+    overflow-x: auto;
+    animation: flowCanvasSlide 0.25s ease-out;
+}
+
+@keyframes flowCanvasSlide {
+    from { opacity: 0; max-height: 0; }
+    to   { opacity: 1; max-height: 500px; }
+}
+
+/* Full flow in editor */
+.automation-flow-full {
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    overflow-x: auto;
+    margin-bottom: 16px;
+}
+
+.automation-flow-full:empty {
+    display: none;
+}
+
+/* SVG shared */
+.flow-svg {
+    font-family: var(--sans);
+    border-radius: var(--r-lg);
+}
+
+/* Mini dots hover */
+.flow-mini-dot {
+    cursor: default;
+}
+
+.flow-mini-dot circle,
+.flow-mini-dot polygon {
+    transition: filter 0.15s, transform 0.15s;
+}
+
+.flow-mini-dot:hover circle,
+.flow-mini-dot:hover polygon {
+    filter: brightness(1.2);
+}
+
+/* Mini flow tooltip */
+.flow-mini-tooltip {
+    z-index: 1000;
+    max-width: 320px;
+    padding: 8px 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+    pointer-events: none;
+    font-size: 12px;
+    line-height: 1.4;
+}
+.flow-mini-tooltip-title {
+    font-weight: 600;
+    color: var(--t1);
+    margin-bottom: 2px;
+}
+.flow-mini-tooltip-desc {
+    color: var(--t3);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Full canvas nodes */
+.flow-node {
+    cursor: default;
+}
+
+.flow-node rect,
+.flow-node polygon {
+    transition: filter 0.15s;
+}
+
+.flow-node:hover rect,
+.flow-node:hover polygon {
+    filter: brightness(1.15);
+}
+
+/* Connector dots glow on hover */
+.flow-connector {
+    transition: r 0.15s;
+}
+
+.flow-node:hover .flow-connector {
+    r: 6;
+}
+
+/* Edges */
+.flow-edge path {
+    transition: stroke 0.2s;
+}
+
+/* Running animation */
+@keyframes flow-dash {
+    to { stroke-dashoffset: -20; }
+}
+
+.flow-edge--active path {
+    stroke: var(--accent);
+    stroke-dasharray: 5 5;
+    animation: flow-dash 0.8s linear infinite;
+}
+
+.automation-history-item {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.automation-history-item:last-child {
+    border-bottom: none;
+}
+
+.automation-history-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.automation-history-id {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--t2);
+}
+
+.automation-history-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--t4);
+    margin-bottom: 8px;
+}
+
+.automation-history-result {
+    background: var(--surface-inset);
+    border-radius: var(--r-sm);
+    padding: 8px 10px;
+    font-size: 12px;
+    color: var(--t2);
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* ─── Prompt preview in automation card ──────────────────────── */
+
+.automation-prompt-preview {
+    font-size: 12px;
+    color: var(--t3);
+    line-height: 1.4;
+    margin-top: 2px;
+    max-height: 2.8em; /* ~2 lines */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+/* ─── Master-detail layout ───────────────────────────────────── */
+
+.auto-list-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    max-width: none;
+    padding: 0;
+}
+
+.auto-master > .page-header {
+    padding-top: 24px;
+}
+
+.auto-master > .auto-list-section {
+    padding: 0;
+}
+
+.auto-master-detail {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    gap: 0;
+}
+
+.auto-master {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-left: 24px;
+    padding-right: 24px;
+}
+
+.auto-list-section {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+/* ─── Detail side panel (history) ────────────────────────────── */
+
+.auto-detail {
+    width: 380px;
+    flex-shrink: 0;
+    border-left: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+    animation: autoDetailSlide 0.2s ease-out;
+}
+
+.auto-detail[hidden] {
+    display: none;
+}
+
+@keyframes autoDetailSlide {
+    from { opacity: 0; transform: translateX(20px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+
+.auto-detail-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 18px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+}
+
+.auto-detail-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--t1);
+    margin: 0;
+}
+
+.auto-detail-close {
+    min-width: 28px;
+    padding: 2px 6px;
+    font-size: 18px;
+    line-height: 1;
+}
+
+.auto-detail-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0;
+}
+
+/* ─── Chat-style prompt bar ──────────────────────────────────── */
+
+.auto-prompt-bar {
+    padding: 12px 18px 14px;
+    flex-shrink: 0;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.auto-prompt-shell {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    max-width: 800px;
+    margin: 0 auto;
+    border-radius: 20px;
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    background: rgba(251, 250, 247, 0.92);
+    backdrop-filter: blur(12px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
+    padding: 8px 12px;
+}
+
+.dark .auto-prompt-shell {
+    background: rgba(29, 28, 24, 0.88);
+    border-color: rgba(255, 255, 255, 0.08);
+}
+
+.auto-prompt-textarea {
+    flex: 1;
+    min-height: 36px;
+    max-height: 100px;
+    border: 0;
+    box-shadow: none !important;
+    background: transparent;
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 6px 4px;
+    resize: none;
+    outline: none;
+}
+
+.auto-prompt-textarea:focus {
+    box-shadow: none !important;
+    outline: none;
+}
+
+.auto-prompt-send-btn {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+@media (max-width: 700px) {
+    .auto-master {
+        padding-left: 16px;
+        padding-right: 16px;
+    }
+
+    .automation-row {
+        flex-direction: column;
+    }
+
+    .automation-actions {
+        width: 100%;
+        margin-left: 0;
+        justify-content: flex-start;
+    }
+
+    .auto-detail {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        max-width: 380px;
+        z-index: 60;
+        box-shadow: -4px 0 20px rgba(0, 0, 0, 0.15);
+    }
+
+    .auto-master-detail {
+        flex-direction: column;
+    }
+}
+
+

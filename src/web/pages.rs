@@ -290,7 +290,16 @@ fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String 
     <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="/static/img/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/static/img/favicon/site.webmanifest">
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/tokens.css">
+    <link rel="stylesheet" href="/static/css/reset.css">
+    <link rel="stylesheet" href="/static/css/layout.css">
+    <link rel="stylesheet" href="/static/css/primitives.css">
+    <link rel="stylesheet" href="/static/css/chat.css">
+    <link rel="stylesheet" href="/static/css/pages.css">
+    <link rel="stylesheet" href="/static/css/automations.css">
+    <link rel="stylesheet" href="/static/css/workflows.css">
+    <link rel="stylesheet" href="/static/css/onboarding.css">
+    <link rel="stylesheet" href="/static/css/utilities.css">
     <script>
     (function() {{
         var theme = localStorage.getItem('homun-theme') || 'system';
@@ -2287,7 +2296,16 @@ fn render_mcp_oauth_callback_page(
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{title}</title>
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/tokens.css">
+    <link rel="stylesheet" href="/static/css/reset.css">
+    <link rel="stylesheet" href="/static/css/layout.css">
+    <link rel="stylesheet" href="/static/css/primitives.css">
+    <link rel="stylesheet" href="/static/css/chat.css">
+    <link rel="stylesheet" href="/static/css/pages.css">
+    <link rel="stylesheet" href="/static/css/automations.css">
+    <link rel="stylesheet" href="/static/css/workflows.css">
+    <link rel="stylesheet" href="/static/css/onboarding.css">
+    <link rel="stylesheet" href="/static/css/utilities.css">
 </head>
 <body class="oauth-callback-page">
     <main class="oauth-callback-shell">
@@ -4500,7 +4518,16 @@ fn standalone_page(title: &str, body: &str) -> String {
     <title>{title} — Homun</title>
     <link rel="icon" href="/static/img/favicon/favicon.ico" sizes="any">
     <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/tokens.css">
+    <link rel="stylesheet" href="/static/css/reset.css">
+    <link rel="stylesheet" href="/static/css/layout.css">
+    <link rel="stylesheet" href="/static/css/primitives.css">
+    <link rel="stylesheet" href="/static/css/chat.css">
+    <link rel="stylesheet" href="/static/css/pages.css">
+    <link rel="stylesheet" href="/static/css/automations.css">
+    <link rel="stylesheet" href="/static/css/workflows.css">
+    <link rel="stylesheet" href="/static/css/onboarding.css">
+    <link rel="stylesheet" href="/static/css/utilities.css">
     <script>
     (function() {{
         var theme = localStorage.getItem('homun-theme') || 'system';

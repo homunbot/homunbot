@@ -1,0 +1,556 @@
+/* ─── Workflows: step builder + timeline ─── */
+.wf-step-row {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.75rem;
+    margin-bottom: 0.5rem;
+    background: var(--surface-1);
+}
+.wf-step-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+.wf-step-number {
+    font-weight: 600;
+    font-size: 0.8rem;
+    width: 1.5rem;
+    text-align: center;
+    color: var(--text-2);
+    flex-shrink: 0;
+}
+.wf-step-name { flex: 1; }
+.wf-step-approval {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.8rem;
+    color: var(--text-2);
+    white-space: nowrap;
+    cursor: pointer;
+}
+.wf-step-instruction { width: 100%; }
+
+/* Timeline */
+.wf-detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+.wf-timeline { padding-left: 0.5rem; }
+.wf-timeline-step {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.5rem 0;
+    border-left: 2px solid var(--border);
+    margin-left: 0.5rem;
+    padding-left: 1rem;
+    position: relative;
+}
+.wf-timeline-step:last-child { border-left-color: transparent; }
+.wf-timeline-icon {
+    position: absolute;
+    left: -0.55rem;
+    top: 0.55rem;
+    font-size: 0.9rem;
+    line-height: 1;
+    color: var(--text-2);
+}
+.wf-step-done .wf-timeline-icon { color: var(--ok); }
+.wf-step-active .wf-timeline-icon { color: var(--accent); }
+.wf-step-failed .wf-timeline-icon { color: var(--err); }
+.wf-step-skipped .wf-timeline-icon { color: var(--text-3); }
+
+.wf-timeline-body { flex: 1; min-width: 0; }
+.wf-timeline-name { font-weight: 500; margin-bottom: 0.2rem; }
+.wf-timeline-instruction {
+    font-size: 0.82rem;
+    color: var(--text-2);
+    margin-bottom: 0.2rem;
+}
+.wf-step-result {
+    font-size: 0.8rem;
+    background: var(--surface-2);
+    border-radius: var(--radius);
+    padding: 0.4rem 0.6rem;
+    margin-top: 0.3rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.wf-step-error {
+    font-size: 0.8rem;
+    color: var(--err);
+    margin-top: 0.2rem;
+}
+.wf-timeline-ts {
+    font-size: 0.72rem;
+    color: var(--text-3);
+    margin-top: 0.2rem;
+}
+.item-row.selected { background: var(--surface-2); }
+
+/* ═══════════════════════════════════════════════════════
+   AUTOMATIONS BUILDER (N8N STYLE)
+   ═══════════════════════════════════════════════════════ */
+
+.builder-node {
+    position: absolute;
+    width: 180px;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    cursor: grab;
+    user-select: none;
+    z-index: 10;
+    transition: box-shadow 0.2s, border-color 0.2s;
+}
+.builder-node:active {
+    cursor: grabbing;
+}
+.builder-node.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-light), 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.builder-node--error {
+    border-color: var(--err);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--err) 24%, transparent);
+}
+.builder-node.selected.builder-node--error {
+    border-color: var(--err);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--err) 40%, transparent);
+}
+
+.builder-node-error-badge {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--err);
+    color: white;
+    font-size: 10px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    z-index: 15;
+}
+
+.builder-node-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    border-radius: var(--r-md) var(--r-md) 0 0;
+    background: var(--surface);
+}
+
+.builder-node-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+}
+
+.builder-node-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--t1);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.builder-node-body {
+    padding: 8px 12px;
+    font-size: 11px;
+    color: var(--t3);
+    background: var(--surface-raised);
+    border-radius: 0 0 var(--r-md) var(--r-md);
+}
+
+.builder-handle {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    background: var(--surface-raised);
+    border: 2px solid var(--border-strong);
+    border-radius: 50%;
+    top: 50%;
+    transform: translateY(-50%);
+    cursor: crosshair;
+    z-index: 20;
+    transition: transform 0.1s, border-color 0.1s;
+}
+
+.builder-handle:hover {
+    transform: translateY(-50%) scale(1.2);
+    border-color: var(--accent);
+}
+
+.builder-handle-in {
+    left: -6px;
+}
+
+.builder-handle-out {
+    right: -6px;
+}
+
+.builder-edge-path {
+    fill: none;
+    stroke: var(--border-strong);
+    stroke-width: 2;
+    transition: stroke 0.2s;
+}
+
+.builder-edge-path:hover,
+.builder-edge-path.selected {
+    stroke: var(--accent);
+    stroke-width: 3;
+    cursor: pointer;
+}
+
+.builder-edge-hitbox {
+    fill: none;
+    stroke: transparent;
+    stroke-width: 15;
+    cursor: pointer;
+}
+
+/* Palette items (JS-generated) */
+.builder-palette-group-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--t4);
+    padding: 8px 4px 4px;
+    margin-top: 4px;
+}
+.builder-palette-group-label:first-child { margin-top: 0; }
+
+.builder-node-drag {
+    padding: 8px 10px;
+    background: var(--surface-hover);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    cursor: grab;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: border-color 0.15s, background 0.15s;
+}
+.builder-node-drag:hover {
+    border-color: var(--border-strong);
+    background: var(--surface-raised);
+}
+.builder-palette-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    flex-shrink: 0;
+}
+.builder-palette-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--t1);
+}
+
+/* Diamond shape nodes (condition/parallel) */
+.builder-node--diamond {
+    transform-origin: center center;
+    border-radius: 4px;
+}
+.builder-node--diamond .builder-node-header {
+    border-radius: 4px 4px 0 0;
+}
+.builder-node--diamond .builder-node-body {
+    border-radius: 0 0 4px 4px;
+}
+
+/* Prompt bar below canvas */
+.builder-prompt-bar {
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    padding: 10px 16px;
+    flex-shrink: 0;
+}
+.builder-prompt-inner {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+}
+.builder-prompt-inner textarea {
+    flex: 1;
+    resize: none;
+    min-height: 36px;
+    max-height: 120px;
+    font-size: 13px;
+    line-height: 1.4;
+}
+.builder-prompt-status {
+    font-size: 11px;
+    color: var(--t4);
+    padding-top: 4px;
+    min-height: 16px;
+}
+
+/* ── Palette Tooltip ──────────────────────────────── */
+.palette-tooltip {
+    font-size: 11px;
+    color: var(--t3);
+    line-height: 1.4;
+    padding: 6px 0 2px 28px; /* align with label after icon */
+    margin-top: -2px;
+}
+
+/* ── Trigger: Weekday Buttons ─────────────────────── */
+.weekday-row {
+    display: flex;
+    gap: 4px;
+}
+.weekday-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--t3);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.weekday-btn:hover { border-color: var(--primary); }
+.weekday-btn.active {
+    background: var(--primary);
+    color: #fff;
+    border-color: var(--primary);
+}
+
+/* ── Trigger: Cron Fields ─────────────────────────── */
+.cron-fields {
+    display: flex;
+    gap: 6px;
+}
+.cron-field {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.cron-field-label {
+    font-size: 10px;
+    color: var(--t4);
+    text-align: center;
+}
+.cron-input {
+    text-align: center;
+    padding: 4px 2px !important;
+    font-size: 12px;
+}
+.cron-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 8px;
+}
+.btn-xs {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 3px;
+}
+
+/* ── Inspector: Hints & Links ─────────────────────── */
+.form-hint {
+    font-size: 12px;
+    color: var(--t4);
+    margin: 4px 0 8px 0;
+    line-height: 1.4;
+}
+.form-hint--warning {
+    color: var(--warning, #E8A838);
+    font-size: 11px;
+}
+.inspector-link {
+    display: inline-block;
+    font-size: 12px;
+    color: var(--primary);
+    margin: 6px 0;
+    cursor: pointer;
+    text-decoration: none;
+}
+.inspector-link:hover {
+    text-decoration: underline;
+}
+
+/* ─── Inspector Search (MCP / Skill catalog) ─── */
+.inspector-search-section {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--warm-300);
+}
+.inspector-search-section > label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--t2);
+    margin-bottom: 6px;
+}
+.inspector-search-row {
+    display: flex;
+    gap: 6px;
+}
+.inspector-search-row .input {
+    flex: 1;
+    font-size: 12px;
+    padding: 6px 8px;
+}
+.inspector-search-results {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--t3);
+    max-height: 200px;
+    overflow-y: auto;
+}
+.search-result-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--surface);
+    margin-bottom: 4px;
+    transition: background 0.15s;
+}
+.search-result-item:hover {
+    background: var(--surface-hover);
+}
+.search-result-info {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.search-result-info strong {
+    color: var(--t1);
+    font-size: 12px;
+}
+.search-result-desc {
+    color: var(--t3);
+    font-size: 11px;
+}
+
+/* ── Schema Form (guided tool parameters) ────────────────── */
+.schema-fields-container {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.schema-fields-container .form-group {
+    margin-bottom: 0;
+}
+.schema-required {
+    color: var(--error, #C25450);
+    margin-left: 2px;
+    font-weight: 700;
+}
+.schema-field-hint {
+    font-size: 11px;
+    color: var(--t4);
+    margin: 2px 0 0;
+    line-height: 1.3;
+    font-family: var(--mono);
+}
+
+/* ── Preset Buttons ──────────────────────────────────────── */
+.preset-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+}
+.preset-btn {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--t2);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    font-family: var(--mono);
+}
+.preset-btn:hover {
+    background: var(--surface-3);
+    border-color: var(--accent);
+}
+
+/* ── Automation Template Gallery ─────────────────────────── */
+#builder-templates {
+    padding: 16px 20px;
+}
+.template-heading {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--t2);
+    margin: 0 0 12px;
+}
+.template-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+}
+.template-card {
+    padding: 16px;
+    border-radius: 8px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.template-card:hover {
+    border-color: var(--accent);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+.template-card-icon {
+    font-size: 24px;
+    margin-bottom: 8px;
+}
+.template-card-name {
+    font-weight: 600;
+    color: var(--t1);
+    margin-bottom: 4px;
+    font-size: 13px;
+}
+.template-card-desc {
+    font-size: 12px;
+    color: var(--t3);
+    line-height: 1.4;
+}
+.template-or-hint {
+    text-align: center;
+    color: var(--t4);
+    font-size: 12px;
+    margin-top: 16px;
+}
+

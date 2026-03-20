@@ -12,12 +12,15 @@ This document defines non-negotiable UI quality rules for Homun.
 ## System Rules
 
 - Base spacing grid: 8px.
-- Approved spacing scale: 8 / 12 / 16 / 24 / 32 / 40.
+- Approved spacing scale: 4 / 8 / 12 / 16 / 24 / 32 / 40 (tokens: `--space-xs` through `--space-3xl`).
 - Control heights: 40px default, 32px compact.
-- Typography scale: 12 / 14 / 16 / 20 / 28.
-- Border radius: 8px and 12px only, plus pill for chips.
+- Typography scale: 12 / 14 / 16 / 20 / 28 (tokens: `--fs-xs` through `--fs-xl`).
+- Border radius: 6 / 8 / 12 / 16 / pill (tokens: `--r-sm` through `--r-xl`, `--r-pill`).
+- Z-index scale: 1 / 10 / 30 / 100 / 1000 (tokens: `--z-base` through `--z-toast`).
+- Overlay opacity: light (0.04) / medium (0.08) / heavy (0.35) (tokens: `--overlay-*`).
 - One accent color family per page context.
 - Focus, disabled, error, success states are mandatory.
+- Always use CSS tokens (`var(--*)`) — never hardcode colors, sizes, or spacing.
 
 ## Composition Rules
 

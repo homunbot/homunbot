@@ -1,0 +1,354 @@
+/* ═══ LAYOUT ═══ */
+.app {
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+}
+
+
+/* ═══ NAV BAR (Editorial Canvas) ═══
+   Vertical icon bar, dark by default, accent-colored via theme.
+   80px wide, icons centered, tooltips on hover.
+*/
+.sidebar {
+    width: var(--nav-w);
+    background: var(--nav-bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex-shrink: 0;
+    z-index: 30;
+    padding: 24px 0;
+    border: none;
+}
+
+.sidebar-header {
+    margin-bottom: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.logo-link {
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform var(--fast) var(--ease);
+}
+.logo-link:hover { transform: scale(1.05); }
+
+.logo-icon {
+    height: 40px;
+    width: 40px;
+    flex-shrink: 0;
+    background-image: url('/static/img/icon_white.png');
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center center;
+}
+
+/* Nav sections */
+.nav {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 0 14px;
+}
+
+.nav-bottom {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 0 14px 0;
+    margin-top: auto;
+}
+
+/* Nav links — icon buttons */
+.nav-link {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    border-radius: var(--r-xl);
+    color: var(--nav-text);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all var(--med) var(--ease);
+    position: relative;
+    padding: 0;
+}
+
+.nav-link:hover {
+    color: var(--nav-text-hover);
+    background: rgba(255, 255, 255, 0.1);
+    transform: scale(1.05);
+}
+
+.nav-link.active {
+    background: var(--nav-active-bg);
+    color: var(--nav-active-text);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.nav-icon {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    opacity: 1;
+    transition: opacity var(--fast);
+}
+
+.nav-link:hover .nav-icon { opacity: 1; }
+.nav-link.active .nav-icon { opacity: 1; }
+
+/* Featured nav group (Chat) — extra spacing below */
+.nav-group-featured {
+    margin-bottom: 8px;
+}
+
+/* Hidden label (icon-only) */
+.nav-label { display: none; }
+
+.sidebar-footer { justify-content: center; padding: 12px 8px; }
+.sidebar-footer .version-badge { display: none; }
+
+/* ─── Nav tooltips on hover ─── */
+.nav-link::after {
+    content: attr(data-label);
+    position: absolute;
+    left: calc(100% + 12px);
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 6px 12px;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-lg);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--t1);
+    white-space: nowrap;
+    z-index: 40;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--fast) var(--ease);
+}
+.nav-link:hover::after { opacity: 1; }
+.nav-link:not([data-label])::after { display: none; }
+
+/* ─── Emergency Stop nav button ─── */
+.nav-estop {
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    margin-top: 8px;
+}
+.nav-estop .nav-icon { color: rgba(255, 100, 100, 0.6); }
+.nav-estop:hover { background: rgba(239, 68, 68, 0.15); }
+.nav-estop:hover .nav-icon { color: #EF4444; opacity: 1; }
+.nav-estop.is-stopped { pointer-events: none; }
+.nav-estop.is-stopped .nav-icon { opacity: 0.2; }
+
+/* ─── Logout nav button ─── */
+.nav-logout {
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+}
+.nav-logout .nav-icon { color: var(--nav-text); }
+.nav-logout:hover .nav-icon { color: rgba(255, 100, 100, 0.9); }
+
+/* ─── Sub-navigation panels ─── */
+/* Content with subnav — flex row like .chat-shell */
+.content.has-subnav {
+    display: flex;
+    flex-direction: row;
+}
+.content.has-subnav > .content-inner,
+.content.has-subnav > .auto-list-view,
+.content.has-subnav > div:not(.sidebar-subnav) {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+}
+
+/* Subnav — flex child inside .content, same pattern as .chat-sidebar */
+.sidebar-subnav {
+    width: 220px;
+    flex-shrink: 0;
+    background: #F4F4F5;
+    border-right: 1.5px dashed var(--border);
+    padding: 32px 12px 20px;
+    display: none;
+    flex-direction: column;
+    gap: 2px;
+    overflow-y: auto;
+}
+.sidebar-subnav.is-open {
+    display: flex;
+}
+
+.sidebar-subnav-header {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--t3);
+    padding: 0 8px 16px;
+}
+.subnav-section {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--t4);
+    padding: 14px 8px 4px;
+    line-height: 1;
+}
+.subnav-section:first-of-type {
+    padding-top: 0;
+}
+
+.sidebar-subnav-link {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    border-radius: var(--r-lg);
+    color: var(--t2);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all var(--fast) var(--ease);
+}
+.sidebar-subnav-link:hover {
+    color: var(--t1);
+    background: var(--surface-hover);
+}
+.sidebar-subnav-link.active {
+    color: var(--t1);
+    font-weight: 600;
+    background: var(--surface);
+}
+
+/* ─── Theme toggle (legacy compat) ─── */
+.theme-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: var(--r-md);
+    transition: background var(--fast) var(--ease);
+}
+.theme-toggle:hover { background: var(--surface-hover); }
+.theme-toggle-icon { width: 18px; height: 18px; color: var(--t3); transition: color var(--fast), transform var(--fast); }
+.theme-toggle:hover .theme-toggle-icon { color: var(--t1); }
+.theme-toggle-icon svg { width: 100%; height: 100%; }
+.theme-toggle-icon--sun { display: none; }
+.theme-toggle-icon--moon { display: block; }
+[data-theme="dark"] .theme-toggle-icon--sun { display: block; }
+[data-theme="dark"] .theme-toggle-icon--moon { display: none; }
+.theme-toggle:hover .theme-toggle-icon--moon { transform: rotate(-15deg); }
+.theme-toggle:hover .theme-toggle-icon--sun { transform: rotate(15deg); }
+
+
+/* ═══ MAIN CONTENT — Editorial Canvas ═══ */
+.content {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    background: var(--bg);
+    border-radius: var(--content-radius) 0 0 var(--content-radius);
+    box-shadow: -10px 0 30px rgba(0, 0, 0, 0.15);
+    position: relative;
+    z-index: 20;
+}
+
+.content-inner {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 48px 40px;
+}
+
+
+/* ═══ PAGE HEADER ═══ */
+.page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 40px;
+}
+
+.page-title-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.page-title {
+    font-size: 26px;
+    font-weight: 600;
+    font-family: var(--display);
+    letter-spacing: -0.025em;
+    color: var(--t1);
+}
+
+.page-subtitle {
+    font-size: 14px;
+    color: var(--t3);
+    margin-top: 4px;
+    line-height: 1.5;
+    font-weight: 400;
+}
+
+/* ─── Background Textures ─── */
+.bg-texture-none { /* default, no texture */ }
+
+.bg-texture-noise {
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+}
+
+.bg-texture-hatch {
+    background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M-1,1 l2,-2 M0,12 l12,-12 M11,13 l2,-2' stroke='%23000000' stroke-opacity='0.03' stroke-width='0.75' fill='none'/%3E%3C/svg%3E");
+}
+
+.bg-texture-waves {
+    background-image: url("data:image/svg+xml,%3Csvg width='40' height='20' viewBox='0 0 40 20' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 10 C 10 10, 10 0, 20 0 C 30 0, 30 10, 40 10' stroke='%23000000' stroke-opacity='0.04' stroke-width='1' fill='none'/%3E%3C/svg%3E");
+}
+
+.bg-texture-grid {
+    background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 20 20' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M 20 0 L 0 0 0 20' fill='none' stroke='%23000000' stroke-opacity='0.04' stroke-width='0.5'/%3E%3C/svg%3E");
+}
+
+.bg-texture-dots {
+    background-image: url("data:image/svg+xml,%3Csvg width='16' height='16' viewBox='0 0 16 16' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='1' cy='1' r='0.6' fill='%23000000' fill-opacity='0.06'/%3E%3C/svg%3E");
+}
+
+/* Dark mode: invert texture stroke color to white */
+.dark .bg-texture-noise {
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+}
+.dark .bg-texture-hatch {
+    background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M-1,1 l2,-2 M0,12 l12,-12 M11,13 l2,-2' stroke='%23ffffff' stroke-opacity='0.03' stroke-width='0.75' fill='none'/%3E%3C/svg%3E");
+}
+.dark .bg-texture-waves {
+    background-image: url("data:image/svg+xml,%3Csvg width='40' height='20' viewBox='0 0 40 20' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 10 C 10 10, 10 0, 20 0 C 30 0, 30 10, 40 10' stroke='%23ffffff' stroke-opacity='0.03' stroke-width='1' fill='none'/%3E%3C/svg%3E");
+}
+.dark .bg-texture-grid {
+    background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 20 20' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M 20 0 L 0 0 0 20' fill='none' stroke='%23ffffff' stroke-opacity='0.03' stroke-width='0.5'/%3E%3C/svg%3E");
+}
+.dark .bg-texture-dots {
+    background-image: url("data:image/svg+xml,%3Csvg width='16' height='16' viewBox='0 0 16 16' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='1' cy='1' r='0.6' fill='%23ffffff' fill-opacity='0.05'/%3E%3C/svg%3E");
+}
+
+

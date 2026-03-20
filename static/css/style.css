@@ -106,6 +106,34 @@
     --fast:  120ms;
     --med:   200ms;
 
+    /* Spacing scale (8px grid) */
+    --space-xs:  4px;
+    --space-sm:  8px;
+    --space-md:  12px;
+    --space-lg:  16px;
+    --space-xl:  24px;
+    --space-2xl: 32px;
+    --space-3xl: 40px;
+
+    /* Font-size scale */
+    --fs-xs:  12px;
+    --fs-sm:  14px;
+    --fs-md:  16px;
+    --fs-lg:  20px;
+    --fs-xl:  28px;
+
+    /* Z-index scale */
+    --z-base:    1;
+    --z-sticky:  10;
+    --z-overlay: 30;
+    --z-modal:   100;
+    --z-toast:   1000;
+
+    /* Overlay opacity */
+    --overlay-light:  rgba(0, 0, 0, 0.04);
+    --overlay-medium: rgba(0, 0, 0, 0.08);
+    --overlay-heavy:  rgba(0, 0, 0, 0.35);
+
     /* Layout */
     --nav-w:          80px;
     --sidebar-w:      80px;
@@ -195,6 +223,11 @@
     --shadow-md:   0 2px 10px rgba(0, 0, 0, 0.5);
     --shadow-lg:   0 4px 20px rgba(0, 0, 0, 0.6);
     --shadow-xl:   0 20px 50px -15px rgba(0, 0, 0, 0.7);
+
+    /* Overlay opacity (dark: white-based for visibility) */
+    --overlay-light:  rgba(255, 255, 255, 0.04);
+    --overlay-medium: rgba(255, 255, 255, 0.08);
+    --overlay-heavy:  rgba(0, 0, 0, 0.55);
 
     /* Nav: slightly lighter in dark mode */
     --nav-bg:         #0A0A0A;

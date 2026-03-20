@@ -1,0 +1,64 @@
+/* ═══ UTILITY CLASSES ═══
+   Low-specificity helpers for common inline patterns.
+   Use sparingly — prefer component classes for complex styling.
+   Convention: u-{property}-{size} mapping to spacing tokens.
+*/
+
+/* ── Visibility ── */
+.u-hidden { display: none !important; }
+.u-visible { display: block !important; }
+.u-sr-only {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0, 0, 0, 0); border: 0;
+}
+
+/* ── Flexbox ── */
+.u-flex { display: flex; }
+.u-flex-col { display: flex; flex-direction: column; }
+.u-items-center { align-items: center; }
+.u-justify-between { justify-content: space-between; }
+.u-flex-1 { flex: 1; min-width: 0; }
+.u-flex-wrap { flex-wrap: wrap; }
+
+/* ── Gap (spacing tokens) ── */
+.u-gap-xs  { gap: var(--space-xs); }
+.u-gap-sm  { gap: var(--space-sm); }
+.u-gap-md  { gap: var(--space-md); }
+.u-gap-lg  { gap: var(--space-lg); }
+.u-gap-xl  { gap: var(--space-xl); }
+
+/* ── Margin top ── */
+.u-mt-xs  { margin-top: var(--space-xs); }
+.u-mt-sm  { margin-top: var(--space-sm); }
+.u-mt-md  { margin-top: var(--space-md); }
+.u-mt-lg  { margin-top: var(--space-lg); }
+.u-mt-xl  { margin-top: var(--space-xl); }
+
+/* ── Margin bottom ── */
+.u-mb-xs  { margin-bottom: var(--space-xs); }
+.u-mb-sm  { margin-bottom: var(--space-sm); }
+.u-mb-md  { margin-bottom: var(--space-md); }
+.u-mb-lg  { margin-bottom: var(--space-lg); }
+.u-mb-xl  { margin-bottom: var(--space-xl); }
+
+/* ── Padding ── */
+.u-p-sm  { padding: var(--space-sm); }
+.u-p-md  { padding: var(--space-md); }
+.u-p-lg  { padding: var(--space-lg); }
+.u-p-xl  { padding: var(--space-xl); }
+
+/* ── Text ── */
+.u-text-sm    { font-size: var(--fs-xs); }
+.u-text-muted { color: var(--t3); }
+.u-text-center { text-align: center; }
+.u-mono { font-family: var(--mono); }
+.u-truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ── Borders ── */
+.u-border-top    { border-top: 1px solid var(--border); }
+.u-border-bottom { border-bottom: 1px solid var(--border); }

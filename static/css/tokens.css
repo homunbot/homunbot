@@ -1,0 +1,302 @@
+/* ═══════════════════════════════════════════════════════
+   HOMUN — Editorial Canvas
+
+   Clean, modern, editorial.
+   Black, white, blue accent. Configurable.
+   ═══════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
+
+/* ─── Design Tokens: Light Theme ─── */
+:root {
+    /* Core neutrals — clean white/gray */
+    --bg:             #F4F4F5;
+    --bg-subtle:      #EDEDEE;
+    --surface:        #FFFFFF;
+    --surface-raised: #FFFFFF;
+    --surface-subtle:  #F5F5F4;
+    --surface-inset:  #F5F5F4;
+    --surface-hover:  #F0F0EF;
+
+    /* Brand / accent — Blue (default) */
+    --accent:         #3B82F6;
+    --accent-hover:   #2563EB;
+    --accent-active:  #1D4ED8;
+    --accent-light:   #EFF6FF;
+    --accent-border:  #93C5FD;
+    --accent-text:    #3B82F6;
+    --accent-contrast:#ffffff;
+
+    /* Neutral scale (warm-* kept for backward compat) */
+    --warm-50:        #FAFAFA;
+    --warm-100:       #F5F5F4;
+    --warm-200:       #E5E7EB;
+    --warm-300:       #D1D5DB;
+    --warm-400:       #9CA3AF;
+    --warm-500:       #6B7280;
+    --warm-600:       #4B5563;
+    --warm-700:       #374151;
+    --warm-800:       #1F2937;
+    --warm-900:       #111827;
+
+    /* Text */
+    --t1:             #111111;
+    --t2:             #6B7280;
+    --t3:             #9CA3AF;
+    --t4:             #D1D5DB;
+
+    /* Text semantic aliases */
+    --text-inverse:   #FFFFFF;
+    --text-on-accent: #FFFFFF;
+
+    /* Borders */
+    --border:         #E5E7EB;
+    --border-subtle:  #F3F4F6;
+    --border-strong:  #D1D5DB;
+    --divider:        #F3F4F6;
+
+    /* Semantic — clean, modern */
+    --ok:             #10B981;
+    --ok-bg:          #ECFDF5;
+    --ok-border:      #A7F3D0;
+    --warn:           #F59E0B;
+    --warn-bg:        #FFFBEB;
+    --warn-border:    #FDE68A;
+    --err:            #EF4444;
+    --err-bg:         #FEF2F2;
+    --err-border:     #FECACA;
+    --info:           #6B7280;
+    --info-bg:        #F9FAFB;
+    --info-border:    #E5E7EB;
+
+    /* Interactive / focus */
+    --focus-ring:     #3B82F6;
+    --selection-bg:   #DBEAFE;
+    --overlay-scrim:  rgba(0, 0, 0, 0.3);
+
+    /* Data viz */
+    --chart-primary:    #3B82F6;
+    --chart-secondary:  #8B5CF6;
+    --chart-tertiary:   #06B6D4;
+    --chart-quaternary: #10B981;
+    --chart-grid:       #F3F4F6;
+    --chart-axis:       #9CA3AF;
+
+    /* Radii — rounder, modern */
+    --r-sm:  6px;
+    --r-md:  8px;
+    --r-lg:  12px;
+    --r-xl:  16px;
+    --r-2xl: 24px;
+    --r-pill: 9999px;
+
+    /* Shadows — subtle, cool */
+    --shadow-sm:   0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-md:   0 2px 8px rgba(0, 0, 0, 0.06);
+    --shadow-lg:   0 4px 20px rgba(0, 0, 0, 0.08);
+    --shadow-xl:   0 20px 50px -15px rgba(0, 0, 0, 0.1);
+
+    /* Typography */
+    --sans:    'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    --display: 'Plus Jakarta Sans', var(--sans);
+    --mono:    'SF Mono', 'Cascadia Code', 'JetBrains Mono', monospace;
+
+    /* Motion */
+    --ease:  cubic-bezier(0.25, 0.1, 0.25, 1);
+    --fast:  120ms;
+    --med:   200ms;
+
+    /* Spacing scale (8px grid) */
+    --space-xs:  4px;
+    --space-sm:  8px;
+    --space-md:  12px;
+    --space-lg:  16px;
+    --space-xl:  24px;
+    --space-2xl: 32px;
+    --space-3xl: 40px;
+
+    /* Font-size scale */
+    --fs-xs:  12px;
+    --fs-sm:  14px;
+    --fs-md:  16px;
+    --fs-lg:  20px;
+    --fs-xl:  28px;
+
+    /* Z-index scale */
+    --z-base:    1;
+    --z-sticky:  10;
+    --z-overlay: 30;
+    --z-modal:   100;
+    --z-toast:   1000;
+
+    /* Overlay opacity */
+    --overlay-light:  rgba(0, 0, 0, 0.04);
+    --overlay-medium: rgba(0, 0, 0, 0.08);
+    --overlay-heavy:  rgba(0, 0, 0, 0.35);
+
+    /* Layout */
+    --nav-w:          80px;
+    --sidebar-w:      80px;
+    --sidebar-collapsed-w: 80px;
+    --content-radius: 24px;
+
+    /* Nav bar */
+    --nav-bg:         #0A0A0A;
+    --nav-text:       rgba(255, 255, 255, 0.4);
+    --nav-text-hover: #FFFFFF;
+    --nav-active-bg:  #FFFFFF;
+    --nav-active-text: #000000;
+
+    /* Logo */
+    --logo-src: url('/static/img/homun.png');
+    --logo-mark: url('/static/img/favicon/favicon-32x32.png');
+}
+
+
+/* ─── Dark Mode ─── */
+.dark {
+    --bg:             #0A0A0A;
+    --bg-subtle:      #141414;
+    --surface:        #1A1A1A;
+    --surface-raised: #222222;
+    --surface-subtle:  #161616;
+    --surface-inset:  #161616;
+    --surface-hover:  #2A2A2A;
+
+    --accent:         #60A5FA;
+    --accent-hover:   #93C5FD;
+    --accent-active:  #3B82F6;
+    --accent-light:   #172554;
+    --accent-border:  #1E40AF;
+    --accent-text:    #93C5FD;
+    --accent-contrast:#1a1a1a;
+
+    --warm-50:        #0A0A0A;
+    --warm-100:       #141414;
+    --warm-200:       #1A1A1A;
+    --warm-300:       #2A2A2A;
+    --warm-400:       #3D3D3D;
+    --warm-500:       #737373;
+    --warm-600:       #A3A3A3;
+    --warm-700:       #D4D4D4;
+    --warm-800:       #E5E5E5;
+    --warm-900:       #F5F5F5;
+
+    --t1:             #F9F9F8;
+    --t2:             #A3A3A3;
+    --t3:             #737373;
+    --t4:             #525252;
+
+    --text-inverse:   #0A0A0A;
+    --text-on-accent: #FFFFFF;
+
+    --border:         #2A2A2A;
+    --border-subtle:  #1F1F1F;
+    --border-strong:  #3D3D3D;
+    --divider:        #1F1F1F;
+
+    --ok:             #34D399;
+    --ok-bg:          #052E16;
+    --ok-border:      #065F46;
+    --warn:           #FBBF24;
+    --warn-bg:        #422006;
+    --warn-border:    #78350F;
+    --err:            #F87171;
+    --err-bg:         #450A0A;
+    --err-border:     #991B1B;
+    --info:           #A3A3A3;
+    --info-bg:        #1A1A1A;
+    --info-border:    #2A2A2A;
+
+    --focus-ring:     #60A5FA;
+    --selection-bg:   #1E3A5F;
+    --overlay-scrim:  rgba(0, 0, 0, 0.6);
+
+    --chart-primary:    #60A5FA;
+    --chart-secondary:  #A78BFA;
+    --chart-tertiary:   #22D3EE;
+    --chart-quaternary: #34D399;
+    --chart-grid:       #1F1F1F;
+    --chart-axis:       #525252;
+
+    --shadow-sm:   0 1px 3px rgba(0, 0, 0, 0.4);
+    --shadow-md:   0 2px 10px rgba(0, 0, 0, 0.5);
+    --shadow-lg:   0 4px 20px rgba(0, 0, 0, 0.6);
+    --shadow-xl:   0 20px 50px -15px rgba(0, 0, 0, 0.7);
+
+    /* Overlay opacity (dark: white-based for visibility) */
+    --overlay-light:  rgba(255, 255, 255, 0.04);
+    --overlay-medium: rgba(255, 255, 255, 0.08);
+    --overlay-heavy:  rgba(0, 0, 0, 0.55);
+
+    /* Nav: slightly lighter in dark mode */
+    --nav-bg:         #0A0A0A;
+    --nav-active-bg:  rgba(255, 255, 255, 0.15);
+    --nav-active-text: #FFFFFF;
+
+    --logo-src: url('/static/img/homun_white.png');
+    --logo-mark: url('/static/img/favicon/favicon-32x32.png');
+}
+
+
+/* ─── Accent Variants ───
+   Applied via data-accent="name" on <html>.
+   Nav bar background inherits from --nav-bg (set by JS).
+*/
+
+/* Terracotta */
+[data-accent="terracotta"] {
+    --accent: #B85C38; --accent-hover: #9F4D2D; --accent-active: #8C4327;
+    --accent-light: #FEF2EC; --accent-border: #E8C5B6; --accent-text: #B85C38;
+    --focus-ring: #D07A52; --selection-bg: #FEE8DB; --chart-primary: #B85C38;
+    --nav-bg: #B85C38; --accent-contrast: #ffffff;
+}
+[data-accent="terracotta"].dark {
+    --accent: #C96D47; --accent-hover: #D97A52; --accent-active: #B85C38;
+    --accent-light: #3A2820; --accent-border: #6B3E31; --accent-text: #D97A52;
+    --focus-ring: #D97A52; --selection-bg: #5A3429; --chart-primary: #C96D47;
+    --nav-bg: #C96D47; --accent-contrast: #ffffff;
+}
+
+/* Plum */
+[data-accent="plum"] {
+    --accent: #7C3AED; --accent-hover: #6D28D9; --accent-active: #5B21B6;
+    --accent-light: #F5F3FF; --accent-border: #C4B5FD; --accent-text: #7C3AED;
+    --focus-ring: #8B5CF6; --selection-bg: #EDE9FE; --chart-primary: #7C3AED;
+    --nav-bg: #7C3AED; --accent-contrast: #ffffff;
+}
+[data-accent="plum"].dark {
+    --accent: #A78BFA; --accent-hover: #C4B5FD; --accent-active: #7C3AED;
+    --accent-light: #2E1065; --accent-border: #4C1D95; --accent-text: #C4B5FD;
+    --focus-ring: #A78BFA; --selection-bg: #3B0764; --chart-primary: #A78BFA;
+    --nav-bg: #A78BFA; --accent-contrast: #1a1a1a;
+}
+
+/* Moss — legacy default, now a variant */
+[data-accent="moss"] {
+    --accent: #628A4A; --accent-hover: #537842; --accent-active: #476838;
+    --accent-light: #F0FDF4; --accent-border: #BBF7D0; --accent-text: #628A4A;
+    --focus-ring: #7A9A62; --selection-bg: #DCFCE7; --chart-primary: #628A4A;
+    --nav-bg: #628A4A; --accent-contrast: #ffffff;
+}
+[data-accent="moss"].dark {
+    --accent: #82A868; --accent-hover: #96BA7C; --accent-active: #628A4A;
+    --accent-light: #14532D; --accent-border: #166534; --accent-text: #96BA7C;
+    --focus-ring: #96BA7C; --selection-bg: #1A3A1A; --chart-primary: #82A868;
+    --nav-bg: #82A868; --accent-contrast: #ffffff;
+}
+
+/* Stone */
+[data-accent="stone"] {
+    --accent: #78716C; --accent-hover: #57534E; --accent-active: #44403C;
+    --accent-light: #FAFAF9; --accent-border: #D6D3D1; --accent-text: #78716C;
+    --focus-ring: #A8A29E; --selection-bg: #F5F5F4; --chart-primary: #78716C;
+    --nav-bg: #78716C; --accent-contrast: #ffffff;
+}
+[data-accent="stone"].dark {
+    --accent: #A8A29E; --accent-hover: #D6D3D1; --accent-active: #78716C;
+    --accent-light: #292524; --accent-border: #44403C; --accent-text: #D6D3D1;
+    --focus-ring: #A8A29E; --selection-bg: #1C1917; --chart-primary: #A8A29E;
+    --nav-bg: #A8A29E; --accent-contrast: #1a1a1a;
+}
+
