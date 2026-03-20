@@ -18,12 +18,12 @@
     align-items: center;
     flex-shrink: 0;
     z-index: 30;
-    padding: 24px 0;
+    padding: 16px 0;
     border: none;
 }
 
 .sidebar-header {
-    margin-bottom: 32px;
+    margin-bottom: 20px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -35,13 +35,13 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: transform var(--fast) var(--ease);
+    transition: opacity var(--fast) var(--ease);
 }
-.logo-link:hover { transform: scale(1.05); }
+.logo-link:hover { opacity: 0.8; }
 
 .logo-icon {
-    height: 40px;
-    width: 40px;
+    height: 28px;
+    width: 28px;
     flex-shrink: 0;
     background-image: url('/static/img/icon_white.png');
     background-size: contain;
@@ -55,55 +55,52 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
     width: 100%;
-    padding: 0 14px;
+    padding: 0 8px;
 }
 
 .nav-bottom {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
     width: 100%;
-    padding: 0 14px 0;
+    padding: 0 8px 0;
     margin-top: auto;
 }
 
-/* Nav links — icon buttons */
+/* Nav links — icon buttons, no background on hover/active */
 .nav-link {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 48px;
-    height: 48px;
-    border-radius: var(--r-xl);
+    width: 36px;
+    height: 36px;
+    border-radius: var(--r-md);
     color: var(--nav-text);
     text-decoration: none;
     font-size: 13px;
     font-weight: 500;
-    transition: all var(--med) var(--ease);
+    transition: color var(--fast) var(--ease);
     position: relative;
     padding: 0;
+    background: transparent;
 }
 
 .nav-link:hover {
     color: var(--nav-text-hover);
-    background: rgba(255, 255, 255, 0.1);
-    transform: scale(1.05);
 }
 
 .nav-link.active {
-    background: var(--nav-active-bg);
     color: var(--nav-active-text);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 .nav-icon {
-    width: 20px;
-    height: 20px;
+    width: 16px;
+    height: 16px;
     flex-shrink: 0;
-    opacity: 1;
+    opacity: 0.5;
     transition: opacity var(--fast);
 }
 
@@ -112,7 +109,7 @@
 
 /* Featured nav group (Chat) — extra spacing below */
 .nav-group-featured {
-    margin-bottom: 8px;
+    margin-bottom: 4px;
 }
 
 /* Hidden label (icon-only) */
@@ -125,7 +122,7 @@
 .nav-link::after {
     content: attr(data-label);
     position: absolute;
-    left: calc(100% + 12px);
+    left: calc(100% + 8px);
     top: 50%;
     transform: translateY(-50%);
     padding: 6px 12px;
@@ -150,13 +147,12 @@
     border: 0;
     background: transparent;
     cursor: pointer;
-    margin-top: 8px;
+    margin-top: 4px;
 }
-.nav-estop .nav-icon { color: rgba(255, 100, 100, 0.6); }
-.nav-estop:hover { background: rgba(239, 68, 68, 0.15); }
+.nav-estop .nav-icon { color: rgba(255, 100, 100, 0.4); opacity: 1; }
 .nav-estop:hover .nav-icon { color: #EF4444; opacity: 1; }
 .nav-estop.is-stopped { pointer-events: none; }
-.nav-estop.is-stopped .nav-icon { opacity: 0.2; }
+.nav-estop.is-stopped .nav-icon { opacity: 0.15; }
 
 /* ─── Logout nav button ─── */
 .nav-logout {
@@ -166,7 +162,7 @@
     padding: 0;
 }
 .nav-logout .nav-icon { color: var(--nav-text); }
-.nav-logout:hover .nav-icon { color: rgba(255, 100, 100, 0.9); }
+.nav-logout:hover .nav-icon { color: rgba(255, 100, 100, 0.9); opacity: 1; }
 
 /* ─── Sub-navigation panels ─── */
 /* Content with subnav — flex row like .chat-shell */
@@ -268,7 +264,7 @@
     overflow-y: auto;
     overflow-x: hidden;
     background: var(--bg);
-    border-radius: var(--content-radius) 0 0 var(--content-radius);
+    border-radius: var(--content-radius) 0 0 0;
     box-shadow: -10px 0 30px rgba(0, 0, 0, 0.15);
     position: relative;
     z-index: 20;

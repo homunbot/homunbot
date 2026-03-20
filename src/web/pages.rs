@@ -58,19 +58,9 @@ pub fn router() -> Router<Arc<AppState>> {
 /// SVG icons used in the sidebar nav
 const ICON_DASHBOARD: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="1" width="7" height="7" rx="1.5"/><rect x="10" y="1" width="7" height="4" rx="1.5"/><rect x="1" y="10" width="7" height="4" rx="1.5" transform="translate(0,3)"/><rect x="10" y="7" width="7" height="7" rx="1.5" transform="translate(0,3)"/></svg>"#;
 const ICON_CHAT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12.5V3.5A1.5 1.5 0 0 1 3.5 2h11A1.5 1.5 0 0 1 16 3.5v7a1.5 1.5 0 0 1-1.5 1.5H6L2 16V12.5z"/><line x1="6" y1="6" x2="12" y2="6"/><line x1="6" y1="9" x2="10" y2="9"/></svg>"#;
-const ICON_AUTOMATIONS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="6.5"/><path d="M9 5.5v4l2.8 1.8"/><path d="M9 1v1.5M9 15.5V17M1 9h1.5M15.5 9H17"/></svg>"#;
-const ICON_SKILLS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1L11.5 6.5 17 7.5 13 11.5 14 17 9 14.5 4 17 5 11.5 1 7.5 6.5 6.5z"/></svg>"#;
-const ICON_MCP: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h4"/><path d="M11 9h4"/><circle cx="9" cy="9" r="2.5"/><path d="M7.2 7.2l-2-2M10.8 10.8l2 2M10.8 7.2l2-2M7.2 10.8l-2 2"/></svg>"#;
 const ICON_SETTINGS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="2.5"/><path d="M14.7 11.1a1.2 1.2 0 0 0 .24 1.32l.04.04a1.44 1.44 0 1 1-2.04 2.04l-.04-.04a1.2 1.2 0 0 0-1.32-.24 1.2 1.2 0 0 0-.72 1.08v.12a1.44 1.44 0 0 1-2.88 0v-.06a1.2 1.2 0 0 0-.78-1.08 1.2 1.2 0 0 0-1.32.24l-.04.04a1.44 1.44 0 1 1-2.04-2.04l.04-.04a1.2 1.2 0 0 0 .24-1.32 1.2 1.2 0 0 0-1.08-.72h-.12a1.44 1.44 0 0 1 0-2.88h.06a1.2 1.2 0 0 0 1.08-.78 1.2 1.2 0 0 0-.24-1.32l-.04-.04a1.44 1.44 0 1 1 2.04-2.04l.04.04a1.2 1.2 0 0 0 1.32.24h.06a1.2 1.2 0 0 0 .72-1.08V2.88a1.44 1.44 0 0 1 2.88 0v.06a1.2 1.2 0 0 0 .72 1.08 1.2 1.2 0 0 0 1.32-.24l.04-.04a1.44 1.44 0 1 1 2.04 2.04l-.04.04a1.2 1.2 0 0 0-.24 1.32v.06a1.2 1.2 0 0 0 1.08.72h.12a1.44 1.44 0 0 1 0 2.88h-.06a1.2 1.2 0 0 0-1.08.72z"/></svg>"#;
-const ICON_LOGS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v12"/><line x1="6" y1="6" x2="12" y2="6"/><line x1="6" y1="9" x2="12" y2="9"/><line x1="6" y1="12" x2="9" y2="12"/></svg>"#;
-const ICON_MEMORY: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v14"/><path d="M3 9h12"/><circle cx="9" cy="9" r="3"/><circle cx="9" cy="9" r="7"/></svg>"#;
-const ICON_VAULT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="14" height="11" rx="1.5"/><path d="M5 5V4a4 4 0 0 1 8 0v1"/><circle cx="9" cy="11" r="1.5"/><path d="M9 12.5V14"/></svg>"#;
-const ICON_PERMISSIONS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="16" height="12" rx="1.5"/><circle cx="9" cy="10" r="2"/><path d="M5 4V3a4 4 0 0 1 8 0v1"/></svg>"#;
-const ICON_APPROVALS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1v4M9 13v4M1 9h4M13 9h4"/><circle cx="9" cy="9" r="3"/><path d="M6 9l2 2 4-4"/></svg>"#;
 const ICON_ACCOUNT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="6" r="3.5"/><path d="M3 17c0-3.5 2.5-6 6-6s6 2.5 6 6"/></svg>"#;
 const ICON_LOGOUT: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15H3.5A1.5 1.5 0 0 1 2 13.5v-9A1.5 1.5 0 0 1 3.5 3H6"/><path d="M12 12l4-3-4-3"/><path d="M16 9H7"/></svg>"#;
-const ICON_KNOWLEDGE: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h5l2 2h7v10H2z"/><path d="M6 9h6"/><path d="M6 12h4"/></svg>"#;
-const ICON_WORKFLOWS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="4" r="2"/><circle cx="13" cy="4" r="2"/><circle cx="9" cy="14" r="2"/><path d="M5 6v2a3 3 0 0 0 3 3h1"/><path d="M13 6v2a3 3 0 0 1-3 3h-1"/></svg>"#;
 
 /// Channel icons — minimal stroke SVGs for dashboard/settings
 const ICON_WEB: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="7.5"/><path d="M1.5 9h15"/><path d="M9 1.5a11.5 11.5 0 0 1 3 7.5 11.5 11.5 0 0 1-3 7.5"/><path d="M9 1.5a11.5 11.5 0 0 0-3 7.5 11.5 11.5 0 0 0 3 7.5"/></svg>"#;
@@ -83,40 +73,45 @@ const ICON_EMAIL: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="current
 /// Logo icon — serves the SVG logotype via <img> tag.
 const LOGO_ICON: &str = r#"<div class="logo-icon" title="HOMUN"></div>"#;
 
-/// Tools icon — wrench/gear for the Tools flyout trigger.
-const ICON_TOOLS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 1.5a4.5 4.5 0 0 0-3.6 7.2L2 14.1 3.9 16l5.4-5.4A4.5 4.5 0 1 0 11 1.5z"/></svg>"#;
+/// Automation icon — clock with cardinal ticks (flows + schedules).
+const ICON_AUTOMATION: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="6.5"/><path d="M9 5.5v4l2.8 1.8"/><path d="M9 1v1.5M9 15.5V17M1 9h1.5M15.5 9H17"/></svg>"#;
+
+/// Brain icon — stylised brain (memory, knowledge, contacts).
+const ICON_BRAIN: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 16V9"/><path d="M6.5 3.5a3 3 0 0 0-3 3c0 1-.5 2-1 2.5s-.5 2 .5 3 2.5 1 3.5.5L9 9"/><path d="M11.5 3.5a3 3 0 0 1 3 3c0 1 .5 2 1 2.5s.5 2-.5 3-2.5 1-3.5.5L9 9"/></svg>"#;
+
+/// Extensions icon — puzzle piece (skills, MCP, agents).
+const ICON_EXTENSIONS: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 2h4v2.5a1.5 1.5 0 0 1-1.5 1.5h-1A1.5 1.5 0 0 1 7 4.5V2z"/><path d="M2 7h2.5A1.5 1.5 0 0 1 6 8.5v1A1.5 1.5 0 0 1 4.5 11H2V7z"/><rect x="7" y="7" width="9" height="9" rx="1.5"/></svg>"#;
+
+/// Security icon — shield (vault, keys, permissions).
+const ICON_SECURITY: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1.5L2.5 4.5v4c0 4.5 3 7.5 6.5 9 3.5-1.5 6.5-4.5 6.5-9v-4L9 1.5z"/><path d="M6.5 9l2 2 3.5-3.5"/></svg>"#;
+
+/// System icon — server/monitoring (database, logs).
+const ICON_SYSTEM: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="14" height="5" rx="1.5"/><rect x="2" y="11" width="14" height="5" rx="1.5"/><circle cx="5" cy="4.5" r="0.5" fill="currentColor"/><circle cx="5" cy="13.5" r="0.5" fill="currentColor"/><line x1="8" y1="4.5" x2="13" y2="4.5"/><line x1="8" y1="13.5" x2="13" y2="13.5"/></svg>"#;
 
 /// Emergency stop icon — octagon with square stop symbol.
 const ICON_ESTOP: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6,1 12,1 17,6 17,12 12,17 6,17 1,12 1,6"/><rect x="6.5" y="6.5" width="5" height="5" rx="0.8"/></svg>"#;
 
-/// Pages that belong to the "Tools" sub-navigation group.
-const TOOLS_PAGES: &[&str] = &[
-    "automations",
-    "workflows",
-    "skills",
-    "mcp",
-    "contacts",
-    "agents",
-    "memory",
-    "knowledge",
-    "vault",
-];
+/// Pages that belong to the "Automation" sub-navigation group.
+const AUTOMATION_PAGES: &[&str] = &["automations", "workflows"];
+/// Pages that belong to the "Brain" sub-navigation group.
+const BRAIN_PAGES: &[&str] = &["memory", "knowledge", "contacts"];
+/// Pages that belong to the "Extensions" sub-navigation group.
+const EXTENSIONS_PAGES: &[&str] = &["skills", "mcp", "agents"];
 /// Pages that belong to the "Settings" sub-navigation group.
-const SETTINGS_PAGES: &[&str] = &[
-    "settings",
-    "appearance",
-    "channels",
-    "browser",
+const SETTINGS_PAGES: &[&str] = &["settings", "appearance", "channels", "browser"];
+/// Pages that belong to the "Security" sub-navigation group.
+const SECURITY_PAGES: &[&str] = &[
+    "vault",
+    "api-keys",
+    "approvals",
     "file-access",
     "shell",
     "sandbox",
-    "api-keys",
-    "approvals",
-    "maintenance",
-    "logs",
 ];
+/// Pages that belong to the "System" sub-navigation group.
+const SYSTEM_PAGES: &[&str] = &["maintenance", "logs"];
 
-/// Build the sidebar navigation HTML (icon bar only, 80px).
+/// Build the sidebar navigation HTML (icon bar, 56px).
 fn sidebar(active: &str) -> String {
     let a = |page: &str| -> &str {
         if active == page {
@@ -126,11 +121,14 @@ fn sidebar(active: &str) -> String {
         }
     };
 
-    let is_tools = TOOLS_PAGES.contains(&active);
-    let is_settings = SETTINGS_PAGES.contains(&active);
-
-    let tools_active = if is_tools { " active" } else { "" };
-    let settings_active = if is_settings { " active" } else { "" };
+    /// Return " active" if `active` belongs to the given page group.
+    fn group_active(active: &str, pages: &[&str]) -> &'static str {
+        if pages.contains(&active) {
+            " active"
+        } else {
+            ""
+        }
+    }
 
     format!(
         r##"<nav class="sidebar">
@@ -146,8 +144,14 @@ fn sidebar(active: &str) -> String {
                 <a href="/dashboard" class="nav-link{dash_a}" data-label="Dashboard">
                     <span class="nav-icon">{ic_dash}</span>
                 </a>
-                <a href="/automations" class="nav-link{tools_a}" data-label="Tools">
-                    <span class="nav-icon">{ic_tools}</span>
+                <a href="/automations" class="nav-link{auto_a}" data-label="Automation">
+                    <span class="nav-icon">{ic_auto}</span>
+                </a>
+                <a href="/memory" class="nav-link{brain_a}" data-label="Brain">
+                    <span class="nav-icon">{ic_brain}</span>
+                </a>
+                <a href="/skills" class="nav-link{ext_a}" data-label="Extensions">
+                    <span class="nav-icon">{ic_ext}</span>
                 </a>
                 <button type="button" class="nav-link nav-estop" id="nav-estop-btn" data-label="Stop" title="Emergency Stop">
                     <span class="nav-icon">{ic_estop}</span>
@@ -160,29 +164,44 @@ fn sidebar(active: &str) -> String {
                 <a href="/setup" class="nav-link{settings_a}" data-label="Settings">
                     <span class="nav-icon">{ic_settings}</span>
                 </a>
+                <a href="/vault" class="nav-link{security_a}" data-label="Security">
+                    <span class="nav-icon">{ic_security}</span>
+                </a>
+                <a href="/maintenance" class="nav-link{system_a}" data-label="System">
+                    <span class="nav-icon">{ic_system}</span>
+                </a>
                 <button type="button" class="nav-link nav-logout" id="nav-logout-btn" data-label="Logout" title="Sign out" onclick="fetch('/api/auth/logout',{{method:'POST'}}).then(()=>location.href='/login')">
                     <span class="nav-icon">{ic_logout}</span>
                 </button>
             </div>
         </nav>"##,
         logo = LOGO_ICON,
-        // Main icons
+        // Active states
         chat_a = a("chat"),
         dash_a = a("dashboard"),
         account_a = a("account"),
-        tools_a = tools_active,
-        settings_a = settings_active,
+        auto_a = group_active(active, AUTOMATION_PAGES),
+        brain_a = group_active(active, BRAIN_PAGES),
+        ext_a = group_active(active, EXTENSIONS_PAGES),
+        settings_a = group_active(active, SETTINGS_PAGES),
+        security_a = group_active(active, SECURITY_PAGES),
+        system_a = group_active(active, SYSTEM_PAGES),
+        // Icons
         ic_chat = ICON_CHAT,
         ic_dash = ICON_DASHBOARD,
-        ic_account = ICON_ACCOUNT,
-        ic_tools = ICON_TOOLS,
+        ic_auto = ICON_AUTOMATION,
+        ic_brain = ICON_BRAIN,
+        ic_ext = ICON_EXTENSIONS,
         ic_estop = ICON_ESTOP,
+        ic_account = ICON_ACCOUNT,
         ic_settings = ICON_SETTINGS,
+        ic_security = ICON_SECURITY,
+        ic_system = ICON_SYSTEM,
         ic_logout = ICON_LOGOUT,
     )
 }
 
-/// Build the content subnav (Tools or Settings) — placed inside `<main class="content">`.
+/// Build the content subnav for the active page group.
 /// Returns empty string for pages without a subnav (chat, dashboard, account).
 fn content_subnav(active: &str) -> String {
     let a = |page: &str| -> &str {
@@ -193,63 +212,83 @@ fn content_subnav(active: &str) -> String {
         }
     };
 
-    if TOOLS_PAGES.contains(&active) {
+    if AUTOMATION_PAGES.contains(&active) {
         format!(
-            r#"<aside class="sidebar-subnav is-open" id="tools-subnav">
-                <div class="sidebar-subnav-header">TOOLS</div>
-                <div class="subnav-section">Automazione</div>
+            r#"<aside class="sidebar-subnav is-open">
+                <div class="sidebar-subnav-header">AUTOMATION</div>
                 <a href="/automations" class="sidebar-subnav-link{0}">Automations</a>
                 <a href="/workflows" class="sidebar-subnav-link{1}">Workflows</a>
-                <div class="subnav-section">Persone</div>
-                <a href="/contacts" class="sidebar-subnav-link{2}">Contacts</a>
-                <div class="subnav-section">Conoscenza</div>
-                <a href="/memory" class="sidebar-subnav-link{3}">Memory</a>
-                <a href="/knowledge" class="sidebar-subnav-link{4}">Knowledge</a>
-                <div class="subnav-section">Ecosystem</div>
-                <a href="/skills" class="sidebar-subnav-link{5}">Skills</a>
-                <a href="/mcp" class="sidebar-subnav-link{6}">MCP Servers</a>
-                <a href="/agents" class="sidebar-subnav-link{7}">Agents</a>
-                <a href="/vault" class="sidebar-subnav-link{8}">Vault</a>
             </aside>"#,
             a("automations"),
             a("workflows"),
-            a("contacts"),
+        )
+    } else if BRAIN_PAGES.contains(&active) {
+        format!(
+            r#"<aside class="sidebar-subnav is-open">
+                <div class="sidebar-subnav-header">BRAIN</div>
+                <a href="/memory" class="sidebar-subnav-link{0}">Memory</a>
+                <a href="/knowledge" class="sidebar-subnav-link{1}">Knowledge</a>
+                <a href="/contacts" class="sidebar-subnav-link{2}">Contacts</a>
+            </aside>"#,
             a("memory"),
             a("knowledge"),
+            a("contacts"),
+        )
+    } else if EXTENSIONS_PAGES.contains(&active) {
+        format!(
+            r#"<aside class="sidebar-subnav is-open">
+                <div class="sidebar-subnav-header">EXTENSIONS</div>
+                <a href="/skills" class="sidebar-subnav-link{0}">Skills</a>
+                <a href="/mcp" class="sidebar-subnav-link{1}">MCP Servers</a>
+                <a href="/agents" class="sidebar-subnav-link{2}">Agents</a>
+            </aside>"#,
             a("skills"),
             a("mcp"),
             a("agents"),
-            a("vault"),
         )
     } else if SETTINGS_PAGES.contains(&active) {
         format!(
-            r#"<aside class="sidebar-subnav is-open" id="settings-subnav">
+            r#"<aside class="sidebar-subnav is-open">
                 <div class="sidebar-subnav-header">SETTINGS</div>
-                <div class="subnav-section">Modello</div>
+                <div class="subnav-section">General</div>
                 <a href="/setup" class="sidebar-subnav-link{0}">Model &amp; Providers</a>
                 <a href="/appearance" class="sidebar-subnav-link{1}">Appearance</a>
-                <div class="subnav-section">Connessioni</div>
+                <div class="subnav-section">Channels</div>
                 <a href="/channels" class="sidebar-subnav-link{2}">Channels</a>
                 <a href="/browser" class="sidebar-subnav-link{3}">Browser</a>
-                <div class="subnav-section">Permessi</div>
-                <a href="/approvals" class="sidebar-subnav-link{4}">Approvals</a>
-                <a href="/file-access" class="sidebar-subnav-link{5}">File Access</a>
-                <a href="/shell" class="sidebar-subnav-link{6}">Shell</a>
-                <a href="/sandbox" class="sidebar-subnav-link{7}">Sandbox</a>
-                <a href="/api-keys" class="sidebar-subnav-link{8}">API Keys</a>
-                <div class="subnav-section">Sistema</div>
-                <a href="/maintenance" class="sidebar-subnav-link{9}">Database</a>
-                <a href="/logs" class="sidebar-subnav-link{10}">Logs</a>
             </aside>"#,
             a("settings"),
             a("appearance"),
             a("channels"),
             a("browser"),
+        )
+    } else if SECURITY_PAGES.contains(&active) {
+        format!(
+            r#"<aside class="sidebar-subnav is-open">
+                <div class="sidebar-subnav-header">SECURITY</div>
+                <div class="subnav-section">Secrets</div>
+                <a href="/vault" class="sidebar-subnav-link{0}">Vault</a>
+                <a href="/api-keys" class="sidebar-subnav-link{1}">API Keys</a>
+                <div class="subnav-section">Access</div>
+                <a href="/approvals" class="sidebar-subnav-link{2}">Approvals</a>
+                <a href="/file-access" class="sidebar-subnav-link{3}">File Access</a>
+                <a href="/shell" class="sidebar-subnav-link{4}">Shell</a>
+                <a href="/sandbox" class="sidebar-subnav-link{5}">Sandbox</a>
+            </aside>"#,
+            a("vault"),
+            a("api-keys"),
             a("approvals"),
             a("file-access"),
             a("shell"),
             a("sandbox"),
-            a("api-keys"),
+        )
+    } else if SYSTEM_PAGES.contains(&active) {
+        format!(
+            r#"<aside class="sidebar-subnav is-open">
+                <div class="sidebar-subnav-header">SYSTEM</div>
+                <a href="/maintenance" class="sidebar-subnav-link{0}">Database</a>
+                <a href="/logs" class="sidebar-subnav-link{1}">Logs</a>
+            </aside>"#,
             a("maintenance"),
             a("logs"),
         )
@@ -347,6 +386,11 @@ fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String 
             st.setProperty('--chart-primary', accent);
             // Nav bar inherits accent as background
             st.setProperty('--nav-bg', accent);
+            // Compute contrasting icon colors based on nav-bg luminance
+            var navLight = l > 55;
+            st.setProperty('--nav-text', navLight ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.35)');
+            st.setProperty('--nav-text-hover', navLight ? 'rgba(0,0,0,0.85)' : '#FFFFFF');
+            st.setProperty('--nav-active-text', navLight ? '#000000' : '#FFFFFF');
         }} else if (accent) {{
             document.documentElement.setAttribute('data-accent', accent);
         }}
@@ -938,7 +982,7 @@ async fn appearance_page(State(state): State<Arc<AppState>>) -> Html<String> {
                         <div class="form-group" style="margin-top:16px;">
                             <label>Accent Color</label>
                             <div class="accent-picker" id="accent-picker">
-                                <button type="button" class="accent-swatch" data-accent="" title="Blue (default)"><span style="background:#3B82F6"></span></button>
+                                <button type="button" class="accent-swatch" data-accent="" title="Blue (default)"><span style="background:linear-gradient(90deg, #0A0A0A 50%, #3B82F6 50%)"></span></button>
                                 <button type="button" class="accent-swatch" data-accent="moss" title="Moss"><span style="background:#628A4A"></span></button>
                                 <button type="button" class="accent-swatch" data-accent="terracotta" title="Terracotta"><span style="background:#B85C38"></span></button>
                                 <button type="button" class="accent-swatch" data-accent="plum" title="Plum"><span style="background:#7C3AED"></span></button>
