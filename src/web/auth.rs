@@ -650,12 +650,26 @@ pub async fn auth_rate_limit_middleware(
 }
 
 /// Rate limiting middleware for general API endpoints.
+/// API rate-limit middleware.
+///
+/// Requests authenticated via session cookie (Web UI) are exempt — the rate
+/// limit protects against external/unauthenticated abuse, not the logged-in user
+/// clicking around their own dashboard.
 pub async fn api_rate_limit_middleware(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request,
     next: Next,
 ) -> Response {
+    // Skip rate limiting for authenticated Web UI sessions
+    if let Some(session_store) = state.session_store.as_ref() {
+        if let Some(cookie_value) = extract_session_cookie(&req) {
+            if session_store.verify_cookie(&cookie_value).is_some() {
+                return next.run(req).await;
+            }
+        }
+    }
+
     let trust_xff = state.config.read().await.channels.web.trust_x_forwarded_for;
     let client_ip = extract_client_ip(&req, addr.ip(), trust_xff);
     match state.api_rate_limiter.check(client_ip).await {

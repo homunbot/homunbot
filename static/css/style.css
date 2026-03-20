@@ -351,7 +351,7 @@ html, body {
 }
 
 .sidebar-header {
-    margin-bottom: 32px;
+    margin-bottom: 12px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -527,12 +527,16 @@ html, body {
 }
 
 .sidebar-subnav-header {
+    height: var(--header-row, 44px);
+    display: flex;
+    align-items: center;
     font-size: 10px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.2em;
     color: var(--t3);
-    padding: 0 8px 16px;
+    padding: 0;
+    margin-bottom: 7px;
 }
 .subnav-section {
     font-size: 9px;
@@ -550,9 +554,9 @@ html, body {
 .sidebar-subnav-link {
     display: flex;
     align-items: center;
-    padding: 8px 12px;
+    padding: 8px 0 8px 8px;
     border-radius: var(--r-lg);
-    color: var(--t2);
+    color: var(--t3);
     text-decoration: none;
     font-size: 13px;
     font-weight: 500;
@@ -3516,18 +3520,21 @@ html, body {
     flex-shrink: 0;
     background: #F4F4F5;
     border-right: 1.5px dashed var(--border);
-    padding: 28px 16px 16px 12px;
+    padding: 18px 16px 16px 12px;
     overflow: hidden;
     transition: width var(--fast), padding var(--fast), border-color var(--fast);
 }
 
 /* ─── Chat sidebar header ─── */
 .chat-sidebar-header {
+    height: var(--header-row, 44px);
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 0 8px 20px;
+    padding: 0 8px;
+    margin-bottom: 4px;
+    flex-shrink: 0;
 }
 .chat-sidebar-title {
     margin: 0;
@@ -3916,7 +3923,8 @@ html, body {
     align-items: center;
     gap: 10px;
     width: 100%;
-    padding: 16px 24px 12px;
+    padding: 18px 24px 12px;
+    min-height: calc(18px + var(--header-row) + 12px);
     box-sizing: border-box;
     background: linear-gradient(to bottom, var(--bg), transparent);
     backdrop-filter: blur(8px);
@@ -8345,7 +8353,7 @@ html, body {
 }
 
 .auto-master > .page-header {
-    padding-top: 24px;
+    padding-top: 0;
 }
 
 .auto-master > .auto-list-section {

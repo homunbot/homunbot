@@ -201,6 +201,9 @@ fn sidebar(active: &str) -> String {
     )
 }
 
+/// Subnav collapse toggle button — hamburger icon, injected into page content.
+const SUBNAV_TOGGLE: &str = r#"<button class="subnav-toggle-btn" id="subnav-toggle" title="Toggle panel" aria-label="Toggle panel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h7"/></svg></button>"#;
+
 /// Build the content subnav for the active page group.
 /// Returns empty string for pages without a subnav (chat, dashboard, account).
 fn content_subnav(active: &str) -> String {
@@ -211,7 +214,6 @@ fn content_subnav(active: &str) -> String {
             ""
         }
     };
-
     if AUTOMATION_PAGES.contains(&active) {
         format!(
             r#"<aside class="sidebar-subnav is-open">
@@ -308,13 +310,18 @@ fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String 
 
     // Inject subnav inside <main class="content"> as first child.
     // Pages with a subnav get a flex wrapper so subnav + page content sit side by side.
+    // The toggle button is placed inside the page content (not the subnav) so it
+    // remains visible when the panel is collapsed.
     let body = if subnav_html.is_empty() {
         body.to_string()
     } else {
-        // Replace the opening <main class="content"> tag with one that includes the subnav
         body.replace(
             r#"<main class="content">"#,
             &format!(r#"<main class="content has-subnav">{subnav_html}"#),
+        )
+        .replace(
+            r#"<div class="page-title-group">"#,
+            &format!(r#"<div class="page-title-group">{toggle}"#, toggle = SUBNAV_TOGGLE),
         )
     };
 
@@ -476,6 +483,24 @@ fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String 
                 confirmBtn.disabled = false;
                 confirmBtn.textContent = 'Stop Everything';
             }}
+        }});
+    }})();
+    </script>
+    <script>
+    // Subnav collapse toggle — applies to all pages with a subnav panel
+    (function() {{
+        var btn = document.getElementById('subnav-toggle');
+        if (!btn) return;
+        var content = btn.closest('.content');
+        if (!content) return;
+        // Restore collapsed state from session
+        if (sessionStorage.getItem('subnav-collapsed') === '1') {{
+            content.classList.add('is-subnav-collapsed');
+        }}
+        btn.addEventListener('click', function() {{
+            content.classList.toggle('is-subnav-collapsed');
+            sessionStorage.setItem('subnav-collapsed',
+                content.classList.contains('is-subnav-collapsed') ? '1' : '0');
         }});
     }})();
     </script>
@@ -1633,7 +1658,7 @@ async fn automations_page() -> Html<String> {
             <div class="content-inner auto-list-view" id="automations-list-view" style="max-width:none;padding:0;display:flex;flex-direction:column;height:100%;">
                 <div class="auto-master-detail" style="display:flex;flex:1;min-height:0;overflow:hidden;">
                     <!-- Master: list + prompt bar -->
-                    <div class="auto-master" id="auto-master" style="flex:1;min-width:0;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;padding-left:24px;padding-right:24px;">
+                    <div class="auto-master" id="auto-master" style="flex:1;min-width:0;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:18px 40px 0;">
                         <div class="page-header">
                             <div class="page-title-group">
                                 <h1 class="page-title">Automations</h1>
@@ -4342,11 +4367,11 @@ async fn knowledge_page(State(_state): State<Arc<AppState>>) -> Html<String> {
     let body = r##"<main class="content">
         <div class="content-inner">
             <div class="page-header">
-                <div>
-                    <h1>Knowledge Base</h1>
-                    <p class="page-subtitle">Personal document knowledge base — upload files and search across your documents.</p>
+                <div class="page-title-group">
+                    <h1 class="page-title">Knowledge Base</h1>
                 </div>
             </div>
+            <p class="page-subtitle">Personal document knowledge base — upload files and search across your documents.</p>
 
             <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)" id="knowledge-stats">
                 <div class="stat-card">

@@ -878,18 +878,21 @@
     flex-shrink: 0;
     background: #F4F4F5;
     border-right: 1.5px dashed var(--border);
-    padding: 28px 16px 16px 12px;
+    padding: 18px 16px 16px 12px;
     overflow: hidden;
     transition: width var(--fast), padding var(--fast), border-color var(--fast);
 }
 
 /* ─── Chat sidebar header ─── */
 .chat-sidebar-header {
+    height: var(--header-row, 44px);
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 0 8px 20px;
+    padding: 0 8px;
+    margin-bottom: 4px;
+    flex-shrink: 0;
 }
 .chat-sidebar-title {
     margin: 0;
@@ -1278,7 +1281,8 @@
     align-items: center;
     gap: 10px;
     width: 100%;
-    padding: 16px 24px 12px;
+    padding: 18px 24px 12px;
+    min-height: calc(18px + var(--header-row) + 12px);
     box-sizing: border-box;
     background: linear-gradient(to bottom, var(--bg), transparent);
     backdrop-filter: blur(8px);

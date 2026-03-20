@@ -336,7 +336,7 @@
 }
 
 .auto-master > .page-header {
-    padding-top: 24px;
+    padding-top: 0;
 }
 
 .auto-master > .auto-list-section {
