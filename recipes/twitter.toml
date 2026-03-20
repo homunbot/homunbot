@@ -1,10 +1,10 @@
 id = "twitter"
 display_name = "Twitter / X"
-subtitle = "Tweets, search, and timeline"
+subtitle = "Tweets, search, timeline, likes, and retweets"
 icon = "twitter"
 category = "Social"
 auth_mode = "api_key"
-capability_intro = "Search tweets, read timelines, and post updates"
+capability_intro = "Search tweets, read timelines, post updates, like and retweet"
 setup_guide = """
 ## How to get Twitter/X API credentials
 
@@ -27,7 +27,7 @@ https://localhost
 ```
 This URL is not used — it's only required by X during app setup.
 
-Set the **App permissions** to **Read** (or Read and Write if you have a paid plan).
+Set the **App permissions** to **Read and Write** (needed for posting, liking, retweeting).
 
 ### Step 4: Generate keys and tokens
 Go to your app's **Keys and Tokens** tab. You need **4 values** from 2 sections:
@@ -43,21 +43,24 @@ Go to your app's **Keys and Tokens** tab. You need **4 values** from 2 sections:
 3. Copy the **Access Token Secret** → paste in field 4
 
 ### API tiers
-- **Free**: read-only, 1,500 tweets/month
+- **Free**: read + write, 1,500 tweets/month
 - **Basic** ($200/month): read + write, 10,000 tweets/month
 - **Pro** ($5,000/month): full access, analytics
+
+### Available capabilities
+With this connection you can: **search tweets**, **post tweets**, **read your timeline**, **like/retweet posts**, **look up user profiles**, and **delete tweets**.
 
 > All 4 credentials are shown only once when generated — save them immediately. If lost, you can regenerate them.
 """
 
 [mcp]
 command = "npx"
-args = ["-y", "@enescinar/twitter-mcp"]
+args = ["-y", "@kms_dev/x-mcp"]
 transport = "stdio"
 
 [success]
 title = "Twitter/X connected"
-body = "You can now ask: Search tweets about... / Show trending topics"
+body = "You can now ask: Search tweets about... / Post a tweet / Show my timeline / Like a tweet"
 
 [[fields]]
 id = "api_key"
@@ -67,17 +70,17 @@ secret = true
 required = true
 input = "password"
 source_hint = "developer.x.com → Dashboard → Your App → Keys and Tokens → Consumer Keys"
-env_key = "API_KEY"
+env_key = "X_API_KEY"
 
 [[fields]]
-id = "api_secret_key"
-label = "API Secret Key"
+id = "api_secret"
+label = "API Secret"
 help = "Consumer API secret key"
 secret = true
 required = true
 input = "password"
 source_hint = "developer.x.com → Dashboard → Your App → Keys and Tokens → Consumer Keys"
-env_key = "API_SECRET_KEY"
+env_key = "X_API_SECRET"
 
 [[fields]]
 id = "access_token"
@@ -87,7 +90,7 @@ secret = true
 required = true
 input = "password"
 source_hint = "developer.x.com → Dashboard → Your App → Keys and Tokens → Authentication Tokens"
-env_key = "ACCESS_TOKEN"
+env_key = "X_ACCESS_TOKEN"
 
 [[fields]]
 id = "access_token_secret"
@@ -97,4 +100,4 @@ secret = true
 required = true
 input = "password"
 source_hint = "developer.x.com → Dashboard → Your App → Keys and Tokens → Authentication Tokens"
-env_key = "ACCESS_TOKEN_SECRET"
+env_key = "X_ACCESS_TOKEN_SECRET"

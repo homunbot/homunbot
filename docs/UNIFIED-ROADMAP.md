@@ -185,7 +185,7 @@ Stato: SEC-6/7/8/11/12/13/14/15 tutti ✅ DONE. Scudo anti-injection completo.
 | RCP-7 | **Brave Search recipe** | ✅ DONE 2026-03-20 | `recipes/brave-search.toml`: API key, `@anthropic/brave-search-mcp-server` |
 | RCP-8 | **Spotify recipe** | ✅ DONE 2026-03-20 | `recipes/spotify.toml`: OAuth (client_id + secret + refresh_token), `mcp-spotify` |
 | RCP-9 | **Stripe recipe** | ✅ DONE 2026-03-20 | `recipes/stripe.toml`: API key, `@stripe/agent-toolkit` |
-| RCP-10 | **Twitter/X recipe** | ✅ DONE 2026-03-20 | `recipes/twitter.toml`: OAuth 1.0a (4 keys), `@enescinar/twitter-mcp`. ⚠️ Only 2 tools — look for more complete MCP |
+| RCP-10 | **Twitter/X recipe** | ✅ DONE 2026-03-20 | `recipes/twitter.toml`: OAuth 1.0a (4 keys), `@kms_dev/x-mcp` (official X SDK). 7 tools: post, search, timeline, like, retweet, delete, user info |
 | RCP-11 | **Sentry recipe** | ✅ DONE 2026-03-20 | `recipes/sentry.toml`: API key + org slug, `mcp-server-sentry` (env: SENTRY_ACCESS_TOKEN) |
 | RCP-12 | **Todoist recipe** | ✅ DONE 2026-03-20 | `recipes/todoist.toml`: API key, `mcp-server-todoist` |
 | RCP-13 | **Home Assistant recipe** | ✅ DONE 2026-03-20 | `recipes/home-assistant.toml`: URL + token, `mcp-server-home-assistant` |
