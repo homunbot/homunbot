@@ -42,8 +42,8 @@
     /* Text */
     --t1:             #111111;
     --t2:             #6B7280;
-    --t3:             #9CA3AF;
-    --t4:             #D1D5DB;
+    --t3:             #6B7280;
+    --t4:             #9CA3AF;
 
     /* Text semantic aliases */
     --text-inverse:   #FFFFFF;
@@ -135,15 +135,15 @@
     --overlay-heavy:  rgba(0, 0, 0, 0.35);
 
     /* Layout */
-    --nav-w:          56px;
-    --sidebar-w:      56px;
-    --sidebar-collapsed-w: 56px;
+    --nav-w:          70px;
+    --sidebar-w:      70px;
+    --sidebar-collapsed-w: 70px;
     --content-radius: 20px;
     --header-row:     44px;
 
     /* Nav bar */
     --nav-bg:         #0A0A0A;
-    --nav-text:       rgba(255, 255, 255, 0.4);
+    --nav-text:       rgba(255, 255, 255, 0.55);
     --nav-text-hover: #FFFFFF;
     --nav-active-text: #FFFFFF;
 
@@ -249,14 +249,14 @@
     --accent-light: #FEF2EC; --accent-border: #E8C5B6; --accent-text: #B85C38;
     --focus-ring: #D07A52; --selection-bg: #FEE8DB; --chart-primary: #B85C38;
     --nav-bg: #B85C38; --accent-contrast: #ffffff;
-    --nav-text: rgba(255,255,255,0.35); --nav-text-hover: #FFFFFF; --nav-active-text: #FFFFFF;
+    --nav-text: rgba(255,255,255,0.55); --nav-text-hover: #FFFFFF; --nav-active-text: #FFFFFF;
 }
 [data-accent="terracotta"].dark {
     --accent: #C96D47; --accent-hover: #D97A52; --accent-active: #B85C38;
     --accent-light: #3A2820; --accent-border: #6B3E31; --accent-text: #D97A52;
     --focus-ring: #D97A52; --selection-bg: #5A3429; --chart-primary: #C96D47;
     --nav-bg: #C96D47; --accent-contrast: #ffffff;
-    --nav-text: rgba(255,255,255,0.35); --nav-text-hover: #FFFFFF; --nav-active-text: #FFFFFF;
+    --nav-text: rgba(255,255,255,0.55); --nav-text-hover: #FFFFFF; --nav-active-text: #FFFFFF;
 }
 
 /* Plum — nav-bg L≈33% (dark) */
@@ -265,7 +265,7 @@
     --accent-light: #F5F3FF; --accent-border: #C4B5FD; --accent-text: #7C3AED;
     --focus-ring: #8B5CF6; --selection-bg: #EDE9FE; --chart-primary: #7C3AED;
     --nav-bg: #7C3AED; --accent-contrast: #ffffff;
-    --nav-text: rgba(255,255,255,0.35); --nav-text-hover: #FFFFFF; --nav-active-text: #FFFFFF;
+    --nav-text: rgba(255,255,255,0.55); --nav-text-hover: #FFFFFF; --nav-active-text: #FFFFFF;
 }
 /* Plum dark — nav-bg L≈60% (light) → dark icons */
 [data-accent="plum"].dark {
@@ -273,7 +273,7 @@
     --accent-light: #2E1065; --accent-border: #4C1D95; --accent-text: #C4B5FD;
     --focus-ring: #A78BFA; --selection-bg: #3B0764; --chart-primary: #A78BFA;
     --nav-bg: #A78BFA; --accent-contrast: #1a1a1a;
-    --nav-text: rgba(0,0,0,0.35); --nav-text-hover: rgba(0,0,0,0.85); --nav-active-text: #000000;
+    --nav-text: rgba(0,0,0,0.5); --nav-text-hover: rgba(0,0,0,0.85); --nav-active-text: #000000;
 }
 
 /* Moss — nav-bg L≈52% (dark, borderline) */
@@ -282,7 +282,7 @@
     --accent-light: #F0FDF4; --accent-border: #BBF7D0; --accent-text: #628A4A;
     --focus-ring: #7A9A62; --selection-bg: #DCFCE7; --chart-primary: #628A4A;
     --nav-bg: #628A4A; --accent-contrast: #ffffff;
-    --nav-text: rgba(255,255,255,0.35); --nav-text-hover: #FFFFFF; --nav-active-text: #FFFFFF;
+    --nav-text: rgba(255,255,255,0.55); --nav-text-hover: #FFFFFF; --nav-active-text: #FFFFFF;
 }
 /* Moss dark — nav-bg L≈63% (light) → dark icons */
 [data-accent="moss"].dark {
@@ -290,7 +290,7 @@
     --accent-light: #14532D; --accent-border: #166534; --accent-text: #96BA7C;
     --focus-ring: #96BA7C; --selection-bg: #1A3A1A; --chart-primary: #82A868;
     --nav-bg: #82A868; --accent-contrast: #ffffff;
-    --nav-text: rgba(0,0,0,0.35); --nav-text-hover: rgba(0,0,0,0.85); --nav-active-text: #000000;
+    --nav-text: rgba(0,0,0,0.5); --nav-text-hover: rgba(0,0,0,0.85); --nav-active-text: #000000;
 }
 
 /* Stone — nav-bg L≈46% (dark) */
@@ -299,7 +299,7 @@
     --accent-light: #FAFAF9; --accent-border: #D6D3D1; --accent-text: #78716C;
     --focus-ring: #A8A29E; --selection-bg: #F5F5F4; --chart-primary: #78716C;
     --nav-bg: #78716C; --accent-contrast: #ffffff;
-    --nav-text: rgba(255,255,255,0.35); --nav-text-hover: #FFFFFF; --nav-active-text: #FFFFFF;
+    --nav-text: rgba(255,255,255,0.55); --nav-text-hover: #FFFFFF; --nav-active-text: #FFFFFF;
 }
 /* Stone dark — nav-bg L≈64% (light) → dark icons */
 [data-accent="stone"].dark {
@@ -307,6 +307,6 @@
     --accent-light: #292524; --accent-border: #44403C; --accent-text: #D6D3D1;
     --focus-ring: #A8A29E; --selection-bg: #1C1917; --chart-primary: #A8A29E;
     --nav-bg: #A8A29E; --accent-contrast: #1a1a1a;
-    --nav-text: rgba(0,0,0,0.35); --nav-text-hover: rgba(0,0,0,0.85); --nav-active-text: #000000;
+    --nav-text: rgba(0,0,0,0.5); --nav-text-hover: rgba(0,0,0,0.85); --nav-active-text: #000000;
 }
 

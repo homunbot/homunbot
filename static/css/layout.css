@@ -100,8 +100,8 @@
 }
 
 .nav-icon {
-    width: 16px;
-    height: 16px;
+    width: 20px;
+    height: 20px;
     flex-shrink: 0;
     transition: color var(--fast);
 }
@@ -187,6 +187,12 @@
     height: var(--header-row);
     margin-bottom: 24px;
 }
+/* Content body offset — aligns under page title, leaving gutter below hamburger.
+   Applies to standard content-inner pages and the automations master panel. */
+.content.has-subnav > .content-inner > *:not(.page-header),
+.content.has-subnav .auto-master > *:not(.page-header) {
+    margin-left: 44px;
+}
 
 /* Subnav — flex child inside .content, same pattern as .chat-sidebar.
    padding-top: 16px matches sidebar so header rows align across columns. */
@@ -244,7 +250,7 @@
     font-weight: 600;
 }
 
-/* ─── Subnav collapse toggle (inline in page-header, same pattern as chat) ─── */
+/* ─── Subnav collapse toggle (inline in page-header) ─── */
 .subnav-toggle-btn {
     display: inline-flex;
     align-items: center;

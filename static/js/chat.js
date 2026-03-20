@@ -44,8 +44,29 @@ const chatMcpPickerList = document.getElementById('chat-mcp-picker-list');
 const chatModalBackdrop = document.getElementById('chat-modal-backdrop');
 const chatModalTitle = document.getElementById('chat-modal-title');
 const chatModalCopy = document.getElementById('chat-modal-copy');
+let chatModalInput = document.getElementById('chat-modal-input');
+// Ensure input exists even if HTML template hasn't been recompiled
+if (!chatModalInput) {
+    const copy = document.getElementById('chat-modal-copy');
+    if (copy) {
+        chatModalInput = document.createElement('input');
+        chatModalInput.type = 'text';
+        chatModalInput.className = 'chat-modal-input';
+        chatModalInput.id = 'chat-modal-input';
+        chatModalInput.hidden = true;
+        chatModalInput.autocomplete = 'off';
+        copy.insertAdjacentElement('afterend', chatModalInput);
+    }
+}
 const chatModalCancel = document.getElementById('chat-modal-cancel');
 const chatModalConfirm = document.getElementById('chat-modal-confirm');
+const chatMainEl = document.querySelector('.chat-main');
+const chatWelcomeGreeting = document.getElementById('chat-welcome-greeting');
+const chatWelcomePhrase = document.getElementById('chat-welcome-phrase');
+const chatDragOverlay = document.getElementById('chat-drag-overlay');
+const btnChatTools = document.getElementById('btn-chat-tools');
+const chatToolsLabel = document.getElementById('chat-tools-label');
+const chatToolsDismiss = document.getElementById('chat-tools-dismiss');
 
 let ws = null;
 let reconnectTimer = null;
@@ -60,8 +81,6 @@ let sidebarCollapsed = false;
 let openConversationMenuId = null;
 let conversationPollTimer = null;
 let previouslyRunningIds = new Set();
-let renamingConversationId = null;
-let renameDraft = '';
 let multiSelectMode = false;
 let selectedConversations = new Set();
 let searchDebounceTimer = null;
@@ -71,6 +90,9 @@ let pendingMcpServers = [];
 let availableMcpServers = [];
 let mcpPickerOpen = false;
 let mcpSearchQuery = '';
+let isRecording = false;
+let recognition = null;
+let activeToolMode = null;
 let currentPlanState = null;
 let planExpanded = false;
 const GENERIC_PLAN_CONSTRAINTS = new Set([
@@ -262,15 +284,96 @@ function applySidebarState() {
 
 // sidebar menu removed — search modal replaces it
 
-function closeConversationMenu() {
+function dismissDropdown() {
+    const existing = document.querySelector('.chat-conv-dropdown');
+    if (existing) existing.remove();
     openConversationMenuId = null;
+}
+
+function closeConversationMenu() {
+    dismissDropdown();
     renderConversationList();
 }
 
-function openModal({ title, copy, confirmLabel = 'Confirm', destructive = false, onConfirm }) {
-    modalState = { onConfirm };
+function openConversationDropdown(conversation, anchorEl) {
+    closeConversationMenu();
+    openConversationMenuId = conversation.conversation_id;
+    renderConversationList();
+
+    var icRename = '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.2 5.2l-1.8-1.8a2.5 2.5 0 00-3.5 0L3.5 9.9V14.5h4.6l6.4-6.4a2.5 2.5 0 000-3.5z"/></svg>';
+    var icArchive = '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="14" height="3" rx="1"/><path d="M3 6v8a1 1 0 001 1h10a1 1 0 001-1V6"/><path d="M7 10h4"/></svg>';
+    var icDelete = '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h12"/><path d="M7 5V3h4v2"/><path d="M5 5v10a1 1 0 001 1h6a1 1 0 001-1V5"/></svg>';
+    var icSelect = '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="12" height="12" rx="2"/><path d="M6 9l2 2 4-4"/></svg>';
+
+    const menu = document.createElement('div');
+    menu.className = 'chat-conv-dropdown';
+
+    function addItem(icon, label, cls, handler) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'chat-conv-dropdown-item' + (cls ? ' ' + cls : '');
+        btn.appendChild(parseSvg(icon));
+        const span = document.createElement('span');
+        span.textContent = label;
+        btn.appendChild(span);
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            handler();
+        });
+        menu.appendChild(btn);
+    }
+
+    addItem(icRename, 'Rename', '', () => renameConversation(conversation));
+    addItem(icArchive, conversation.archived ? 'Restore' : 'Archive', '', () => setConversationArchived(conversation, !conversation.archived));
+
+    const sep = document.createElement('div');
+    sep.className = 'chat-conv-dropdown-sep';
+    menu.appendChild(sep);
+
+    addItem(icDelete, 'Delete', 'is-danger', () => deleteConversation(conversation));
+
+    const sep2 = document.createElement('div');
+    sep2.className = 'chat-conv-dropdown-sep';
+    menu.appendChild(sep2);
+
+    addItem(icSelect, 'Select', '', () => {
+        closeConversationMenu();
+        enterMultiSelectMode(conversation.conversation_id);
+    });
+
+    document.body.appendChild(menu);
+
+    // anchorEl may be detached after renderConversationList() rebuilt the DOM,
+    // so find the live button via its .is-open class instead.
+    requestAnimationFrame(() => {
+        const liveAnchor = document.querySelector('.chat-conv-more-btn.is-open') || anchorEl;
+        const rect = liveAnchor.getBoundingClientRect();
+        let top = rect.bottom + 4;
+        let left = rect.right - menu.offsetWidth;
+        if (left < 8) left = 8;
+        if (top + menu.offsetHeight > window.innerHeight - 8) {
+            top = rect.top - menu.offsetHeight - 4;
+        }
+        menu.style.top = top + 'px';
+        menu.style.left = left + 'px';
+    });
+}
+
+function openModal({ title, copy, confirmLabel = 'Confirm', destructive = false, inputValue, inputPlaceholder, onConfirm }) {
+    modalState = { onConfirm, hasInput: inputValue !== undefined };
     if (chatModalTitle) chatModalTitle.textContent = title;
-    if (chatModalCopy) chatModalCopy.textContent = copy;
+    if (chatModalCopy) chatModalCopy.textContent = copy || '';
+    if (chatModalInput) {
+        if (inputValue !== undefined) {
+            chatModalInput.hidden = false;
+            chatModalInput.value = inputValue;
+            chatModalInput.placeholder = inputPlaceholder || '';
+            setTimeout(() => { chatModalInput.focus(); chatModalInput.select(); }, 0);
+        } else {
+            chatModalInput.hidden = true;
+            chatModalInput.value = '';
+        }
+    }
     if (chatModalConfirm) {
         chatModalConfirm.textContent = confirmLabel;
         chatModalConfirm.classList.toggle('btn-danger', destructive);
@@ -283,9 +386,8 @@ function openModal({ title, copy, confirmLabel = 'Confirm', destructive = false,
 
 function closeModal() {
     modalState = null;
-    if (chatModalBackdrop) {
-        chatModalBackdrop.hidden = true;
-    }
+    if (chatModalBackdrop) chatModalBackdrop.hidden = true;
+    if (chatModalInput) { chatModalInput.hidden = true; chatModalInput.value = ''; }
 }
 
 function updateConversationSummary(mutator) {
@@ -323,8 +425,7 @@ function renderConversationList() {
 }
 
 function buildConversationItem(conversation) {
-    var icRename = '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.2 5.2l-1.8-1.8a2.5 2.5 0 00-3.5 0L3.5 9.9V14.5h4.6l6.4-6.4a2.5 2.5 0 000-3.5z"/></svg>';
-    var icDelete = '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h12"/><path d="M7 5V3h4v2"/><path d="M5 5v10a1 1 0 001 1h6a1 1 0 001-1V5"/></svg>';
+    var icMore = '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="4" r="1.2"/><circle cx="9" cy="9" r="1.2"/><circle cx="9" cy="14" r="1.2"/></svg>';
 
     const item = document.createElement('div');
     item.className = 'chat-conversation-item';
@@ -336,8 +437,9 @@ function buildConversationItem(conversation) {
         item.classList.add('is-selectable');
         if (selectedConversations.has(conversation.conversation_id)) item.classList.add('is-selected');
     }
+    if (openConversationMenuId === conversation.conversation_id) item.classList.add('has-menu-open');
 
-    // Checkbox — always present, slides in on hover via CSS
+    // Checkbox — only visible in multi-select mode via CSS
     const checkWrap = document.createElement('div');
     checkWrap.className = 'chat-conv-check';
     const cb = document.createElement('input');
@@ -345,41 +447,22 @@ function buildConversationItem(conversation) {
     cb.checked = multiSelectMode && selectedConversations.has(conversation.conversation_id);
     cb.addEventListener('click', function(e) {
         e.stopPropagation();
-        if (!multiSelectMode) enterMultiSelectMode(conversation.conversation_id);
-        else toggleConversationSelection(conversation.conversation_id);
+        toggleConversationSelection(conversation.conversation_id);
     });
     checkWrap.appendChild(cb);
     item.appendChild(checkWrap);
 
-    // Name — shifts right on hover via CSS
-    if (renamingConversationId === conversation.conversation_id) {
-        const inp = document.createElement('input');
-        inp.type = 'text';
-        inp.className = 'input chat-rename-input';
-        inp.value = renameDraft || conversation.title || 'New conversation';
-        inp.setAttribute('aria-label', 'Rename conversation');
-        inp.addEventListener('click', function(e) { e.stopPropagation(); });
-        inp.addEventListener('input', function() { renameDraft = inp.value; });
-        let committed = false;
-        inp.addEventListener('keydown', async function(e) {
-            if (e.key === 'Enter') { e.preventDefault(); committed = true; await commitRenameConversation(conversation); }
-            else if (e.key === 'Escape') { e.preventDefault(); committed = true; cancelRenameConversation(); }
-        });
-        inp.addEventListener('blur', async function() { if (!committed) await commitRenameConversation(conversation); });
-        item.appendChild(inp);
-        setTimeout(function() { inp.focus(); inp.select(); }, 0);
-    } else {
-        const nameEl = document.createElement('span');
-        nameEl.className = 'chat-conversation-name';
-        nameEl.textContent = capitalizeFirst(conversation.title) || 'New conversation';
-        nameEl.addEventListener('click', function() {
-            if (multiSelectMode) { toggleConversationSelection(conversation.conversation_id); return; }
-            if (conversation.conversation_id !== currentConversationId) selectConversation(conversation.conversation_id);
-        });
-        item.appendChild(nameEl);
-    }
+    // Name
+    const nameEl = document.createElement('span');
+    nameEl.className = 'chat-conversation-name';
+    nameEl.textContent = capitalizeFirst(conversation.title) || 'New conversation';
+    nameEl.addEventListener('click', function() {
+        if (multiSelectMode) { toggleConversationSelection(conversation.conversation_id); return; }
+        if (conversation.conversation_id !== currentConversationId) selectConversation(conversation.conversation_id);
+    });
+    item.appendChild(nameEl);
 
-    // Trailing: timestamp (default) / action icons (hover)
+    // Trailing: timestamp (default) / 3-dot button (hover)
     const trailing = document.createElement('div');
     trailing.className = 'chat-conv-trailing';
 
@@ -387,28 +470,24 @@ function buildConversationItem(conversation) {
     dateEl.className = 'chat-conversation-date';
     dateEl.textContent = formatConversationTimestamp(conversation.updated_at);
     trailing.appendChild(dateEl);
-
-    const hoverActions = document.createElement('div');
-    hoverActions.className = 'chat-conv-hover-actions';
-
-    const renameBtn = document.createElement('button');
-    renameBtn.type = 'button';
-    renameBtn.className = 'chat-conv-action-btn';
-    renameBtn.title = 'Rename';
-    renameBtn.appendChild(parseSvg(icRename));
-    renameBtn.addEventListener('click', async function(e) { e.stopPropagation(); await renameConversation(conversation); });
-    hoverActions.appendChild(renameBtn);
-
-    const deleteBtn = document.createElement('button');
-    deleteBtn.type = 'button';
-    deleteBtn.className = 'chat-conv-action-btn is-danger';
-    deleteBtn.title = 'Delete';
-    deleteBtn.appendChild(parseSvg(icDelete));
-    deleteBtn.addEventListener('click', async function(e) { e.stopPropagation(); await deleteConversation(conversation); });
-    hoverActions.appendChild(deleteBtn);
-
-    trailing.appendChild(hoverActions);
     item.appendChild(trailing);
+
+    // 3-dot menu button (appears on hover)
+    const moreBtn = document.createElement('button');
+    moreBtn.type = 'button';
+    moreBtn.className = 'chat-conv-more-btn';
+    if (openConversationMenuId === conversation.conversation_id) moreBtn.classList.add('is-open');
+    moreBtn.title = 'Actions';
+    moreBtn.appendChild(parseSvg(icMore));
+    moreBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (openConversationMenuId === conversation.conversation_id) {
+            closeConversationMenu();
+        } else {
+            openConversationDropdown(conversation, moreBtn);
+        }
+    });
+    item.appendChild(moreBtn);
 
     return item;
 }
@@ -503,40 +582,33 @@ async function updateConversation(conversationId, payload) {
 
 async function renameConversation(conversation) {
     closeConversationMenu();
-    renamingConversationId = conversation.conversation_id;
-    renameDraft = conversation.title || 'New conversation';
-    renderConversationList();
-}
-
-function cancelRenameConversation() {
-    renamingConversationId = null;
-    renameDraft = '';
-    renderConversationList();
-}
-
-async function commitRenameConversation(conversation) {
-    if (renamingConversationId !== conversation.conversation_id) return;
-    const nextTitle = String(renameDraft || '').trim();
-    const oldTitle = conversation.title;
-
-    // Optimistic update: set new title locally, close input immediately
-    renamingConversationId = null;
-    renameDraft = '';
-    conversation.title = nextTitle;
-    const conv = conversations.find(c => c.conversation_id === conversation.conversation_id);
-    if (conv) conv.title = nextTitle;
-    renderConversationList();
-
-    try {
-        await updateConversation(conversation.conversation_id, { title: nextTitle });
-    } catch (e) {
-        // Rollback on failure
-        console.error('Failed to rename conversation:', e);
-        conversation.title = oldTitle;
-        if (conv) conv.title = oldTitle;
-        renderConversationList();
-        showToast('Failed to rename conversation', 'error');
-    }
+    openModal({
+        title: 'Rename conversation',
+        copy: '',
+        inputValue: conversation.title || 'New conversation',
+        inputPlaceholder: 'Conversation name',
+        confirmLabel: 'Save',
+        onConfirm: async (newTitle) => {
+            const nextTitle = String(newTitle || '').trim();
+            if (!nextTitle || nextTitle === conversation.title) return;
+            const oldTitle = conversation.title;
+            conversation.title = nextTitle;
+            const conv = conversations.find(c => c.conversation_id === conversation.conversation_id);
+            if (conv) conv.title = nextTitle;
+            renderConversationList();
+            syncConversationHeader();
+            try {
+                await updateConversation(conversation.conversation_id, { title: nextTitle });
+            } catch (e) {
+                console.error('Failed to rename conversation:', e);
+                conversation.title = oldTitle;
+                if (conv) conv.title = oldTitle;
+                renderConversationList();
+                syncConversationHeader();
+                showToast('Failed to rename conversation', 'error');
+            }
+        },
+    });
 }
 
 async function setConversationArchived(conversation, archived) {
@@ -639,9 +711,33 @@ async function loadHistory() {
     }
 }
 
+const WELCOME_PHRASES = [
+    'What would you like to explore?',
+    'How can I help you today?',
+    'Ready when you are.',
+    'Ask me anything.',
+    'Let\'s get something done.',
+    'What\'s on your mind?',
+    'Where shall we start?',
+    'I\'m here to help.',
+];
+
 function syncEmptyState() {
-    if (!chatEmptyState || !messagesEl) return;
-    chatEmptyState.style.display = messagesEl.children.length > 0 ? 'none' : '';
+    if (!messagesEl) return;
+    const isEmpty = messagesEl.children.length === 0;
+
+    // Toggle welcome class on chat-main for centered layout
+    if (chatMainEl) chatMainEl.classList.toggle('is-welcome', isEmpty);
+
+    // Populate greeting + random phrase on first show
+    if (isEmpty && chatWelcomeGreeting) {
+        const chatConfig = document.getElementById('chat-config');
+        const username = chatConfig?.dataset?.username || '';
+        chatWelcomeGreeting.textContent = username ? `Ciao ${username}` : 'Ciao';
+    }
+    if (isEmpty && chatWelcomePhrase) {
+        chatWelcomePhrase.textContent = WELCOME_PHRASES[Math.floor(Math.random() * WELCOME_PHRASES.length)];
+    }
 }
 
 function isUsefulPlanConstraint(item) {
@@ -932,7 +1028,7 @@ function resetConversationView() {
 
 async function selectConversation(conversationId) {
     currentConversationId = conversationId;
-    openConversationMenuId = null;
+    dismissDropdown();
     window.localStorage.setItem('homun.chat.currentConversation', conversationId);
     setConversationUrl(conversationId);
     syncConversationHeader();
@@ -1016,7 +1112,7 @@ function renderSearchResults(results) {
 
 // ─── Multi-select ───
 function enterMultiSelectMode(initialId) {
-    openConversationMenuId = null;
+    dismissDropdown();
     multiSelectMode = true;
     selectedConversations.clear();
     if (initialId) selectedConversations.add(initialId);
@@ -1087,7 +1183,7 @@ btnChatSidebar?.addEventListener('click', () => {
 });
 
 document.addEventListener('click', (e) => {
-    if (openConversationMenuId && !e.target.closest('.chat-conversation-item')) {
+    if (openConversationMenuId && !e.target.closest('.chat-conversation-item') && !e.target.closest('.chat-conv-dropdown')) {
         closeConversationMenu();
     }
     if (mcpPickerOpen && !e.target.closest('.chat-plus-wrap')) {
@@ -1098,8 +1194,10 @@ document.addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         if (!chatSearchModal?.hidden) { closeSearchModal(); return; }
+        if (openConversationMenuId) { closeConversationMenu(); return; }
+        if (modelPickerBackdrop) { closeModelPicker(); return; }
+        if (toolsDropdownEl) { closeToolsDropdown(); return; }
         if (multiSelectMode) { exitMultiSelectMode(); return; }
-        if (renamingConversationId) { cancelRenameConversation(); }
         if (mcpPickerOpen) { closeMcpPicker(); }
         if (!chatModalBackdrop?.hidden) { closeModal(); }
     }
@@ -1113,10 +1211,14 @@ chatModalBackdrop?.addEventListener('click', (e) => {
 });
 chatModalConfirm?.addEventListener('click', async () => {
     const action = modalState?.onConfirm;
+    const inputVal = modalState?.hasInput && chatModalInput ? chatModalInput.value : undefined;
     closeModal();
     if (action) {
-        await action();
+        await action(inputVal);
     }
+});
+chatModalInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); chatModalConfirm?.click(); }
 });
 
 function setRunBadge(mode, label) {
@@ -2270,6 +2372,12 @@ function sendCurrentMessage() {
     chatText.focus();
     pendingAttachments = [];
     pendingMcpServers = [];
+    if (activeToolMode) {
+        activeToolMode = null;
+        if (btnChatTools) btnChatTools.classList.remove('is-active');
+        if (chatToolsLabel) chatToolsLabel.textContent = 'Tools';
+        if (chatToolsDismiss) chatToolsDismiss.hidden = true;
+    }
     clearExecutionPlan();
     renderComposerContextStrip();
     closeMcpPicker();
@@ -2319,8 +2427,7 @@ function setProcessing(processing) {
     if (btnSend) {
         btnSend.classList.toggle('is-processing', processing);
         btnSend.classList.remove('is-stopping');
-        btnSend.setAttribute('aria-label', processing ? 'Stop current run' : 'Send message');
-        btnSend.title = processing ? 'Stop' : 'Send';
+        if (!processing) updateSendButtonState();
     }
     if (chatText) chatText.disabled = false;
     // Toggle logo pulse on the app shell
@@ -2329,6 +2436,15 @@ function setProcessing(processing) {
     if (!processing) {
         setRunBadge(ws && ws.readyState === WebSocket.OPEN ? 'idle' : 'offline', ws && ws.readyState === WebSocket.OPEN ? '' : 'Offline');
     }
+}
+
+/** Update send button icon state: mic (empty) vs send arrow (has text) */
+function updateSendButtonState() {
+    if (!btnSend || isProcessing) return;
+    const hasText = chatText && chatText.value.trim().length > 0;
+    const hasAttachments = pendingAttachments && pendingAttachments.length > 0;
+    btnSend.classList.toggle('has-text', hasText || hasAttachments);
+    btnSend.setAttribute('aria-label', hasText || hasAttachments ? 'Send message' : 'Voice input');
 }
 
 /** Handle stop button click */
@@ -2355,7 +2471,16 @@ btnSend?.addEventListener('click', () => {
         handleStop();
         return;
     }
-    sendCurrentMessage();
+    if (isRecording) {
+        stopRecording();
+        return;
+    }
+    const hasContent = (chatText && chatText.value.trim()) || (pendingAttachments && pendingAttachments.length > 0);
+    if (hasContent) {
+        sendCurrentMessage();
+    } else {
+        startRecording();
+    }
 });
 
 // ─── Chat actions (New / Compact / Clear) ─────────────────────────
@@ -2425,7 +2550,6 @@ document.getElementById('btn-compact-chat')?.addEventListener('click', handleCom
 
 // ─── Model Selector ─────────────────────────────────────────────
 
-const chatModelSelect = document.getElementById('chat-model-select');
 const chatConfig = document.getElementById('chat-config');
 const chatModelCapabilitiesEl = document.getElementById('chat-model-capabilities');
 let currentModel = '';
@@ -2538,70 +2662,215 @@ function renderActiveModelCapabilities(modelId) {
     });
 }
 
-/** Load available models and populate the dropdown */
+/** Fetch model data and init current model (no DOM select needed) */
 async function loadChatModelDropdown() {
-    if (!chatModelSelect) return;
-
-    // Get current model from config
     if (chatConfig) {
         currentModel = chatConfig.dataset.model || '';
         currentVisionModel = chatConfig.dataset.visionModel || '';
     }
-
     try {
-        // Use shared ModelLoader for fetching (DRY: single source of truth)
         const result = window.ModelLoader
             ? await ModelLoader.fetchGrouped({ fresh: true })
             : { groups: {}, raw: {} };
-        const groups = result.groups;
-
         await hydrateChatModelCapabilities(result.raw);
-
-        // Clear existing options
-        while (chatModelSelect.firstChild) {
-            chatModelSelect.removeChild(chatModelSelect.firstChild);
-        }
-
-        // Add current model as first option (selected)
-        const currentOpt = document.createElement('option');
-        currentOpt.value = currentModel;
-        const modelDisplay = currentModel.split('/').pop() || currentModel;
-        currentOpt.textContent = formatModelOptionLabel(modelDisplay, currentModel);
-        currentOpt.selected = true;
-        chatModelSelect.appendChild(currentOpt);
-
-        // Add separator
-        const sepOpt = document.createElement('option');
-        sepOpt.disabled = true;
-        sepOpt.textContent = '── Switch to ──';
-        chatModelSelect.appendChild(sepOpt);
-
-        // Add model groups
-        Object.keys(groups).forEach(function(provider) {
-            const optgroup = document.createElement('optgroup');
-            optgroup.label = (window.ModelLoader && ModelLoader.PROVIDER_NAMES[provider]) || provider;
-
-            groups[provider].forEach(function(m) {
-                const option = document.createElement('option');
-                option.value = m.value;
-                option.textContent = formatModelOptionLabel(m.label, m.value);
-                optgroup.appendChild(option);
-            });
-
-            chatModelSelect.appendChild(optgroup);
-        });
-
         renderActiveModelCapabilities(currentModel);
-
-        // Sync pill label with current model short name
         const pillName = document.getElementById('chat-model-pill-name');
-        if (pillName) {
-            pillName.textContent = currentModel.split('/').pop() || currentModel;
-        }
-
+        if (pillName) pillName.textContent = currentModel.split('/').pop() || currentModel;
     } catch (err) {
         console.error('Failed to load models:', err);
     }
+}
+
+// ─── Model Picker Modal ─────────────────────────────────────────
+
+let modelPickerBackdrop = null;
+const RECENT_MODELS_KEY = 'homun.chat.recentModels';
+const MAX_RECENT = 5;
+
+function getRecentModels() {
+    try {
+        return JSON.parse(localStorage.getItem(RECENT_MODELS_KEY) || '[]');
+    } catch { return []; }
+}
+
+function addRecentModel(modelId) {
+    const recent = getRecentModels().filter(m => m !== modelId);
+    recent.unshift(modelId);
+    if (recent.length > MAX_RECENT) recent.length = MAX_RECENT;
+    localStorage.setItem(RECENT_MODELS_KEY, JSON.stringify(recent));
+}
+
+async function openModelPicker() {
+    if (modelPickerBackdrop) return;
+
+    const result = window.ModelLoader
+        ? await ModelLoader.fetchGrouped()
+        : { groups: {}, raw: {} };
+    const groups = result.groups;
+
+    // Build modal DOM
+    const backdrop = document.createElement('div');
+    backdrop.className = 'chat-model-picker-backdrop';
+
+    const modal = document.createElement('div');
+    modal.className = 'chat-model-picker';
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'chat-model-picker-header';
+    const title = document.createElement('h3');
+    title.textContent = 'Choose a Model';
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'chat-model-picker-close';
+    closeBtn.textContent = '\u00d7';
+    closeBtn.addEventListener('click', closeModelPicker);
+    header.appendChild(title);
+    header.appendChild(closeBtn);
+    modal.appendChild(header);
+
+    // Search
+    const searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.className = 'chat-model-picker-search';
+    searchInput.placeholder = 'Search models\u2026';
+    searchInput.autocomplete = 'off';
+    modal.appendChild(searchInput);
+
+    // Body (scrollable list)
+    const body = document.createElement('div');
+    body.className = 'chat-model-picker-body';
+    modal.appendChild(body);
+
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+    modelPickerBackdrop = backdrop;
+
+    // Close on backdrop click
+    backdrop.addEventListener('click', (e) => {
+        if (e.target === backdrop) closeModelPicker();
+    });
+
+    // Render models
+    function renderList(filter) {
+        body.textContent = '';
+        const q = (filter || '').toLowerCase();
+        const providerNames = window.ModelLoader ? ModelLoader.PROVIDER_NAMES : {};
+        const recent = getRecentModels();
+        let totalRendered = 0;
+
+        // Recently used section
+        if (recent.length > 0 && !q) {
+            const label = document.createElement('div');
+            label.className = 'chat-model-group-label';
+            label.textContent = 'Recently Used';
+            body.appendChild(label);
+            recent.forEach(modelId => {
+                body.appendChild(buildModelOption(modelId, modelId.split('/').pop() || modelId));
+                totalRendered++;
+            });
+        }
+
+        // Provider groups
+        Object.keys(groups).forEach(provider => {
+            const models = groups[provider];
+            const filtered = q
+                ? models.filter(m => m.label.toLowerCase().includes(q) || m.value.toLowerCase().includes(q))
+                : models;
+            if (filtered.length === 0) return;
+
+            const label = document.createElement('div');
+            label.className = 'chat-model-group-label';
+            label.textContent = providerNames[provider] || provider;
+            body.appendChild(label);
+
+            filtered.forEach(m => {
+                body.appendChild(buildModelOption(m.value, m.label));
+                totalRendered++;
+            });
+        });
+
+        if (totalRendered === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'chat-model-picker-empty';
+            empty.textContent = q ? 'No models match your search' : 'No models configured';
+            body.appendChild(empty);
+        }
+    }
+
+    function buildModelOption(modelId, label) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'chat-model-option';
+        if (modelId === currentModel) btn.classList.add('is-current');
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'chat-model-option-name';
+        nameSpan.textContent = label;
+        btn.appendChild(nameSpan);
+
+        // Capability badges
+        const caps = modelCapabilityLabels(modelId);
+        if (caps.length > 0) {
+            const badge = document.createElement('span');
+            badge.className = 'chat-model-option-badge';
+            badge.textContent = caps.join(' \u00b7 ');
+            btn.appendChild(badge);
+        }
+
+        // Current check
+        if (modelId === currentModel) {
+            const check = document.createElement('span');
+            check.className = 'chat-model-option-check';
+            check.textContent = '\u2713';
+            btn.appendChild(check);
+        }
+
+        btn.addEventListener('click', () => selectModel(modelId));
+        return btn;
+    }
+
+    renderList('');
+    searchInput.focus();
+
+    searchInput.addEventListener('input', () => renderList(searchInput.value));
+}
+
+function closeModelPicker() {
+    if (modelPickerBackdrop) {
+        modelPickerBackdrop.remove();
+        modelPickerBackdrop = null;
+    }
+}
+
+async function selectModel(newModel) {
+    if (newModel === currentModel) {
+        closeModelPicker();
+        return;
+    }
+    try {
+        const res = await fetch('/api/v1/config', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: 'agent.model', value: newModel })
+        });
+        if (res.ok) {
+            currentModel = newModel;
+            thinkingEnabled = null;
+            if (chatConfig) chatConfig.dataset.model = newModel;
+            addRecentModel(newModel);
+            const pillName = document.getElementById('chat-model-pill-name');
+            if (pillName) pillName.textContent = newModel.split('/').pop() || newModel;
+            renderActiveModelCapabilities(newModel);
+            showToast('Model switched to ' + newModel.split('/').pop(), 'success');
+        } else {
+            showToast('Failed to switch model', 'error');
+        }
+    } catch (e) {
+        console.error('Failed to switch model:', e);
+        showToast('Failed to switch model', 'error');
+    }
+    closeModelPicker();
 }
 
 // providerDisplayName removed — now uses ModelLoader.PROVIDER_NAMES (DRY)
@@ -2635,6 +2904,7 @@ chatPlusBtn?.addEventListener('click', (e) => {
 document.addEventListener('click', () => {
     closeChatPlusMenu();
     closeMcpPicker();
+    closeToolsDropdown();
 });
 
 chatPlusMenu?.addEventListener('click', (e) => {
@@ -2693,53 +2963,253 @@ chatDocInput?.addEventListener('change', () => {
     }
 });
 
-/** Handle model change */
-if (chatModelSelect) {
-    chatModelSelect.addEventListener('change', async function() {
-        const newModel = chatModelSelect.value;
-        if (!newModel || newModel === currentModel) return;
-
-        try {
-            const res = await fetch('/api/v1/config', {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key: 'agent.model', value: newModel })
-            });
-
-            if (res.ok) {
-                currentModel = newModel;
-                thinkingEnabled = null;
-                if (chatConfig) {
-                    chatConfig.dataset.model = newModel;
-                }
-                showToast('Model switched to ' + newModel.split('/').pop(), 'success');
-
-                // Update display
-                const opt = chatModelSelect.options[0];
-                opt.value = newModel;
-                opt.textContent = formatModelOptionLabel(newModel.split('/').pop() || newModel, newModel);
-                opt.selected = true;
-                // Sync pill label
-                const pillName = document.getElementById('chat-model-pill-name');
-                if (pillName) {
-                    pillName.textContent = newModel.split('/').pop() || newModel;
-                }
-                renderActiveModelCapabilities(newModel);
-            } else {
-                showToast('Failed to switch model', 'error');
-            }
-        } catch (e) {
-            console.error('Failed to switch model:', e);
-            showToast('Failed to switch model', 'error');
-        }
-    });
-}
+/** Model pill click → open modal picker */
+document.getElementById('chat-model-pill')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openModelPicker();
+});
 
 // Load model dropdown on connect
 loadChatModelDropdown();
 closeChatPlusMenu();
 setRunBadge('offline', 'Offline');
 syncEmptyState();
+
+// ─── Send button state: mic ↔ send arrow ────────────────────────
+
+chatText?.addEventListener('input', () => updateSendButtonState());
+// Initial state
+updateSendButtonState();
+
+// ─── Tools dropdown ─────────────────────────────────────────────
+
+let toolsDropdownEl = null;
+
+/** Create an SVG element from a template string (safe: all content is static) */
+function svgFromTemplate(tmpl) {
+    const container = document.createElement('template');
+    container.innerHTML = tmpl.trim(); // eslint-disable-line -- static SVG only
+    return container.content.firstChild;
+}
+
+const TOOLS_ITEMS = [
+    { label: 'Create Skill', svg: '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v14"/><path d="M2 9h14"/></svg>', prompt: 'Create a new skill that ' },
+    { label: 'Create Automation', svg: '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L5 10l3 3 8-8z"/><path d="M2 16h4"/></svg>', prompt: 'Create a new automation that ' },
+    { label: 'Create Workflow', svg: '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="4" cy="9" r="2"/><circle cx="14" cy="5" r="2"/><circle cx="14" cy="13" r="2"/><path d="M6 9h4l2-4M10 9l2 4"/></svg>', prompt: 'Create a workflow that ' },
+    { label: 'Browse Web', svg: '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="7"/><path d="M2 9h14"/><path d="M9 2a11 11 0 014 7 11 11 0 01-4 7 11 11 0 01-4-7 11 11 0 014-7z"/></svg>', prompt: 'Search the web for ' },
+    { label: 'MCP Servers', svg: '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="14" height="5" rx="1"/><rect x="2" y="10" width="14" height="5" rx="1"/><circle cx="5" cy="5.5" r="0.8" fill="currentColor"/><circle cx="5" cy="12.5" r="0.8" fill="currentColor"/></svg>', prompt: null },
+];
+
+function openToolsDropdown() {
+    if (toolsDropdownEl) { closeToolsDropdown(); return; }
+    const anchor = btnChatTools;
+    if (!anchor) return;
+
+    const menu = document.createElement('div');
+    menu.className = 'chat-tools-dropdown';
+    TOOLS_ITEMS.forEach(item => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'chat-tools-dropdown-item';
+        btn.appendChild(svgFromTemplate(item.svg));
+        const span = document.createElement('span');
+        span.textContent = item.label;
+        btn.appendChild(span);
+        btn.addEventListener('click', () => {
+            closeToolsDropdown();
+            if (item.prompt) {
+                insertPrompt(item.prompt, item.label);
+            } else {
+                openMcpPickerFromTools();
+            }
+        });
+        menu.appendChild(btn);
+    });
+
+    document.body.appendChild(menu);
+    toolsDropdownEl = menu;
+
+    requestAnimationFrame(() => {
+        const rect = anchor.getBoundingClientRect();
+        const mw = menu.offsetWidth;
+        const mh = menu.offsetHeight;
+        let left = rect.left;
+        let top = rect.top - mh - 8;
+        if (left + mw > window.innerWidth - 8) left = window.innerWidth - mw - 8;
+        if (top < 8) top = rect.bottom + 8;
+        menu.style.left = left + 'px';
+        menu.style.top = top + 'px';
+    });
+}
+
+function closeToolsDropdown() {
+    if (toolsDropdownEl) {
+        toolsDropdownEl.remove();
+        toolsDropdownEl = null;
+    }
+}
+
+function insertPrompt(text, label) {
+    if (!chatText) return;
+    chatText.value = text;
+    chatText.focus();
+    chatText.setSelectionRange(text.length, text.length);
+    updateSendButtonState();
+    // Activate tool mode indicator
+    if (label) {
+        activeToolMode = label;
+        if (btnChatTools) btnChatTools.classList.add('is-active');
+        if (chatToolsLabel) chatToolsLabel.textContent = label;
+        if (chatToolsDismiss) chatToolsDismiss.hidden = false;
+    }
+}
+
+function clearToolMode() {
+    activeToolMode = null;
+    if (btnChatTools) btnChatTools.classList.remove('is-active');
+    if (chatToolsLabel) chatToolsLabel.textContent = 'Tools';
+    if (chatToolsDismiss) chatToolsDismiss.hidden = true;
+    if (chatText) {
+        chatText.value = '';
+        chatText.focus();
+    }
+    updateSendButtonState();
+}
+
+function openMcpPickerFromTools() {
+    closeChatPlusMenu();
+    if (typeof ensureMcpServersLoaded === 'function') {
+        ensureMcpServersLoaded().then(() => {
+            mcpPickerOpen = true;
+            if (chatMcpPicker) chatMcpPicker.hidden = false;
+            renderMcpPickerList();
+            chatMcpSearch?.focus();
+        }).catch(() => showToast('Failed to load MCP servers', 'error'));
+    }
+}
+
+btnChatTools?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeChatPlusMenu();
+    closeMcpPicker();
+    openToolsDropdown();
+});
+
+chatToolsDismiss?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    clearToolMode();
+});
+
+// Tools dropdown also closes on outside click (via existing document click listener)
+
+// ─── Drag & drop ────────────────────────────────────────────────
+
+let dragCounter = 0;
+
+if (chatMainEl) {
+    chatMainEl.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        dragCounter++;
+        if (chatDragOverlay) chatDragOverlay.hidden = false;
+    });
+
+    chatMainEl.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        dragCounter--;
+        if (dragCounter <= 0) {
+            dragCounter = 0;
+            if (chatDragOverlay) chatDragOverlay.hidden = true;
+        }
+    });
+
+    chatMainEl.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+    });
+
+    chatMainEl.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dragCounter = 0;
+        if (chatDragOverlay) chatDragOverlay.hidden = true;
+
+        const files = e.dataTransfer?.files;
+        if (!files || files.length === 0) return;
+
+        // Route files by type: images vs documents
+        const images = [];
+        const docs = [];
+        for (const f of files) {
+            if (f.type.startsWith('image/')) images.push(f);
+            else docs.push(f);
+        }
+        if (images.length > 0) uploadChatFiles('image', images);
+        if (docs.length > 0) uploadChatFiles('document', docs);
+    });
+}
+
+// ─── Voice input (Web Speech API) ───────────────────────────────
+
+function initSpeechRecognition() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+        // No browser support — permanently show send icon
+        if (btnSend) btnSend.classList.add('no-mic');
+        return null;
+    }
+    const rec = new SpeechRecognition();
+    rec.continuous = false;
+    rec.interimResults = false;
+    rec.lang = navigator.language || 'en-US';
+
+    rec.addEventListener('result', (e) => {
+        const transcript = Array.from(e.results)
+            .map(r => r[0].transcript)
+            .join(' ');
+        if (chatText && transcript) {
+            chatText.value += (chatText.value ? ' ' : '') + transcript;
+            updateSendButtonState();
+        }
+    });
+
+    rec.addEventListener('end', () => {
+        isRecording = false;
+        if (btnSend) btnSend.classList.remove('is-recording');
+        updateSendButtonState();
+    });
+
+    rec.addEventListener('error', (e) => {
+        isRecording = false;
+        if (btnSend) btnSend.classList.remove('is-recording');
+        updateSendButtonState();
+        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+            if (btnSend) btnSend.classList.add('no-mic');
+            showToast('Microphone access denied', 'error');
+        }
+    });
+
+    return rec;
+}
+
+function startRecording() {
+    if (isRecording) return;
+    if (!recognition) recognition = initSpeechRecognition();
+    if (!recognition) return;
+    try {
+        recognition.start();
+        isRecording = true;
+        if (btnSend) btnSend.classList.add('is-recording');
+    } catch (e) {
+        console.error('Speech recognition error:', e);
+    }
+}
+
+function stopRecording() {
+    if (!isRecording || !recognition) return;
+    recognition.stop();
+}
+
+// Init speech recognition (non-blocking)
+recognition = initSpeechRecognition();
 
 // ─── Workflow progress donut chart ─────────────────────────────
 

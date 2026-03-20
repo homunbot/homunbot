@@ -3,9 +3,10 @@ use std::sync::Arc;
 use axum::extract::{Query, State};
 use axum::response::{Html, IntoResponse};
 use axum::routing::get;
-use axum::Router;
+use axum::{Extension, Router};
 use serde::Deserialize;
 
+use super::auth::AuthUser;
 use super::server::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -201,7 +202,7 @@ fn sidebar(active: &str) -> String {
     )
 }
 
-/// Subnav collapse toggle button — hamburger icon, injected into page content.
+/// Subnav collapse toggle button — hamburger icon, injected into page content header.
 const SUBNAV_TOGGLE: &str = r#"<button class="subnav-toggle-btn" id="subnav-toggle" title="Toggle panel" aria-label="Toggle panel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h7"/></svg></button>"#;
 
 /// Build the content subnav for the active page group.
@@ -310,7 +311,7 @@ fn page_html(title: &str, active: &str, body: &str, scripts: &[&str]) -> String 
 
     // Inject subnav inside <main class="content"> as first child.
     // Pages with a subnav get a flex wrapper so subnav + page content sit side by side.
-    // The toggle button is placed inside the page content (not the subnav) so it
+    // The toggle button is placed inside the page content (page-title-group) so it
     // remains visible when the panel is collapsed.
     let body = if subnav_html.is_empty() {
         body.to_string()
@@ -1485,7 +1486,11 @@ async fn browser_page(State(state): State<Arc<AppState>>) -> Html<String> {
 
 // ─── Chat ───────────────────────────────────────────────────────
 
-async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
+async fn chat_page(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
+) -> Html<String> {
+    let username = auth.username.clone();
     let config = state.config.read().await;
     let current_model = config.agent.model.clone();
     let current_vision_model = if config.agent.vision_model.trim().is_empty() {
@@ -1533,28 +1538,20 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
                                 <button class="chat-sidebar-toggle-btn" id="btn-chat-sidebar" title="Toggle sidebar" aria-label="Toggle sidebar">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h7"/></svg>
                                 </button>
-                                <div class="chat-topbar-model-pill">
-                                    <div class="chat-model-selector">
-                                        <div class="chat-model-pill" id="chat-model-pill">
-                                            <span class="chat-model-pill-name" id="chat-model-pill-name">{current_model}</span>
-                                            <svg class="chat-model-pill-arrow" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7l4 4 4-4"/></svg>
-                                        </div>
-                                        <select id="chat-model-select" class="chat-model-select-hidden" aria-label="Model">
-                                            <option value="{current_model}">{current_model}</option>
-                                        </select>
-                                    </div>
-                                </div>
                             </div>
                             <div class="chat-actions">
                                 <span class="chat-connection" id="ws-status">Connecting…</span>
                             </div>
                             <span id="chat-conversation-title" hidden>New conversation</span>
                         </div>
+                        <div class="chat-drag-overlay" id="chat-drag-overlay" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                            <span>Drop files here</span>
+                        </div>
                         <div class="chat-thread-wrap">
                             <div class="chat-empty-state" id="chat-empty-state">
-                                <div class="chat-empty-kicker">Homun is ready</div>
-                                <h2>Ask, search, inspect tools, or connect services.</h2>
-                                <p>The chat will show reasoning blocks, tool activity and formatted answers in one continuous workspace.</p>
+                                <div class="chat-welcome-greeting" id="chat-welcome-greeting"></div>
+                                <p class="chat-welcome-phrase" id="chat-welcome-phrase"></p>
                             </div>
                             <div class="chat-messages" id="messages"></div>
                         </div>
@@ -1569,20 +1566,23 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
                                 </button>
                                 <ol class="chat-plan-tasklist" id="chat-plan-tasklist"></ol>
                             </section>
-                            <div class="chat-composer-shell" id="chat-config" data-model="{current_model}" data-vision-model="{current_vision_model}">
+                            <div class="chat-composer-shell" id="chat-config" data-model="{current_model}" data-vision-model="{current_vision_model}" data-username="{username}">
                                 <form class="chat-input" id="chat-form">
                                     <textarea id="chat-text" placeholder="Message Homun…" autocomplete="off" class="input chat-textarea" rows="1" autofocus></textarea>
                                     <div class="chat-attachment-strip" id="chat-attachment-strip" hidden></div>
                                     <div class="chat-input-bottom">
-                                        <div class="chat-composer-footer">
-                                        </div>
-                                        <div class="chat-input-actions">
+                                        <div class="chat-input-actions-left">
                                             <div class="chat-plus-wrap">
-                                                <button type="button" class="chat-plus-btn" id="btn-chat-plus" title="Add attachments or services">+</button>
+                                                <button type="button" class="chat-plus-btn" id="btn-chat-plus" title="Add attachments">+</button>
                                                 <div class="chat-plus-menu" id="chat-plus-menu" hidden>
-                                                    <button type="button" class="chat-plus-item" id="btn-chat-upload-image">Add image</button>
-                                                    <button type="button" class="chat-plus-item" id="btn-chat-upload-doc">Add document</button>
-                                                    <button type="button" class="chat-plus-item" id="btn-chat-open-mcp">Open MCP</button>
+                                                    <button type="button" class="chat-plus-item" id="btn-chat-upload-image">
+                                                        <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="14" height="14" rx="2"/><circle cx="6.5" cy="6.5" r="1.5"/><path d="M16 11l-4-4L3 16"/></svg>
+                                                        Image
+                                                    </button>
+                                                    <button type="button" class="chat-plus-item" id="btn-chat-upload-doc">
+                                                        <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2H5a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7z"/><polyline points="10 2 10 7 15 7"/></svg>
+                                                        Document
+                                                    </button>
                                                 </div>
                                                 <div class="chat-mcp-picker" id="chat-mcp-picker" hidden>
                                                     <div class="chat-mcp-picker-header">
@@ -1592,8 +1592,20 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
                                                     <div class="chat-mcp-picker-list" id="chat-mcp-picker-list"></div>
                                                 </div>
                                             </div>
+                                            <button type="button" class="chat-tools-btn" id="btn-chat-tools" title="Tools">
+                                                <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="2.5"/><path d="M16.5 11.5a1.5 1.5 0 00.3-1.65l-.8-1.65a1.5 1.5 0 00-1.4-.95h-.35a6.5 6.5 0 00-.65-1.1l.2-.35a1.5 1.5 0 00-.3-1.65L12.2 3.2a1.5 1.5 0 00-1.65-.3l-.35.2a6.5 6.5 0 00-1.1-.65V2a1.5 1.5 0 00-.95-1.4L6.5.6a1.5 1.5 0 00-1.65.3L3.7 2.05a1.5 1.5 0 00-.3 1.65l.2.35a6.5 6.5 0 00-.65 1.1H2.6a1.5 1.5 0 00-1.4.95L.6 7.75a1.5 1.5 0 00.3 1.65l1.15 1.15a1.5 1.5 0 001.65.3l.35-.2a6.5 6.5 0 001.1.65v.35a1.5 1.5 0 00.95 1.4l1.65.6a1.5 1.5 0 001.65-.3z"/></svg>
+                                                <span class="chat-tools-label" id="chat-tools-label">Tools</span>
+                                                <span class="chat-tools-dismiss" id="chat-tools-dismiss" hidden>&times;</span>
+                                            </button>
+                                        </div>
+                                        <div class="chat-input-actions-right">
+                                            <button type="button" class="chat-model-pill" id="chat-model-pill" title="Choose model">
+                                                <span class="chat-model-pill-name" id="chat-model-pill-name">{current_model}</span>
+                                                <svg class="chat-model-pill-arrow" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7l4 4 4-4"/></svg>
+                                            </button>
                                             <button type="button" class="chat-send-btn" id="btn-send" aria-label="Send message">
                                                 <span class="chat-send-spinner" aria-hidden="true"></span>
+                                                <svg class="chat-send-icon chat-send-icon--mic" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="1" width="6" height="10" rx="3"/><path d="M3 8v1a6 6 0 0012 0V8"/><line x1="9" y1="15" x2="9" y2="17"/><line x1="6" y1="17" x2="12" y2="17"/></svg>
                                                 <svg class="chat-send-icon chat-send-icon--send" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h9"/><path d="M9 3l6 6-6 6"/></svg>
                                                 <svg class="chat-send-icon chat-send-icon--stop" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="7" height="7" rx="1.2"/></svg>
                                             </button>
@@ -1610,6 +1622,7 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
                                     <h3 id="chat-modal-title">Confirm action</h3>
                                 </div>
                                 <p class="chat-modal-copy" id="chat-modal-copy"></p>
+                                <input type="text" class="chat-modal-input" id="chat-modal-input" hidden autocomplete="off">
                                 <div class="chat-modal-actions">
                                     <button type="button" class="btn btn-ghost btn-sm" id="chat-modal-cancel">Cancel</button>
                                     <button type="button" class="btn btn-primary btn-sm" id="chat-modal-confirm">Confirm</button>
@@ -1641,6 +1654,7 @@ async fn chat_page(State(state): State<Arc<AppState>>) -> Html<String> {
         <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>"#,
         current_model = current_model,
         current_vision_model = current_vision_model,
+        username = username,
     );
 
     Html(page_html(
