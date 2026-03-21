@@ -2,21 +2,26 @@ mod agent_loop;
 mod attachment_router;
 pub mod auth;
 pub mod bootstrap_watcher;
+mod browser_context;
 mod browser_task_plan;
 mod context;
+mod context_compactor;
 pub mod debounce;
 pub mod definition;
 pub mod email_approval;
 mod execution_plan;
 pub mod gateway;
+mod iteration_budget;
 pub mod orchestrator;
 pub mod heartbeat;
 pub mod memory;
 pub(crate) mod persona;
 pub mod prompt; // New modular prompt system
 pub mod registry;
+mod skill_activator;
 pub mod stop;
 pub mod subagent; // Make public so spawn.rs can access it
+mod tool_builder;
 mod verifier;
 
 #[cfg(feature = "embeddings")]
