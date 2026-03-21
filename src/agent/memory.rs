@@ -4,10 +4,12 @@ use anyhow::{Context as _, Result};
 use chrono::Datelike;
 use serde::Deserialize;
 
+use std::sync::Arc;
+
 use crate::config::Config;
 use crate::provider::{ChatMessage, ChatRequest, Provider, RequestPriority};
 use crate::security::redact_vault_values;
-use crate::storage::Database;
+use crate::storage::MemoryBackend;
 
 /// Memory consolidation system — LLM-powered summarization.
 ///
@@ -18,7 +20,7 @@ use crate::storage::Database;
 /// Consolidation is triggered when message count exceeds threshold.
 /// Runs as a background task (non-blocking).
 pub struct MemoryConsolidator {
-    db: Database,
+    store: Arc<dyn MemoryBackend>,
     data_dir: PathBuf,
 }
 
@@ -124,16 +126,25 @@ struct VaultEntry {
 }
 
 impl MemoryConsolidator {
-    pub fn new(db: Database) -> Self {
+    /// Create from a concrete Database (backwards-compatible convenience).
+    pub fn new(db: crate::storage::Database) -> Self {
         Self {
-            db,
+            store: Arc::new(db),
+            data_dir: Config::data_dir(),
+        }
+    }
+
+    /// Create from any MemoryBackend implementation.
+    pub fn from_store(store: Arc<dyn MemoryBackend>) -> Self {
+        Self {
+            store,
             data_dir: Config::data_dir(),
         }
     }
 
     /// Check if consolidation is needed for a session
     pub async fn should_consolidate(&self, session_key: &str, memory_window: u32) -> Result<bool> {
-        let count = self.db.count_messages(session_key).await?;
+        let count = self.store.count_messages(session_key).await?;
         Ok(count > memory_window as i64)
     }
 
@@ -158,11 +169,11 @@ impl MemoryConsolidator {
         let keep_count = (memory_window / 2) as i64;
 
         // Load all messages for the session
-        let all_messages = self.db.load_messages(session_key, 10000).await?;
+        let all_messages = self.store.load_messages(session_key, 10000).await?;
         let total = all_messages.len() as i64;
 
         // Get last_consolidated pointer
-        let session = self.db.load_session(session_key).await?;
+        let session = self.store.load_session(session_key).await?;
         let last_consolidated = session.map(|s| s.last_consolidated).unwrap_or(0);
 
         // Messages to process: from last_consolidated to (total - keep_count)
@@ -407,7 +418,7 @@ impl MemoryConsolidator {
         let memory_updated = !memory_update.is_empty() && memory_update != current_memory;
         if memory_updated {
             self.save_memory_md(&memory_update)?;
-            self.db.upsert_long_term_memory(&memory_update).await?;
+            self.store.upsert_long_term_memory(&memory_update).await?;
         }
 
         // --- 5. Store history entry in DB (legacy) + memory_chunks (for vector/FTS5 search) ---
@@ -415,14 +426,14 @@ impl MemoryConsolidator {
         let mut new_chunk_ids: Vec<(i64, String)> = Vec::new();
 
         if !history_entry.is_empty() {
-            self.db
+            self.store
                 .insert_memory(Some(session_key), &history_entry, "history")
                 .await?;
 
             // Also insert into memory_chunks for hybrid search
             // History entries get default importance 2 (routine summaries)
             let chunk_id = self
-                .db
+                .store
                 .insert_memory_chunk(
                     &today,
                     session_key,
@@ -441,7 +452,7 @@ impl MemoryConsolidator {
         // Memory facts get default importance 3 (user profile data)
         if memory_updated {
             let chunk_id = self
-                .db
+                .store
                 .insert_memory_chunk(
                     &today,
                     session_key,
@@ -460,7 +471,7 @@ impl MemoryConsolidator {
         for instruction in &new_instructions {
             let importance = instruction.importance.clamp(1, 5);
             let chunk_id = self
-                .db
+                .store
                 .insert_memory_chunk(
                     &today,
                     session_key,
@@ -477,7 +488,7 @@ impl MemoryConsolidator {
 
         // --- 6. Update last_consolidated pointer ---
         let new_consolidated = process_end as i64;
-        self.db
+        self.store
             .upsert_session(session_key, new_consolidated)
             .await?;
 
@@ -511,11 +522,11 @@ impl MemoryConsolidator {
         if max_chunks == 0 {
             return Ok(Vec::new());
         }
-        let count = self.db.count_memory_chunks().await?;
+        let count = self.store.count_memory_chunks().await?;
         if count <= max_chunks as i64 {
             return Ok(Vec::new());
         }
-        self.db.prune_memory_chunks_to_budget(max_chunks).await
+        self.store.prune_memory_chunks_to_budget(max_chunks).await
     }
 
     /// Create a hierarchical summary for a completed time period.
@@ -541,7 +552,7 @@ impl MemoryConsolidator {
             let start = last_monday.format("%Y-%m-%d").to_string();
             let end = last_sunday.format("%Y-%m-%d").to_string();
 
-            if !self.db.has_memory_summary("week", &start).await? {
+            if !self.store.has_memory_summary("week", &start).await? {
                 self.summarize_range("week", &start, &end, provider, model, contact_id, agent_id)
                     .await?;
             }
@@ -564,7 +575,7 @@ impl MemoryConsolidator {
                 if let Some(month_end) = month_end {
                     let start = month_start.format("%Y-%m-%d").to_string();
                     let end = month_end.format("%Y-%m-%d").to_string();
-                    if !self.db.has_memory_summary("month", &start).await? {
+                    if !self.store.has_memory_summary("month", &start).await? {
                         self.summarize_range(
                             "month", &start, &end, provider, model, contact_id, agent_id,
                         )
@@ -589,7 +600,7 @@ impl MemoryConsolidator {
         contact_id: Option<i64>,
         agent_id: Option<&str>,
     ) -> Result<()> {
-        let chunks = self.db.load_chunks_in_range(start_date, end_date).await?;
+        let chunks = self.store.load_chunks_in_range(start_date, end_date).await?;
         if chunks.is_empty() {
             return Ok(());
         }
@@ -631,7 +642,7 @@ impl MemoryConsolidator {
             .context("Period summarization LLM call failed")?;
 
         if let Some(summary) = response.content.filter(|s| !s.trim().is_empty()) {
-            self.db
+            self.store
                 .insert_memory_summary(period, start_date, end_date, &summary, contact_id, agent_id)
                 .await?;
             tracing::info!(
@@ -750,7 +761,7 @@ impl MemoryConsolidator {
 
     /// Check if session compaction is needed.
     pub async fn should_compact(&self, session_key: &str, memory_window: u32) -> Result<bool> {
-        let count = self.db.count_messages(session_key).await?;
+        let count = self.store.count_messages(session_key).await?;
         Ok(count > memory_window as i64)
     }
 
@@ -766,7 +777,7 @@ impl MemoryConsolidator {
         model: &str,
     ) -> Result<CompactionResult> {
         let keep_count = memory_window / 2;
-        let total = self.db.count_messages(session_key).await?;
+        let total = self.store.count_messages(session_key).await?;
 
         if total <= memory_window as i64 {
             return Ok(CompactionResult {
@@ -775,7 +786,7 @@ impl MemoryConsolidator {
             });
         }
 
-        let old_messages = self.db.load_old_messages(session_key, keep_count).await?;
+        let old_messages = self.store.load_old_messages(session_key, keep_count).await?;
         if old_messages.is_empty() {
             return Ok(CompactionResult {
                 messages_removed: 0,
@@ -820,10 +831,10 @@ impl MemoryConsolidator {
         };
 
         // Delete old messages
-        let deleted = self.db.delete_old_messages(session_key, keep_count).await?;
+        let deleted = self.store.delete_old_messages(session_key, keep_count).await?;
 
         // Insert summary as system message
-        self.db
+        self.store
             .insert_message(
                 session_key,
                 "system",
@@ -834,7 +845,7 @@ impl MemoryConsolidator {
 
         // Reset last_consolidated pointer so consolidation knows the new layout
         let new_consolidated = (keep_count + 1) as i64;
-        self.db
+        self.store
             .upsert_session(session_key, new_consolidated)
             .await?;
 

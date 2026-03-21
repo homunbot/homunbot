@@ -229,3 +229,13 @@ pub trait RagStore: Send + Sync {
     /// Delete all chunks for a source. Returns count deleted.
     async fn delete_rag_chunks_by_source(&self, source_id: i64) -> Result<u64>;
 }
+
+// ── MemoryBackend ───────────────────────────────────────────────
+
+/// Combined trait for consumers that need both session and memory operations.
+///
+/// Used by: `MemoryConsolidator` (reads session messages, writes memory chunks).
+/// Blanket-implemented for any type that implements both `SessionStore` and `MemoryStore`.
+pub trait MemoryBackend: SessionStore + MemoryStore {}
+
+impl<T: SessionStore + MemoryStore> MemoryBackend for T {}

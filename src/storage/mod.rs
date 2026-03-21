@@ -9,4 +9,4 @@ pub use db::{
     UserRow, WebhookTokenRow,
 };
 pub use secrets::{global_secrets, EncryptedSecrets, SecretKey, SecretsError};
-pub use traits::{MemoryStore, RagStore, SessionStore};
+pub use traits::{MemoryBackend, MemoryStore, RagStore, SessionStore};
