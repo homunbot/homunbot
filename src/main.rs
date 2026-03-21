@@ -71,7 +71,7 @@ use crate::storage::Database;
 #[cfg(feature = "channel-email")]
 use crate::tools::ReadEmailInboxTool;
 use crate::tools::{
-    BusinessTool, ContactsTool, CreateAutomationTool, CronTool, EditFileTool, ListDirTool,
+    AutomationTool, BusinessTool, ContactsTool, EditFileTool, ListDirTool,
     MessageTool, ReadFileTool, ShellTool, SpawnTool, ToolRegistry, VaultTool, WebFetchTool,
     WebSearchTool, WorkflowTool, WriteFileTool,
 };
@@ -121,11 +121,6 @@ enum Commands {
     Skills {
         #[command(subcommand)]
         command: SkillsCommands,
-    },
-    /// Manage cron jobs
-    Cron {
-        #[command(subcommand)]
-        command: CronCommands,
     },
     /// Manage automations
     Automations {
@@ -275,25 +270,6 @@ enum McpCommands {
     Remove { name: String },
     /// Enable/disable an MCP server
     Toggle { name: String },
-}
-
-#[derive(Subcommand)]
-enum CronCommands {
-    /// List scheduled jobs
-    List,
-    /// Add a new cron job
-    Add {
-        #[arg(long)]
-        name: String,
-        #[arg(long)]
-        message: String,
-        #[arg(long)]
-        cron: Option<String>,
-        #[arg(long)]
-        every: Option<u64>,
-    },
-    /// Remove a cron job
-    Remove { id: String },
 }
 
 #[derive(Subcommand)]
@@ -529,8 +505,8 @@ fn create_tool_registry(
         registry.register(Box::new(ContactsTool::new(db.clone(), sc.clone())));
     }
 
-    // Automation creation tool (shared storage with scheduler + web API)
-    registry.register(Box::new(CreateAutomationTool::new(db)));
+    // Automation management tool (shared storage with scheduler + web API)
+    registry.register(Box::new(AutomationTool::new(db)));
 
     // Skill creation tool (generates and installs starter skills in ~/.homun/skills)
     registry.register(Box::new(tools::CreateSkillTool::new()));
@@ -1036,7 +1012,7 @@ async fn main() -> Result<()> {
 
             let session_manager = SessionManager::new(db.clone());
 
-            // Create CronScheduler before the tool registry so CronTool can use it
+            // Create automation scheduler
             let (cron_event_tx, cron_event_rx) = tokio::sync::mpsc::channel(50);
             let contact_event_tx = cron_event_tx.clone();
             let cron_scheduler = Arc::new(CronScheduler::new(db.clone(), cron_event_tx));
@@ -1048,10 +1024,9 @@ async fn main() -> Result<()> {
                 contact_event_tx,
             );
 
-            // Build tool registry with CronTool + MessageTool + SpawnTool + MCP tools
+            // Build tool registry
             let mut tool_registry =
                 create_tool_registry(&config, db.clone(), Some(shared_config.clone()));
-            tool_registry.register(Box::new(CronTool::new(cron_scheduler.clone())));
             tool_registry.register(Box::new(MessageTool::new()));
 
             // SpawnTool uses a late-bound OnceCell because SubagentManager needs Arc<AgentLoop>
@@ -2068,67 +2043,6 @@ async fn main() -> Result<()> {
                         println!("MCP server '{name}' {state}.");
                     } else {
                         eprintln!("MCP server '{name}' not found.");
-                        std::process::exit(1);
-                    }
-                }
-            }
-        }
-        Commands::Cron { command } => {
-            let config = Config::load()?;
-            let db = Database::open(&config.storage.resolved_path()).await?;
-
-            match command {
-                CronCommands::List => {
-                    let jobs = db.load_cron_jobs().await?;
-                    if jobs.is_empty() {
-                        println!("No cron jobs scheduled.");
-                        println!("Add one with: homun cron add --name \"my-job\" --message \"task\" --cron \"0 9 * * *\"");
-                    } else {
-                        println!("Scheduled jobs:\n");
-                        for job in &jobs {
-                            let status = if job.enabled { "✓" } else { "✗" };
-                            let last = job.last_run.as_deref().unwrap_or("never");
-                            println!("  [{status}] {id} | {name}", id = job.id, name = job.name);
-                            println!("      Schedule: {}", job.schedule);
-                            println!("      Message: {}", job.message);
-                            println!("      Last run: {last}");
-                            if let Some(deliver) = &job.deliver_to {
-                                println!("      Deliver to: {deliver}");
-                            }
-                            println!();
-                        }
-                        println!("{} job(s) total.", jobs.len());
-                    }
-                }
-                CronCommands::Add {
-                    name,
-                    message,
-                    cron,
-                    every,
-                } => {
-                    let schedule = if let Some(cron_expr) = cron {
-                        format!("cron:{cron_expr}")
-                    } else if let Some(secs) = every {
-                        format!("every:{secs}")
-                    } else {
-                        eprintln!("Either --cron or --every must be specified.");
-                        eprintln!("  --cron \"0 9 * * *\"  (cron expression)");
-                        eprintln!("  --every 300          (every N seconds)");
-                        std::process::exit(1);
-                    };
-
-                    let id = uuid::Uuid::new_v4().to_string()[..8].to_string();
-                    db.insert_cron_job(&id, &name, &message, &schedule, None)
-                        .await?;
-                    println!("Job created: id={id}, name={name}, schedule={schedule}");
-                    println!("Note: Jobs run when the gateway is active (homun gateway)");
-                }
-                CronCommands::Remove { id } => {
-                    let removed = db.delete_cron_job(&id).await?;
-                    if removed {
-                        println!("Job '{id}' removed.");
-                    } else {
-                        eprintln!("Job '{id}' not found.");
                         std::process::exit(1);
                     }
                 }

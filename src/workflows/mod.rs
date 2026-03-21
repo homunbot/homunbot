@@ -97,6 +97,10 @@ pub struct Workflow {
     pub context: serde_json::Value,
     pub created_by: Option<String>,
     pub deliver_to: Option<String>,
+    /// If this workflow was spawned by an automation, the automation's ID.
+    pub automation_id: Option<String>,
+    /// If this workflow was spawned by an automation run, the run's ID.
+    pub automation_run_id: Option<String>,
     pub current_step_idx: usize,
     pub created_at: String,
     pub updated_at: Option<String>,
@@ -131,6 +135,12 @@ pub struct WorkflowCreateRequest {
     pub objective: String,
     pub steps: Vec<StepDefinition>,
     pub deliver_to: Option<String>,
+    /// Link to the parent automation (set by scheduler, None for user-created).
+    #[serde(default)]
+    pub automation_id: Option<String>,
+    /// Link to the specific automation run that triggered this workflow.
+    #[serde(default)]
+    pub automation_run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

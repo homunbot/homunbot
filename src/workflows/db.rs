@@ -22,8 +22,8 @@ impl Database {
         let deliver_to = req.deliver_to.as_deref();
 
         sqlx::query(
-            "INSERT INTO workflows (id, name, objective, status, created_by, deliver_to, context_json, current_step_idx, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, '{}', 0, ?)",
+            "INSERT INTO workflows (id, name, objective, status, created_by, deliver_to, automation_id, automation_run_id, context_json, current_step_idx, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', 0, ?)",
         )
         .bind(id)
         .bind(&req.name)
@@ -31,6 +31,8 @@ impl Database {
         .bind(status)
         .bind(created_by)
         .bind(deliver_to)
+        .bind(req.automation_id.as_deref())
+        .bind(req.automation_run_id.as_deref())
         .bind(&now)
         .execute(self.pool())
         .await
@@ -62,7 +64,7 @@ impl Database {
     /// Load a workflow with all its steps.
     pub async fn load_workflow(&self, id: &str) -> Result<Option<Workflow>> {
         let row = sqlx::query_as::<_, WorkflowRow>(
-            "SELECT id, name, objective, status, created_by, deliver_to, context_json,
+            "SELECT id, name, objective, status, created_by, deliver_to, automation_id, automation_run_id, context_json,
                     current_step_idx, created_at, updated_at, completed_at, error
              FROM workflows WHERE id = ?",
         )
@@ -96,7 +98,7 @@ impl Database {
     pub async fn list_workflows(&self, status_filter: Option<&str>) -> Result<Vec<Workflow>> {
         let rows = if let Some(status) = status_filter {
             sqlx::query_as::<_, WorkflowRow>(
-                "SELECT id, name, objective, status, created_by, deliver_to, context_json,
+                "SELECT id, name, objective, status, created_by, deliver_to, automation_id, automation_run_id, context_json,
                         current_step_idx, created_at, updated_at, completed_at, error
                  FROM workflows WHERE status = ? ORDER BY created_at DESC",
             )
@@ -105,7 +107,7 @@ impl Database {
             .await?
         } else {
             sqlx::query_as::<_, WorkflowRow>(
-                "SELECT id, name, objective, status, created_by, deliver_to, context_json,
+                "SELECT id, name, objective, status, created_by, deliver_to, automation_id, automation_run_id, context_json,
                         current_step_idx, created_at, updated_at, completed_at, error
                  FROM workflows ORDER BY created_at DESC",
             )
@@ -124,9 +126,9 @@ impl Database {
     /// Load workflows that should be resumed on startup (running or paused).
     pub async fn load_resumable_workflows(&self) -> Result<Vec<Workflow>> {
         let rows = sqlx::query_as::<_, WorkflowRow>(
-            "SELECT id, name, objective, status, created_by, deliver_to, context_json,
+            "SELECT id, name, objective, status, created_by, deliver_to, automation_id, automation_run_id, context_json,
                     current_step_idx, created_at, updated_at, completed_at, error
-             FROM workflows WHERE status IN ('running', 'pending')
+             FROM workflows WHERE status IN ('running', 'pending', 'paused')
              ORDER BY created_at ASC",
         )
         .fetch_all(self.pool())
@@ -282,6 +284,8 @@ struct WorkflowRow {
     status: String,
     created_by: Option<String>,
     deliver_to: Option<String>,
+    automation_id: Option<String>,
+    automation_run_id: Option<String>,
     context_json: String,
     current_step_idx: i64,
     created_at: String,
@@ -301,6 +305,8 @@ impl WorkflowRow {
             context: serde_json::from_str(&self.context_json).unwrap_or_default(),
             created_by: self.created_by,
             deliver_to: self.deliver_to,
+            automation_id: self.automation_id,
+            automation_run_id: self.automation_run_id,
             current_step_idx: self.current_step_idx as usize,
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -346,5 +352,131 @@ impl StepRow {
             max_retries: self.max_retries as u32,
             agent_id: self.agent_id.unwrap_or_else(|| "default".to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::storage::Database;
+    use crate::workflows::{StepDefinition, WorkflowCreateRequest, WorkflowStatus};
+
+    /// Helper to create a test DB with migrations applied.
+    async fn test_db() -> Database {
+        let dir = tempfile::tempdir().expect("tempdir");
+        Database::open(&dir.path().join("test.db"))
+            .await
+            .expect("open test db")
+    }
+
+    fn sample_request() -> WorkflowCreateRequest {
+        WorkflowCreateRequest {
+            name: "Test Workflow".to_string(),
+            objective: "Testing".to_string(),
+            steps: vec![StepDefinition {
+                name: "Step 1".to_string(),
+                instruction: "Do something".to_string(),
+                approval_required: true,
+                max_retries: 1,
+                agent_id: None,
+            }],
+            deliver_to: None,
+            automation_id: None,
+            automation_run_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_load_resumable_includes_paused() {
+        let db = test_db().await;
+
+        // Create and insert 3 workflows with different statuses
+        let req = sample_request();
+        db.insert_workflow("wf-running", &req, None).await.unwrap();
+        db.update_workflow_status("wf-running", WorkflowStatus::Running, None)
+            .await
+            .unwrap();
+
+        db.insert_workflow("wf-paused", &req, None).await.unwrap();
+        db.update_workflow_status("wf-paused", WorkflowStatus::Paused, None)
+            .await
+            .unwrap();
+
+        db.insert_workflow("wf-completed", &req, None).await.unwrap();
+        db.update_workflow_status("wf-completed", WorkflowStatus::Completed, None)
+            .await
+            .unwrap();
+
+        db.insert_workflow("wf-pending", &req, None).await.unwrap();
+        // pending is the default status — no update needed
+
+        let resumable = db.load_resumable_workflows().await.unwrap();
+        let ids: Vec<&str> = resumable.iter().map(|w| w.id.as_str()).collect();
+
+        assert!(ids.contains(&"wf-running"), "running should be resumable");
+        assert!(ids.contains(&"wf-paused"), "paused should be resumable");
+        assert!(ids.contains(&"wf-pending"), "pending should be resumable");
+        assert!(
+            !ids.contains(&"wf-completed"),
+            "completed should NOT be resumable"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_workflow_insert_and_load_roundtrip() {
+        let db = test_db().await;
+        let req = sample_request();
+        db.insert_workflow("wf-rt", &req, Some("web:test"))
+            .await
+            .unwrap();
+
+        let wf = db.load_workflow("wf-rt").await.unwrap().unwrap();
+        assert_eq!(wf.name, "Test Workflow");
+        assert_eq!(wf.objective, "Testing");
+        assert_eq!(wf.status, WorkflowStatus::Pending);
+        assert_eq!(wf.steps.len(), 1);
+        assert!(wf.steps[0].approval_required);
+        assert_eq!(wf.created_by.as_deref(), Some("web:test"));
+        assert!(wf.automation_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_workflow_automation_link_roundtrip() {
+        let db = test_db().await;
+
+        // Create a parent automation first (FK constraint)
+        db.insert_automation(
+            "auto-123",
+            "Test Auto",
+            "do stuff",
+            "every:3600",
+            true,
+            "active",
+            None,
+            "always",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let mut req = sample_request();
+        req.automation_id = Some("auto-123".to_string());
+        req.automation_run_id = Some("run-456".to_string());
+
+        db.insert_workflow("wf-linked", &req, None).await.unwrap();
+
+        let wf = db.load_workflow("wf-linked").await.unwrap().unwrap();
+        assert_eq!(wf.automation_id.as_deref(), Some("auto-123"));
+        assert_eq!(wf.automation_run_id.as_deref(), Some("run-456"));
+    }
+
+    #[tokio::test]
+    async fn test_workflow_without_automation_link() {
+        let db = test_db().await;
+        let req = sample_request();
+        db.insert_workflow("wf-solo", &req, None).await.unwrap();
+
+        let wf = db.load_workflow("wf-solo").await.unwrap().unwrap();
+        assert!(wf.automation_id.is_none());
+        assert!(wf.automation_run_id.is_none());
     }
 }

@@ -62,7 +62,6 @@ const DOMAIN_GROUPS: &[(&str, &str, &[&str])] = &[
         "Token usage statistics and skill audit log",
         &["token_usage", "skill_audit"],
     ),
-    ("cron", "Scheduled cron jobs", &["cron_jobs"]),
     ("email", "Pending email queue", &["email_pending"]),
 ];
 

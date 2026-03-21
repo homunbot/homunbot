@@ -4,13 +4,12 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::sync::{mpsc, Mutex};
 
-use crate::storage::{AutomationRow, AutomationUpdate, CronJobRow, Database};
+use crate::storage::{AutomationRow, AutomationUpdate, Database};
 use crate::workflows::engine::WorkflowEngine;
 use crate::workflows::{StepDefinition, WorkflowCreateRequest};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScheduledKind {
-    Cron,
     Automation,
 }
 
@@ -26,22 +25,15 @@ pub struct CronEvent {
     pub automation_run_id: Option<String>,
 }
 
-/// Cron scheduler — manages recurring and one-shot jobs.
+/// Automation scheduler — fires recurring automations on schedule.
 ///
-/// Architecture (following nanobot):
-/// - Single timer checks all jobs each cycle
-/// - Jobs are stored in SQLite, loaded at startup
-/// - When a job fires, sends CronEvent through mpsc channel
-/// - The gateway routes events to the agent loop
-///
-/// Schedule format:
-/// - "every:300" → run every 300 seconds
-/// - "cron:0 9 * * *" → standard cron expression (9 AM daily)
-/// - "at:2025-02-20T10:30:00" → one-time execution
+/// Single timer checks all automations every 30 seconds.
+/// When an automation fires, either:
+/// - Creates a workflow (if `workflow_steps_json` present)
+/// - Sends a CronEvent through mpsc channel → gateway → agent loop
 pub struct CronScheduler {
     db: Database,
     event_tx: mpsc::Sender<CronEvent>,
-    jobs: Arc<Mutex<Vec<CronJobRow>>>,
     /// Late-bound workflow engine — set after AgentLoop is created.
     workflow_engine: Arc<tokio::sync::OnceCell<Arc<WorkflowEngine>>>,
 }
@@ -51,7 +43,6 @@ impl CronScheduler {
         Self {
             db,
             event_tx,
-            jobs: Arc::new(Mutex::new(Vec::new())),
             workflow_engine: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
@@ -61,19 +52,10 @@ impl CronScheduler {
         let _ = self.workflow_engine.set(engine);
     }
 
-    /// Load jobs from DB and start the scheduler loop.
-    /// Returns a JoinHandle for the background task.
+    /// Start the scheduler loop.
     pub async fn start(self: Arc<Self>) -> Result<tokio::task::JoinHandle<()>> {
-        // Load jobs from DB
-        let db_jobs = self.db.load_cron_jobs().await?;
-        let enabled_count = db_jobs.iter().filter(|j| j.enabled).count();
-
-        {
-            let mut jobs = self.jobs.lock().await;
-            *jobs = db_jobs;
-        }
-
-        tracing::info!(total_jobs = enabled_count, "Cron scheduler loaded jobs");
+        let count = self.db.load_automations().await?.iter().filter(|a| a.enabled).count();
+        tracing::info!(active_automations = count, "Automation scheduler started");
 
         let scheduler = self.clone();
         let handle = tokio::spawn(async move {
@@ -83,68 +65,28 @@ impl CronScheduler {
         Ok(handle)
     }
 
-    /// Main scheduler loop — checks jobs every 30 seconds
+    /// Main scheduler loop — checks automations every 30 seconds.
     async fn run_loop(&self) {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
 
         loop {
             interval.tick().await;
-            if let Err(e) = self.check_and_fire().await {
-                tracing::error!(error = %e, "Cron scheduler error");
+            if let Err(e) = self.check_and_fire_automations().await {
+                tracing::error!(error = %e, "Automation scheduler error");
             }
         }
     }
 
-    /// Check all enabled scheduled jobs (cron + automations) and fire any that are due.
-    async fn check_and_fire(&self) -> Result<()> {
-        // Keep cron cache fresh and process both domains in a single scheduler loop.
-        self.reload().await?;
-        self.check_and_fire_cron().await?;
-        self.check_and_fire_automations().await?;
-        Ok(())
-    }
-
-    async fn check_and_fire_cron(&self) -> Result<()> {
-        let jobs = self.jobs.lock().await.clone();
-        let now = chrono::Utc::now();
-
-        for job in jobs.iter() {
-            if !job.enabled {
-                continue;
-            }
-
-            let should_fire = should_fire_schedule(&job.schedule, job.last_run.as_deref(), &now);
-
-            if should_fire {
-                tracing::info!(
-                    job_id = %job.id,
-                    job_name = %job.name,
-                    "Cron job firing"
-                );
-
-                let event = CronEvent {
-                    kind: ScheduledKind::Cron,
-                    job_id: job.id.clone(),
-                    job_name: job.name.clone(),
-                    message: job.message.clone(),
-                    deliver_to: job.deliver_to.clone(),
-                    automation_run_id: None,
-                };
-
-                if let Err(e) = self.event_tx.send(event).await {
-                    tracing::error!(error = %e, "Failed to send cron event");
-                }
-
-                // Update last_run in DB
-                if let Err(e) = self.db.update_cron_last_run(&job.id).await {
-                    tracing::error!(error = %e, "Failed to update cron job last_run");
-                }
-            }
-        }
-
-        Ok(())
-    }
-
+    /// Check all enabled automations and fire any that are due.
+    ///
+    /// Two execution paths, unified completion:
+    /// - **Prompt-based** (no workflow_steps): sends CronEvent → gateway → agent loop
+    ///   → `evaluate_and_complete_automation_run()` in gateway post-processing.
+    /// - **Workflow-based** (has workflow_steps): calls `WorkflowEngine::create_and_start()`
+    ///   directly → automation run marked "running" → workflow engine calls
+    ///   `evaluate_and_complete_automation_run()` on completion/failure.
+    ///
+    /// Both paths converge on the same trigger evaluation and run completion semantics.
     async fn check_and_fire_automations(&self) -> Result<()> {
         let now = chrono::Utc::now();
         let automations = self.db.load_automations().await?;
@@ -200,10 +142,19 @@ impl CronScheduler {
                 continue;
             }
 
-            let should_fire =
-                should_fire_schedule(&automation.schedule, automation.last_run.as_deref(), &now);
+            let overdue =
+                is_schedule_overdue(&automation.schedule, automation.last_run.as_deref(), &now);
+            let should_fire = overdue
+                || should_fire_schedule(&automation.schedule, automation.last_run.as_deref(), &now);
             if !should_fire {
                 continue;
+            }
+            if overdue {
+                tracing::info!(
+                    automation_id = %automation.id,
+                    name = %automation.name,
+                    "Catching up missed automation schedule"
+                );
             }
 
             let run_id = uuid::Uuid::new_v4().to_string();
@@ -252,14 +203,18 @@ impl CronScheduler {
                                 objective: automation.prompt.clone(),
                                 steps,
                                 deliver_to: automation.deliver_to.clone(),
+                                automation_id: Some(automation.id.clone()),
+                                automation_run_id: Some(run_id.clone()),
                             };
                             let channel = automation.deliver_to.as_deref().unwrap_or("automation");
                             match engine.create_and_start(req, channel, channel).await {
                                 Ok(wf_id) => {
-                                    let msg = format!("Workflow {wf_id} started");
+                                    // Mark as "running" — will be completed by
+                                    // WorkflowEngine when the workflow finishes.
+                                    let msg = format!("Workflow {wf_id} in progress");
                                     let _ = self
                                         .db
-                                        .complete_automation_run(&run_id, "completed", Some(&msg))
+                                        .complete_automation_run(&run_id, "running", Some(&msg))
                                         .await;
                                     let _ = self
                                         .db
@@ -352,45 +307,47 @@ impl CronScheduler {
         Ok(())
     }
 
-    /// Reload jobs from DB (call after add/remove)
-    pub async fn reload(&self) -> Result<()> {
-        let db_jobs = self.db.load_cron_jobs().await?;
-        let mut jobs = self.jobs.lock().await;
-        *jobs = db_jobs;
-        Ok(())
-    }
+}
 
-    /// Add a job to DB and reload
-    pub async fn add_job(
-        &self,
-        name: &str,
-        message: &str,
-        schedule: &str,
-        deliver_to: Option<&str>,
-    ) -> Result<String> {
-        let id = uuid::Uuid::new_v4().to_string()[..8].to_string();
-        self.db
-            .insert_cron_job(&id, name, message, schedule, deliver_to)
-            .await?;
-        self.reload().await?;
-        tracing::info!(id = %id, name = %name, schedule = %schedule, "Cron job added");
-        Ok(id)
-    }
+/// Check if a schedule is overdue — server was down when it should have fired.
+///
+/// Returns true if enough time has passed since `last_run` that at least one
+/// scheduled firing was missed. Used for catch-up on server restart.
+fn is_schedule_overdue(
+    schedule: &str,
+    last_run: Option<&str>,
+    now: &chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let Some(last_str) = last_run else {
+        // Never ran before — not overdue, first run will happen naturally
+        return false;
+    };
+    let last_time = parse_last_run_timestamp(last_str);
+    let Some(last_time) = last_time else {
+        return false;
+    };
 
-    /// Remove a job from DB and reload
-    pub async fn remove_job(&self, id: &str) -> Result<bool> {
-        let removed = self.db.delete_cron_job(id).await?;
-        if removed {
-            self.reload().await?;
-            tracing::info!(id = %id, "Cron job removed");
-        }
-        Ok(removed)
+    // Use AutomationSchedule to compute when the next run should have been
+    use crate::scheduler::automations::AutomationSchedule;
+    let Ok(parsed) = AutomationSchedule::parse_stored(schedule) else {
+        return false;
+    };
+    match parsed.next_run_at(last_time, Some(last_str)) {
+        Some(next) => next < *now, // next run is in the past → missed
+        None => false,
     }
+}
 
-    /// List all jobs
-    pub async fn list_jobs(&self) -> Vec<CronJobRow> {
-        self.jobs.lock().await.clone()
+/// Parse a last_run timestamp (SQLite format or RFC3339).
+fn parse_last_run_timestamp(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    if let Ok(naive) =
+        chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S")
+    {
+        return Some(naive.and_utc());
     }
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
 fn should_fire_schedule(
@@ -752,5 +709,49 @@ mod tests {
 
         // no last_run — should fire (first time)
         assert!(should_fire_schedule("cron:35 9 * * *", None, &now));
+    }
+
+    #[test]
+    fn test_is_schedule_overdue_every_missed() {
+        // Schedule: every 3600s (hourly). Last ran 2 hours ago → overdue.
+        let now = chrono::NaiveDate::from_ymd_opt(2026, 3, 21)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_utc();
+        let last_run = "2026-03-21 10:00:00"; // 2 hours ago
+        assert!(is_schedule_overdue("every:3600", Some(last_run), &now));
+    }
+
+    #[test]
+    fn test_is_schedule_overdue_every_not_missed() {
+        // Schedule: every 3600s. Last ran 30 min ago → not overdue.
+        let now = chrono::NaiveDate::from_ymd_opt(2026, 3, 21)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_utc();
+        let last_run = "2026-03-21 11:30:00"; // 30 min ago
+        assert!(!is_schedule_overdue("every:3600", Some(last_run), &now));
+    }
+
+    #[test]
+    fn test_is_schedule_overdue_cron_missed() {
+        // Schedule: cron 0 9 * * * (daily at 9am). Last ran yesterday at 9am.
+        // Now it's 11am today → overdue (missed today's 9am).
+        let now = chrono::NaiveDate::from_ymd_opt(2026, 3, 21)
+            .unwrap()
+            .and_hms_opt(11, 0, 0)
+            .unwrap()
+            .and_utc();
+        let last_run = "2026-03-20 09:00:00"; // yesterday
+        assert!(is_schedule_overdue("cron:0 9 * * *", Some(last_run), &now));
+    }
+
+    #[test]
+    fn test_is_schedule_overdue_no_last_run() {
+        // No last_run → not overdue (first run will happen naturally).
+        let now = chrono::Utc::now();
+        assert!(!is_schedule_overdue("every:3600", None, &now));
     }
 }

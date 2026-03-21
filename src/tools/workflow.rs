@@ -50,7 +50,7 @@ impl Tool for WorkflowTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["create", "list", "status", "approve", "cancel"],
+                    "enum": ["create", "list", "status", "approve", "cancel", "restart", "delete"],
                     "description": "Action to perform"
                 },
                 "name": {
@@ -97,11 +97,11 @@ impl Tool for WorkflowTool {
                 },
                 "workflow_id": {
                     "type": "string",
-                    "description": "Workflow ID (for action=status/approve/cancel)"
+                    "description": "Workflow ID (for action=status/approve/cancel/restart/delete)"
                 },
                 "filter": {
                     "type": "string",
-                    "enum": ["all", "active", "completed"],
+                    "enum": ["all", "active", "paused", "completed", "failed", "cancelled"],
                     "description": "Status filter (for action=list). Default: all"
                 }
             },
@@ -126,8 +126,10 @@ impl Tool for WorkflowTool {
             "status" => self.handle_status(engine, &args).await,
             "approve" => self.handle_approve(engine, &args).await,
             "cancel" => self.handle_cancel(engine, &args).await,
+            "restart" => self.handle_restart(engine, &args).await,
+            "delete" => self.handle_delete(engine, &args).await,
             other => Ok(ToolResult::error(format!(
-                "Unknown action: {other}. Use create, list, status, approve, or cancel."
+                "Unknown action: {other}. Use create, list, status, approve, cancel, restart, or delete."
             ))),
         }
     }
@@ -175,6 +177,8 @@ impl WorkflowTool {
             objective,
             steps,
             deliver_to,
+            automation_id: None,
+            automation_run_id: None,
         };
 
         match engine
@@ -190,12 +194,18 @@ impl WorkflowTool {
     }
 
     async fn handle_list(&self, engine: &WorkflowEngine, args: &Value) -> Result<ToolResult> {
-        let filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("all");
+        let filter = args
+            .get("filter")
+            .and_then(|v| v.as_str())
+            .unwrap_or("all");
 
         let status_filter = match filter {
             "active" => Some("running"),
+            "paused" => Some("paused"),
             "completed" => Some("completed"),
-            _ => None,
+            "failed" => Some("failed"),
+            "cancelled" => Some("cancelled"),
+            _ => None, // "all" or anything else
         };
 
         let workflows = match engine.list(status_filter).await {
@@ -204,7 +214,10 @@ impl WorkflowTool {
         };
 
         if workflows.is_empty() {
-            return Ok(ToolResult::success("No workflows found."));
+            return Ok(ToolResult::success(match filter {
+                "all" => "No workflows found.".to_string(),
+                other => format!("No {other} workflows found."),
+            }));
         }
 
         let mut lines = Vec::new();
@@ -216,13 +229,8 @@ impl WorkflowTool {
                 .count();
             let total = wf.steps.len();
             lines.push(format!(
-                "- [{}] {} (id: {}) — {}/{} steps, status: {}",
-                wf.id,
-                wf.name,
-                wf.id,
-                completed,
-                total,
-                wf.status.as_str()
+                "- {} ({}) — {}/{} steps, status: {}",
+                wf.name, wf.id, completed, total, wf.status.as_str()
             ));
         }
 
@@ -242,7 +250,7 @@ impl WorkflowTool {
         };
 
         let mut lines = Vec::new();
-        lines.push(format!("Workflow: {} (id: {})", workflow.name, workflow.id));
+        lines.push(format!("Workflow: {} ({})", workflow.name, workflow.id));
         lines.push(format!("Status: {}", workflow.status.as_str()));
         lines.push(format!("Objective: {}", workflow.objective));
         lines.push(format!("Created: {}", workflow.created_at));
@@ -308,6 +316,36 @@ impl WorkflowTool {
         match engine.cancel(id).await {
             Ok(msg) => Ok(ToolResult::success(msg)),
             Err(e) => Ok(ToolResult::error(format!("Failed to cancel workflow: {e}"))),
+        }
+    }
+
+    /// Restart a completed/failed/cancelled workflow from step 0.
+    async fn handle_restart(&self, engine: &WorkflowEngine, args: &Value) -> Result<ToolResult> {
+        let id = match args.get("workflow_id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => return Ok(ToolResult::error("Missing required field: workflow_id")),
+        };
+
+        match engine.restart(id).await {
+            Ok(msg) => Ok(ToolResult::success(msg)),
+            Err(e) => Ok(ToolResult::error(format!(
+                "Failed to restart workflow: {e}"
+            ))),
+        }
+    }
+
+    /// Delete a terminal (completed/failed/cancelled) workflow.
+    async fn handle_delete(&self, engine: &WorkflowEngine, args: &Value) -> Result<ToolResult> {
+        let id = match args.get("workflow_id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => return Ok(ToolResult::error("Missing required field: workflow_id")),
+        };
+
+        match engine.delete(id).await {
+            Ok(msg) => Ok(ToolResult::success(msg)),
+            Err(e) => Ok(ToolResult::error(format!(
+                "Failed to delete workflow: {e}"
+            ))),
         }
     }
 }

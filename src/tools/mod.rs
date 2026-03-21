@@ -4,7 +4,6 @@ pub mod automation;
 pub mod browser;
 pub mod business;
 pub mod contacts;
-pub mod cron;
 #[cfg(feature = "channel-email")]
 pub mod email_inbox;
 pub mod file;
@@ -31,12 +30,11 @@ pub use approval::{
     global_approval_manager, init_approval_manager, ApprovalDecision, ApprovalId, ApprovalLogEntry,
     ApprovalManager, ApprovalResponse, PendingApproval,
 };
-pub use automation::CreateAutomationTool;
+pub use automation::AutomationTool;
 #[cfg(feature = "browser")]
 pub use browser::{BrowserSession, BrowserTool};
 pub use business::BusinessTool;
 pub use contacts::ContactsTool;
-pub use cron::CronTool;
 #[cfg(feature = "channel-email")]
 pub use email_inbox::ReadEmailInboxTool;
 pub use file::{EditFileTool, ListDirTool, ReadFileTool, WriteFileTool};

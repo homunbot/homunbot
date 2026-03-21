@@ -21,8 +21,7 @@ pub(crate) fn tool_result_for_model_context(tool_name: &str, output: &str) -> St
         || tool_name == "remember"
         || tool_name == "message"
         || tool_name == "approval"
-        || tool_name == "cron"
-        || tool_name == "create_automation"
+        || tool_name == "automation"
         || tool_name == "workflow"
         || tool_name == "spawn";
 

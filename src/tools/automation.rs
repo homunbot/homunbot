@@ -1,3 +1,5 @@
+//! LLM tool for creating and managing recurring automations.
+
 use anyhow::{bail, Result};
 use async_trait::async_trait;
 use regex::Regex;
@@ -9,76 +11,111 @@ use super::registry::{
 use crate::config::Config;
 use crate::scheduler::AutomationSchedule;
 use crate::storage::Database;
+use crate::utils::text::truncate_str;
 
-/// Tool to create automations directly from natural conversation.
+/// Automation tool — create, list, manage, and inspect recurring automations.
 ///
-/// It persists to the same `automations` table used by Web UI/CLI,
-/// so the scheduler and runtime pipeline are reused with no extra service.
-pub struct CreateAutomationTool {
+/// Persists to the `automations` table used by Web UI and scheduler,
+/// so all automations are visible and manageable from any interface.
+pub struct AutomationTool {
     db: Database,
 }
 
-impl CreateAutomationTool {
+impl AutomationTool {
     pub fn new(db: Database) -> Self {
         Self { db }
     }
 }
 
 #[async_trait]
-impl Tool for CreateAutomationTool {
+impl Tool for AutomationTool {
     fn name(&self) -> &str {
-        "create_automation"
+        "automation"
     }
 
     fn description(&self) -> &str {
-        "Create a recurring automation from conversation. \
-         Convert natural user timing into a schedule before calling: \
-         prefer 'cron:MIN HOUR DOM MON DOW' or 'every:SECONDS'. \
-         Examples: 'ogni mattina alle 8' -> 'cron:0 8 * * *', \
-         'every 6 hours' -> 'every:21600'."
+        "Create and manage recurring automations with execution tracking, trigger evaluation, \
+         and run history. Use for tasks that should run on a schedule (e.g. 'every morning \
+         check my email'). For simple reminders without tracking, use the cron tool instead. \
+         For one-shot multi-step tasks, use the workflow tool instead."
     }
 
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["create", "list", "status", "history", "enable", "disable", "update", "delete"],
+                    "description": "Action to perform"
+                },
+                "automation_id": {
+                    "type": "string",
+                    "description": "Automation ID (for actions: status, history, enable, disable, update, delete)"
+                },
                 "name": {
                     "type": "string",
-                    "description": "Short automation name. If omitted, generated from prompt."
+                    "description": "Automation name (for action=create, or to rename with action=update)"
                 },
                 "prompt": {
                     "type": "string",
-                    "description": "Task instructions the automation should execute."
+                    "description": "Task instructions the automation should execute (for action=create/update)"
                 },
                 "schedule": {
                     "type": "string",
-                    "description": "Schedule in 'cron:MIN HOUR DOM MON DOW' or 'every:SECONDS'. Bare cron (5 fields) is also accepted."
+                    "description": "Schedule: 'cron:MIN HOUR DOM MON DOW' or 'every:SECONDS'. Natural language accepted: 'ogni mattina alle 8' -> 'cron:0 8 * * *', 'every 6 hours' -> 'every:21600'"
                 },
                 "deliver_to": {
                     "type": "string",
-                    "description": "Optional destination in format channel:chat_id. Defaults to current chat."
+                    "description": "Destination in format channel:chat_id. Defaults to current chat."
                 },
                 "trigger": {
                     "type": "string",
                     "enum": ["always", "on_change", "contains"],
-                    "description": "Notification trigger behavior."
+                    "description": "Notification trigger: always (every run), on_change (only when output changes), contains (only when output contains trigger_value)"
                 },
                 "trigger_value": {
                     "type": "string",
                     "description": "Required when trigger='contains'. Text to detect in run output."
                 },
-                "enabled": {
-                    "type": "boolean",
-                    "description": "Whether automation starts active. Default true."
+                "filter": {
+                    "type": "string",
+                    "enum": ["all", "active", "paused", "error"],
+                    "description": "Status filter for action=list. Default: all"
                 }
             },
-            "required": ["prompt", "schedule"]
+            "required": ["action"]
         })
     }
 
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
-        let prompt = get_string_param(&args, "prompt")?;
-        let schedule_raw = get_string_param(&args, "schedule")?;
+        let action = args
+            .get("action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("list");
+
+        match action {
+            "create" => self.handle_create(&args, ctx).await,
+            "list" => self.handle_list(&args).await,
+            "status" => self.handle_status(&args).await,
+            "history" => self.handle_history(&args).await,
+            "enable" => self.handle_toggle(&args, true).await,
+            "disable" => self.handle_toggle(&args, false).await,
+            "update" => self.handle_update(&args, ctx).await,
+            "delete" => self.handle_delete(&args).await,
+            other => Ok(ToolResult::error(format!(
+                "Unknown action: {other}. Use create, list, status, history, enable, disable, update, or delete."
+            ))),
+        }
+    }
+}
+
+// ── Action handlers ─────────────────────────────────────────────────
+
+impl AutomationTool {
+    async fn handle_create(&self, args: &Value, ctx: &ToolContext) -> Result<ToolResult> {
+        let prompt = get_string_param(args, "prompt")?;
+        let schedule_raw = get_string_param(args, "schedule")?;
         if prompt.trim().is_empty() {
             return Ok(ToolResult::error("Prompt cannot be empty"));
         }
@@ -89,7 +126,7 @@ impl Tool for CreateAutomationTool {
             Err(e) => return Ok(ToolResult::error(e.to_string())),
         };
 
-        let requested_name = get_optional_string(&args, "name");
+        let requested_name = get_optional_string(args, "name");
         let name = requested_name
             .as_deref()
             .map(str::trim)
@@ -97,21 +134,20 @@ impl Tool for CreateAutomationTool {
             .map(|v| v.to_string())
             .unwrap_or_else(|| derive_name(&prompt));
 
-        let deliver_to = get_optional_string(&args, "deliver_to")
+        let deliver_to = get_optional_string(args, "deliver_to")
             .unwrap_or_else(|| format!("{}:{}", ctx.channel, ctx.chat_id));
         if let Err(e) = parse_deliver_to(&deliver_to) {
             return Ok(ToolResult::error(e));
         }
 
-        let trigger = get_optional_string(&args, "trigger");
-        let trigger_value = get_optional_string(&args, "trigger_value");
+        let trigger = get_optional_string(args, "trigger");
+        let trigger_value = get_optional_string(args, "trigger_value");
         let (trigger_kind, trigger_value) =
             match normalize_trigger(trigger.as_deref(), trigger_value.as_deref()) {
                 Ok(v) => v,
                 Err(e) => return Ok(ToolResult::error(e)),
             };
 
-        let enabled = get_optional_bool(&args, "enabled").unwrap_or(true);
         let config = match Config::load() {
             Ok(cfg) => cfg,
             Err(e) => {
@@ -122,9 +158,7 @@ impl Tool for CreateAutomationTool {
         };
         let compiled_plan =
             crate::scheduler::automations::compile_automation_plan(&prompt, &config);
-        let status = if !enabled {
-            "paused"
-        } else if compiled_plan.is_valid() {
+        let status = if compiled_plan.is_valid() {
             "active"
         } else {
             "invalid_config"
@@ -141,7 +175,7 @@ impl Tool for CreateAutomationTool {
                 name.trim(),
                 prompt.trim(),
                 &schedule,
-                enabled,
+                true,
                 status,
                 Some(&deliver_to),
                 &trigger_kind,
@@ -181,7 +215,271 @@ impl Tool for CreateAutomationTool {
             validation_note
         )))
     }
+
+    async fn handle_list(&self, args: &Value) -> Result<ToolResult> {
+        let filter = args
+            .get("filter")
+            .and_then(|v| v.as_str())
+            .unwrap_or("all");
+
+        let automations = match self.db.load_automations().await {
+            Ok(a) => a,
+            Err(e) => {
+                return Ok(ToolResult::error(format!(
+                    "Failed to load automations: {e}"
+                )))
+            }
+        };
+
+        let filtered: Vec<_> = automations
+            .into_iter()
+            .filter(|a| match filter {
+                "active" => a.status == "active" && a.enabled,
+                "paused" => a.status == "paused" || !a.enabled,
+                "error" => a.status == "error" || a.status == "invalid_config",
+                _ => true,
+            })
+            .collect();
+
+        if filtered.is_empty() {
+            return Ok(ToolResult::success(match filter {
+                "all" => "No automations found.".to_string(),
+                other => format!("No {other} automations found."),
+            }));
+        }
+
+        let mut lines = Vec::new();
+        for a in &filtered {
+            let enabled = if a.enabled { "on" } else { "off" };
+            let last = a
+                .last_result
+                .as_deref()
+                .map(|r| truncate_str(r, 60, "..."))
+                .unwrap_or_else(|| "—".to_string());
+            lines.push(format!(
+                "- {} ({}) [{}/{}] schedule={} trigger={} last: {}",
+                a.name, a.id, a.status, enabled, a.schedule, a.trigger_kind, last
+            ));
+        }
+
+        Ok(ToolResult::success(lines.join("\n")))
+    }
+
+    async fn handle_status(&self, args: &Value) -> Result<ToolResult> {
+        let id = match args.get("automation_id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => return Ok(ToolResult::error("Missing required field: automation_id")),
+        };
+
+        let automation = match self.db.load_automation(id).await {
+            Ok(Some(a)) => a,
+            Ok(None) => return Ok(ToolResult::error(format!("Automation '{id}' not found"))),
+            Err(e) => return Ok(ToolResult::error(format!("Failed to load automation: {e}"))),
+        };
+
+        let mut lines = Vec::new();
+        lines.push(format!("Automation: {} ({})", automation.name, automation.id));
+        lines.push(format!(
+            "Status: {} | Enabled: {}",
+            automation.status, automation.enabled
+        ));
+        lines.push(format!("Schedule: {}", automation.schedule));
+        lines.push(format!("Prompt: {}", truncate_str(&automation.prompt, 200, "...")));
+        lines.push(format!(
+            "Trigger: {}{}",
+            automation.trigger_kind,
+            automation
+                .trigger_value
+                .as_deref()
+                .map(|v| format!(" (value: {v})"))
+                .unwrap_or_default()
+        ));
+        if let Some(ref deliver) = automation.deliver_to {
+            lines.push(format!("Deliver to: {deliver}"));
+        }
+        if let Some(ref last_run) = automation.last_run {
+            lines.push(format!("Last run: {last_run}"));
+        }
+        if let Some(ref last_result) = automation.last_result {
+            lines.push(format!(
+                "Last result: {}",
+                truncate_str(last_result, 300, "...")
+            ));
+        }
+        if let Some(ref errors) = automation.validation_errors {
+            let parsed = crate::scheduler::automations::parse_validation_errors_json(Some(errors));
+            if !parsed.is_empty() {
+                lines.push(format!("Validation errors: {}", parsed.join(" | ")));
+            }
+        }
+
+        Ok(ToolResult::success(lines.join("\n")))
+    }
+
+    async fn handle_history(&self, args: &Value) -> Result<ToolResult> {
+        let id = match args.get("automation_id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => return Ok(ToolResult::error("Missing required field: automation_id")),
+        };
+
+        let runs = match self.db.load_automation_runs(id, 10).await {
+            Ok(r) => r,
+            Err(e) => return Ok(ToolResult::error(format!("Failed to load history: {e}"))),
+        };
+
+        if runs.is_empty() {
+            return Ok(ToolResult::success(format!(
+                "No run history for automation '{id}'."
+            )));
+        }
+
+        let mut lines = vec![format!("Last {} runs for '{id}':", runs.len())];
+        for run in &runs {
+            let result = run
+                .result
+                .as_deref()
+                .map(|r| truncate_str(r, 80, "..."))
+                .unwrap_or_else(|| "—".to_string());
+            let finished = run.finished_at.as_deref().unwrap_or("running");
+            lines.push(format!(
+                "- [{}] {} → {} | {}",
+                run.status, run.started_at, finished, result
+            ));
+        }
+
+        Ok(ToolResult::success(lines.join("\n")))
+    }
+
+    async fn handle_toggle(&self, args: &Value, enable: bool) -> Result<ToolResult> {
+        let id = match args.get("automation_id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => return Ok(ToolResult::error("Missing required field: automation_id")),
+        };
+
+        let automation = match self.db.load_automation(id).await {
+            Ok(Some(a)) => a,
+            Ok(None) => return Ok(ToolResult::error(format!("Automation '{id}' not found"))),
+            Err(e) => return Ok(ToolResult::error(format!("Failed to load automation: {e}"))),
+        };
+
+        let new_status = if enable { "active" } else { "paused" };
+        if let Err(e) = self
+            .db
+            .update_automation(
+                id,
+                crate::storage::AutomationUpdate {
+                    enabled: Some(enable),
+                    status: Some(new_status.to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            return Ok(ToolResult::error(format!(
+                "Failed to update automation: {e}"
+            )));
+        }
+
+        let action_word = if enable { "enabled" } else { "disabled" };
+        Ok(ToolResult::success(format!(
+            "Automation \"{}\" ({id}) {action_word}.",
+            automation.name
+        )))
+    }
+
+    async fn handle_update(&self, args: &Value, _ctx: &ToolContext) -> Result<ToolResult> {
+        let id = match args.get("automation_id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => return Ok(ToolResult::error("Missing required field: automation_id")),
+        };
+
+        if self.db.load_automation(id).await?.is_none() {
+            return Ok(ToolResult::error(format!("Automation '{id}' not found")));
+        }
+
+        let mut update = crate::storage::AutomationUpdate::default();
+        let mut changed = Vec::new();
+
+        if let Some(name) = get_optional_string(args, "name") {
+            update.name = Some(name.clone());
+            changed.push(format!("name={name}"));
+        }
+        if let Some(prompt) = get_optional_string(args, "prompt") {
+            let cleaned = crate::scheduler::automations::normalize_runtime_prompt(&prompt);
+            update.prompt = Some(cleaned.clone());
+            changed.push("prompt updated".to_string());
+        }
+        if let Some(schedule_raw) = get_optional_string(args, "schedule") {
+            let schedule = match normalize_schedule(&schedule_raw) {
+                Ok(v) => v,
+                Err(e) => return Ok(ToolResult::error(e.to_string())),
+            };
+            update.schedule = Some(schedule.clone());
+            changed.push(format!("schedule={schedule}"));
+        }
+        if let Some(deliver_to) = get_optional_string(args, "deliver_to") {
+            if let Err(e) = parse_deliver_to(&deliver_to) {
+                return Ok(ToolResult::error(e));
+            }
+            update.deliver_to = Some(Some(deliver_to.clone()));
+            changed.push(format!("deliver_to={deliver_to}"));
+        }
+        if let Some(trigger) = get_optional_string(args, "trigger") {
+            let trigger_value = get_optional_string(args, "trigger_value");
+            let (kind, value) =
+                match normalize_trigger(Some(&trigger), trigger_value.as_deref()) {
+                    Ok(v) => v,
+                    Err(e) => return Ok(ToolResult::error(e)),
+                };
+            update.trigger_kind = Some(kind.clone());
+            update.trigger_value = Some(value.clone());
+            changed.push(format!("trigger={kind}"));
+        }
+
+        if changed.is_empty() {
+            return Ok(ToolResult::error(
+                "No fields to update. Provide name, prompt, schedule, deliver_to, or trigger.",
+            ));
+        }
+
+        if let Err(e) = self.db.update_automation(id, update).await {
+            return Ok(ToolResult::error(format!(
+                "Failed to update automation: {e}"
+            )));
+        }
+
+        Ok(ToolResult::success(format!(
+            "Automation '{id}' updated: {}",
+            changed.join(", ")
+        )))
+    }
+
+    async fn handle_delete(&self, args: &Value) -> Result<ToolResult> {
+        let id = match args.get("automation_id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => return Ok(ToolResult::error("Missing required field: automation_id")),
+        };
+
+        let automation = match self.db.load_automation(id).await {
+            Ok(Some(a)) => a,
+            Ok(None) => return Ok(ToolResult::error(format!("Automation '{id}' not found"))),
+            Err(e) => return Ok(ToolResult::error(format!("Failed to load automation: {e}"))),
+        };
+
+        if let Err(e) = self.db.delete_automation(id).await {
+            return Ok(ToolResult::error(format!(
+                "Failed to delete automation: {e}"
+            )));
+        }
+
+        Ok(ToolResult::success(format!(
+            "Automation \"{}\" ({id}) deleted.",
+            automation.name
+        )))
+    }
 }
+
+// ── Schedule & trigger helpers (unchanged) ──────────────────────────
 
 fn normalize_schedule(raw: &str) -> Result<String> {
     let raw = raw.trim();
@@ -214,7 +512,6 @@ fn normalize_schedule(raw: &str) -> Result<String> {
 }
 
 fn parse_natural_interval(raw: &str) -> Option<u64> {
-    // English: every 6 hours / every 30 minutes
     let re_en = Regex::new(
         r"(?i)^\s*every\s+(\d+)\s*(second|seconds|sec|s|minute|minutes|min|m|hour|hours|h)\s*$",
     )
@@ -230,7 +527,6 @@ fn parse_natural_interval(raw: &str) -> Option<u64> {
         };
     }
 
-    // Italian: ogni 6 ore / ogni 30 minuti / ogni 10 secondi
     let re_it =
         Regex::new(r"(?i)^\s*ogni\s+(\d+)\s*(secondo|secondi|minuto|minuti|ora|ore)\s*$").ok()?;
     if let Some(c) = re_it.captures(raw) {
@@ -248,7 +544,6 @@ fn parse_natural_interval(raw: &str) -> Option<u64> {
 }
 
 fn parse_natural_daily(raw: &str) -> Option<(u32, u32, bool)> {
-    // every day at 08[:30]
     let re_en = Regex::new(
         r"(?i)^\s*every\s+(day|weekday|weekdays|morning)\s*(?:at)?\s*(\d{1,2})(?::(\d{2}))?\s*$",
     )
@@ -267,7 +562,6 @@ fn parse_natural_daily(raw: &str) -> Option<(u32, u32, bool)> {
         return Some((h, m, weekdays));
     }
 
-    // ogni giorno alle 8[:30] / ogni giorno feriale alle 9
     let re_it = Regex::new(
         r"(?i)^\s*ogni\s+giorno(?:\s+feriale)?\s*(?:alle)?\s*(\d{1,2})(?::(\d{2}))?\s*$",
     )
@@ -396,9 +690,10 @@ mod tests {
     async fn test_create_automation_success() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("test.db")).await.unwrap();
-        let tool = CreateAutomationTool::new(db.clone());
+        let tool = AutomationTool::new(db.clone());
 
         let args = json!({
+            "action": "create",
             "name": "Email Digest",
             "prompt": "Vai su Gmail, leggi le email non lette e riassumi.",
             "schedule": "ogni giorno alle 9",
@@ -406,7 +701,7 @@ mod tests {
         });
 
         let res = tool.execute(args, &test_ctx()).await.unwrap();
-        assert!(!res.is_error);
+        assert!(!res.is_error, "create failed: {}", res.output);
         assert!(res.output.contains("Automation created"));
 
         let rows = db.load_automations().await.unwrap();
@@ -416,5 +711,99 @@ mod tests {
         assert_eq!(row.schedule, "cron:0 9 * * *");
         assert_eq!(row.deliver_to.as_deref(), Some("telegram:123456"));
         assert_eq!(row.trigger_kind, "always");
+    }
+
+    #[tokio::test]
+    async fn test_list_and_status_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("test.db")).await.unwrap();
+        let tool = AutomationTool::new(db.clone());
+
+        // Create one
+        let args = json!({
+            "action": "create",
+            "name": "Test Auto",
+            "prompt": "do something",
+            "schedule": "every:3600"
+        });
+        let res = tool.execute(args, &test_ctx()).await.unwrap();
+        assert!(!res.is_error);
+
+        // List all
+        let res = tool
+            .execute(json!({"action": "list"}), &test_ctx())
+            .await
+            .unwrap();
+        assert!(!res.is_error);
+        assert!(res.output.contains("Test Auto"));
+
+        // Status by ID
+        let rows = db.load_automations().await.unwrap();
+        let id = &rows[0].id;
+        let res = tool
+            .execute(
+                json!({"action": "status", "automation_id": id}),
+                &test_ctx(),
+            )
+            .await
+            .unwrap();
+        assert!(!res.is_error);
+        assert!(res.output.contains("Test Auto"));
+        assert!(res.output.contains("every:3600"));
+    }
+
+    #[tokio::test]
+    async fn test_enable_disable_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("test.db")).await.unwrap();
+        let tool = AutomationTool::new(db.clone());
+
+        let args = json!({
+            "action": "create",
+            "name": "Toggle Test",
+            "prompt": "check stuff",
+            "schedule": "every:600"
+        });
+        tool.execute(args, &test_ctx()).await.unwrap();
+        let id = db.load_automations().await.unwrap()[0].id.clone();
+
+        // Disable
+        let res = tool
+            .execute(
+                json!({"action": "disable", "automation_id": &id}),
+                &test_ctx(),
+            )
+            .await
+            .unwrap();
+        assert!(!res.is_error);
+        assert!(res.output.contains("disabled"));
+
+        let auto = db.load_automation(&id).await.unwrap().unwrap();
+        assert!(!auto.enabled);
+        assert_eq!(auto.status, "paused");
+
+        // Enable
+        let res = tool
+            .execute(
+                json!({"action": "enable", "automation_id": &id}),
+                &test_ctx(),
+            )
+            .await
+            .unwrap();
+        assert!(!res.is_error);
+        assert!(res.output.contains("enabled"));
+
+        // Delete
+        let res = tool
+            .execute(
+                json!({"action": "delete", "automation_id": &id}),
+                &test_ctx(),
+            )
+            .await
+            .unwrap();
+        assert!(!res.is_error);
+        assert!(res.output.contains("deleted"));
+
+        assert!(db.load_automation(&id).await.unwrap().is_none());
     }
 }

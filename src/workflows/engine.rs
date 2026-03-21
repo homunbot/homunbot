@@ -115,8 +115,18 @@ impl WorkflowEngine {
                     .await;
                 let _ = db.cancel_pending_steps(&wf_id).await;
 
-                // Load workflow name for notification
+                // Load workflow for notification + automation run completion
                 if let Ok(Some(wf)) = db.load_workflow(&wf_id).await {
+                    // Complete parent automation run with error
+                    if let (Some(auto_id), Some(run_id)) =
+                        (&wf.automation_id, &wf.automation_run_id)
+                    {
+                        let _ = crate::scheduler::automations::evaluate_and_complete_automation_run(
+                            &db, auto_id, run_id, &e.to_string(), true,
+                        )
+                        .await;
+                    }
+
                     let total = wf.steps.len();
                     let step = wf.current_step_idx;
                     let _ = event_tx
@@ -251,6 +261,8 @@ impl WorkflowEngine {
                 })
                 .collect(),
             deliver_to: workflow.deliver_to.clone(),
+            automation_id: workflow.automation_id.clone(),
+            automation_run_id: None, // restarted workflows don't link to a specific run
         };
 
         let channel_chat = workflow.created_by.as_deref().unwrap_or("web:web");
@@ -558,6 +570,7 @@ fn build_step_prompt(workflow: &Workflow, step: &WorkflowStep, tool_names: &[Str
 }
 
 /// Mark workflow as completed and send final notification.
+/// If this workflow was spawned by an automation, also completes the automation run.
 async fn complete_workflow(
     db: &Database,
     event_tx: &mpsc::Sender<WorkflowEvent>,
@@ -575,6 +588,17 @@ async fn complete_workflow(
         .find(|s| s.status == StepStatus::Completed && s.result.is_some())
         .and_then(|s| s.result.clone())
         .unwrap_or_else(|| "Workflow completed successfully.".to_string());
+
+    // Complete the parent automation run (if this workflow was spawned by one).
+    // Uses the shared trigger evaluation so on_change/contains work for workflow automations.
+    if let (Some(auto_id), Some(run_id)) =
+        (&workflow.automation_id, &workflow.automation_run_id)
+    {
+        let _ = crate::scheduler::automations::evaluate_and_complete_automation_run(
+            db, auto_id, run_id, &summary, false,
+        )
+        .await;
+    }
 
     let _ = event_tx
         .send(WorkflowEvent::WorkflowCompleted {

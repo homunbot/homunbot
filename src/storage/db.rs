@@ -315,6 +315,27 @@ impl Database {
         )
         .await?;
 
+        Self::apply_migration(
+            pool,
+            "031_token_expiry",
+            include_str!("../../migrations/031_token_expiry.sql"),
+        )
+        .await?;
+
+        Self::apply_migration(
+            pool,
+            "032_workflow_automation_link",
+            include_str!("../../migrations/032_workflow_automation_link.sql"),
+        )
+        .await?;
+
+        Self::apply_migration(
+            pool,
+            "033_drop_cron_jobs",
+            include_str!("../../migrations/033_drop_cron_jobs.sql"),
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -812,83 +833,6 @@ impl Database {
             .context("Failed to clear old long-term memory")?;
 
         self.insert_memory(None, content, "long_term").await
-    }
-
-    // --- Cron job operations ---
-
-    /// Insert a new cron job
-    pub async fn insert_cron_job(
-        &self,
-        id: &str,
-        name: &str,
-        message: &str,
-        schedule: &str,
-        deliver_to: Option<&str>,
-    ) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO cron_jobs (id, name, message, schedule, deliver_to)
-             VALUES (?, ?, ?, ?, ?)",
-        )
-        .bind(id)
-        .bind(name)
-        .bind(message)
-        .bind(schedule)
-        .bind(deliver_to)
-        .execute(&self.pool)
-        .await
-        .context("Failed to insert cron job")?;
-
-        Ok(())
-    }
-
-    /// Load all enabled cron jobs
-    pub async fn load_cron_jobs(&self) -> Result<Vec<CronJobRow>> {
-        let rows = sqlx::query_as::<_, CronJobRow>(
-            "SELECT id, name, message, schedule, enabled, deliver_to, last_run, created_at
-             FROM cron_jobs
-             ORDER BY created_at ASC",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .context("Failed to load cron jobs")?;
-
-        Ok(rows)
-    }
-
-    /// Update last_run timestamp for a cron job
-    pub async fn update_cron_last_run(&self, id: &str) -> Result<()> {
-        sqlx::query("UPDATE cron_jobs SET last_run = datetime('now') WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .context("Failed to update cron job last_run")?;
-
-        Ok(())
-    }
-
-    /// Delete a cron job
-    pub async fn delete_cron_job(&self, id: &str) -> Result<bool> {
-        let result = sqlx::query("DELETE FROM cron_jobs WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .context("Failed to delete cron job")?;
-
-        Ok(result.rows_affected() > 0)
-    }
-
-    // --- Memory chunk operations (for vector + FTS5 search) ---
-
-    /// Toggle a cron job's enabled state
-    pub async fn toggle_cron_job(&self, id: &str, enabled: bool) -> Result<bool> {
-        let result = sqlx::query("UPDATE cron_jobs SET enabled = ? WHERE id = ?")
-            .bind(enabled)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .context("Failed to toggle cron job")?;
-
-        Ok(result.rows_affected() > 0)
     }
 
     // --- Automation operations ---
@@ -1920,18 +1864,6 @@ pub struct RagChunkRow {
     pub content: String,
     pub token_count: i64,
     pub sensitive: bool,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct CronJobRow {
-    pub id: String,
-    pub name: String,
-    pub message: String,
-    pub schedule: String,
-    pub enabled: bool,
-    pub deliver_to: Option<String>,
-    pub last_run: Option<String>,
     pub created_at: String,
 }
 

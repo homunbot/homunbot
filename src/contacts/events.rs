@@ -63,7 +63,7 @@ async fn scan_and_notify(
         );
 
         let cron_event = CronEvent {
-            kind: crate::scheduler::cron::ScheduledKind::Cron,
+            kind: crate::scheduler::cron::ScheduledKind::Automation,
             job_id: format!("contact_event_{}", ev.id),
             job_name: format!("Contact: {} {}", ue.contact_name, label),
             message: message.clone(),
@@ -85,7 +85,7 @@ async fn scan_and_notify(
 
             if !deliver_to.is_empty() {
                 let greet_event = CronEvent {
-                    kind: crate::scheduler::cron::ScheduledKind::Cron,
+                    kind: crate::scheduler::cron::ScheduledKind::Automation,
                     job_id: format!("contact_greet_{}", ev.id),
                     job_name: format!("Auto-greet: {}", ue.contact_name),
                     message: greeting,

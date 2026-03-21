@@ -764,6 +764,154 @@ fn parse_last_run(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
+// ═══════════════════════════════════════════════════════════════
+// SHARED TRIGGER EVALUATION + RUN COMPLETION
+// ═══════════════════════════════════════════════════════════════
+
+/// Evaluate the automation trigger, complete the run, and update the automation status.
+///
+/// Shared by:
+/// - Gateway post-processing (prompt-based automations)
+/// - WorkflowEngine completion callback (workflow-based automations)
+///
+/// Returns `(should_notify, trigger_note)` — caller decides whether to send outbound.
+pub async fn evaluate_and_complete_automation_run(
+    db: &crate::storage::Database,
+    automation_id: &str,
+    run_id: &str,
+    run_output: &str,
+    is_error: bool,
+) -> Result<(bool, Option<String>)> {
+    let run_result = if is_error {
+        format!("Run failed: {run_output}")
+    } else {
+        run_output.to_string()
+    };
+    let run_status = if is_error { "error" } else { "success" };
+    let automation_status = if is_error { "error" } else { "active" };
+
+    // Evaluate trigger condition (only for successful runs)
+    let mut should_notify = true;
+    let mut trigger_note: Option<String> = None;
+
+    if !is_error {
+        if let Ok(Some(automation)) = db.load_automation(automation_id).await {
+            let previous_result = db
+                .load_last_successful_automation_result(automation_id, Some(run_id))
+                .await
+                .ok()
+                .flatten();
+            let (notify, note) = evaluate_automation_trigger(
+                &automation.trigger_kind,
+                automation.trigger_value.as_deref(),
+                previous_result.as_deref(),
+                run_output,
+            );
+            should_notify = notify;
+            trigger_note = note;
+        }
+    }
+
+    // Complete the run
+    if let Err(e) = db
+        .complete_automation_run(run_id, run_status, Some(&run_result))
+        .await
+    {
+        tracing::error!(error = %e, run_id = %run_id, "Failed to complete automation run");
+    }
+
+    // Update automation status
+    let latest_result = if is_error {
+        truncate_str(&run_result, 500, "...")
+    } else if let Some(ref note) = trigger_note {
+        format!("{note} | output: {}", truncate_str(&run_result, 300, "..."))
+    } else {
+        truncate_str(&run_result, 500, "...")
+    };
+
+    if let Err(e) = db
+        .update_automation(
+            automation_id,
+            crate::storage::AutomationUpdate {
+                status: Some(automation_status.to_string()),
+                last_result: Some(Some(latest_result)),
+                touch_last_run: true,
+                ..Default::default()
+            },
+        )
+        .await
+    {
+        tracing::error!(
+            error = %e,
+            automation_id = %automation_id,
+            "Failed to update automation status after run"
+        );
+    }
+
+    Ok((should_notify, trigger_note))
+}
+
+/// Evaluate whether an automation trigger condition is satisfied.
+///
+/// Returns `(should_notify, optional_note)`.
+pub fn evaluate_automation_trigger(
+    trigger_kind: &str,
+    trigger_value: Option<&str>,
+    previous_result: Option<&str>,
+    current_result: &str,
+) -> (bool, Option<String>) {
+    match trigger_kind.trim().to_ascii_lowercase().as_str() {
+        "always" => (true, None),
+        "on_change" | "changed" => {
+            let Some(previous) = previous_result else {
+                return (
+                    true,
+                    Some("No previous successful run; notifying".to_string()),
+                );
+            };
+            let previous_norm = normalize_for_trigger_compare(previous);
+            let current_norm = normalize_for_trigger_compare(current_result);
+            if previous_norm == current_norm {
+                (
+                    false,
+                    Some("Trigger on_change not matched (result unchanged)".to_string()),
+                )
+            } else {
+                (true, None)
+            }
+        }
+        "contains" => {
+            let needle = trigger_value.unwrap_or("").trim();
+            if needle.is_empty() {
+                return (
+                    true,
+                    Some("Trigger contains misconfigured; defaulting to notify".to_string()),
+                );
+            }
+            let haystack = current_result.to_ascii_lowercase();
+            if haystack.contains(&needle.to_ascii_lowercase()) {
+                (true, None)
+            } else {
+                (
+                    false,
+                    Some(format!("Trigger contains not matched ('{needle}')")),
+                )
+            }
+        }
+        other => (
+            true,
+            Some(format!("Unknown trigger '{other}'; defaulting to notify")),
+        ),
+    }
+}
+
+fn normalize_for_trigger_compare(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

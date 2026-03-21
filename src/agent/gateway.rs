@@ -9,7 +9,7 @@ use crate::bus::{
     build_outbound_meta, InboundMessage, MessageMetadata, OutboundMessage, StreamMessage,
 };
 use crate::config::Config;
-use crate::scheduler::{CronEvent, CronScheduler, ScheduledKind};
+use crate::scheduler::{CronEvent, CronScheduler};
 use crate::security::PairingManager;
 use crate::session::SessionManager;
 use crate::storage::{AutomationUpdate, Database, EmailPendingRow};
@@ -1450,7 +1450,7 @@ impl Gateway {
                 let base_suppress_outbound =
                     should_suppress_system_outbound(inbound_metadata.as_ref(), &channel_name);
                 let blocked_tools: &'static [&'static str] = if is_automation_context {
-                    &["create_automation", "cron"]
+                    &["automation"]
                 } else {
                     &[]
                 };
@@ -1488,16 +1488,10 @@ impl Gateway {
         let cron_db = self.db.clone();
         let cron_loop = tokio::spawn(async move {
             while let Some(event) = cron_event_rx.recv().await {
-                let kind = event.kind;
-                let kind_name = match kind {
-                    ScheduledKind::Cron => "cron",
-                    ScheduledKind::Automation => "automation",
-                };
                 tracing::info!(
-                    kind = kind_name,
                     job_id = %event.job_id,
                     job_name = %event.job_name,
-                    "Queueing scheduler event"
+                    "Queueing automation event"
                 );
 
                 let (channel, chat_id) = event
@@ -1506,20 +1500,17 @@ impl Gateway {
                     .and_then(|d| d.rsplit_once(':'))
                     .map(|(c, id)| (c.trim().to_string(), id.trim().to_string()))
                     .filter(|(c, id)| !c.is_empty() && !id.is_empty())
-                    .unwrap_or_else(|| match kind {
-                        ScheduledKind::Automation => ("cli".to_string(), "default".to_string()),
-                        ScheduledKind::Cron => ("cron".to_string(), event.job_id.clone()),
-                    });
+                    .unwrap_or_else(|| ("cli".to_string(), "default".to_string()));
 
                 let inbound = InboundMessage {
                     channel,
-                    sender_id: format!("system:{kind_name}"),
+                    sender_id: "system:automation".to_string(),
                     chat_id,
                     content: event.message,
                     timestamp: chrono::Utc::now(),
                     metadata: Some(MessageMetadata {
                         is_system: true,
-                        scheduler_kind: Some(kind_name.to_string()),
+                        scheduler_kind: Some("automation".to_string()),
                         scheduler_job_id: Some(event.job_id.clone()),
                         automation_run_id: event.automation_run_id.clone(),
                         ..Default::default()
@@ -1527,26 +1518,24 @@ impl Gateway {
                 };
 
                 if let Err(e) = scheduler_inbound_tx.send(inbound).await {
-                    tracing::error!(error = %e, kind = kind_name, "Failed to enqueue scheduler event");
+                    tracing::error!(error = %e, "Failed to enqueue automation event");
 
-                    if kind == ScheduledKind::Automation {
-                        if let Some(run_id) = event.automation_run_id {
-                            let result_msg = "Failed to enqueue automation run into inbound queue";
-                            let _ = cron_db
-                                .complete_automation_run(&run_id, "error", Some(result_msg))
-                                .await;
-                            let _ = cron_db
-                                .update_automation(
-                                    &event.job_id,
-                                    AutomationUpdate {
-                                        status: Some("error".to_string()),
-                                        last_result: Some(Some(result_msg.to_string())),
-                                        touch_last_run: true,
-                                        ..Default::default()
-                                    },
-                                )
-                                .await;
-                        }
+                    if let Some(run_id) = event.automation_run_id {
+                        let result_msg = "Failed to enqueue automation run into inbound queue";
+                        let _ = cron_db
+                            .complete_automation_run(&run_id, "error", Some(result_msg))
+                            .await;
+                        let _ = cron_db
+                            .update_automation(
+                                &event.job_id,
+                                AutomationUpdate {
+                                    status: Some("error".to_string()),
+                                    last_result: Some(Some(result_msg.to_string())),
+                                    touch_last_run: true,
+                                    ..Default::default()
+                                },
+                            )
+                            .await;
                     }
                 }
             }
@@ -1992,91 +1981,37 @@ async fn dispatch_to_agent(
     };
 
     let mut suppress_outbound = ctx.suppress_outbound;
-    let mut trigger_note: Option<String> = None;
 
-    if processing_error.is_none() {
-        if let (Some(run_id), Some(automation_id)) = (
-            ctx.automation_run_id.as_deref(),
-            ctx.automation_id.as_deref(),
-        ) {
-            if let Ok(Some(automation)) = task_db.load_automation(automation_id).await {
-                let previous_result = task_db
-                    .load_last_successful_automation_result(automation_id, Some(run_id))
-                    .await
-                    .ok()
-                    .flatten();
-                let (should_notify, note) = evaluate_automation_trigger(
-                    &automation.trigger_kind,
-                    automation.trigger_value.as_deref(),
-                    previous_result.as_deref(),
-                    &run_output,
-                );
-                if !should_notify {
-                    suppress_outbound = true;
-                    trigger_note = note;
-                }
+    // Evaluate trigger + complete automation run via shared function.
+    // This same function is called by WorkflowEngine for workflow-based automations.
+    if let (Some(run_id), Some(automation_id)) = (
+        ctx.automation_run_id.as_deref(),
+        ctx.automation_id.as_deref(),
+    ) {
+        let is_error = processing_error.is_some();
+        let output = if is_error {
+            processing_error.as_deref().unwrap_or("Unknown error")
+        } else {
+            &run_output
+        };
+        if let Ok((should_notify, _note)) =
+            crate::scheduler::automations::evaluate_and_complete_automation_run(
+                &task_db,
+                automation_id,
+                &run_id,
+                output,
+                is_error,
+            )
+            .await
+        {
+            if !should_notify {
+                suppress_outbound = true;
             }
         }
     }
 
     if !suppress_outbound {
         route_outbound(outbound, &senders, &known_chat_ids).await;
-    }
-
-    if let Some(run_id) = ctx.automation_run_id {
-        let run_result = match processing_error.as_deref() {
-            Some(e) => format!("Run failed: {e}"),
-            None => run_output.clone(),
-        };
-        let run_status = if processing_error.is_some() {
-            "error"
-        } else {
-            "success"
-        };
-        let automation_status = if processing_error.is_some() {
-            "error"
-        } else {
-            "active"
-        };
-
-        if let Err(e) = task_db
-            .complete_automation_run(&run_id, run_status, Some(&run_result))
-            .await
-        {
-            tracing::error!(
-                error = %e,
-                run_id = %run_id,
-                "Failed to complete automation run"
-            );
-        }
-
-        if let Some(automation_id) = ctx.automation_id {
-            let latest_result = if processing_error.is_some() {
-                truncate_str(&run_result, 500, "...")
-            } else if let Some(note) = trigger_note.as_deref() {
-                format!("{note} | output: {}", truncate_str(&run_result, 300, "..."))
-            } else {
-                truncate_str(&run_result, 500, "...")
-            };
-            if let Err(e) = task_db
-                .update_automation(
-                    &automation_id,
-                    AutomationUpdate {
-                        status: Some(automation_status.to_string()),
-                        last_result: Some(Some(latest_result)),
-                        touch_last_run: true,
-                        ..Default::default()
-                    },
-                )
-                .await
-            {
-                tracing::error!(
-                    error = %e,
-                    automation_id = %automation_id,
-                    "Failed to update automation status after run"
-                );
-            }
-        }
     }
 }
 
@@ -2091,63 +2026,8 @@ fn should_suppress_system_outbound(metadata: Option<&MessageMetadata>, channel: 
 }
 
 
-fn evaluate_automation_trigger(
-    trigger_kind: &str,
-    trigger_value: Option<&str>,
-    previous_result: Option<&str>,
-    current_result: &str,
-) -> (bool, Option<String>) {
-    match trigger_kind.trim().to_ascii_lowercase().as_str() {
-        "always" => (true, None),
-        "on_change" | "changed" => {
-            let Some(previous) = previous_result else {
-                return (
-                    true,
-                    Some("No previous successful run; notifying".to_string()),
-                );
-            };
-            let previous_norm = normalize_for_compare(previous);
-            let current_norm = normalize_for_compare(current_result);
-            if previous_norm == current_norm {
-                (
-                    false,
-                    Some("Trigger on_change not matched (result unchanged)".to_string()),
-                )
-            } else {
-                (true, None)
-            }
-        }
-        "contains" => {
-            let needle = trigger_value.unwrap_or("").trim();
-            if needle.is_empty() {
-                return (
-                    true,
-                    Some("Trigger contains misconfigured; defaulting to notify".to_string()),
-                );
-            }
-            let haystack = current_result.to_ascii_lowercase();
-            if haystack.contains(&needle.to_ascii_lowercase()) {
-                (true, None)
-            } else {
-                (
-                    false,
-                    Some(format!("Trigger contains not matched ('{needle}')")),
-                )
-            }
-        }
-        other => (
-            true,
-            Some(format!("Unknown trigger '{other}'; defaulting to notify")),
-        ),
-    }
-}
-
-fn normalize_for_compare(text: &str) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase()
-}
+// evaluate_automation_trigger and normalize_for_compare moved to
+// crate::scheduler::automations — shared with WorkflowEngine completion path.
 
 fn infer_automation_id(inbound: &InboundMessage) -> Option<String> {
     if let Some(id) = inbound
