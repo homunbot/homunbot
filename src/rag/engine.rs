@@ -4,8 +4,10 @@ use std::path::Path;
 use anyhow::{Context as _, Result};
 use sha2::{Digest, Sha256};
 
+use std::sync::Arc;
+
 use crate::agent::embeddings::EmbeddingEngine;
-use crate::storage::{Database, RagChunkRow, RagSourceRow};
+use crate::storage::{RagChunkRow, RagSourceRow, RagStore};
 
 use super::chunker::{chunk_file, detect_doc_type, is_supported, ChunkOptions};
 use super::sensitive;
@@ -31,15 +33,25 @@ pub struct RagStats {
 
 /// Unified RAG engine — handles ingestion, search, and lifecycle.
 pub struct RagEngine {
-    db: Database,
+    store: Arc<dyn RagStore>,
     engine: EmbeddingEngine,
     chunk_opts: ChunkOptions,
 }
 
 impl RagEngine {
-    pub fn new(db: Database, engine: EmbeddingEngine, chunk_opts: ChunkOptions) -> Self {
+    /// Create from a concrete Database (backwards-compatible convenience).
+    pub fn new(db: crate::storage::Database, engine: EmbeddingEngine, chunk_opts: ChunkOptions) -> Self {
         Self {
-            db,
+            store: Arc::new(db),
+            engine,
+            chunk_opts,
+        }
+    }
+
+    /// Create from any RagStore implementation.
+    pub fn from_store(store: Arc<dyn RagStore>, engine: EmbeddingEngine, chunk_opts: ChunkOptions) -> Self {
+        Self {
+            store,
             engine,
             chunk_opts,
         }
@@ -62,7 +74,7 @@ impl RagEngine {
         let hash = hex_sha256(&content);
 
         // Dedup: skip if already indexed
-        if let Some(existing) = self.db.find_rag_source_by_hash(&hash).await? {
+        if let Some(existing) = self.store.find_rag_source_by_hash(&hash).await? {
             tracing::debug!(source_id = existing.id, "File already indexed, skipping");
             return Ok(None);
         }
@@ -210,7 +222,7 @@ impl RagEngine {
         }
 
         let chunk_ids: Vec<i64> = merged.iter().map(|&(id, _)| id).collect();
-        let chunks = self.db.load_rag_chunks_by_ids(&chunk_ids).await?;
+        let chunks = self.store.load_rag_chunks_by_ids(&chunk_ids).await?;
 
         let chunk_map: HashMap<i64, RagChunkRow> = chunks.into_iter().map(|c| (c.id, c)).collect();
 
@@ -221,7 +233,7 @@ impl RagEngine {
             .collect::<std::collections::HashSet<_>>()
             .into_iter()
             .collect();
-        let sources = self.db.list_rag_sources().await.unwrap_or_default();
+        let sources = self.store.list_rag_sources().await.unwrap_or_default();
         let source_map: HashMap<i64, String> = sources
             .into_iter()
             .filter(|s| source_ids.contains(&s.id))
@@ -284,26 +296,26 @@ impl RagEngine {
 
     /// Remove a source and its chunks.
     pub async fn remove_source(&mut self, source_id: i64) -> Result<bool> {
-        self.db.delete_rag_source(source_id).await
+        self.store.delete_rag_source(source_id).await
     }
 
     /// List all indexed sources.
     pub async fn list_sources(&self) -> Result<Vec<RagSourceRow>> {
-        self.db.list_rag_sources().await
+        self.store.list_rag_sources().await
     }
 
     /// Get knowledge base stats.
     pub async fn stats(&self) -> Result<RagStats> {
         Ok(RagStats {
-            source_count: self.db.count_rag_sources().await.unwrap_or(0),
-            chunk_count: self.db.count_rag_chunks().await.unwrap_or(0),
+            source_count: self.store.count_rag_sources().await.unwrap_or(0),
+            chunk_count: self.store.count_rag_chunks().await.unwrap_or(0),
             index_vectors: self.engine.len(),
         })
     }
 
     /// Rebuild the HNSW index from all chunks in the database.
     pub async fn reindex_all(&mut self) -> Result<usize> {
-        let sources = self.db.list_rag_sources().await?;
+        let sources = self.store.list_rag_sources().await?;
         let source_map: HashMap<i64, String> = sources
             .iter()
             .map(|s| (s.id, s.file_name.clone()))
@@ -315,7 +327,7 @@ impl RagEngine {
                 continue;
             }
 
-            let chunks = self.db.load_rag_chunks_by_source(source.id).await?;
+            let chunks = self.store.load_rag_chunks_by_source(source.id).await?;
             for chunk in chunks {
                 let file_name = source_map
                     .get(&chunk.source_id)
@@ -324,7 +336,7 @@ impl RagEngine {
 
                 // Fix empty headings by prepending filename (for FTS5 matching)
                 if chunk.heading.is_empty() && !file_name.is_empty() {
-                    let _ = self.db.update_rag_chunk_heading(chunk.id, &file_name).await;
+                    let _ = self.store.update_rag_chunk_heading(chunk.id, &file_name).await;
                 }
 
                 let embed_text = format!("{}\n{}", file_name, chunk.content);
@@ -340,7 +352,7 @@ impl RagEngine {
 
     /// Reindex if HNSW is empty but DB has chunks (e.g., after restart with missing index file).
     pub async fn reindex_if_needed(&mut self) -> Result<()> {
-        let db_chunks = self.db.count_rag_chunks().await.unwrap_or(0);
+        let db_chunks = self.store.count_rag_chunks().await.unwrap_or(0);
         let index_vectors = self.engine.len();
 
         if db_chunks > 0 && index_vectors == 0 {
@@ -368,7 +380,7 @@ impl RagEngine {
 
     /// Reveal a sensitive chunk's full content (bypasses redaction).
     pub async fn reveal_chunk(&self, chunk_id: i64) -> Result<Option<RagChunkRow>> {
-        let chunks = self.db.load_rag_chunks_by_ids(&[chunk_id]).await?;
+        let chunks = self.store.load_rag_chunks_by_ids(&[chunk_id]).await?;
         Ok(chunks.into_iter().next())
     }
 }
