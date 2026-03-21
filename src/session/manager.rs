@@ -1,31 +1,41 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 
 use crate::provider::ChatMessage;
-use crate::storage::Database;
+use crate::storage::SessionStore;
 
-/// Session manager backed by SQLite.
+/// Session manager backed by any `SessionStore` implementation.
 ///
-/// Follows nanobot's SessionManager pattern but uses SQLite instead of JSONL files.
-/// Messages are append-only for LLM cache efficiency.
+/// Wraps a storage backend to provide session lifecycle management:
+/// message persistence, history retrieval, and session cleanup.
 #[derive(Clone)]
 pub struct SessionManager {
-    db: Database,
+    store: Arc<dyn SessionStore>,
 }
 
 impl SessionManager {
-    pub fn new(db: Database) -> Self {
-        Self { db }
+    /// Create from a concrete Database (backwards-compatible convenience).
+    pub fn new(db: crate::storage::Database) -> Self {
+        Self {
+            store: Arc::new(db),
+        }
+    }
+
+    /// Create from any SessionStore implementation.
+    pub fn from_store(store: Arc<dyn SessionStore>) -> Self {
+        Self { store }
     }
 
     /// Ensure a session exists in the database
     pub async fn ensure_session(&self, key: &str) -> Result<()> {
-        self.db.upsert_session(key, 0).await
+        self.store.upsert_session(key, 0).await
     }
 
     /// Add a message to a session (creates session if needed)
     pub async fn add_message(&self, session_key: &str, role: &str, content: &str) -> Result<()> {
-        self.db.upsert_session(session_key, 0).await?;
-        self.db
+        self.store.upsert_session(session_key, 0).await?;
+        self.store
             .insert_message(session_key, role, content, &[])
             .await
     }
@@ -38,8 +48,8 @@ impl SessionManager {
         content: &str,
         tools_used: &[String],
     ) -> Result<()> {
-        self.db.upsert_session(session_key, 0).await?;
-        self.db
+        self.store.upsert_session(session_key, 0).await?;
+        self.store
             .insert_message(session_key, role, content, tools_used)
             .await
     }
@@ -50,7 +60,7 @@ impl SessionManager {
         session_key: &str,
         max_messages: u32,
     ) -> Result<Vec<ChatMessage>> {
-        let rows = self.db.load_messages(session_key, max_messages).await?;
+        let rows = self.store.load_messages(session_key, max_messages).await?;
         let messages = rows
             .into_iter()
             .map(|r| ChatMessage {
@@ -67,6 +77,6 @@ impl SessionManager {
 
     /// Clear all messages for a session (for /new command)
     pub async fn clear(&self, session_key: &str) -> Result<()> {
-        self.db.clear_messages(session_key).await
+        self.store.clear_messages(session_key).await
     }
 }

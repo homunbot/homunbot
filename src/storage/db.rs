@@ -2947,6 +2947,145 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
     statements
 }
 
+// ── Trait implementations ───────────────────────────────────────
+// Each trait impl delegates to the identically-named inherent method
+// via `Database::method(self, ...)` to avoid trait-vs-inherent ambiguity.
+
+#[async_trait::async_trait]
+impl super::traits::SessionStore for Database {
+    async fn upsert_session(&self, key: &str, last_consolidated: i64) -> Result<()> {
+        Database::upsert_session(self, key, last_consolidated).await
+    }
+    async fn load_session(&self, key: &str) -> Result<Option<SessionRow>> {
+        Database::load_session(self, key).await
+    }
+    async fn delete_session(&self, key: &str) -> Result<bool> {
+        Database::delete_session(self, key).await
+    }
+    async fn list_sessions_by_prefix(&self, prefix_like: &str, limit: u32) -> Result<Vec<SessionListRow>> {
+        Database::list_sessions_by_prefix(self, prefix_like, limit).await
+    }
+    async fn set_session_metadata(&self, key: &str, metadata: &str) -> Result<()> {
+        Database::set_session_metadata(self, key, metadata).await
+    }
+    async fn insert_message(&self, session_key: &str, role: &str, content: &str, tools_used: &[String]) -> Result<()> {
+        Database::insert_message(self, session_key, role, content, tools_used).await
+    }
+    async fn load_messages(&self, session_key: &str, limit: u32) -> Result<Vec<MessageRow>> {
+        Database::load_messages(self, session_key, limit).await
+    }
+    async fn count_messages(&self, session_key: &str) -> Result<i64> {
+        Database::count_messages(self, session_key).await
+    }
+    async fn clear_messages(&self, session_key: &str) -> Result<()> {
+        Database::clear_messages(self, session_key).await
+    }
+    async fn load_old_messages(&self, session_key: &str, keep_count: u32) -> Result<Vec<MessageRow>> {
+        Database::load_old_messages(self, session_key, keep_count).await
+    }
+    async fn delete_old_messages(&self, session_key: &str, keep_count: u32) -> Result<u64> {
+        Database::delete_old_messages(self, session_key, keep_count).await
+    }
+}
+
+#[async_trait::async_trait]
+impl super::traits::MemoryStore for Database {
+    async fn insert_memory(&self, session_key: Option<&str>, content: &str, memory_type: &str) -> Result<()> {
+        Database::insert_memory(self, session_key, content, memory_type).await
+    }
+    async fn load_memories(&self, session_key: &str) -> Result<Vec<MemoryRow>> {
+        Database::load_memories(self, session_key).await
+    }
+    async fn load_long_term_memory(&self) -> Result<Option<String>> {
+        Database::load_long_term_memory(self).await
+    }
+    async fn upsert_long_term_memory(&self, content: &str) -> Result<()> {
+        Database::upsert_long_term_memory(self, content).await
+    }
+    async fn insert_memory_chunk(&self, date: &str, source: &str, heading: &str, content: &str, memory_type: &str, contact_id: Option<i64>, agent_id: Option<&str>, importance: i32) -> Result<i64> {
+        Database::insert_memory_chunk(self, date, source, heading, content, memory_type, contact_id, agent_id, importance).await
+    }
+    async fn load_chunks_by_ids(&self, ids: &[i64]) -> Result<Vec<MemoryChunkRow>> {
+        Database::load_chunks_by_ids(self, ids).await
+    }
+    async fn fts5_search(&self, query: &str, limit: usize) -> Result<Vec<(i64, f64)>> {
+        Database::fts5_search(self, query, limit).await
+    }
+    async fn count_memory_chunks(&self) -> Result<i64> {
+        Database::count_memory_chunks(self).await
+    }
+    async fn list_memory_history(&self, limit: i64, offset: i64) -> Result<Vec<MemoryChunkRow>> {
+        Database::list_memory_history(self, limit, offset).await
+    }
+    async fn load_all_memory_chunks(&self) -> Result<Vec<MemoryChunkRow>> {
+        Database::load_all_memory_chunks(self).await
+    }
+    async fn prune_memory_chunks_to_budget(&self, keep_count: u32) -> Result<Vec<i64>> {
+        Database::prune_memory_chunks_to_budget(self, keep_count).await
+    }
+    async fn load_chunks_in_range(&self, start_date: &str, end_date: &str) -> Result<Vec<MemoryChunkRow>> {
+        Database::load_chunks_in_range(self, start_date, end_date).await
+    }
+    async fn reset_all_memory(&self) -> Result<()> {
+        Database::reset_all_memory(self).await
+    }
+    async fn insert_memory_summary(&self, period: &str, start_date: &str, end_date: &str, content: &str, contact_id: Option<i64>, agent_id: Option<&str>) -> Result<i64> {
+        Database::insert_memory_summary(self, period, start_date, end_date, content, contact_id, agent_id).await
+    }
+    async fn has_memory_summary(&self, period: &str, start_date: &str) -> Result<bool> {
+        Database::has_memory_summary(self, period, start_date).await
+    }
+    async fn load_summaries_in_range(&self, start_date: &str, end_date: &str) -> Result<Vec<MemorySummaryRow>> {
+        Database::load_summaries_in_range(self, start_date, end_date).await
+    }
+}
+
+#[async_trait::async_trait]
+impl super::traits::RagStore for Database {
+    async fn insert_rag_source(&self, file_path: &str, file_name: &str, file_hash: &str, doc_type: &str, file_size: i64, source_channel: Option<&str>) -> Result<i64> {
+        Database::insert_rag_source(self, file_path, file_name, file_hash, doc_type, file_size, source_channel).await
+    }
+    async fn find_rag_source_by_hash(&self, file_hash: &str) -> Result<Option<RagSourceRow>> {
+        Database::find_rag_source_by_hash(self, file_hash).await
+    }
+    async fn find_rag_source_by_path(&self, file_path: &str) -> Result<Option<RagSourceRow>> {
+        Database::find_rag_source_by_path(self, file_path).await
+    }
+    async fn update_rag_source_status(&self, id: i64, status: &str, error_message: Option<&str>, chunk_count: i64) -> Result<()> {
+        Database::update_rag_source_status(self, id, status, error_message, chunk_count).await
+    }
+    async fn delete_rag_source(&self, id: i64) -> Result<bool> {
+        Database::delete_rag_source(self, id).await
+    }
+    async fn list_rag_sources(&self) -> Result<Vec<RagSourceRow>> {
+        Database::list_rag_sources(self).await
+    }
+    async fn count_rag_sources(&self) -> Result<i64> {
+        Database::count_rag_sources(self).await
+    }
+    async fn insert_rag_chunk(&self, source_id: i64, chunk_index: i64, heading: &str, content: &str, token_count: i64, sensitive: bool) -> Result<i64> {
+        Database::insert_rag_chunk(self, source_id, chunk_index, heading, content, token_count, sensitive).await
+    }
+    async fn update_rag_chunk_heading(&self, chunk_id: i64, heading: &str) -> Result<()> {
+        Database::update_rag_chunk_heading(self, chunk_id, heading).await
+    }
+    async fn load_rag_chunks_by_ids(&self, ids: &[i64]) -> Result<Vec<RagChunkRow>> {
+        Database::load_rag_chunks_by_ids(self, ids).await
+    }
+    async fn rag_fts5_search(&self, query: &str, limit: usize) -> Result<Vec<(i64, f64)>> {
+        Database::rag_fts5_search(self, query, limit).await
+    }
+    async fn count_rag_chunks(&self) -> Result<i64> {
+        Database::count_rag_chunks(self).await
+    }
+    async fn load_rag_chunks_by_source(&self, source_id: i64) -> Result<Vec<RagChunkRow>> {
+        Database::load_rag_chunks_by_source(self, source_id).await
+    }
+    async fn delete_rag_chunks_by_source(&self, source_id: i64) -> Result<u64> {
+        Database::delete_rag_chunks_by_source(self, source_id).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
