@@ -1041,6 +1041,31 @@ pub struct WebConfig {
     /// Require explicit device approval for new browsers (default: false).
     /// When enabled, login from an unrecognized User-Agent requires a 6-digit code.
     pub require_device_approval: bool,
+    /// Tunnel configuration for exposing the web UI to the internet.
+    pub tunnel: Option<TunnelConfig>,
+}
+
+/// Tunnel provider configuration for remote access.
+///
+/// Spawns an external tunnel process (cloudflared, ngrok, or custom)
+/// to expose the local web server to the internet.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TunnelConfig {
+    /// Enable the tunnel (default: false).
+    pub enabled: bool,
+    /// Provider: "cloudflare", "ngrok", or "custom".
+    pub provider: String,
+    /// Auth token for the tunnel provider (e.g. ngrok auth token). Optional.
+    #[serde(default)]
+    pub auth_token: String,
+    /// Custom command to run (when provider = "custom").
+    /// The command receives the local port as the last argument.
+    /// First line of stdout is parsed as the public URL.
+    #[serde(default)]
+    pub custom_command: String,
+    /// Extra arguments for the custom command.
+    #[serde(default)]
+    pub custom_args: Vec<String>,
 }
 
 impl Default for WebConfig {
@@ -1059,6 +1084,7 @@ impl Default for WebConfig {
             trust_x_forwarded_for: false,
             session_ttl_secs: 86400,
             require_device_approval: false,
+            tunnel: None,
         }
     }
 }

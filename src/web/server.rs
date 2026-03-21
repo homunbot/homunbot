@@ -226,6 +226,7 @@ impl WebServer {
             tls_key,
             auto_tls,
             session_ttl,
+            tunnel_config,
         ) = {
             let cfg = self.config.read().await;
             (
@@ -238,7 +239,45 @@ impl WebServer {
                 cfg.channels.web.tls_key.clone(),
                 cfg.channels.web.auto_tls,
                 cfg.channels.web.session_ttl_secs,
+                cfg.channels.web.tunnel.clone(),
             )
+        };
+
+        // Start tunnel if configured (before building the router so CORS can use the URL)
+        let tunnel_url: Option<String> = if let Some(ref tc) = tunnel_config {
+            if tc.enabled {
+                match super::tunnel::create_tunnel(tc) {
+                    Ok(mut tunnel) => match tunnel.start(port).await {
+                        Ok(url) => {
+                            tracing::info!(
+                                provider = tunnel.name(),
+                                url = %url,
+                                "Tunnel active — web UI accessible externally"
+                            );
+                            // Keep the tunnel process alive in the background
+                            tokio::spawn(async move {
+                                // Tunnel runs until the process exits or is killed
+                                // (kill_on_drop handles cleanup when this task is dropped)
+                                tokio::signal::ctrl_c().await.ok();
+                                let _ = tunnel.stop().await;
+                            });
+                            Some(url)
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Tunnel failed to start — continuing without");
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Invalid tunnel config — continuing without");
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
         };
 
         if let Some(db) = self.db.as_ref() {
@@ -438,6 +477,7 @@ impl WebServer {
                 CorsLayer::new()
                     .allow_origin(tower_http::cors::AllowOrigin::predicate({
                         let cors_domain = domain.clone();
+                        let cors_tunnel_url = tunnel_url.clone();
                         move |origin, _| {
                             let s = origin.as_bytes();
                             s.starts_with(b"https://localhost")
@@ -449,6 +489,9 @@ impl WebServer {
                                         || s.starts_with(
                                             format!("http://{cors_domain}").as_bytes(),
                                         )))
+                                || cors_tunnel_url
+                                    .as_ref()
+                                    .is_some_and(|url| s.starts_with(url.as_bytes()))
                         }
                     }))
                     .allow_methods([
@@ -493,9 +536,9 @@ impl WebServer {
                     let proxy_target_port = port;
                     tokio::spawn(start_port_proxy(443, proxy_target_port));
                 }
-                tracing::info!(%addr, url = %format!("https://{domain}"), "Web UI starting (HTTPS)");
+                tracing::info!(%addr, url = %format!("https://{domain}"), tunnel = ?tunnel_url, "Web UI starting (HTTPS)");
             } else {
-                tracing::info!(%addr, url = %format!("https://localhost:{port}"), "Web UI starting (HTTPS)");
+                tracing::info!(%addr, url = %format!("https://localhost:{port}"), tunnel = ?tunnel_url, "Web UI starting (HTTPS)");
             }
             let acceptor = tokio_rustls::TlsAcceptor::from(tls_cfg);
             let make_service = app.into_make_service_with_connect_info::<SocketAddr>();
