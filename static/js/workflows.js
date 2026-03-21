@@ -6,6 +6,12 @@ let selectedWorkflowId = null;
 let stepCounter = 0;
 let deliveryTargets = [];
 
+/** Get the current profile filter slug (empty = all). */
+function getWorkflowsProfileFilter() {
+    const el = document.getElementById('workflows-profile-filter');
+    return el ? el.value : '';
+}
+
 // ─── Helpers ────────────────────────────────────────────────────
 
 async function apiRequest(path, options = {}) {
@@ -143,7 +149,9 @@ function collectSteps() {
 
 async function loadWorkflows() {
     try {
-        const data = await apiRequest('/v1/workflows');
+        const pf = getWorkflowsProfileFilter();
+        const profileParam = pf ? '?profile=' + encodeURIComponent(pf) : '';
+        const data = await apiRequest('/v1/workflows' + profileParam);
         workflows = data.workflows || [];
 
         const stats = data.stats || {};
@@ -513,6 +521,25 @@ function toggleCreatorPanel(show) {
 }
 
 async function initWorkflowsPage() {
+    // Initialize profile filter dropdown
+    const profileSelect = document.getElementById('workflows-profile-filter');
+    if (profileSelect) {
+        const allOpt = document.createElement('option');
+        allOpt.value = '';
+        allOpt.textContent = 'All profiles';
+        profileSelect.appendChild(allOpt);
+        try {
+            const profiles = await apiRequest('/v1/profiles');
+            profiles.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.slug;
+                opt.textContent = (p.avatar_emoji || '\u{1F464}') + ' ' + p.display_name;
+                profileSelect.appendChild(opt);
+            });
+        } catch (_) {}
+        profileSelect.addEventListener('change', () => loadWorkflows());
+    }
+
     // Creator panel toggle
     var createToggle = document.getElementById('wf-create-toggle');
     if (createToggle) createToggle.addEventListener('click', function() { toggleCreatorPanel(); });

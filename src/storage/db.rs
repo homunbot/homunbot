@@ -336,6 +336,35 @@ impl Database {
         )
         .await?;
 
+        // Migration 034 — profiles table + seed default
+        Self::apply_migration(
+            pool,
+            "034_profiles",
+            include_str!("../../migrations/034_profiles.sql"),
+        )
+        .await?;
+
+        // Migration 035 — profile_id columns on memory, RAG, contacts, sessions
+        Self::apply_migration(
+            pool,
+            "035_profile_scoping",
+            include_str!("../../migrations/035_profile_scoping.sql"),
+        )
+        .await?;
+
+        // Backfill profile_id after migration 035.
+        // Done in Rust (not SQL) because ALTER TABLE + FTS5 content-sync triggers
+        // cause SQLite to invalidate table names for DML in the same migration batch.
+        Self::backfill_profile_ids(pool).await?;
+
+        // Migration 036 — profile_id on automations and workflows
+        Self::apply_migration(
+            pool,
+            "036_profile_scoping_phase2",
+            include_str!("../../migrations/036_profile_scoping_phase2.sql"),
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -395,6 +424,28 @@ impl Database {
         Ok(())
     }
 
+    /// Backfill NULL profile_id to the default profile (id=1).
+    ///
+    /// Runs as a separate step after migration 035 because SQLite's ALTER TABLE
+    /// on tables with FTS5 content-sync triggers invalidates the table name
+    /// for DML operations in the same migration batch.
+    async fn backfill_profile_ids(pool: &Pool<Sqlite>) -> Result<()> {
+        for table in &["memory_chunks", "rag_chunks", "contacts", "sessions"] {
+            let sql = format!("UPDATE {table} SET profile_id = 1 WHERE profile_id IS NULL");
+            let result = sqlx::query(&sql).execute(pool).await;
+            match result {
+                Ok(r) if r.rows_affected() > 0 => {
+                    tracing::info!(table, rows = r.rows_affected(), "Backfilled profile_id");
+                }
+                Err(e) => {
+                    tracing::warn!(table, error = %e, "Failed to backfill profile_id (table may not exist)");
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     /// Get a reference to the connection pool
     pub fn pool(&self) -> &Pool<Sqlite> {
         &self.pool
@@ -433,6 +484,32 @@ impl Database {
         .await
         .context("Failed to update session metadata")?;
 
+        Ok(())
+    }
+
+    /// Get the profile_id for a session (returns None if unset).
+    pub async fn get_session_profile_id(&self, key: &str) -> Option<i64> {
+        sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT profile_id FROM sessions WHERE key = ?",
+        )
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+    }
+
+    /// Set the profile_id for a session.
+    pub async fn set_session_profile_id(&self, key: &str, profile_id: i64) -> Result<()> {
+        sqlx::query(
+            "UPDATE sessions SET profile_id = ?, updated_at = datetime('now') WHERE key = ?",
+        )
+        .bind(profile_id)
+        .bind(key)
+        .execute(&self.pool)
+        .await
+        .context("Failed to set session profile_id")?;
         Ok(())
     }
 
@@ -1802,6 +1879,8 @@ pub struct MemoryChunkRow {
     pub agent_id: Option<String>,
     /// Importance score (1-5). 1=trivial, 3=normal, 5=critical.
     pub importance: i32,
+    /// Profile this chunk belongs to (NULL = global, visible to all profiles).
+    pub profile_id: Option<i64>,
 }
 
 /// A hierarchical summary of memory chunks over a time period.
@@ -1865,6 +1944,8 @@ pub struct RagChunkRow {
     pub token_count: i64,
     pub sensitive: bool,
     pub created_at: String,
+    /// Profile this chunk belongs to (NULL = global, visible to all profiles).
+    pub profile_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize)]
@@ -1888,6 +1969,7 @@ pub struct AutomationRow {
     pub validation_errors: Option<String>,
     pub workflow_steps_json: Option<String>,
     pub flow_json: Option<String>,
+    pub profile_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -2119,8 +2201,8 @@ impl super::traits::MemoryStore for Database {
     async fn upsert_long_term_memory(&self, content: &str) -> Result<()> {
         Database::upsert_long_term_memory(self, content).await
     }
-    async fn insert_memory_chunk(&self, date: &str, source: &str, heading: &str, content: &str, memory_type: &str, contact_id: Option<i64>, agent_id: Option<&str>, importance: i32) -> Result<i64> {
-        Database::insert_memory_chunk(self, date, source, heading, content, memory_type, contact_id, agent_id, importance).await
+    async fn insert_memory_chunk(&self, date: &str, source: &str, heading: &str, content: &str, memory_type: &str, contact_id: Option<i64>, agent_id: Option<&str>, importance: i32, profile_id: Option<i64>) -> Result<i64> {
+        Database::insert_memory_chunk(self, date, source, heading, content, memory_type, contact_id, agent_id, importance, profile_id).await
     }
     async fn load_chunks_by_ids(&self, ids: &[i64]) -> Result<Vec<MemoryChunkRow>> {
         Database::load_chunks_by_ids(self, ids).await
@@ -2180,8 +2262,8 @@ impl super::traits::RagStore for Database {
     async fn count_rag_sources(&self) -> Result<i64> {
         Database::count_rag_sources(self).await
     }
-    async fn insert_rag_chunk(&self, source_id: i64, chunk_index: i64, heading: &str, content: &str, token_count: i64, sensitive: bool) -> Result<i64> {
-        Database::insert_rag_chunk(self, source_id, chunk_index, heading, content, token_count, sensitive).await
+    async fn insert_rag_chunk(&self, source_id: i64, chunk_index: i64, heading: &str, content: &str, token_count: i64, sensitive: bool, profile_id: Option<i64>) -> Result<i64> {
+        Database::insert_rag_chunk(self, source_id, chunk_index, heading, content, token_count, sensitive, profile_id).await
     }
     async fn update_rag_chunk_heading(&self, chunk_id: i64, heading: &str) -> Result<()> {
         Database::update_rag_chunk_heading(self, chunk_id, heading).await

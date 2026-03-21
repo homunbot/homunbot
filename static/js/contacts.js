@@ -351,6 +351,11 @@ function showEditForm(id) {
         + '<div class="form-group"><label for="ef-tone">Tone of Voice</label>'
         + '<input id="ef-tone" name="tone_of_voice" class="input" placeholder="e.g. formal, informal, friendly" value="' + esc(c.tone_of_voice || '') + '"></div>'
         + '</div>'
+        + '<div class="form-group"><label for="ef-profile">Profile</label>'
+        + '<select id="ef-profile" name="profile_id" class="input">'
+        + '<option value="">Channel default</option>'
+        + '</select>'
+        + '<p style="font-size:12px;color:var(--t3);margin:4px 0 0">Choose which profile the agent uses when responding to this contact.</p></div>'
         + '<div class="form-group"><label for="ef-persona">Persona Override</label>'
         + '<select id="ef-persona" name="persona_override" class="input" onchange="document.getElementById(\'persona-instr-group\').style.display=this.value===\'custom\'?\'block\':\'none\'">'
         + '<option value=""' + (!c.persona_override ? ' selected' : '') + '>Channel default</option>'
@@ -370,6 +375,7 @@ function showEditForm(id) {
 
     document.getElementById('contact-edit-form').addEventListener('submit', e => saveEditContact(e, id));
     document.getElementById('ef-name').focus();
+    loadProfileDropdown(c.profile_id);
 }
 
 // ── Save / Delete ───────────────────────────────────────────────────
@@ -595,6 +601,33 @@ async function approvePending(id) {
 async function rejectPending(id) {
     await fetch(API + '/pending/' + id + '/reject', { method: 'POST' });
     loadPending();
+}
+
+// ── Profile dropdown loader ──────────────────────────────────────────
+
+let _cachedProfiles = null;
+
+/** Load profiles and populate the #ef-profile select in the contact edit form. */
+async function loadProfileDropdown(selectedId) {
+    const select = document.getElementById('ef-profile');
+    if (!select) return;
+
+    if (!_cachedProfiles) {
+        try {
+            const res = await fetch('/api/v1/profiles');
+            if (res.ok) _cachedProfiles = await res.json();
+        } catch (_) {}
+    }
+    if (!_cachedProfiles) return;
+
+    // Keep the "Channel default" option, add profile options
+    _cachedProfiles.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = (p.avatar_emoji || '\u{1F464}') + ' ' + p.display_name + (p.is_default ? ' (default)' : '');
+        if (selectedId && p.id === selectedId) opt.selected = true;
+        select.appendChild(opt);
+    });
 }
 
 // ── Util ────────────────────────────────────────────────────────────

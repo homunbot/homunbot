@@ -68,6 +68,8 @@ pub struct Skill {
     pub body: Option<String>,
     /// Whether this skill passes runtime eligibility checks
     pub eligible: bool,
+    /// Profile this skill belongs to. None = global (available to all profiles).
+    pub profile_slug: Option<String>,
 }
 
 impl Skill {
@@ -104,8 +106,9 @@ impl SkillRegistry {
 
     /// Scan directories for skills and load their metadata.
     /// Scans in priority order:
-    /// 1. ~/.homun/skills/ (user-installed)
-    /// 2. ./skills/ (project-local)
+    /// 1. ~/.homun/skills/ (user-installed, global)
+    /// 2. ./skills/ (project-local, global)
+    /// 3. ~/.homun/brain/profiles/{slug}/skills/ (per-profile)
     pub async fn scan_and_load(&mut self) -> Result<()> {
         let scan_dirs = vec![
             // User-installed skills
@@ -116,9 +119,13 @@ impl SkillRegistry {
 
         for dir in scan_dirs {
             if dir.exists() && dir.is_dir() {
-                self.scan_directory(&dir).await?;
+                self.scan_directory_with_profile(&dir, None).await?;
             }
         }
+
+        // Scan per-profile skill directories
+        let data_dir = Config::data_dir();
+        self.scan_profile_skills(&data_dir).await?;
 
         // Check eligibility for all loaded skills
         self.check_all_eligibility();
@@ -159,8 +166,44 @@ impl SkillRegistry {
         }
     }
 
-    /// Scan a single directory for skill subdirectories
-    async fn scan_directory(&mut self, dir: &Path) -> Result<()> {
+    /// Scan profile-specific skill directories.
+    ///
+    /// Scans `~/.homun/brain/profiles/{slug}/skills/` for each profile.
+    /// Skills found are tagged with the profile slug.
+    pub async fn scan_profile_skills(&mut self, data_dir: &Path) -> Result<()> {
+        let profiles_dir = data_dir.join("brain").join("profiles");
+        if !profiles_dir.exists() {
+            return Ok(());
+        }
+        let mut entries = match tokio::fs::read_dir(&profiles_dir).await {
+            Ok(e) => e,
+            Err(_) => return Ok(()),
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let profile_path = entry.path();
+            if !profile_path.is_dir() {
+                continue;
+            }
+            let skills_dir = profile_path.join("skills");
+            if skills_dir.exists() && skills_dir.is_dir() {
+                let slug = profile_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                self.scan_directory_with_profile(&skills_dir, Some(&slug))
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Scan a directory for skills, optionally tagging with a profile slug.
+    async fn scan_directory_with_profile(
+        &mut self,
+        dir: &Path,
+        profile_slug: Option<&str>,
+    ) -> Result<()> {
         let mut entries = tokio::fs::read_dir(dir)
             .await
             .with_context(|| format!("Failed to read skills directory {}", dir.display()))?;
@@ -171,10 +214,12 @@ impl SkillRegistry {
                 let skill_md = path.join("SKILL.md");
                 if skill_md.exists() {
                     match self.load_skill_metadata(&path).await {
-                        Ok(skill) => {
+                        Ok(mut skill) => {
+                            skill.profile_slug = profile_slug.map(|s| s.to_string());
                             tracing::debug!(
                                 skill = %skill.meta.name,
                                 path = %path.display(),
+                                profile = ?profile_slug,
                                 "Loaded skill metadata"
                             );
                             self.skills.insert(skill.meta.name.clone(), skill);
@@ -192,6 +237,12 @@ impl SkillRegistry {
         }
 
         Ok(())
+    }
+
+    /// Scan a single directory for skill subdirectories (legacy, delegates to profile-aware version)
+    #[allow(dead_code)]
+    async fn scan_directory(&mut self, dir: &Path) -> Result<()> {
+        self.scan_directory_with_profile(dir, None).await
     }
 
     /// Load only the metadata (frontmatter) from a skill directory
@@ -218,6 +269,7 @@ impl SkillRegistry {
             path: skill_dir.to_path_buf(),
             body: None,     // Loaded on demand (progressive disclosure)
             eligible: true, // Checked later by check_all_eligibility()
+            profile_slug: None, // Set by scan_directory_with_profile
         })
     }
 
@@ -259,6 +311,21 @@ impl SkillRegistry {
             .values()
             .filter(|s| s.eligible && !s.meta.disable_model_invocation)
             .map(|s| (s.meta.name.as_str(), s.meta.description.as_str()))
+            .collect()
+    }
+
+    /// Map skill name → profile slug for per-profile skills only.
+    ///
+    /// Global skills (profile_slug=None) are not included in the map.
+    /// Used by cognition discovery to filter skills by active profile.
+    pub fn list_profile_scopes(&self) -> std::collections::HashMap<&str, &str> {
+        self.skills
+            .values()
+            .filter_map(|s| {
+                s.profile_slug
+                    .as_deref()
+                    .map(|slug| (s.meta.name.as_str(), slug))
+            })
             .collect()
     }
 
@@ -867,6 +934,7 @@ Body.
                 path: PathBuf::from("/tmp/test"),
                 body: None,
                 eligible: true,
+                profile_slug: None,
             },
         );
 
@@ -1236,6 +1304,7 @@ This should only load on demand.
                 path: PathBuf::from("/tmp/ok"),
                 body: None,
                 eligible: true,
+                profile_slug: None,
             },
         );
 
@@ -1255,6 +1324,7 @@ This should only load on demand.
                 path: PathBuf::from("/tmp/bad"),
                 body: None,
                 eligible: false,
+                profile_slug: None,
             },
         );
 
@@ -1323,6 +1393,7 @@ Body.
                 path: PathBuf::from("/tmp/normal"),
                 body: None,
                 eligible: true,
+                profile_slug: None,
             },
         );
 
@@ -1343,6 +1414,7 @@ Body.
                 path: PathBuf::from("/tmp/user-only"),
                 body: None,
                 eligible: true,
+                profile_slug: None,
             },
         );
 
@@ -1517,6 +1589,7 @@ Do something useful.
                 path: PathBuf::from("/tmp/normal"),
                 body: None,
                 eligible: true,
+                profile_slug: None,
             },
         );
 
@@ -1537,6 +1610,7 @@ Do something useful.
                 path: PathBuf::from("/tmp/missing"),
                 body: None,
                 eligible: false,
+                profile_slug: None,
             },
         );
 
@@ -1557,6 +1631,7 @@ Do something useful.
                 path: PathBuf::from("/tmp/slash"),
                 body: None,
                 eligible: true,
+                profile_slug: None,
             },
         );
 
@@ -1577,6 +1652,7 @@ Do something useful.
                 path: PathBuf::from("/tmp/auto"),
                 body: None,
                 eligible: true,
+                profile_slug: None,
             },
         );
 

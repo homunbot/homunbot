@@ -1,11 +1,23 @@
 //! Persona resolution — determines how the agent presents itself.
 //!
+//! **Deprecated**: replaced by the Profile System (`src/profiles/`).
+//! Identity, tone, and linguistics are now managed via PROFILE.json + SOUL.md
+//! per profile. This module is retained only for backward compatibility with
+//! contacts that still use `persona_override` / `persona_instructions` fields.
+//! It will be removed once those fields are migrated out of the Contact struct.
+//!
 //! Priority chain: Contact.persona_override > Channel.persona > "bot" (global default).
 //! Same pattern for tone_of_voice.
+
+// Allow deprecated items within this module — the module itself is deprecated
+#![allow(deprecated)]
 
 use crate::contacts::Contact;
 
 /// Resolved persona for a specific conversation.
+///
+/// **Deprecated**: use the Profile System instead.
+#[deprecated(note = "Use the Profile System (src/profiles/) — profiles replace personas")]
 #[derive(Debug, Clone)]
 pub struct ResolvedPersona {
     /// "bot", "owner", "company", or "custom".
@@ -18,11 +30,14 @@ pub struct ResolvedPersona {
 
 /// Resolve the effective persona for a conversation.
 ///
+/// **Deprecated**: the agent loop now uses the Profile System instead.
+///
 /// # Arguments
 /// * `contact` — the resolved contact (if any)
 /// * `channel_persona` — persona from channel config (e.g. "owner")
 /// * `channel_tone` — default tone from channel config
 /// * `user_name` — the owner's name (from USER.md or config) for "owner" persona
+#[deprecated(note = "Use the Profile System (src/profiles/) — profiles replace personas")]
 pub fn resolve_persona(
     contact: Option<&Contact>,
     channel_persona: &str,
@@ -115,6 +130,7 @@ mod tests {
             persona_override: persona_override.map(|s| s.to_string()),
             persona_instructions: instructions.to_string(),
             agent_override: None,
+            profile_id: None,
         }
     }
 

@@ -3,6 +3,12 @@ let selectedAutomationId = null;
 let openEditorId = null;
 let automationTargets = [];
 
+/** Get the current profile filter slug (empty = all). */
+function getAutomationsProfileFilter() {
+    const el = document.getElementById('automations-profile-filter');
+    return el ? el.value : '';
+}
+
 const WEEKDAY_LABELS = {
     '1': 'Mon',
     '2': 'Tue',
@@ -618,7 +624,9 @@ function renderHistoryRows(rows) {
 
 async function loadAutomations() {
     try {
-        automations = await apiRequest('/v1/automations');
+        const pf = getAutomationsProfileFilter();
+        const profileParam = pf ? '?profile=' + encodeURIComponent(pf) : '';
+        automations = await apiRequest('/v1/automations' + profileParam);
     } catch (err) {
         automations = [];
         showErrorState('automations-list', 'Could not load automations.', loadAutomations);
@@ -1045,6 +1053,25 @@ async function initializeAutomationsPage() {
     const refreshBtn = document.getElementById('btn-automations-refresh');
 
     if (!listEl) return;
+
+    // Initialize profile filter dropdown
+    const profileSelect = document.getElementById('automations-profile-filter');
+    if (profileSelect) {
+        const allOpt = document.createElement('option');
+        allOpt.value = '';
+        allOpt.textContent = 'All profiles';
+        profileSelect.appendChild(allOpt);
+        try {
+            const profiles = await apiRequest('/v1/profiles');
+            profiles.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.slug;
+                opt.textContent = (p.avatar_emoji || '\u{1F464}') + ' ' + p.display_name;
+                profileSelect.appendChild(opt);
+            });
+        } catch (_) {}
+        profileSelect.addEventListener('change', () => loadAutomations());
+    }
 
     await loadAutomationTargets();
 

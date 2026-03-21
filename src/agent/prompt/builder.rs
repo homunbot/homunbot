@@ -25,14 +25,15 @@ impl SystemPromptBuilder {
     pub fn with_defaults() -> Self {
         use super::{
             AgentInstructionsSection, BusinessSection, ContactsSection, IdentitySection,
-            MemorySection, PersonaSection, RuntimeSection, SafetySection, SkillsSection,
-            ToolsSection, WorkspaceSection,
+            MemorySection, PersonaSection, ProfileSection, RuntimeSection, SafetySection,
+            SkillsSection, ToolsSection, WorkspaceSection,
         };
 
         Self {
             sections: vec![
                 Box::new(IdentitySection),
                 Box::new(PersonaSection),
+                Box::new(ProfileSection),
                 Box::new(AgentInstructionsSection),
                 Box::new(ToolsSection),
                 Box::new(SafetySection),
@@ -120,6 +121,7 @@ impl<'a> PromptContext<'a> {
             channels_info: self.channels_info,
             contact_context: self.contact_context,
             persona_context: self.persona_context,
+            profile_context: self.profile_context,
             agent_instructions: self.agent_instructions,
             cognition_understanding: self.cognition_understanding,
             cognition_plan: self.cognition_plan,
@@ -151,6 +153,7 @@ mod tests {
             channels_info: "",
             contact_context: "",
             persona_context: "",
+            profile_context: "",
             agent_instructions: "",
             cognition_understanding: "",
             cognition_plan: &[],

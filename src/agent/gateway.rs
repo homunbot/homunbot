@@ -908,6 +908,29 @@ impl Gateway {
                     continue;
                 }
 
+                // Handle /profile command — switch or show active profile
+                let content_trimmed = inbound.content.trim();
+                let is_profile_cmd = content_trimmed == "/profile"
+                    || content_trimmed.starts_with("/profile ")
+                    || content_trimmed == "!profile"
+                    || content_trimmed.starts_with("!profile ");
+                if is_profile_cmd {
+                    let response = handle_profile_command(
+                        content_trimmed,
+                        &session_key,
+                        &routing_db,
+                    )
+                    .await;
+                    let outbound = OutboundMessage {
+                        channel: channel_name.clone(),
+                        chat_id: chat_id.clone(),
+                        content: response,
+                        metadata: None,
+                    };
+                    route_outbound(outbound, &senders_for_routing, &known_chat_ids).await;
+                    continue;
+                }
+
                 // --- Unified authorization check ---
                 if !is_system {
                     if let Some((pairing_required, allow_from)) = pairing_config.get(&channel_name)
@@ -1717,6 +1740,16 @@ impl Gateway {
             tracing::info!(channel = %ch.name, "Channel stopped");
         }
 
+        // 4.5. Close browser tabs and MCP peers
+        #[cfg(feature = "browser")]
+        {
+            let handles = self.estop_handles.read().await;
+            if let Some(ref session) = handles.browser_session {
+                tracing::info!("Closing browser tabs...");
+                session.close_idle_tabs(0).await; // timeout=0 → close all
+            }
+        }
+
         // 5. Close database pool (drain in-flight queries)
         self.db.pool().close().await;
         tracing::info!("Database pool closed");
@@ -2273,4 +2306,72 @@ async fn route_outbound(
     if !routed {
         tracing::error!(channel = %channel_name, "No sender found for channel");
     }
+}
+
+/// Handle `/profile` or `!profile` commands from any channel.
+///
+/// - `/profile` — show the active profile for the current session
+/// - `/profile <slug>` — switch the session to a different profile
+async fn handle_profile_command(
+    content: &str,
+    session_key: &str,
+    db: &Database,
+) -> String {
+    // Parse slug argument (strip prefix: /profile or !profile)
+    let slug_arg = content
+        .strip_prefix("/profile")
+        .or_else(|| content.strip_prefix("!profile"))
+        .map(|s| s.trim())
+        .unwrap_or("");
+
+    if slug_arg.is_empty() {
+        // Show current profile
+        let current = match db.get_session_profile_id(session_key).await {
+            Some(pid) => {
+                match crate::profiles::db::load_profile_by_id(db.pool(), pid).await {
+                    Ok(Some(p)) => format!("{} {} ({})", p.avatar_emoji, p.display_name, p.slug),
+                    _ => "default".to_string(),
+                }
+            }
+            None => "default".to_string(),
+        };
+        return format!("Active profile: {current}\n\nUse /profile <slug> to switch.");
+    }
+
+    // Look up the requested profile
+    let profile = match crate::profiles::db::load_profile_by_slug(db.pool(), slug_arg).await {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            // List available profiles
+            let list = match crate::profiles::db::load_all_profiles(db.pool()).await {
+                Ok(profiles) => profiles
+                    .iter()
+                    .map(|p| format!("  {} {} ({})", p.avatar_emoji, p.display_name, p.slug))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                Err(_) => "  (error loading profiles)".to_string(),
+            };
+            return format!("Profile \"{slug_arg}\" not found.\n\nAvailable profiles:\n{list}");
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to load profile");
+            return format!("Error loading profile: {e}");
+        }
+    };
+
+    // Update session profile_id
+    if let Err(e) = db.set_session_profile_id(session_key, profile.id).await {
+        tracing::error!(error = %e, session = session_key, "Failed to set session profile");
+        return format!("Error switching profile: {e}");
+    }
+
+    tracing::info!(
+        session = session_key,
+        profile = %profile.slug,
+        "Switched session profile"
+    );
+    format!(
+        "Switched to profile: {} {} ({})",
+        profile.avatar_emoji, profile.display_name, profile.slug
+    )
 }

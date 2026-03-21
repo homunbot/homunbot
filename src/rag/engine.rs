@@ -87,7 +87,7 @@ impl RagEngine {
         let doc_type = detect_doc_type(path).to_string();
 
         let source_id = self
-            .db
+            .store
             .insert_rag_source(
                 &path.to_string_lossy(),
                 &file_name,
@@ -100,7 +100,7 @@ impl RagEngine {
 
         match chunk_file(path, &self.chunk_opts) {
             Ok(chunks) if chunks.is_empty() => {
-                self.db
+                self.store
                     .update_rag_source_status(source_id, "indexed", None, 0)
                     .await?;
                 tracing::info!(source_id, file = %file_name, "File indexed (empty, 0 chunks)");
@@ -121,7 +121,7 @@ impl RagEngine {
                         filename_sensitive || sensitive::is_sensitive(&chunk.content);
 
                     let chunk_id = self
-                        .db
+                        .store
                         .insert_rag_chunk(
                             source_id,
                             chunk.index as i64,
@@ -129,6 +129,7 @@ impl RagEngine {
                             &chunk.content,
                             chunk.token_count as i64,
                             is_sensitive,
+                            None, // profile_id: set via API in Sprint 4
                         )
                         .await?;
 
@@ -142,7 +143,7 @@ impl RagEngine {
                     tracing::warn!(error = %e, "Failed to save RAG HNSW index");
                 }
 
-                self.db
+                self.store
                     .update_rag_source_status(source_id, "indexed", None, chunks.len() as i64)
                     .await?;
 
@@ -155,7 +156,7 @@ impl RagEngine {
                 Ok(Some(source_id))
             }
             Err(e) => {
-                self.db
+                self.store
                     .update_rag_source_status(source_id, "error", Some(&e.to_string()), 0)
                     .await?;
                 Err(e)
@@ -199,7 +200,15 @@ impl RagEngine {
     }
 
     /// Hybrid search: vector + FTS5 + RRF merge (no temporal decay).
-    pub async fn search(&mut self, query: &str, top_k: usize) -> Result<Vec<RagSearchResult>> {
+    ///
+    /// When `profile_id` is provided, results are filtered to include both
+    /// profile-scoped chunks (matching the profile) and global chunks (profile_id IS NULL).
+    pub async fn search(
+        &mut self,
+        query: &str,
+        top_k: usize,
+        profile_id: Option<i64>,
+    ) -> Result<Vec<RagSearchResult>> {
         let vector_results = self
             .engine
             .search(query, CANDIDATES_PER_SOURCE)
@@ -210,7 +219,7 @@ impl RagEngine {
         let fts_results = if sanitized_query.trim().is_empty() {
             Vec::new()
         } else {
-            self.db
+            self.store
                 .rag_fts5_search(&sanitized_query, CANDIDATES_PER_SOURCE)
                 .await
                 .unwrap_or_default()
@@ -243,7 +252,13 @@ impl RagEngine {
         let results = merged
             .into_iter()
             .filter_map(|(id, score)| {
-                chunk_map.get(&id).map(|chunk| {
+                chunk_map.get(&id).and_then(|chunk| {
+                    // Profile scoping: include global chunks + profile-specific chunks
+                    if let Some(pid) = profile_id {
+                        if chunk.profile_id.is_some() && chunk.profile_id != Some(pid) {
+                            return None; // belongs to a different profile
+                        }
+                    }
                     let mut chunk = chunk.clone();
                     // Redact sensitive chunk content
                     if chunk.sensitive {
@@ -252,14 +267,14 @@ impl RagEngine {
                             chunk.heading, chunk.token_count
                         );
                     }
-                    RagSearchResult {
+                    Some(RagSearchResult {
                         source_file: source_map
                             .get(&chunk.source_id)
                             .cloned()
                             .unwrap_or_default(),
                         chunk,
                         score,
-                    }
+                    })
                 })
             })
             .collect();
@@ -279,7 +294,7 @@ impl RagEngine {
         let new_hash = hex_sha256(&content);
 
         if let Some(existing) = self
-            .db
+            .store
             .find_rag_source_by_path(&path.to_string_lossy())
             .await?
         {

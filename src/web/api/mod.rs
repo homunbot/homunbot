@@ -20,6 +20,7 @@ mod memory;
 mod onboarding;
 mod openai;
 mod permissions;
+mod profiles;
 mod providers;
 mod sandbox;
 mod sessions;
@@ -74,6 +75,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .merge(workflows::routes())
         .merge(business::routes())
         .merge(contacts::routes())
+        .merge(profiles::routes())
         .merge(onboarding::routes())
         .merge(agents::routes())
         .merge(devices::routes())

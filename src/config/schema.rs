@@ -30,6 +30,9 @@ pub struct Config {
     /// Multi-agent routing configuration.
     #[serde(default)]
     pub routing: RoutingConfig,
+    /// Profile system configuration.
+    #[serde(default)]
+    pub profiles: ProfilesConfig,
 }
 
 impl Config {
@@ -472,6 +475,22 @@ pub struct RoutingConfig {
     pub classifier_model: String,
 }
 
+/// Profile system configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProfilesConfig {
+    /// Default profile slug when no channel/contact override is set.
+    pub default: String,
+}
+
+impl Default for ProfilesConfig {
+    fn default() -> Self {
+        Self {
+            default: "default".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ModelCapabilities {
@@ -792,6 +811,10 @@ pub trait ChannelBehavior {
     fn default_agent(&self) -> &str {
         ""
     }
+    /// Default profile slug for this channel. Empty = use global default.
+    fn default_profile(&self) -> &str {
+        ""
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -827,6 +850,9 @@ pub struct TelegramConfig {
     /// Named agent to handle messages on this channel.  Empty = "default".
     #[serde(default)]
     pub default_agent: String,
+    /// Default profile slug for this channel. Empty = use global default.
+    #[serde(default)]
+    pub default_profile: String,
 }
 
 impl ChannelBehavior for TelegramConfig {
@@ -853,6 +879,9 @@ impl ChannelBehavior for TelegramConfig {
     }
     fn default_agent(&self) -> &str {
         &self.default_agent
+    }
+    fn default_profile(&self) -> &str {
+        &self.default_profile
     }
 }
 
@@ -895,6 +924,9 @@ pub struct WhatsAppConfig {
     /// Named agent to handle messages on this channel.  Empty = "default".
     #[serde(default)]
     pub default_agent: String,
+    /// Default profile slug for this channel. Empty = use global default.
+    #[serde(default)]
+    pub default_profile: String,
 }
 
 impl ChannelBehavior for WhatsAppConfig {
@@ -922,6 +954,9 @@ impl ChannelBehavior for WhatsAppConfig {
     fn default_agent(&self) -> &str {
         &self.default_agent
     }
+    fn default_profile(&self) -> &str {
+        &self.default_profile
+    }
 }
 
 fn default_bot_name() -> String {
@@ -944,6 +979,7 @@ impl Default for WhatsAppConfig {
             persona: default_persona(),
             tone_of_voice: String::new(),
             default_agent: String::new(),
+            default_profile: String::new(),
         }
     }
 }
@@ -996,6 +1032,9 @@ pub struct DiscordConfig {
     /// Named agent to handle messages on this channel.  Empty = "default".
     #[serde(default)]
     pub default_agent: String,
+    /// Default profile slug for this channel. Empty = use global default.
+    #[serde(default)]
+    pub default_profile: String,
 }
 
 impl ChannelBehavior for DiscordConfig {
@@ -1022,6 +1061,9 @@ impl ChannelBehavior for DiscordConfig {
     }
     fn default_agent(&self) -> &str {
         &self.default_agent
+    }
+    fn default_profile(&self) -> &str {
+        &self.default_profile
     }
 }
 
@@ -1144,6 +1186,9 @@ pub struct SlackConfig {
     /// Named agent to handle messages on this channel.  Empty = "default".
     #[serde(default)]
     pub default_agent: String,
+    /// Default profile slug for this channel. Empty = use global default.
+    #[serde(default)]
+    pub default_profile: String,
 }
 
 impl ChannelBehavior for SlackConfig {
@@ -1170,6 +1215,9 @@ impl ChannelBehavior for SlackConfig {
     }
     fn default_agent(&self) -> &str {
         &self.default_agent
+    }
+    fn default_profile(&self) -> &str {
+        &self.default_profile
     }
 }
 
@@ -1253,6 +1301,9 @@ pub struct EmailAccountConfig {
     /// Named agent to handle messages on this channel.  Empty = "default".
     #[serde(default)]
     pub default_agent: String,
+    /// Default profile slug for this channel. Empty = use global default.
+    #[serde(default)]
+    pub default_profile: String,
 }
 
 fn default_batch_threshold() -> u32 {
@@ -1294,6 +1345,9 @@ impl ChannelBehavior for EmailAccountConfig {
     fn default_agent(&self) -> &str {
         &self.default_agent
     }
+    fn default_profile(&self) -> &str {
+        &self.default_profile
+    }
 }
 
 impl Default for EmailAccountConfig {
@@ -1322,6 +1376,7 @@ impl Default for EmailAccountConfig {
             persona: default_persona(),
             tone_of_voice: String::new(),
             default_agent: String::new(),
+            default_profile: String::new(),
         }
     }
 }
@@ -1424,6 +1479,7 @@ impl EmailConfig {
             persona: default_persona(),
             tone_of_voice: String::new(),
             default_agent: String::new(),
+            default_profile: String::new(),
         }
     }
 }
@@ -1646,6 +1702,9 @@ pub struct McpChannelConfig {
     /// Named agent to handle messages on this channel.  Empty = "default".
     #[serde(default)]
     pub default_agent: String,
+    /// Default profile slug for this channel. Empty = use global default.
+    #[serde(default)]
+    pub default_profile: String,
 }
 
 impl ChannelBehavior for McpChannelConfig {
@@ -1673,6 +1732,9 @@ impl ChannelBehavior for McpChannelConfig {
     fn default_agent(&self) -> &str {
         &self.default_agent
     }
+    fn default_profile(&self) -> &str {
+        &self.default_profile
+    }
 }
 
 impl Default for McpChannelConfig {
@@ -1686,6 +1748,7 @@ impl Default for McpChannelConfig {
             response_mode: String::new(),
             pairing_required: false,
             default_agent: String::new(),
+            default_profile: String::new(),
         }
     }
 }

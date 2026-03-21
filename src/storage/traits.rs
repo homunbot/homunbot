@@ -106,6 +106,7 @@ pub trait MemoryStore: Send + Sync {
         contact_id: Option<i64>,
         agent_id: Option<&str>,
         importance: i32,
+        profile_id: Option<i64>,
     ) -> Result<i64>;
 
     /// Load chunks by their IDs (for vector search result hydration).
@@ -209,6 +210,7 @@ pub trait RagStore: Send + Sync {
         content: &str,
         token_count: i64,
         sensitive: bool,
+        profile_id: Option<i64>,
     ) -> Result<i64>;
 
     /// Update a chunk's heading (after LLM enrichment).

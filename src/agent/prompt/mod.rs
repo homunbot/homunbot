@@ -11,8 +11,8 @@ mod sections;
 pub use builder::SystemPromptBuilder;
 pub use sections::{
     AgentInstructionsSection, BusinessSection, ContactsSection, IdentitySection, MemorySection,
-    PersonaSection, PromptSection, RuntimeSection, SafetySection, SkillsSection, ToolsSection,
-    WorkspaceSection,
+    PersonaSection, ProfileSection, PromptSection, RuntimeSection, SafetySection, SkillsSection,
+    ToolsSection, WorkspaceSection,
 };
 
 use std::path::Path;
@@ -49,6 +49,9 @@ pub struct PromptContext<'a> {
     pub contact_context: &'a str,
     /// Persona prompt prefix (from persona resolver)
     pub persona_context: &'a str,
+    /// Profile context: linguistics, personality, capabilities from PROFILE.json.
+    /// Empty when no profile-specific JSON is configured.
+    pub profile_context: &'a str,
     /// Per-agent instructions (from `AgentDefinition.instructions`).
     pub agent_instructions: &'a str,
     /// Cognition understanding (what the user wants, natural language).

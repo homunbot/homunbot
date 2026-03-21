@@ -8,7 +8,21 @@ use axum::Router;
 use serde::{Deserialize, Serialize};
 
 use super::super::server::AppState;
+use crate::storage::Database;
 use crate::web::auth::{check_write, AuthUser};
+
+/// Resolve a profile slug query param to an id. Returns None if empty/missing.
+async fn resolve_profile_filter(db: &Database, slug: Option<&str>) -> Option<i64> {
+    let slug = slug?.trim();
+    if slug.is_empty() {
+        return None;
+    }
+    crate::profiles::db::load_profile_by_slug(db.pool(), slug)
+        .await
+        .ok()
+        .flatten()
+        .map(|p| p.id)
+}
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -48,11 +62,41 @@ struct MemoryStatsResponse {
     has_instructions_md: bool,
 }
 
-async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<MemoryStatsResponse> {
+#[derive(Deserialize, Default)]
+struct StatsQuery {
+    /// Profile slug — when set, counts only chunks for this profile.
+    #[serde(default)]
+    profile: Option<String>,
+}
+
+async fn memory_stats(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<StatsQuery>,
+) -> Json<MemoryStatsResponse> {
     let data_dir = crate::config::Config::data_dir();
+    let brain_dir = resolve_brain_dir(&data_dir, q.profile.as_deref());
 
     let chunk_count = match state.db.as_ref() {
-        Some(db) => db.count_memory_chunks().await.unwrap_or(0),
+        Some(db) => {
+            if let Some(ref slug) = q.profile {
+                if !slug.is_empty() {
+                    // Count only chunks for this profile (+ global NULL chunks)
+                    if let Ok(Some(profile)) =
+                        crate::profiles::db::load_profile_by_slug(db.pool(), slug).await
+                    {
+                        db.count_memory_chunks_for_profile(profile.id)
+                            .await
+                            .unwrap_or(0)
+                    } else {
+                        0
+                    }
+                } else {
+                    db.count_memory_chunks().await.unwrap_or(0)
+                }
+            } else {
+                db.count_memory_chunks().await.unwrap_or(0)
+            }
+        }
         None => 0,
     };
 
@@ -68,9 +112,10 @@ async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<MemoryStatsRes
     Json(MemoryStatsResponse {
         chunk_count,
         daily_count,
-        has_memory_md: data_dir.join("MEMORY.md").exists(),
+        has_memory_md: brain_dir.join("MEMORY.md").exists()
+            || data_dir.join("MEMORY.md").exists(),
         has_history_md: data_dir.join("HISTORY.md").exists(),
-        has_instructions_md: data_dir.join("brain").join("INSTRUCTIONS.md").exists()
+        has_instructions_md: brain_dir.join("INSTRUCTIONS.md").exists()
             || data_dir.join("INSTRUCTIONS.md").exists(),
     })
 }
@@ -144,6 +189,9 @@ async fn run_memory_cleanup(
 #[derive(Deserialize)]
 struct MemoryFileQuery {
     file: String,
+    /// Profile slug — when set, reads from the profile's brain directory.
+    #[serde(default)]
+    profile: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -156,12 +204,19 @@ async fn get_memory_file(
     Query(q): Query<MemoryFileQuery>,
 ) -> Result<Json<MemoryFileResponse>, StatusCode> {
     let data_dir = crate::config::Config::data_dir();
-    let brain_dir = data_dir.join("brain");
+    let brain_dir = resolve_brain_dir(&data_dir, q.profile.as_deref());
     let path = match q.file.as_str() {
-        "memory" => data_dir.join("MEMORY.md"),
+        "memory" => {
+            // MEMORY.md lives in profile brain dir if profiled, else data_dir
+            let profile_path = brain_dir.join("MEMORY.md");
+            if profile_path.exists() {
+                profile_path
+            } else {
+                data_dir.join("MEMORY.md")
+            }
+        }
         "history" => data_dir.join("HISTORY.md"),
         "instructions" => {
-            // Prefer brain/ location, fall back to legacy data_dir
             let new_path = brain_dir.join("INSTRUCTIONS.md");
             if new_path.exists() {
                 new_path
@@ -176,10 +231,22 @@ async fn get_memory_file(
     Ok(Json(MemoryFileResponse { ok: true, content }))
 }
 
+/// Resolve the brain directory for a profile slug.
+/// Returns `brain/profiles/{slug}/` if slug is provided, else `brain/`.
+fn resolve_brain_dir(data_dir: &std::path::Path, profile_slug: Option<&str>) -> std::path::PathBuf {
+    match profile_slug {
+        Some(slug) if !slug.is_empty() => data_dir.join("brain").join("profiles").join(slug),
+        _ => data_dir.join("brain"),
+    }
+}
+
 #[derive(Deserialize)]
 struct PutMemoryFileRequest {
     file: String,
     content: String,
+    /// Profile slug — when set, writes to the profile's brain directory.
+    #[serde(default)]
+    profile: Option<String>,
 }
 
 async fn put_memory_file(
@@ -188,9 +255,9 @@ async fn put_memory_file(
 ) -> Result<Json<OkResponse>, StatusCode> {
     check_write(&auth)?;
     let data_dir = crate::config::Config::data_dir();
-    let brain_dir = data_dir.join("brain");
+    let brain_dir = resolve_brain_dir(&data_dir, req.profile.as_deref());
     let path = match req.file.as_str() {
-        "memory" => data_dir.join("MEMORY.md"),
+        "memory" => brain_dir.join("MEMORY.md"),
         "instructions" => brain_dir.join("INSTRUCTIONS.md"),
         _ => return Err(StatusCode::BAD_REQUEST),
     };
@@ -239,6 +306,9 @@ struct ChunkView {
     /// Relevance score from hybrid search (0.0-1.0). None for FTS5-only results.
     #[serde(skip_serializing_if = "Option::is_none")]
     score: Option<f64>,
+    /// Profile this chunk belongs to (null = global).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile_id: Option<i64>,
 }
 
 impl From<crate::storage::MemoryChunkRow> for ChunkView {
@@ -252,6 +322,7 @@ impl From<crate::storage::MemoryChunkRow> for ChunkView {
             memory_type: row.memory_type,
             created_at: row.created_at,
             score: None,
+            profile_id: row.profile_id,
         }
     }
 }
@@ -283,6 +354,7 @@ async fn search_memory(
                         memory_type: r.chunk.memory_type,
                         created_at: r.chunk.created_at,
                         score: Some(r.score),
+                        profile_id: r.chunk.profile_id,
                     })
                     .collect();
                 return Ok(Json(SearchResponse { chunks }));
@@ -327,6 +399,9 @@ struct HistoryQuery {
     limit: i64,
     #[serde(default)]
     offset: i64,
+    /// Filter by profile slug. Empty = show all.
+    #[serde(default)]
+    profile: Option<String>,
 }
 
 fn default_history_limit() -> i64 {
@@ -344,7 +419,17 @@ async fn get_memory_history(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let chunks = rows.into_iter().map(ChunkView::from).collect();
+    // Filter by profile if specified
+    let profile_id = resolve_profile_filter(db, q.profile.as_deref()).await;
+    let chunks: Vec<ChunkView> = rows
+        .into_iter()
+        .filter(|r| match profile_id {
+            Some(pid) => r.profile_id.is_none() || r.profile_id == Some(pid),
+            None => true,
+        })
+        .map(ChunkView::from)
+        .collect();
+
     Ok(Json(SearchResponse { chunks }))
 }
 
@@ -354,9 +439,19 @@ struct InstructionsResponse {
     instructions: Vec<String>,
 }
 
-async fn get_instructions() -> Json<InstructionsResponse> {
+#[derive(Deserialize, Default)]
+struct InstructionsQuery {
+    /// Profile slug — when set, reads from profile's brain directory.
+    #[serde(default)]
+    profile: Option<String>,
+}
+
+async fn get_instructions(
+    Query(q): Query<InstructionsQuery>,
+) -> Json<InstructionsResponse> {
     let data_dir = crate::config::Config::data_dir();
-    let brain_path = data_dir.join("brain").join("INSTRUCTIONS.md");
+    let brain_dir = resolve_brain_dir(&data_dir, q.profile.as_deref());
+    let brain_path = brain_dir.join("INSTRUCTIONS.md");
     let legacy_path = data_dir.join("INSTRUCTIONS.md");
     let path = if brain_path.exists() {
         brain_path
@@ -386,6 +481,9 @@ async fn get_instructions() -> Json<InstructionsResponse> {
 #[derive(Deserialize)]
 struct PutInstructionsRequest {
     instructions: Vec<String>,
+    /// Profile slug — when set, writes to profile's brain directory.
+    #[serde(default)]
+    profile: Option<String>,
 }
 
 async fn put_instructions(
@@ -394,7 +492,7 @@ async fn put_instructions(
 ) -> Result<Json<OkResponse>, StatusCode> {
     check_write(&auth)?;
     let data_dir = crate::config::Config::data_dir();
-    let brain_dir = data_dir.join("brain");
+    let brain_dir = resolve_brain_dir(&data_dir, req.profile.as_deref());
     let path = brain_dir.join("INSTRUCTIONS.md");
 
     tokio::fs::create_dir_all(&brain_dir)

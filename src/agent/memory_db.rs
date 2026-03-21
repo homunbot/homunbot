@@ -20,10 +20,11 @@ impl Database {
         contact_id: Option<i64>,
         agent_id: Option<&str>,
         importance: i32,
+        profile_id: Option<i64>,
     ) -> Result<i64> {
         let result = sqlx::query(
-            "INSERT INTO memory_chunks (date, source, heading, content, memory_type, contact_id, agent_id, importance)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO memory_chunks (date, source, heading, content, memory_type, contact_id, agent_id, importance, profile_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(date)
         .bind(source)
@@ -33,6 +34,7 @@ impl Database {
         .bind(contact_id)
         .bind(agent_id)
         .bind(importance)
+        .bind(profile_id)
         .execute(self.pool())
         .await
         .context("Failed to insert memory chunk")?;
@@ -48,7 +50,7 @@ impl Database {
 
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let query = format!(
-            "SELECT id, date, source, heading, content, memory_type, created_at, contact_id, agent_id, importance
+            "SELECT id, date, source, heading, content, memory_type, created_at, contact_id, agent_id, importance, profile_id, profile_id
              FROM memory_chunks WHERE id IN ({})
              ORDER BY created_at DESC",
             placeholders.join(",")
@@ -95,6 +97,18 @@ impl Database {
         Ok(count)
     }
 
+    /// Count memory chunks visible to a specific profile (profile's own + global NULL).
+    pub async fn count_memory_chunks_for_profile(&self, profile_id: i64) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM memory_chunks WHERE profile_id IS NULL OR profile_id = ?",
+        )
+        .bind(profile_id)
+        .fetch_one(self.pool())
+        .await
+        .context("Failed to count memory chunks for profile")?;
+        Ok(count)
+    }
+
     /// List memory history chunks (type='history'), ordered by newest first.
     pub async fn list_memory_history(
         &self,
@@ -102,7 +116,7 @@ impl Database {
         offset: i64,
     ) -> Result<Vec<MemoryChunkRow>> {
         let rows = sqlx::query_as::<_, MemoryChunkRow>(
-            "SELECT id, date, source, heading, content, memory_type, created_at, contact_id, agent_id, importance \
+            "SELECT id, date, source, heading, content, memory_type, created_at, contact_id, agent_id, importance, profile_id \
              FROM memory_chunks WHERE memory_type = 'history' \
              ORDER BY created_at DESC LIMIT ? OFFSET ?",
         )
@@ -117,7 +131,7 @@ impl Database {
     /// Load all memory chunks (for re-embedding after model change).
     pub async fn load_all_memory_chunks(&self) -> Result<Vec<MemoryChunkRow>> {
         let rows = sqlx::query_as::<_, MemoryChunkRow>(
-            "SELECT id, date, source, heading, content, memory_type, created_at, contact_id, agent_id, importance
+            "SELECT id, date, source, heading, content, memory_type, created_at, contact_id, agent_id, importance, profile_id
              FROM memory_chunks ORDER BY id",
         )
         .fetch_all(self.pool())
@@ -219,7 +233,7 @@ impl Database {
         end_date: &str,
     ) -> Result<Vec<MemoryChunkRow>> {
         let rows = sqlx::query_as::<_, MemoryChunkRow>(
-            "SELECT id, date, source, heading, content, memory_type, created_at, contact_id, agent_id, importance
+            "SELECT id, date, source, heading, content, memory_type, created_at, contact_id, agent_id, importance, profile_id
              FROM memory_chunks WHERE date >= ? AND date <= ?
              ORDER BY date ASC, created_at ASC",
         )

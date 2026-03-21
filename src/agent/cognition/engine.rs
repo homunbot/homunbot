@@ -39,6 +39,10 @@ pub struct CognitionParams<'a> {
     pub channel: &'a str,
     pub agent_id: Option<&'a str>,
     pub contact_id: Option<i64>,
+    /// Visible profile IDs for memory/RAG scoping (active + readable_from).
+    pub visible_profile_ids: Vec<i64>,
+    /// Active profile slug for skill filtering.
+    pub active_profile_slug: Option<String>,
     pub stream_tx: Option<&'a mpsc::Sender<StreamChunk>>,
     pub cognition_model: Option<&'a str>,
     pub max_iterations: u32,
@@ -280,7 +284,12 @@ async fn dispatch_discovery_tool(
             discovery::discover_tools(query, params.tool_registry).await
         }
         "discover_skills" => {
-            discovery::discover_skills(query, params.skill_registry).await
+            discovery::discover_skills(
+                query,
+                params.skill_registry,
+                params.active_profile_slug.as_deref(),
+            )
+            .await
         }
         "discover_mcp" => {
             discovery::discover_mcp(query, params.config, params.tool_registry).await
@@ -293,6 +302,7 @@ async fn dispatch_discovery_tool(
                     searcher,
                     params.contact_id,
                     params.agent_id,
+                    &params.visible_profile_ids,
                 )
                 .await;
             }

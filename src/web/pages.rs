@@ -36,6 +36,7 @@ pub fn router() -> Router<Arc<AppState>> {
             get(mcp_notion_oauth_callback_page),
         )
         .route("/contacts", get(contacts_page))
+        .route("/profiles", get(profiles_page))
         .route("/memory", get(memory_page))
         .route("/knowledge", get(knowledge_page))
         .route("/vault", get(vault_page))
@@ -95,7 +96,7 @@ const ICON_ESTOP: &str = r#"<svg viewBox="0 0 18 18" fill="none" stroke="current
 /// Pages that belong to the "Automation" sub-navigation group.
 const AUTOMATION_PAGES: &[&str] = &["automations", "workflows"];
 /// Pages that belong to the "Brain" sub-navigation group.
-const BRAIN_PAGES: &[&str] = &["memory", "knowledge", "contacts"];
+const BRAIN_PAGES: &[&str] = &["memory", "knowledge", "contacts", "profiles"];
 /// Pages that belong to the "Extensions" sub-navigation group.
 const EXTENSIONS_PAGES: &[&str] = &["skills", "mcp", "agents"];
 /// Pages that belong to the "Settings" sub-navigation group.
@@ -232,10 +233,12 @@ fn content_subnav(active: &str) -> String {
                 <a href="/memory" class="sidebar-subnav-link{0}">Memory</a>
                 <a href="/knowledge" class="sidebar-subnav-link{1}">Knowledge</a>
                 <a href="/contacts" class="sidebar-subnav-link{2}">Contacts</a>
+                <a href="/profiles" class="sidebar-subnav-link{3}">Profiles</a>
             </aside>"#,
             a("memory"),
             a("knowledge"),
             a("contacts"),
+            a("profiles"),
         )
     } else if EXTENSIONS_PAGES.contains(&active) {
         format!(
@@ -1604,6 +1607,11 @@ async fn chat_page(
                                             </button>
                                         </div>
                                         <div class="chat-input-actions-right">
+                                            <button type="button" class="chat-model-pill" id="chat-profile-pill" title="Choose profile" style="margin-right:4px">
+                                                <span id="chat-profile-pill-emoji" style="margin-right:2px">&#128100;</span>
+                                                <span class="chat-model-pill-name" id="chat-profile-pill-name">Default</span>
+                                                <svg class="chat-model-pill-arrow" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7l4 4 4-4"/></svg>
+                                            </button>
                                             <button type="button" class="chat-model-pill" id="chat-model-pill" title="Choose model">
                                                 <span class="chat-model-pill-name" id="chat-model-pill-name">{current_model}</span>
                                                 <svg class="chat-model-pill-arrow" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7l4 4 4-4"/></svg>
@@ -1686,7 +1694,9 @@ async fn automations_page() -> Html<String> {
                                 <h1 class="page-title">Automations</h1>
                                 <span class="badge badge-info" id="automations-count">0</span>
                             </div>
-                            <div class="actions">
+                            <div class="actions" style="display:flex;align-items:center;gap:8px">
+                                <label style="font-size:13px;color:var(--t2)">Profile:</label>
+                                <select id="automations-profile-filter" class="input" style="width:auto;min-width:130px;font-size:13px"></select>
                                 <button class="btn btn-primary btn-sm" id="btn-create-automation">
                                     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"><path d="M8 3v10M3 8h10"/></svg>Create
                                 </button>
@@ -1824,7 +1834,9 @@ async fn workflows_page() -> Html<String> {
                         <h1 class="page-title">Workflows</h1>
                         <span class="badge badge-info" id="workflows-count">0</span>
                     </div>
-                    <div class="actions">
+                    <div class="actions" style="display:flex;align-items:center;gap:8px">
+                        <label style="font-size:13px;color:var(--t2)">Profile:</label>
+                        <select id="workflows-profile-filter" class="input" style="width:auto;min-width:130px;font-size:13px"></select>
                         <button class="btn btn-primary btn-sm" id="wf-create-toggle">
                             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"><path d="M8 3v10M3 8h10"/></svg>Create Workflow
                         </button>
@@ -2536,6 +2548,35 @@ async fn contacts_page(State(_state): State<Arc<AppState>>) -> Html<String> {
     Html(page_html("Contacts", "contacts", body, &["contacts.js"]))
 }
 
+// ─── Profiles ─────────────────────────────────────────────────────
+
+async fn profiles_page(State(_state): State<Arc<AppState>>) -> Html<String> {
+    let body = r##"<main class="content">
+        <div class="contacts-layout" id="profiles-layout">
+            <div class="contacts-sidebar">
+                <div class="contacts-sidebar-header">
+                    <div class="contacts-search-row">
+                        <svg class="contacts-search-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6.5" cy="6.5" r="5"/><path d="M11 11l3.5 3.5"/></svg>
+                        <input type="text" id="profile-search" placeholder="Search profiles..." class="input">
+                    </div>
+                    <div class="contacts-sidebar-meta">
+                        <span><span id="profiles-count">0</span> profiles</span>
+                        <button class="btn btn-primary btn-sm" id="add-profile-btn">+ New</button>
+                    </div>
+                </div>
+                <div class="contacts-list-scroll" id="profiles-list"></div>
+            </div>
+            <div class="contact-detail-pane" id="profile-detail-pane">
+                <div class="contact-empty-detail" id="profile-empty">
+                    <p>Select a profile to view details</p>
+                </div>
+                <div id="profile-detail" style="display:none"></div>
+            </div>
+        </div>
+    </main>"##;
+    Html(page_html("Profiles", "profiles", body, &["profiles.js"]))
+}
+
 // ─── Memory ──────────────────────────────────────────────────────
 
 async fn memory_page(State(state): State<Arc<AppState>>) -> Html<String> {
@@ -2564,23 +2605,27 @@ async fn memory_page(State(state): State<Arc<AppState>>) -> Html<String> {
                         <h1 class="page-title">Memory</h1>
                         <span class="badge badge-info">{chunk_count} chunks</span>
                     </div>
+                    <div style="display:flex;align-items:center;gap:8px">
+                        <label style="font-size:13px;color:var(--t2)">Profile:</label>
+                        <select id="memory-profile-filter" class="input" style="width:auto;min-width:140px;font-size:13px"></select>
+                    </div>
                 </div>
 
                 <div class="stats-grid stats-grid--3">
                     <div class="stat-card">
                         <div class="stat-label">Memory Chunks</div>
-                        <div class="stat-value">{chunk_count}</div>
+                        <div class="stat-value" id="mem-stat-chunks">{chunk_count}</div>
                         <div class="stat-sub">in vector store</div>
                     </div>
                     <div class="stat-card">
                         <div class="stat-label">Daily Logs</div>
-                        <div class="stat-value">{daily_count}</div>
+                        <div class="stat-value" id="mem-stat-daily">{daily_count}</div>
                         <div class="stat-sub">conversation logs</div>
                     </div>
                     <div class="stat-card">
                         <div class="stat-label">Files</div>
-                        <div class="stat-value">{file_count}</div>
-                        <div class="stat-sub">{file_detail}</div>
+                        <div class="stat-value" id="mem-stat-files">{file_count}</div>
+                        <div class="stat-sub" id="mem-stat-files-detail">{file_detail}</div>
                     </div>
                 </div>
 
@@ -4342,6 +4387,10 @@ async fn knowledge_page(State(_state): State<Arc<AppState>>) -> Html<String> {
             <div class="page-header">
                 <div class="page-title-group">
                     <h1 class="page-title">Knowledge Base</h1>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px">
+                    <label style="font-size:13px;color:var(--t2)">Profile:</label>
+                    <select id="knowledge-profile-filter" class="input" style="width:auto;min-width:140px;font-size:13px"></select>
                 </div>
             </div>
             <p class="page-subtitle">Personal document knowledge base — upload files and search across your documents.</p>

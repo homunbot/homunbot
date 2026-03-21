@@ -65,7 +65,7 @@ impl Database {
     pub async fn load_workflow(&self, id: &str) -> Result<Option<Workflow>> {
         let row = sqlx::query_as::<_, WorkflowRow>(
             "SELECT id, name, objective, status, created_by, deliver_to, automation_id, automation_run_id, context_json,
-                    current_step_idx, created_at, updated_at, completed_at, error
+                    current_step_idx, created_at, updated_at, completed_at, error, profile_id
              FROM workflows WHERE id = ?",
         )
         .bind(id)
@@ -99,7 +99,7 @@ impl Database {
         let rows = if let Some(status) = status_filter {
             sqlx::query_as::<_, WorkflowRow>(
                 "SELECT id, name, objective, status, created_by, deliver_to, automation_id, automation_run_id, context_json,
-                        current_step_idx, created_at, updated_at, completed_at, error
+                        current_step_idx, created_at, updated_at, completed_at, error, profile_id
                  FROM workflows WHERE status = ? ORDER BY created_at DESC",
             )
             .bind(status)
@@ -108,7 +108,7 @@ impl Database {
         } else {
             sqlx::query_as::<_, WorkflowRow>(
                 "SELECT id, name, objective, status, created_by, deliver_to, automation_id, automation_run_id, context_json,
-                        current_step_idx, created_at, updated_at, completed_at, error
+                        current_step_idx, created_at, updated_at, completed_at, error, profile_id
                  FROM workflows ORDER BY created_at DESC",
             )
             .fetch_all(self.pool())
@@ -127,7 +127,7 @@ impl Database {
     pub async fn load_resumable_workflows(&self) -> Result<Vec<Workflow>> {
         let rows = sqlx::query_as::<_, WorkflowRow>(
             "SELECT id, name, objective, status, created_by, deliver_to, automation_id, automation_run_id, context_json,
-                    current_step_idx, created_at, updated_at, completed_at, error
+                    current_step_idx, created_at, updated_at, completed_at, error, profile_id
              FROM workflows WHERE status IN ('running', 'pending', 'paused')
              ORDER BY created_at ASC",
         )
@@ -197,6 +197,35 @@ impl Database {
             .bind(id)
             .execute(self.pool())
             .await?;
+        Ok(())
+    }
+
+    /// Reset a terminal workflow to pending: clears error/completed_at, resets
+    /// step index to 0, and sets all steps back to pending.
+    pub async fn reset_workflow(&self, id: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+
+        sqlx::query(
+            "UPDATE workflows SET status = 'pending', error = NULL, completed_at = NULL,
+             current_step_idx = 0, context_json = '{}', updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(&now)
+        .bind(id)
+        .execute(self.pool())
+        .await
+        .with_context(|| format!("Failed to reset workflow {id}"))?;
+
+        sqlx::query(
+            "UPDATE workflow_steps SET status = 'pending', result = NULL, error = NULL,
+             started_at = NULL, completed_at = NULL
+             WHERE workflow_id = ?",
+        )
+        .bind(id)
+        .execute(self.pool())
+        .await
+        .with_context(|| format!("Failed to reset steps for workflow {id}"))?;
+
         Ok(())
     }
 
@@ -292,6 +321,7 @@ struct WorkflowRow {
     updated_at: Option<String>,
     completed_at: Option<String>,
     error: Option<String>,
+    profile_id: Option<i64>,
 }
 
 impl WorkflowRow {
@@ -312,6 +342,7 @@ impl WorkflowRow {
             updated_at: self.updated_at,
             completed_at: self.completed_at,
             error: self.error,
+            profile_id: self.profile_id,
         }
     }
 }

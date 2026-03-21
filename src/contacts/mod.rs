@@ -65,6 +65,8 @@ pub struct Contact {
     pub persona_instructions: String,
     /// Per-contact agent routing override (MAG-2). NULL = use channel default.
     pub agent_override: Option<String>,
+    /// Profile to use when responding to this contact. NULL = use channel/global default.
+    pub profile_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]

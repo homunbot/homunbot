@@ -1,5 +1,64 @@
 // Homun — Memory page interactivity
 
+// ─── Profile filter ───
+(async function initProfileFilter() {
+    const select = document.getElementById('memory-profile-filter');
+    if (!select) return;
+
+    // Add "All profiles" option
+    const allOpt = document.createElement('option');
+    allOpt.value = '';
+    allOpt.textContent = 'All profiles';
+    select.appendChild(allOpt);
+
+    try {
+        const res = await fetch('/api/v1/profiles');
+        if (!res.ok) return;
+        const profiles = await res.json();
+        profiles.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.slug;
+            opt.textContent = (p.avatar_emoji || '\u{1F464}') + ' ' + p.display_name;
+            select.appendChild(opt);
+        });
+    } catch (_) {}
+
+    select.addEventListener('change', () => {
+        // Reload all sections with the new profile filter
+        if (typeof historyOffset !== 'undefined') historyOffset = 0;
+        if (typeof loadHistory === 'function') loadHistory();
+        if (typeof loadMemoryFile === 'function') loadMemoryFile();
+        if (typeof loadInstructions === 'function') loadInstructions();
+        reloadMemoryStats();
+    });
+})();
+
+/** Get the current profile filter slug (empty = all). */
+function getProfileFilter() {
+    const el = document.getElementById('memory-profile-filter');
+    return el ? el.value : '';
+}
+
+/** Reload memory stats cards with profile filter. */
+async function reloadMemoryStats() {
+    try {
+        const pf = getProfileFilter();
+        const profileParam = pf ? '?profile=' + encodeURIComponent(pf) : '';
+        const resp = await fetch('/api/v1/memory/stats' + profileParam);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const el = (id) => document.getElementById(id);
+        if (el('mem-stat-chunks')) el('mem-stat-chunks').textContent = data.chunk_count;
+        if (el('mem-stat-daily')) el('mem-stat-daily').textContent = data.daily_count;
+        const fileCount = [data.has_memory_md, data.has_instructions_md].filter(Boolean).length;
+        if (el('mem-stat-files')) el('mem-stat-files').textContent = fileCount;
+        const parts = [];
+        if (data.has_memory_md) parts.push('MEMORY.md');
+        if (data.has_instructions_md) parts.push('INSTRUCTIONS.md');
+        if (el('mem-stat-files-detail')) el('mem-stat-files-detail').textContent = parts.join(' + ') || 'none';
+    } catch (_) {}
+}
+
 /** Escape HTML entities to prevent XSS — all dynamic content passes through this. */
 function esc(s) {
     const d = document.createElement('div');
@@ -111,7 +170,9 @@ const memStatus = document.getElementById('memory-status');
 
 async function loadMemoryFile() {
     try {
-        const resp = await fetch('/api/v1/memory/content?file=memory');
+        const pf = getProfileFilter();
+        const profileParam = pf ? '&profile=' + encodeURIComponent(pf) : '';
+        const resp = await fetch('/api/v1/memory/content?file=memory' + profileParam);
         const data = await resp.json();
         if (textarea) textarea.value = data.content || '';
     } catch (e) { /* ignore */ }
@@ -120,10 +181,11 @@ async function loadMemoryFile() {
 if (btnSave) {
     btnSave.addEventListener('click', async () => {
         try {
+            const pf = getProfileFilter();
             await fetch('/api/v1/memory/content', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ file: 'memory', content: textarea.value }),
+                body: JSON.stringify({ file: 'memory', content: textarea.value, profile: pf || undefined }),
             });
             showToast('MEMORY.md saved');
             if (memStatus) memStatus.textContent = 'Saved ✓';
@@ -174,7 +236,9 @@ function updateInstructionsCount() {
 
 async function loadInstructions() {
     try {
-        const resp = await fetch('/api/v1/memory/instructions');
+        const pf = getProfileFilter();
+        const profileParam = pf ? '?profile=' + encodeURIComponent(pf) : '';
+        const resp = await fetch('/api/v1/memory/instructions' + profileParam);
         const data = await resp.json();
         currentInstructions = data.instructions || [];
         renderInstructions();
@@ -279,10 +343,11 @@ if (btnDeduplicate) {
 
 async function saveInstructions() {
     try {
+        const pf = getProfileFilter();
         await fetch('/api/v1/memory/instructions', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ instructions: currentInstructions }),
+            body: JSON.stringify({ instructions: currentInstructions, profile: pf || undefined }),
         });
         showToast('Instructions updated');
     } catch (e) {
@@ -344,7 +409,8 @@ function updateHistoryCount() {
 
 async function loadHistory(append = false) {
     try {
-        const resp = await fetch(`/api/v1/memory/history?limit=${historyLimit}&offset=${historyOffset}`);
+        const profileParam = getProfileFilter() ? `&profile=${encodeURIComponent(getProfileFilter())}` : '';
+        const resp = await fetch(`/api/v1/memory/history?limit=${historyLimit}&offset=${historyOffset}${profileParam}`);
         const data = await resp.json();
         const chunks = data.chunks || [];
 

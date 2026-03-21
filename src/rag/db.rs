@@ -124,10 +124,11 @@ impl Database {
         content: &str,
         token_count: i64,
         sensitive: bool,
+        profile_id: Option<i64>,
     ) -> Result<i64> {
         let result = sqlx::query(
-            "INSERT INTO rag_chunks (source_id, chunk_index, heading, content, token_count, sensitive)
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO rag_chunks (source_id, chunk_index, heading, content, token_count, sensitive, profile_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(source_id)
         .bind(chunk_index)
@@ -135,6 +136,7 @@ impl Database {
         .bind(content)
         .bind(token_count)
         .bind(sensitive)
+        .bind(profile_id)
         .execute(self.pool())
         .await
         .context("Failed to insert RAG chunk")?;
@@ -161,7 +163,7 @@ impl Database {
 
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let query = format!(
-            "SELECT id, source_id, chunk_index, heading, content, token_count, sensitive, created_at
+            "SELECT id, source_id, chunk_index, heading, content, token_count, sensitive, created_at, profile_id
              FROM rag_chunks WHERE id IN ({})
              ORDER BY created_at DESC",
             placeholders.join(",")
@@ -219,7 +221,7 @@ impl Database {
     /// Load all chunks for a specific source.
     pub async fn load_rag_chunks_by_source(&self, source_id: i64) -> Result<Vec<RagChunkRow>> {
         let rows = sqlx::query_as::<_, RagChunkRow>(
-            "SELECT id, source_id, chunk_index, heading, content, token_count, sensitive, created_at
+            "SELECT id, source_id, chunk_index, heading, content, token_count, sensitive, created_at, profile_id
              FROM rag_chunks WHERE source_id = ? ORDER BY chunk_index",
         )
         .bind(source_id)

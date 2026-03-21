@@ -106,6 +106,9 @@ pub struct Workflow {
     pub updated_at: Option<String>,
     pub completed_at: Option<String>,
     pub error: Option<String>,
+    /// Profile this workflow belongs to. None = global/unscoped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

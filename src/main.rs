@@ -43,6 +43,7 @@ mod connections;
 mod contacts;
 mod logs;
 mod mcp_setup;
+mod profiles;
 mod provider;
 mod queue;
 #[cfg(feature = "embeddings")]
@@ -772,6 +773,16 @@ async fn main() -> Result<()> {
                 );
             }
             let db = Database::open(&config.storage.resolved_path()).await?;
+
+            // Initialize profile system (create brain dirs, migrate legacy files)
+            let data_dir = Config::data_dir();
+            if let Err(e) = profiles::ProfileRegistry::load(&db, &data_dir).await {
+                tracing::warn!(error = %e, "Failed to initialize profile registry");
+            }
+            if let Err(e) = profiles::db::migrate_contact_personas(db.pool(), &data_dir).await {
+                tracing::warn!(error = %e, "Failed to migrate contact personas");
+            }
+
             let provider = provider::create_provider(&config)?;
             let mut tool_registry = create_tool_registry(&config, db.clone(), None);
 
@@ -797,7 +808,7 @@ async fn main() -> Result<()> {
             > = None;
             #[cfg(feature = "browser")]
             if let Some(browser_peer) = mcp_manager.take_browser_peer() {
-                let browser_tool = crate::tools::BrowserTool::new(browser_peer);
+                let browser_tool = crate::tools::BrowserTool::new(browser_peer, None);
                 _browser_session = Some(browser_tool.session());
                 tool_registry.register(Box::new(browser_tool));
                 tracing::info!("🌐 Browser tool registered successfully");
@@ -987,6 +998,16 @@ async fn main() -> Result<()> {
                 "⏱ database opened"
             );
 
+            // Initialize profile system: load profiles, create brain dirs, migrate legacy files
+            let data_dir = Config::data_dir();
+            if let Err(e) = profiles::ProfileRegistry::load(&db, &data_dir).await {
+                tracing::warn!(error = %e, "Failed to initialize profile registry");
+            }
+            // Migrate contact personas → profiles (idempotent)
+            if let Err(e) = profiles::db::migrate_contact_personas(db.pool(), &data_dir).await {
+                tracing::warn!(error = %e, "Failed to migrate contact personas to profiles");
+            }
+
             // Health tracker: shared between provider (records metrics) and web UI (exposes them)
             let health_tracker = Arc::new(provider::ProviderHealthTracker::new());
 
@@ -1052,6 +1073,8 @@ async fn main() -> Result<()> {
             let mcp_sandbox_config = config.security.execution_sandbox.clone();
             #[cfg(feature = "mcp")]
             let mcp_shared_config = shared_config.clone();
+            #[cfg(all(feature = "mcp", feature = "browser"))]
+            let config_for_pool = shared_config.clone();
 
             // Create tool message channel for proactive messaging (MessageTool → Gateway → Channel)
             let (tool_msg_tx, tool_msg_rx) = tokio::sync::mpsc::channel(100);
@@ -1412,14 +1435,92 @@ async fn main() -> Result<()> {
                         };
 
                         if let Some(peer) = browser_peer {
-                            let browser_tool = crate::tools::BrowserTool::new(peer);
+                            let browser_pool = std::sync::Arc::new(
+                                crate::browser::BrowserPool::new(config_for_pool.clone()),
+                            );
+                            browser_pool
+                                .set_default_peer(
+                                    &config_for_pool.read().await.browser.default_profile,
+                                    peer.clone(),
+                                )
+                                .await;
+                            let monitor_pool_ref = browser_pool.clone();
+                            let browser_tool =
+                                crate::tools::BrowserTool::new(peer, Some(browser_pool));
                             let session = browser_tool.session();
                             agent_for_mcp
                                 .register_deferred_tools(vec![Box::new(browser_tool)])
                                 .await;
                             agent_for_mcp.set_browser_session(session.clone()).await;
                             // Also update estop handles so emergency stop can close the browser
-                            estop_for_mcp.write().await.browser_session = Some(session);
+                            estop_for_mcp.write().await.browser_session = Some(session.clone());
+
+                            // Background idle monitor: closes idle tabs every 60s and
+                            // shuts down non-default profile MCP peers after 10 min idle.
+                            let monitor_session = session;
+                            let monitor_pool = monitor_pool_ref;
+                            tokio::spawn(async move {
+                                const CHECK_INTERVAL_SECS: u64 = 60;
+                                const POOL_IDLE_TIMEOUT_SECS: u64 = 600; // 10 min
+                                let mut last_active: std::collections::HashMap<String, std::time::Instant> =
+                                    std::collections::HashMap::new();
+
+                                loop {
+                                    tokio::time::sleep(std::time::Duration::from_secs(CHECK_INTERVAL_SECS)).await;
+
+                                    // 1. Close idle browser tabs (same logic as agent loop start)
+                                    monitor_session
+                                        .close_idle_tabs(
+                                            crate::tools::browser::BROWSER_IDLE_TIMEOUT_SECS,
+                                        )
+                                        .await;
+
+                                    // 2. Shut down non-default profile MCP peers idle > 10 min
+                                    let active = monitor_pool.active_profiles().await;
+                                    let now = std::time::Instant::now();
+                                    let default_profile = {
+                                        let config = config_for_pool.read().await;
+                                        config.browser.default_profile.clone()
+                                    };
+
+                                    // Track which profiles are active
+                                    for name in &active {
+                                        // If a session has active tabs, update last seen
+                                        if monitor_session.has_any_active().await {
+                                            last_active.insert(name.clone(), now);
+                                        } else if !last_active.contains_key(name) {
+                                            last_active.insert(name.clone(), now);
+                                        }
+                                    }
+
+                                    // Shut down non-default profiles idle too long
+                                    let idle_threshold =
+                                        std::time::Duration::from_secs(POOL_IDLE_TIMEOUT_SECS);
+                                    let profiles_to_close: Vec<String> = last_active
+                                        .iter()
+                                        .filter(|(name, last)| {
+                                            **name != default_profile
+                                                && now.duration_since(**last) > idle_threshold
+                                        })
+                                        .map(|(name, _)| name.clone())
+                                        .collect();
+
+                                    for name in profiles_to_close {
+                                        tracing::info!(
+                                            profile = %name,
+                                            "Shutting down idle browser profile (>10 min inactive)"
+                                        );
+                                        monitor_pool.shutdown_profile(&name).await;
+                                        last_active.remove(&name);
+                                    }
+
+                                    // Clean up tracking for profiles no longer active
+                                    let active_set: std::collections::HashSet<String> =
+                                        active.into_iter().collect();
+                                    last_active.retain(|k, _| active_set.contains(k));
+                                }
+                            });
+
                             tracing::info!("🌐 Browser tool registered successfully");
                         } else {
                             tracing::warn!(
@@ -2498,7 +2599,7 @@ async fn main() -> Result<()> {
                 }
                 KnowledgeCommands::Search { query, limit } => {
                     let mut engine = rag_handle.lock().await;
-                    match engine.search(&query, limit).await {
+                    match engine.search(&query, limit, None).await {
                         Ok(results) if results.is_empty() => {
                             println!("No results found.");
                         }

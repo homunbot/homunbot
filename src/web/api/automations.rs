@@ -301,14 +301,38 @@ async fn list_automation_targets(
     Json(targets)
 }
 
+#[derive(Deserialize, Default)]
+struct AutomationListQuery {
+    /// Profile slug filter — when set, shows only automations for this profile + global.
+    #[serde(default)]
+    profile: Option<String>,
+}
+
 /// GET /api/v1/automations
 async fn list_automations(
     State(state): State<Arc<AppState>>,
+    Query(q): Query<AutomationListQuery>,
 ) -> Result<Json<Vec<AutomationListItem>>, (StatusCode, String)> {
     let db = state.db.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "Database not available".to_string(),
     ))?;
+
+    // Resolve profile filter slug → id
+    let filter_profile_id = if let Some(ref slug) = q.profile {
+        if !slug.is_empty() {
+            crate::profiles::db::load_profile_by_slug(db.pool(), slug)
+                .await
+                .ok()
+                .flatten()
+                .map(|p| p.id)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let rows = db.load_automations().await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -318,6 +342,10 @@ async fn list_automations(
     let now = chrono::Utc::now();
     let items = rows
         .into_iter()
+        .filter(|row| match filter_profile_id {
+            Some(pid) => row.profile_id.is_none() || row.profile_id == Some(pid),
+            None => true, // no filter = show all
+        })
         .map(|mut row| {
             let next_run = crate::scheduler::AutomationSchedule::next_run_from_stored(
                 &row.schedule,

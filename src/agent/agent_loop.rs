@@ -464,6 +464,12 @@ impl AgentLoop {
         thinking_override: Option<bool>,
     ) -> Result<String> {
         crate::agent::stop::clear_stop();
+
+        // Built-in /profile command: switch active profile for this session
+        if let Some(response) = self.handle_profile_command(content).await {
+            return Ok(response);
+        }
+
         let blocked_set: HashSet<&str> = blocked_tools.iter().copied().collect();
 
         // Snapshot config for this request — picks up any changes from web UI.
@@ -603,33 +609,64 @@ impl AgentLoop {
         };
         self.context.set_contact_context(contact_ctx.clone()).await;
 
-        // Resolve persona (contact > channel > "bot") and inject into prompt
-        let contact_summary = {
+        // Resolve profile + persona and inject into prompt
+        let (contact_summary, active_profile_id, active_profile_brain_dir, active_profile_slug) = {
             let config = self.config.read().await;
             let behavior = config.channels.behavior_for(channel);
-            let ch_persona = behavior.map(|b| b.persona()).unwrap_or("bot");
-            let ch_tone = behavior.map(|b| b.tone_of_voice()).unwrap_or("");
-            let user_name = &config.agent.user_name;
-            let persona = crate::agent::persona::resolve_persona(
+
+            // Extract channel behavior values before dropping the non-Send reference
+            let ch_default_profile = behavior
+                .map(|b| b.default_profile())
+                .unwrap_or("")
+                .to_string();
+            let global_default_profile = config.profiles.default.clone();
+            // Resolve active profile (contact > channel > config default)
+            let profile_id = crate::agent::profile_resolver::resolve_profile_id_from_values(
                 contact.as_ref(),
-                ch_persona,
-                ch_tone,
-                user_name,
-            );
-            let mut persona_text = persona.prompt_prefix.clone();
-            if !persona.tone_of_voice.is_empty() {
-                if !persona_text.is_empty() {
-                    persona_text.push('\n');
-                }
-                persona_text.push_str(&format!("Tone of voice: {}", persona.tone_of_voice));
-            }
-            self.context.set_persona_context(persona_text).await;
-            // Return a short contact summary for cognition
-            if let Some(ref c) = contact {
+                &ch_default_profile,
+                &global_default_profile,
+                &self.db,
+            )
+            .await;
+
+            // Build profile brain dir path + inject profile context
+            let data_dir = Config::data_dir();
+            let (profile_brain_dir, active_profile_slug) =
+                if let Ok(Some(profile)) = crate::profiles::db::load_profile_by_id(self.db.pool(), profile_id).await {
+                    let dir = profile.brain_dir(&data_dir);
+                    let slug = profile.slug.clone();
+                    // Reload bootstrap files from profile dir
+                    self.context.reload_bootstrap_for_profile(&dir).await;
+                    // Set structured profile context from PROFILE.json
+                    let profile_ctx = crate::profiles::build_profile_context(&profile);
+                    self.context.set_profile_context(profile_ctx).await;
+                    (Some(dir), Some(slug))
+                } else {
+                    self.context.set_profile_context(String::new()).await;
+                    (None, None)
+                };
+
+            // Persona context is now handled by the Profile System:
+            // - ProfileSection injects linguistics/personality/tone from PROFILE.json
+            // - IdentitySection injects SOUL.md from the profile directory
+            // PersonaSection is skipped when persona_context is empty (default).
+
+            // Return contact summary for cognition + profile info
+            let summary = if let Some(ref c) = contact {
                 format!("{} ({})", c.name, channel)
             } else {
                 channel.to_string()
-            }
+            };
+            (summary, profile_id, profile_brain_dir, active_profile_slug)
+        };
+
+        // Resolve visible profile IDs for memory/RAG scoping (active + readable_from)
+        let active_visible_profile_ids = if let Ok(Some(profile)) =
+            crate::profiles::db::load_profile_by_id(self.db.pool(), active_profile_id).await
+        {
+            crate::profiles::resolve_visible_profile_ids(&profile, self.db.pool()).await
+        } else {
+            vec![active_profile_id]
         };
 
         // Per-agent instructions (from AgentDefinition).
@@ -658,6 +695,8 @@ impl AgentLoop {
                 channel,
                 agent_id: self.agent_id.as_deref(),
                 contact_id: memory_contact_id,
+                visible_profile_ids: active_visible_profile_ids.clone(),
+                active_profile_slug: active_profile_slug.clone(),
                 stream_tx: stream_tx.as_ref(),
                 cognition_model: if config.agent.cognition_model.is_empty() {
                     None
@@ -827,6 +866,8 @@ impl AgentLoop {
             message_tx: self.message_tx.clone(),
             approval_manager: crate::tools::global_approval_manager(),
             skill_env: None,
+            profile_id: Some(active_profile_id),
+            profile_brain_dir: active_profile_brain_dir.clone(),
         };
 
         // Browser session: idle cleanup and per-conversation continuation hint
@@ -1802,7 +1843,12 @@ impl AgentLoop {
         }
 
         // Check if memory consolidation is needed (non-blocking background task)
-        self.maybe_consolidate(session_key).await;
+        self.maybe_consolidate(
+            session_key,
+            active_profile_brain_dir,
+            Some(active_profile_id),
+        )
+        .await;
 
         Ok(safe_response)
     }
@@ -1810,11 +1856,69 @@ impl AgentLoop {
     // try_activate_skill → skill_activator.rs
     // try_resolve_slash_command → skill_activator.rs
 
+    /// Handle the `/profile` built-in command.
+    ///
+    /// - `/profile` → show current profile
+    /// - `/profile <slug>` → switch to the named profile
+    /// - `/profile list` → list all available profiles
+    ///
+    /// Returns `Some(response)` if the command was handled, `None` otherwise.
+    async fn handle_profile_command(&self, content: &str) -> Option<String> {
+        let trimmed = content.trim();
+        if !trimmed.starts_with("/profile") {
+            return None;
+        }
+        // Only match "/profile" exactly or "/profile <arg>"
+        let rest = trimmed.strip_prefix("/profile")?.trim();
+
+        // "/profile list" — show all profiles
+        if rest == "list" {
+            match crate::profiles::db::load_all_profiles(self.db.pool()).await {
+                Ok(profiles) => {
+                    let lines: Vec<String> = profiles
+                        .iter()
+                        .map(|p| {
+                            let badge = if p.is_default != 0 { " (default)" } else { "" };
+                            format!("{} **{}**{} — {}", p.avatar_emoji, p.slug, badge, p.display_name)
+                        })
+                        .collect();
+                    return Some(format!("Available profiles:\n{}", lines.join("\n")));
+                }
+                Err(e) => return Some(format!("Failed to list profiles: {e}")),
+            }
+        }
+
+        // "/profile" (no arg) — show current profile info
+        if rest.is_empty() {
+            let config = self.config.read().await;
+            let default_slug = &config.profiles.default;
+            return Some(format!("Current default profile: **{default_slug}**\nUse `/profile <slug>` to switch, or `/profile list` to see all."));
+        }
+
+        // "/profile <slug>" — switch profile
+        let slug = rest;
+        match crate::profiles::db::load_profile_by_slug(self.db.pool(), slug).await {
+            Ok(Some(profile)) => {
+                Some(format!(
+                    "{} Switched to profile **{}** ({})",
+                    profile.avatar_emoji, profile.slug, profile.display_name
+                ))
+            }
+            Ok(None) => Some(format!("Profile '{}' not found. Use `/profile list` to see available profiles.", slug)),
+            Err(e) => Some(format!("Failed to load profile: {e}")),
+        }
+    }
+
     /// Trigger memory consolidation and session compaction if thresholds exceeded.
     /// Runs in background via `tokio::spawn` — never blocks the response.
     /// After consolidation, new chunks are indexed in the HNSW vector index,
     /// then session compaction prunes old messages and inserts a summary.
-    async fn maybe_consolidate(&self, session_key: &str) {
+    async fn maybe_consolidate(
+        &self,
+        session_key: &str,
+        profile_brain_dir: Option<std::path::PathBuf>,
+        profile_id: Option<i64>,
+    ) {
         let memory = self.memory.clone();
         let cfg = self.config.read().await;
         let window = cfg.agent.consolidation_threshold;
@@ -1849,6 +1953,8 @@ impl AgentLoop {
                             &model,
                             contact_id,
                             agent_id.as_deref(),
+                            profile_brain_dir,
+                            profile_id,
                         )
                         .await
                     {

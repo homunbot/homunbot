@@ -30,6 +30,7 @@ pub type BootstrapFiles = Arc<RwLock<Vec<(String, String)>>>;
 /// Watches bootstrap files for changes and reloads their content.
 ///
 /// Updates both legacy and new format so all parts of the system stay synchronized.
+/// Optionally watches a profile-specific brain directory in addition to the global dirs.
 pub struct BootstrapWatcher {
     /// Legacy format: concatenated string
     bootstrap_content: BootstrapContent,
@@ -37,6 +38,9 @@ pub struct BootstrapWatcher {
     bootstrap_files: BootstrapFiles,
     /// Base data directory (~/.homun/)
     data_dir: PathBuf,
+    /// Profile-specific brain directory (e.g. `~/.homun/brain/profiles/acme-corp/`).
+    /// Watched in addition to the global dirs. First priority for file loading.
+    profile_brain_dir: Option<PathBuf>,
 }
 
 impl BootstrapWatcher {
@@ -50,7 +54,14 @@ impl BootstrapWatcher {
             bootstrap_content,
             bootstrap_files,
             data_dir,
+            profile_brain_dir: None,
         }
+    }
+
+    /// Set the profile-specific brain directory to watch.
+    pub fn with_profile_brain_dir(mut self, dir: PathBuf) -> Self {
+        self.profile_brain_dir = Some(dir);
+        self
     }
 
     /// Start watching the bootstrap directories. Returns a handle that stops on drop.
@@ -103,9 +114,17 @@ impl BootstrapWatcher {
             })?
         };
 
-        // Watch both directories
+        // Watch both global directories
         watcher.watch(&brain_dir, RecursiveMode::NonRecursive)?;
         watcher.watch(&self.data_dir, RecursiveMode::NonRecursive)?;
+
+        // Watch profile-specific brain dir if set
+        if let Some(ref profile_dir) = self.profile_brain_dir {
+            if profile_dir.exists() {
+                watcher.watch(profile_dir, RecursiveMode::NonRecursive)?;
+                tracing::info!(profile_dir = %profile_dir.display(), "Watching profile brain directory");
+            }
+        }
 
         tracing::info!(
             brain_dir = %brain_dir.display(),
@@ -151,7 +170,8 @@ impl BootstrapWatcher {
 
     /// Re-load all bootstrap files and update both formats.
     async fn reload_bootstrap_files(&self) -> Result<()> {
-        let (content, files) = Self::load_bootstrap_files(&self.data_dir);
+        let (content, files) =
+            Self::load_bootstrap_files(&self.data_dir, self.profile_brain_dir.as_deref());
 
         // Update legacy format
         {
@@ -168,8 +188,11 @@ impl BootstrapWatcher {
         Ok(())
     }
 
-    /// Load bootstrap files from disk.
-    fn load_bootstrap_files(data_dir: &std::path::Path) -> (String, Vec<(String, String)>) {
+    /// Load bootstrap files from disk, with optional profile brain dir.
+    fn load_bootstrap_files(
+        data_dir: &std::path::Path,
+        profile_brain_dir: Option<&std::path::Path>,
+    ) -> (String, Vec<(String, String)>) {
         let mut content = String::new();
         let mut files = Vec::new();
         let brain_dir = data_dir.join("brain");
@@ -183,8 +206,14 @@ impl BootstrapWatcher {
                 _ => continue,
             };
 
-            // Try brain/ first (agent-written), then data_dir (user-placed)
-            let candidates = [brain_dir.join(filename), data_dir.join(filename)];
+            // Profile dir first, then brain/ (agent-written), then data_dir (user-placed)
+            let mut candidates: Vec<std::path::PathBuf> = Vec::with_capacity(3);
+            if let Some(pdir) = profile_brain_dir {
+                candidates.push(pdir.join(filename));
+            }
+            candidates.push(brain_dir.join(filename));
+            candidates.push(data_dir.join(filename));
+
             let file_path = match candidates.iter().find(|p| p.exists()) {
                 Some(p) => p,
                 None => continue,

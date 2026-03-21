@@ -76,17 +76,23 @@ impl MemorySearcher {
         top_k: usize,
         contact_id: Option<i64>,
     ) -> Result<Vec<SearchResult>> {
-        self.search_scoped_full(query, top_k, contact_id, None)
+        self.search_scoped_full(query, top_k, contact_id, None, &[])
             .await
     }
 
-    /// Search with full scoping: contact + agent.
+    /// Search with full scoping: contact + agent + profile.
+    ///
+    /// `profile_ids`: list of visible profile IDs (active + readable_from).
+    /// Chunks with `profile_id IS NULL` (global) are always included.
+    /// Chunks with a `profile_id` are included only if it's in this list.
+    /// Pass empty slice to disable profile filtering.
     pub async fn search_scoped_full(
         &mut self,
         query: &str,
         top_k: usize,
         contact_id: Option<i64>,
         agent_id: Option<&str>,
+        profile_ids: &[i64],
     ) -> Result<Vec<SearchResult>> {
         // Run vector search (always works)
         let vector_results = self.engine.search(query, CANDIDATES_PER_SOURCE).await?;
@@ -106,7 +112,7 @@ impl MemorySearcher {
                 );
                 // Fallback: use vector results only
                 return self
-                    .search_vector_only(&vector_results, top_k, contact_id, agent_id)
+                    .search_vector_only(&vector_results, top_k, contact_id, agent_id, profile_ids)
                     .await;
             }
         };
@@ -143,6 +149,14 @@ impl MemorySearcher {
                             return None; // belongs to a different agent
                         }
                     }
+                    // Profile scoping: include global chunks + visible profile chunks
+                    if !profile_ids.is_empty() {
+                        if let Some(cpid) = chunk.profile_id {
+                            if !profile_ids.contains(&cpid) {
+                                return None; // belongs to a non-visible profile
+                            }
+                        }
+                    }
                     // Apply temporal decay and importance weighting
                     let decayed_score =
                         apply_temporal_decay(score, &chunk.date, now, DEFAULT_HALF_LIFE_DAYS);
@@ -174,6 +188,7 @@ impl MemorySearcher {
         top_k: usize,
         contact_id: Option<i64>,
         agent_id: Option<&str>,
+        profile_ids: &[i64],
     ) -> Result<Vec<SearchResult>> {
         if vector_results.is_empty() {
             return Ok(Vec::new());
@@ -207,6 +222,14 @@ impl MemorySearcher {
                     if let Some(aid) = agent_id {
                         if chunk.agent_id.is_some() && chunk.agent_id.as_deref() != Some(aid) {
                             return None;
+                        }
+                    }
+                    // Profile scoping
+                    if !profile_ids.is_empty() {
+                        if let Some(cpid) = chunk.profile_id {
+                            if !profile_ids.contains(&cpid) {
+                                return None;
+                            }
                         }
                     }
                     Some(SearchResult {

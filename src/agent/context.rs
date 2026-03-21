@@ -63,6 +63,8 @@ pub struct ContextBuilder {
     contact_context: RwLock<String>,
     /// Persona prompt prefix (resolved per-message from contact > channel > "bot").
     persona_context: RwLock<String>,
+    /// Structured profile context from PROFILE.json (linguistics, personality, etc.).
+    profile_context: RwLock<String>,
     /// Per-agent instructions from `AgentDefinition`.
     agent_instructions: RwLock<String>,
     /// Cognition understanding (what the user wants, natural language).
@@ -93,6 +95,7 @@ impl ContextBuilder {
             registered_tool_names: RwLock::new(Vec::new()),
             contact_context: RwLock::new(String::new()),
             persona_context: RwLock::new(String::new()),
+            profile_context: RwLock::new(String::new()),
             agent_instructions: RwLock::new(String::new()),
             cognition_understanding: RwLock::new(String::new()),
             cognition_plan: RwLock::new(Vec::new()),
@@ -103,16 +106,31 @@ impl ContextBuilder {
     /// Load bootstrap files (SOUL.md, AGENTS.md, USER.md, INSTRUCTIONS.md).
     ///
     /// Search order for each file (first match wins):
-    /// 1. `~/.homun/brain/` — agent-written memory (allowed by file tool)
-    /// 2. `~/.homun/` — user-placed configuration (protected by file tool)
+    /// 1. `profile_brain_dir/{file}` — profile-specific (if provided)
+    /// 2. `~/.homun/brain/{file}` — global agent-written memory
+    /// 3. `~/.homun/{file}` — user-placed configuration
     fn load_bootstrap_files(data_dir: &Path) -> (String, Vec<(String, String)>) {
+        Self::load_bootstrap_files_with_profile(data_dir, None)
+    }
+
+    /// Load bootstrap files with optional profile brain directory.
+    fn load_bootstrap_files_with_profile(
+        data_dir: &Path,
+        profile_brain_dir: Option<&Path>,
+    ) -> (String, Vec<(String, String)>) {
         let mut content = String::new();
         let mut files = Vec::new();
         let brain_dir = data_dir.join("brain");
 
         for (filename, label) in BOOTSTRAP_FILES {
-            // Try brain/ first (agent-written), then data_dir (user-placed)
-            let candidates = [brain_dir.join(filename), data_dir.join(filename)];
+            // Build candidate paths: profile dir first, then global brain, then data_dir
+            let mut candidates: Vec<std::path::PathBuf> = Vec::with_capacity(3);
+            if let Some(pdir) = profile_brain_dir {
+                candidates.push(pdir.join(filename));
+            }
+            candidates.push(brain_dir.join(filename));
+            candidates.push(data_dir.join(filename));
+
             let file_path = match candidates.iter().find(|p| p.exists()) {
                 Some(p) => p,
                 None => continue,
@@ -150,7 +168,26 @@ impl ContextBuilder {
     pub async fn reload_bootstrap_files(&self) {
         let data_dir = Config::data_dir();
         let (content, files) = Self::load_bootstrap_files(&data_dir);
+        self.apply_bootstrap(content, files).await;
+        tracing::info!("Reloaded bootstrap files");
+    }
 
+    /// Reload bootstrap files scoped to a specific profile brain directory.
+    ///
+    /// The profile dir gets first priority, then falls back to global brain/ and data_dir/.
+    pub async fn reload_bootstrap_for_profile(&self, profile_brain_dir: &Path) {
+        let data_dir = Config::data_dir();
+        let (content, files) =
+            Self::load_bootstrap_files_with_profile(&data_dir, Some(profile_brain_dir));
+        self.apply_bootstrap(content, files).await;
+        tracing::info!(
+            profile_dir = %profile_brain_dir.display(),
+            "Reloaded bootstrap files for profile"
+        );
+    }
+
+    /// Apply bootstrap content + files to shared state.
+    async fn apply_bootstrap(&self, content: String, files: Vec<(String, String)>) {
         {
             let mut guard = self.bootstrap_content.write().await;
             *guard = content;
@@ -159,8 +196,6 @@ impl ContextBuilder {
             let mut guard = self.bootstrap_files.write().await;
             *guard = files;
         }
-
-        tracing::info!("Reloaded bootstrap files");
     }
 
     /// Set the skills summary (called after skills are loaded)
@@ -225,6 +260,11 @@ impl ContextBuilder {
     /// Update the persona prompt prefix (called per-message after persona resolution).
     pub async fn set_persona_context(&self, ctx: String) {
         *self.persona_context.write().await = ctx;
+    }
+
+    /// Set structured profile context from PROFILE.json.
+    pub async fn set_profile_context(&self, ctx: String) {
+        *self.profile_context.write().await = ctx;
     }
 
     /// Set per-agent instructions (from `AgentDefinition.instructions`).
@@ -365,6 +405,7 @@ impl ContextBuilder {
         let registered_tool_names = self.registered_tool_names.read().await;
         let contact_context = self.contact_context.read().await;
         let persona_context = self.persona_context.read().await;
+        let profile_context = self.profile_context.read().await;
         let agent_instructions = self.agent_instructions.read().await;
         let cognition_understanding = self.cognition_understanding.read().await;
         let cognition_plan = self.cognition_plan.read().await;
@@ -387,6 +428,7 @@ impl ContextBuilder {
             channels_info: &self.channels_info,
             contact_context: &contact_context,
             persona_context: &persona_context,
+            profile_context: &profile_context,
             agent_instructions: &agent_instructions,
             cognition_understanding: &cognition_understanding,
             cognition_plan: &cognition_plan,

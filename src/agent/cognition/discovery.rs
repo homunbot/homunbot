@@ -128,9 +128,14 @@ pub(super) async fn discover_tools(
 // ── discover_skills ─────────────────────────────────────────────────
 
 /// Search for relevant skills by natural-language query.
+///
+/// When `active_profile_slug` is provided, per-profile skills are filtered:
+/// global skills (profile_slug=None) are always included, per-profile skills
+/// are only included if they belong to the active profile.
 pub(super) async fn discover_skills(
     query: &str,
     skill_registry: Option<&RwLock<SkillRegistry>>,
+    active_profile_slug: Option<&str>,
 ) -> String {
     let Some(registry) = skill_registry else {
         return "[]".to_string();
@@ -141,8 +146,20 @@ pub(super) async fn discover_skills(
     let query_lower = query.to_lowercase();
     let query_words: Vec<&str> = query_lower.split_whitespace().collect();
 
+    // Collect profile-scoped skills for visibility filtering
+    let profile_map = guard.list_profile_scopes();
+
     let mut scored: Vec<(i32, SkillEntry)> = all_skills
         .into_iter()
+        .filter(|(name, _)| {
+            let Some(profile) = active_profile_slug else {
+                return true; // no profile filtering
+            };
+            match profile_map.get(*name) {
+                None => true,                  // global skill — always visible
+                Some(slug) => *slug == profile, // per-profile — visible only if match
+            }
+        })
         .filter_map(|(name, desc)| {
             let name_lower = name.to_lowercase();
             let desc_lower = desc.to_lowercase();
@@ -280,9 +297,10 @@ pub(super) async fn search_memory(
     searcher: &Arc<tokio::sync::Mutex<crate::agent::memory_search::MemorySearcher>>,
     contact_id: Option<i64>,
     agent_id: Option<&str>,
+    profile_ids: &[i64],
 ) -> String {
     let mut guard = searcher.lock().await;
-    match guard.search_scoped_full(query, 3, contact_id, agent_id).await {
+    match guard.search_scoped_full(query, 3, contact_id, agent_id, profile_ids).await {
         Ok(results) if !results.is_empty() => {
             let entries: Vec<MemoryEntry> = results
                 .iter()
@@ -309,6 +327,7 @@ pub(super) async fn search_memory(
     _query: &str,
     _contact_id: Option<i64>,
     _agent_id: Option<&str>,
+    _profile_ids: &[i64],
 ) -> String {
     "[]".to_string()
 }
@@ -322,7 +341,7 @@ pub(super) async fn search_knowledge(
     rag_engine: &Arc<tokio::sync::Mutex<crate::rag::RagEngine>>,
 ) -> String {
     let mut guard = rag_engine.lock().await;
-    match guard.search(query, 3).await {
+    match guard.search(query, 3, None).await {
         Ok(results) if !results.is_empty() => {
             let entries: Vec<KnowledgeEntry> = results
                 .iter()

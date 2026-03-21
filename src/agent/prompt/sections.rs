@@ -523,6 +523,35 @@ impl PromptSection for PersonaSection {
 }
 
 // ============================================================================
+// PROFILE SECTION
+// ============================================================================
+
+/// Injects structured profile context (linguistics, personality, capabilities)
+/// from the active PROFILE.json into the system prompt.
+///
+/// This is separate from PersonaSection (which handles bot/owner/company mode)
+/// and IdentitySection (which loads raw SOUL.md/USER.md files).
+/// ProfileSection provides structured behavioral guidance from the AIEOS-inspired
+/// profile JSON (language, formality, tone, traits, domains).
+pub struct ProfileSection;
+
+impl PromptSection for ProfileSection {
+    fn name(&self) -> &str {
+        "profile"
+    }
+
+    fn build(&self, ctx: &PromptContext<'_>) -> Result<String> {
+        if ctx.profile_context.is_empty() {
+            return Ok(String::new());
+        }
+        Ok(format!(
+            "## Active Profile\n\n{}\n",
+            ctx.profile_context,
+        ))
+    }
+}
+
+// ============================================================================
 // AGENT INSTRUCTIONS SECTION
 // ============================================================================
 
@@ -603,6 +632,7 @@ mod tests {
             channels_info: "",
             contact_context: "",
             persona_context: "",
+            profile_context: "",
             agent_instructions: "",
             cognition_understanding: "",
             cognition_plan: &[],

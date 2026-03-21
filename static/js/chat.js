@@ -3805,4 +3805,68 @@ async function bootstrapChat() {
     }
 }
 
+// ─── Profile selector pill ──────────────────────────────────────
+
+let chatProfileDropdown = null;
+let chatActiveProfileId = null;
+
+async function loadChatProfiles() {
+    try {
+        const res = await fetch('/api/v1/profiles');
+        if (!res.ok) return;
+        const profiles = await res.json();
+        if (!profiles.length) return;
+
+        // Set initial active profile to default
+        const defaultP = profiles.find(p => p.is_default) || profiles[0];
+        chatActiveProfileId = defaultP.id;
+        setChatProfilePill(defaultP);
+    } catch (_) { /* profile selector is optional */ }
+}
+
+function setChatProfilePill(profile) {
+    const emoji = document.getElementById('chat-profile-pill-emoji');
+    const name = document.getElementById('chat-profile-pill-name');
+    if (emoji) emoji.textContent = profile.avatar_emoji || '\u{1F464}';
+    if (name) name.textContent = profile.display_name || 'Default';
+}
+
+document.getElementById('chat-profile-pill')?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (chatProfileDropdown) { chatProfileDropdown.remove(); chatProfileDropdown = null; return; }
+
+    try {
+        const res = await fetch('/api/v1/profiles');
+        if (!res.ok) return;
+        const profiles = await res.json();
+
+        const menu = document.createElement('div');
+        menu.className = 'chat-model-dropdown';
+        menu.style.cssText = 'position:absolute;bottom:100%;right:0;z-index:100;margin-bottom:4px;min-width:180px';
+
+        profiles.forEach(p => {
+            const item = document.createElement('button');
+            item.className = 'chat-model-dropdown-item' + (p.id === chatActiveProfileId ? ' active' : '');
+            item.textContent = (p.avatar_emoji || '\u{1F464}') + ' ' + p.display_name;
+            if (p.is_default) item.textContent += ' (default)';
+            item.onclick = () => {
+                chatActiveProfileId = p.id;
+                setChatProfilePill(p);
+                menu.remove();
+                chatProfileDropdown = null;
+            };
+            menu.appendChild(item);
+        });
+
+        const pill = document.getElementById('chat-profile-pill');
+        if (pill) { pill.style.position = 'relative'; pill.appendChild(menu); }
+        chatProfileDropdown = menu;
+
+        const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); chatProfileDropdown = null; document.removeEventListener('click', close); } };
+        setTimeout(() => document.addEventListener('click', close), 0);
+    } catch (_) {}
+});
+
+loadChatProfiles();
+
 bootstrapChat();

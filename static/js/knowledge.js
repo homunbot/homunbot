@@ -1,12 +1,46 @@
 // Knowledge Base page — upload, search, list sources
 
 document.addEventListener('DOMContentLoaded', () => {
+    initKnowledgeProfileFilter();
     loadStats();
     loadSources();
     setupUpload();
     setupSearch();
     setupFolderIndex();
 });
+
+/** Get the current profile filter slug (empty = all). */
+function getKnowledgeProfileFilter() {
+    const el = document.getElementById('knowledge-profile-filter');
+    return el ? el.value : '';
+}
+
+/** Initialize the profile filter dropdown. */
+async function initKnowledgeProfileFilter() {
+    const select = document.getElementById('knowledge-profile-filter');
+    if (!select) return;
+
+    const allOpt = document.createElement('option');
+    allOpt.value = '';
+    allOpt.textContent = 'All profiles';
+    select.appendChild(allOpt);
+
+    try {
+        const res = await fetch('/api/v1/profiles');
+        if (!res.ok) return;
+        const profiles = await res.json();
+        profiles.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.slug;
+            opt.textContent = (p.avatar_emoji || '\u{1F464}') + ' ' + p.display_name;
+            select.appendChild(opt);
+        });
+    } catch (_) {}
+
+    select.addEventListener('change', () => {
+        loadSources();
+    });
+}
 
 // ─── Stats ────────────────────────────────────────────
 
@@ -219,7 +253,9 @@ async function doSearch(query) {
 
     showProgress('search-results', 'Searching\u2026');
     try {
-        const resp = await fetch('/api/v1/knowledge/search?q=' + encodeURIComponent(query) + '&limit=5');
+        const pf = getKnowledgeProfileFilter();
+        const profileParam = pf ? '&profile=' + encodeURIComponent(pf) : '';
+        const resp = await fetch('/api/v1/knowledge/search?q=' + encodeURIComponent(query) + '&limit=5' + profileParam);
         const data = await resp.json();
         const results = data.results || [];
         hideProgress('search-results');

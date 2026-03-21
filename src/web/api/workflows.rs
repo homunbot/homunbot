@@ -40,11 +40,14 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
 #[derive(Deserialize)]
 struct WorkflowListQuery {
     status: Option<String>,
+    /// Profile slug filter — when set, shows only workflows for this profile + global.
+    #[serde(default)]
+    profile: Option<String>,
 }
 
 // --- Handlers ---
 
-/// GET /api/v1/workflows?status=running
+/// GET /api/v1/workflows?status=running&profile=slug
 async fn list_workflows_api(
     Query(q): Query<WorkflowListQuery>,
     State(state): State<Arc<AppState>>,
@@ -53,10 +56,39 @@ async fn list_workflows_api(
         StatusCode::SERVICE_UNAVAILABLE,
         "Workflow engine not available".into(),
     ))?;
-    let workflows = engine
+
+    // Resolve profile filter
+    let filter_profile_id = if let Some(ref slug) = q.profile {
+        if let Some(ref db) = state.db {
+            if !slug.is_empty() {
+                crate::profiles::db::load_profile_by_slug(db.pool(), slug)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|p| p.id)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let all_workflows = engine
         .list(q.status.as_deref())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Filter by profile
+    let workflows: Vec<_> = all_workflows
+        .into_iter()
+        .filter(|w| match filter_profile_id {
+            Some(pid) => w.profile_id.is_none() || w.profile_id == Some(pid),
+            None => true,
+        })
+        .collect();
 
     let total = workflows.len();
     let running = workflows

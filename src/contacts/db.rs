@@ -28,6 +28,7 @@ pub struct ContactUpdate {
     pub persona_override: Option<String>,
     pub persona_instructions: Option<String>,
     pub agent_override: Option<String>,
+    pub profile_id: Option<i64>,
 }
 
 // ── Contacts CRUD ───────────────────────────────────────────────────
@@ -131,6 +132,12 @@ impl Database {
         maybe_set!(persona_instructions);
         maybe_set!(agent_override);
 
+        // profile_id is i64, not String — handle separately
+        let profile_id_val = upd.profile_id;
+        if profile_id_val.is_some() {
+            sets.push("profile_id = ?");
+        }
+
         if sets.is_empty() {
             return Ok(false);
         }
@@ -141,6 +148,9 @@ impl Database {
         let mut q = sqlx::query(&sql);
         for v in &vals {
             q = q.bind(v);
+        }
+        if let Some(pid) = profile_id_val {
+            q = q.bind(pid);
         }
         q = q.bind(id);
 

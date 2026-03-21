@@ -89,7 +89,7 @@ impl Tool for RememberTool {
         })
     }
 
-    async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolResult> {
+    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let key = get_string_param(&args, "key")?;
         let value = get_string_param(&args, "value")?;
         let category =
@@ -103,7 +103,11 @@ impl Tool for RememberTool {
         // Normalize key: replace spaces with underscores, lowercase
         let normalized_key = key.replace(' ', "_").to_lowercase();
 
-        let brain_dir = self.data_dir.join("brain");
+        // Use profile-scoped brain dir if available, else global
+        let brain_dir = ctx
+            .profile_brain_dir
+            .clone()
+            .unwrap_or_else(|| self.data_dir.join("brain"));
         let user_file = brain_dir.join("USER.md");
 
         // Ensure brain directory exists

@@ -138,8 +138,27 @@ mod inner {
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(5);
 
+        // Resolve profile filter
+        let profile_id = if let Some(slug) = params.get("profile") {
+            if !slug.is_empty() {
+                if let Some(ref db) = state.db {
+                    crate::profiles::db::load_profile_by_slug(db.pool(), slug)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|p| p.id)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let mut engine = rag.lock().await;
-        match engine.search(query, limit).await {
+        match engine.search(query, limit, profile_id).await {
             Ok(results) => {
                 let items: Vec<serde_json::Value> = results
                     .iter()

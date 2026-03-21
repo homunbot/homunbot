@@ -655,6 +655,8 @@ mod tests {
             message_tx: None,
             approval_manager: None,
             skill_env: None,
+            profile_id: None,
+            profile_brain_dir: None,
         }
     }
 

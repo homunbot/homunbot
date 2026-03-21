@@ -164,6 +164,8 @@ impl MemoryConsolidator {
         model: &str,
         contact_id: Option<i64>,
         agent_id: Option<&str>,
+        profile_brain_dir: Option<std::path::PathBuf>,
+        profile_id: Option<i64>,
     ) -> Result<ConsolidationResult> {
         // How many to keep in active session
         let keep_count = (memory_window / 2) as i64;
@@ -230,8 +232,11 @@ impl MemoryConsolidator {
         // Load current long-term memory
         let current_memory = self.load_memory_md().unwrap_or_default();
 
-        // Load existing instructions for deduplication
-        let instructions_path = self.data_dir.join("brain/INSTRUCTIONS.md");
+        // Load existing instructions for deduplication (profile-scoped if available)
+        let instructions_path = profile_brain_dir
+            .as_ref()
+            .map(|d| d.join("INSTRUCTIONS.md"))
+            .unwrap_or_else(|| self.data_dir.join("brain/INSTRUCTIONS.md"));
         let existing_instructions = std::fs::read_to_string(&instructions_path).unwrap_or_default();
 
         // Load existing vault keys for deduplication (not values, for security)
@@ -405,7 +410,12 @@ impl MemoryConsolidator {
                 "Saving deduplicated instructions"
             );
             let texts: Vec<String> = new_instructions.iter().map(|i| i.text.clone()).collect();
-            self.append_instructions_md(&texts)?;
+            // Write to profile-scoped brain dir if available, else global
+            let global_brain = self.data_dir.join("brain");
+            let target_brain_dir = profile_brain_dir
+                .as_deref()
+                .unwrap_or(&global_brain);
+            self.append_instructions_to(target_brain_dir, &texts)?;
         }
 
         // --- 3. Append to HISTORY.md and daily memory file ---
@@ -417,7 +427,16 @@ impl MemoryConsolidator {
         // --- 4. Update MEMORY.md + DB if memory changed ---
         let memory_updated = !memory_update.is_empty() && memory_update != current_memory;
         if memory_updated {
-            self.save_memory_md(&memory_update)?;
+            // Write to profile-scoped MEMORY.md if available, else global
+            if let Some(ref pdir) = profile_brain_dir {
+                let path = pdir.join("MEMORY.md");
+                std::fs::create_dir_all(pdir).ok();
+                std::fs::write(&path, &memory_update)
+                    .with_context(|| format!("Failed to write {}", path.display()))?;
+                tracing::info!(path = %path.display(), "Updated profile MEMORY.md");
+            } else {
+                self.save_memory_md(&memory_update)?;
+            }
             self.store.upsert_long_term_memory(&memory_update).await?;
         }
 
@@ -443,6 +462,7 @@ impl MemoryConsolidator {
                     contact_id,
                     agent_id,
                     2,
+                    profile_id,
                 )
                 .await?;
             new_chunk_ids.push((chunk_id, history_entry.clone()));
@@ -462,6 +482,7 @@ impl MemoryConsolidator {
                     contact_id,
                     agent_id,
                     3,
+                    profile_id,
                 )
                 .await?;
             new_chunk_ids.push((chunk_id, memory_update.clone()));
@@ -481,6 +502,7 @@ impl MemoryConsolidator {
                     contact_id,
                     agent_id,
                     importance,
+                    profile_id,
                 )
                 .await?;
             new_chunk_ids.push((chunk_id, instruction.text.clone()));
@@ -703,14 +725,22 @@ impl MemoryConsolidator {
         Ok(())
     }
 
-    /// Append learned instructions to brain/INSTRUCTIONS.md
+    /// Append learned instructions to INSTRUCTIONS.md in the given brain directory.
     /// These are directives the user taught in chat ("remember to always do X").
     pub fn append_instructions_md(&self, instructions: &[String]) -> Result<()> {
+        self.append_instructions_to(&self.data_dir.join("brain"), instructions)
+    }
+
+    /// Append learned instructions to INSTRUCTIONS.md in a specific brain directory.
+    pub fn append_instructions_to(
+        &self,
+        brain_dir: &std::path::Path,
+        instructions: &[String],
+    ) -> Result<()> {
         if instructions.is_empty() {
             return Ok(());
         }
 
-        let brain_dir = self.data_dir.join("brain");
         let path = brain_dir.join("INSTRUCTIONS.md");
         std::fs::create_dir_all(&brain_dir).context("Failed to create brain directory")?;
 
