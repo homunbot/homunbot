@@ -121,6 +121,9 @@ impl<'a> PromptContext<'a> {
             contact_context: self.contact_context,
             persona_context: self.persona_context,
             agent_instructions: self.agent_instructions,
+            cognition_understanding: self.cognition_understanding,
+            cognition_plan: self.cognition_plan,
+            cognition_constraints: self.cognition_constraints,
         }
     }
 }
@@ -149,6 +152,9 @@ mod tests {
             contact_context: "",
             persona_context: "",
             agent_instructions: "",
+            cognition_understanding: "",
+            cognition_plan: &[],
+            cognition_constraints: &[],
         }
     }
 

@@ -51,6 +51,13 @@ pub struct PromptContext<'a> {
     pub persona_context: &'a str,
     /// Per-agent instructions (from `AgentDefinition.instructions`).
     pub agent_instructions: &'a str,
+    /// Cognition understanding (what the user wants, natural language).
+    /// Empty when cognition is disabled or failed.
+    pub cognition_understanding: &'a str,
+    /// Cognition plan steps (from the cognition phase).
+    pub cognition_plan: &'a [String],
+    /// Cognition constraints extracted from the user's request.
+    pub cognition_constraints: &'a [String],
 }
 
 /// Tool information for prompt generation.

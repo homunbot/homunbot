@@ -984,13 +984,22 @@ fn build_consolidation_prompt_v2(
    - {{"text": "Never commit without tests", "importance": 5}}
    - {{"text": "Respond in Italian", "importance": 4}}
 
+   Also extract **process patterns** — implicit preferences about HOW tasks should be done.
+   These emerge from corrections, repeated requests, or explicit preferences:
+   - {{"text": "When searching travel options, compare at least 3 alternatives with prices", "importance": 3}}
+   - {{"text": "When booking trains, prefer Frecciarossa and 1st class", "importance": 3}}
+   - {{"text": "For web research, use multiple sources and cross-reference", "importance": 2}}
+   - {{"text": "When the user asks to buy something, always show options before purchasing", "importance": 4}}
+
+   Process patterns are instructions too — they tell you how to approach a CATEGORY of tasks.
+
    ❌ NOT instructions (these are FACTS — add to `memory_update`):
    - "Figli: Claudio (2008), Gaia (2010)" ← This is a FACT about family
    - "User lives in Milan" ← This is a FACT about location
    - "User likes pizza" ← This is a FACT about preferences
    - "Project uses Rust" ← This is a FACT about context
 
-   Ask yourself: "Is this a rule about HOW I should behave?" If NO, it goes in memory_update, NOT instructions.
+   Ask yourself: "Is this a rule about HOW I should behave, or HOW I should approach a type of task?" If NO, it goes in memory_update, NOT instructions.
 
 4. **Detect secrets**: If the user shared NEW passwords, tokens, API keys, or other sensitive data, add them to `vault_entries`. SKIP if the key already exists above unless the value changed.
 

@@ -110,8 +110,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, conversation_id:
                 Some(event) = stream_rx.recv() => {
                     let payload = if let Some(ref evt) = event.event_type {
                         // Tool event: tool_start or tool_end
-                        if evt == "tool_start" {
-                            // Include tool call data for tool_start events
+                        if evt == "tool_start" || evt == "tool_end" {
+                            // Include tool call data for tool events
                             serde_json::json!({
                                 "type": evt,
                                 "name": event.delta,

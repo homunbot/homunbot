@@ -4,6 +4,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::{mpsc, Mutex};
 
+use crate::provider::StreamChunk;
+
 use super::AgentLoop;
 
 /// Result of a completed subagent task.
@@ -28,6 +30,8 @@ pub struct SubagentManager {
     running: Arc<Mutex<HashMap<String, String>>>,
     /// Channel for completed task results
     result_tx: mpsc::Sender<SubagentResult>,
+    /// Optional stream channel for emitting UI events (subagent_start/end)
+    stream_tx: Option<mpsc::Sender<StreamChunk>>,
 }
 
 impl SubagentManager {
@@ -36,7 +40,13 @@ impl SubagentManager {
             agent,
             running: Arc::new(Mutex::new(HashMap::new())),
             result_tx,
+            stream_tx: None,
         }
+    }
+
+    /// Set the stream channel for emitting subagent UI events.
+    pub fn set_stream_tx(&mut self, tx: mpsc::Sender<StreamChunk>) {
+        self.stream_tx = Some(tx);
     }
 
     /// Spawn a new background task.
@@ -63,10 +73,23 @@ impl SubagentManager {
             "Spawning subagent"
         );
 
+        // Emit subagent_start event to frontend
+        if let Some(ref tx) = self.stream_tx {
+            let _ = tx
+                .send(StreamChunk {
+                    delta: task_description.to_string(),
+                    done: false,
+                    event_type: Some("subagent_start".to_string()),
+                    tool_call_data: None,
+                })
+                .await;
+        }
+
         // Clone what we need for the spawned task
         let agent = self.agent.clone();
         let result_tx = self.result_tx.clone();
         let running = self.running.clone();
+        let stream_tx = self.stream_tx.clone();
         let task_id_clone = task_id.clone();
         let description = task_description.to_string();
         let msg = message.to_string();
@@ -100,6 +123,24 @@ impl SubagentManager {
                 success = result.success,
                 "Subagent completed"
             );
+
+            // Emit subagent_end event to frontend
+            if let Some(ref tx) = stream_tx {
+                let truncated = crate::utils::text::truncate_str(&result.result, 200, "…");
+                let _ = tx
+                    .send(StreamChunk {
+                        delta: description.clone(),
+                        done: false,
+                        event_type: Some("subagent_end".to_string()),
+                        tool_call_data: Some(crate::provider::ToolCallData {
+                            id: task_id_clone.clone(),
+                            name: "subagent".to_string(),
+                            arguments: serde_json::Value::Null,
+                            result: Some(truncated.to_string()),
+                        }),
+                    })
+                    .await;
+            }
 
             // Send result
             if let Err(e) = result_tx.send(result).await {

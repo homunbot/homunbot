@@ -248,6 +248,9 @@ pub struct ToolCallData {
     pub id: String,
     pub name: String,
     pub arguments: serde_json::Value,
+    /// Truncated tool output — populated in tool_end events for UI display.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
 }
 
 /// LLM provider trait — abstracts over different API backends

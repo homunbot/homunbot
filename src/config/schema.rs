@@ -419,6 +419,16 @@ pub struct AgentConfig {
     /// Default: true.
     #[serde(default = "default_true")]
     pub orchestrator_enabled: bool,
+    /// Model to use for the cognition phase. Empty = use `agent.model`.
+    /// A cheaper/faster model (e.g. haiku) can reduce latency.
+    #[serde(default)]
+    pub cognition_model: String,
+    /// Maximum iterations for the cognition mini-loop. Default: 4.
+    #[serde(default)]
+    pub cognition_max_iterations: u32,
+    /// Timeout in seconds for the entire cognition phase. Default: 15.
+    #[serde(default)]
+    pub cognition_timeout_secs: u64,
 }
 
 /// Per-agent configuration parsed from `[agents.<id>]` TOML sections.
@@ -512,6 +522,9 @@ impl Default for AgentConfig {
             user_name: String::new(),
             timezone: String::new(),
             orchestrator_enabled: true,
+            cognition_model: String::new(),
+            cognition_max_iterations: 4,
+            cognition_timeout_secs: 15,
         }
     }
 }

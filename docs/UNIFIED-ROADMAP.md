@@ -1,6 +1,6 @@
 # Homun — Unified Roadmap
 
-> Last updated: 2026-03-20
+> Last updated: 2026-03-21
 > Consolidamento di: ROADMAP.md, IMPLEMENTATION-GAPS.md, openclaw-connections-vs-homun-detailed.md
 > Obiettivo: piano unico orientato a **prodotto industriale**, sicurezza-first, senza legacy o feature completate.
 
@@ -131,6 +131,22 @@ Stato: SEC-6/7/8/11/12/13/14/15 tutti ✅ DONE. Scudo anti-injection completo.
 | PRO-4 | **Proactive messaging contacts** | — | ✅ DONE (2026-03-18) — `known_chat_ids` pre-seeded da identità contatti, tool messages pre-registrano chat_id, `contacts send` restituisce chat_id corretto (JID WhatsApp) |
 | BHV-1 | **Unified channel behavior** | — | ✅ DONE (2026-03-18) — Assisted/on_demand/silent per tutti i canali (non solo email). Config: `notify_channel` + `notify_chat_id` su Telegram/WhatsApp/Discord/Slack. `pending_responses` con notify routing (migration 021). Approval interception generico. UI Behavior section nel modale Channels |
 | WA-1 | **WhatsApp self-message filter** | — | ✅ DONE (2026-03-18) — Messaggi `is_from_me` ignorati (non solo bot echo, anche messaggi scritti dal telefono) |
+
+#### 1E. Cognition-First Architecture (P1)
+
+> Obiettivo: sostituire il routing keyword-based con una fase di cognizione LLM-driven che analizza l'intent dell'utente prima dell'execution loop. Feature-gated via `cognition_enabled`.
+
+| # | Task | Effort | Note |
+|---|------|--------|------|
+| COG-1 | **Cognition engine** | 3 giorni | ✅ DONE (2026-03-21) — `agent/cognition/engine.rs`: mini ReAct loop con discovery tools, analizza intent e produce `CognitionResult` (understanding, plan, constraints, tools/skills/MCP/memory/RAG). Config: `cognition_enabled`, `cognition_model`, `cognition_max_iterations`, `cognition_timeout_secs` |
+| COG-2 | **Discovery tools** | 2 giorni | ✅ DONE (2026-03-21) — `agent/cognition/discovery.rs`: 5 read-only tools (memory_search, rag_search, list_tools, list_skills, list_mcp). Non modificano stato, solo raccolgono contesto |
+| COG-3 | **Selective tool loading** | 1 giorno | ✅ DONE (2026-03-21) — `build_selective_tool_defs()` in cognition/mod.rs: solo i tool identificati dalla cognizione passati al LLM (+ always-available: send_message, remember, approval) |
+| COG-4 | **System prompt integration** | 1 giorno | ✅ DONE (2026-03-21) — Understanding/plan/constraints iniettati in `ToolsSection` al posto delle routing rules keyword. Browser essentials sempre presenti |
+| COG-5 | **Browser task plan from cognition** | 1 giorno | ✅ DONE (2026-03-21) — `BrowserTaskPlanState::from_cognition()`: inizializza da CognitionResult invece di keyword matching |
+| COG-6 | **Tool veto safety-net mode** | 1 giorno | ✅ DONE (2026-03-21) — Quando cognition attiva, solo veto minimali (search-first, shell-not-for-web). Full keyword vetoes solo con cognition off |
+| COG-7 | **Dual-path fallback** | — | ✅ DONE (2026-03-21) — Quando `cognition_enabled=false` (default), tutto il vecchio path keyword funziona invariato: blind memory/RAG injection, full tool set, keyword browser routing, full keyword vetoes |
+| COG-8 | **answer_directly fast-path** | — | ✅ DONE (2026-03-21) — Richieste semplici (saluti, domande fattuali) risposte direttamente dalla cognizione senza entrare nell'execution loop |
+| COG-9 | **E2E tests** | 1 giorno | ✅ DONE (2026-03-21) — Test cognition engine, discovery tools, selective tool defs, dual-path |
 
 ---
 

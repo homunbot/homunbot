@@ -21,6 +21,11 @@ src/
 │
 ├── agent/                           # Core agent loop
 │   ├── agent_loop.rs                # ReAct loop (reason → act → observe)
+│   ├── cognition/                   # Cognition-First preprocessing (feature-gated)
+│   │   ├── mod.rs                   # Selective tool defs from cognition results
+│   │   ├── engine.rs                # Mini ReAct loop with discovery tools
+│   │   ├── discovery.rs             # Read-only discovery tools (memory, RAG, tools, skills, MCP)
+│   │   └── types.rs                 # CognitionResult, DiscoveredTool, DiscoveredSkill, etc.
 │   ├── context.rs                   # System prompt assembly
 │   ├── prompt/                      # Prompt builder (sections.rs: 15+ prompt sections)
 │   ├── gateway.rs                   # Message routing + channel orchestration
@@ -30,8 +35,9 @@ src/
 │   ├── subagent.rs                  # Background task spawning
 │   ├── heartbeat.rs                 # Proactive wake-up scheduler
 │   ├── bootstrap_watcher.rs         # Hot-reload USER.md/SOUL.md
-│   ├── browser_task_plan.rs         # Browser automation orchestration
-│   ├── execution_plan.rs            # Structured execution plans
+│   ├── browser_task_plan.rs         # Browser automation state tracking (cognition-driven)
+│   ├── execution_plan.rs            # Structured execution plans + explicit plan steps
+│   ├── tool_veto.rs                 # Minimal runtime safety checks (search-first policy)
 │   ├── verifier.rs                  # Approval verification
 │   ├── attachment_router.rs         # Media attachment routing
 │   ├── email_approval.rs            # Email approval flow
@@ -271,6 +277,17 @@ static/
 - Stealth anti-bot injection, compact snapshots (tree-preserving).
 - Auto-snapshot after navigate/click/type.
 - 17 actions in unified `browser` tool.
+
+### Cognition-First Architecture
+The agent loop follows a 4-phase pattern: **INGRESS → COGNITION → EXECUTION → POST-PROCESSING**.
+
+- **Cognition phase** (`agent/cognition/`): always active. A mini ReAct loop with read-only discovery tools (memory search, RAG search, tool/skill/MCP listing) analyzes the user's intent _before_ the main execution loop.
+- **Output**: `CognitionResult` with understanding, plan steps, constraints, and discovered tools/skills/MCP/memory/RAG context.
+- **Selective tool loading**: only tools identified by cognition are passed to the LLM (+ always-available set: send_message, remember, approval).
+- **System prompt injection**: cognition understanding/plan/constraints are injected into the system prompt's Task Analysis section.
+- **Browser task plan**: initialized from `CognitionResult` via `from_cognition()`.
+- **Tool veto**: minimal safety-net only (search-first policy for web_fetch). Cognition already selected the right tools.
+- **Fallback**: when `run_cognition()` fails (provider error, timeout), `fallback_full_context()` provides ALL tools so the execution loop can still function.
 
 ### Workflow Engine
 - Persistent multi-step workflows with approval gates.
@@ -605,6 +622,7 @@ Prima di dichiarare una feature completa, verifica:
 - Security: auth + HTTPS + rate limiting + API keys + E-Stop + exfiltration guard
 - Workflow Engine: persistent, approval gates, retry, resume-on-boot
 - Business Autopilot BIZ-1: OODA core, budget enforcement
+- Cognition-First Architecture: LLM-driven intent analysis as sole routing path (keyword system removed, 2026-03-21)
 
 ### Current Focus (Fase 1: Hardening Industriale)
 - Channel hardening: Slack Socket Mode, WhatsApp re-pairing, Discord reconnect, proactive messaging
@@ -682,6 +700,12 @@ Quick reference for adding new components without re-reading the whole codebase.
 1. Create dir in `skills/{name}/` with `SKILL.md` (YAML frontmatter)
 2. Optional `scripts/` dir for executable scripts
 3. Loaded automatically by `src/skills/loader.rs`
+
+### New Cognition Discovery Tool
+1. Add fn in `src/agent/cognition/discovery.rs` — follows the pattern of existing discovery fns (memory_search, rag_search, list_tools, list_skills, list_mcp)
+2. Register the tool definition in `discovery.rs`'s `build_discovery_tools()` function
+3. Handle the tool call in `engine.rs`'s match on tool name
+4. The cognition engine will auto-invoke it during the mini ReAct loop
 
 ---
 

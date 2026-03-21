@@ -42,8 +42,8 @@ pub struct ExecutionPlanSnapshot {
     pub required_sources: Vec<String>,
     pub completed_sources: Vec<String>,
     pub current_source: Option<String>,
-    /// Explicit plan steps created by the LLM via `plan_task`.
-    /// Empty when using the default keyword-inferred mode.
+    /// Explicit plan steps — from cognition phase or LLM `plan_task` tool.
+    /// Empty when using the default keyword-inferred mode (no cognition, no explicit plan).
     #[serde(default)]
     pub explicit_steps: Vec<PlanStepSnapshot>,
     /// Optional verification criterion supplied with the plan.
@@ -64,7 +64,8 @@ pub struct ExecutionPlanState {
     completed_steps: Vec<String>,
     active_blockers: Vec<String>,
     seen_step_signatures: HashSet<String>,
-    /// Explicit plan steps set by the LLM via the virtual `plan_task` tool.
+    /// Explicit plan steps — seeded by the cognition phase (if active) or
+    /// set by the LLM via the virtual `plan_task` tool at runtime.
     /// When non-empty, `runtime_message()` renders these instead of
     /// keyword-inferred constraints.
     explicit_steps: Vec<PlanStep>,
@@ -159,6 +160,50 @@ impl ExecutionPlanState {
 
         let desc = &self.explicit_steps[step_index].description;
         Ok(format!("Step {} completed: {}", step_index, desc))
+    }
+
+    /// Auto-advance explicit plan steps based on tool execution.
+    ///
+    /// When a tool completes, checks if any pending/in-progress step mentions
+    /// the tool name in its description. If found, marks it completed and
+    /// auto-advances the next pending step to in-progress.
+    pub fn auto_advance_explicit_steps(&mut self, tool_name: &str) {
+        if self.explicit_steps.is_empty() {
+            return;
+        }
+        let tool_lower = tool_name.to_lowercase();
+        let mut advanced = false;
+        for step in &mut self.explicit_steps {
+            if step.status == StepStatus::Completed {
+                continue;
+            }
+            if step.description.to_lowercase().contains(&tool_lower) {
+                step.status = StepStatus::Completed;
+                advanced = true;
+                break;
+            }
+        }
+        // Auto-advance: ensure one step is InProgress
+        if advanced
+            && !self
+                .explicit_steps
+                .iter()
+                .any(|s| s.status == StepStatus::InProgress)
+        {
+            for step in &mut self.explicit_steps {
+                if step.status == StepStatus::Pending {
+                    step.status = StepStatus::InProgress;
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Mark all explicit steps as completed (called when run finishes).
+    pub fn mark_all_completed(&mut self) {
+        for step in &mut self.explicit_steps {
+            step.status = StepStatus::Completed;
+        }
     }
 
     /// Whether all explicit steps are done.

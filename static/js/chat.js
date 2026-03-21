@@ -1007,6 +1007,7 @@ function purgeOrphanLiveArtifacts() {
 
 function clearTransientRunUi() {
     purgeOrphanLiveArtifacts();
+    removeCognition();
     if (toolIndicatorEl) {
         toolIndicatorEl.remove();
         toolIndicatorEl = null;
@@ -1065,10 +1066,24 @@ function hydrateActiveRun(run) {
     // to avoid DOM thrashing from intermediate states.
     let lastPlanEvent = null;
     for (const event of run.events || []) {
-        if (event.event_type === 'tool_start') {
+        if (event.event_type === 'cognition_start') {
+            showCognitionStep(event.name || 'Analyzing request...');
+        } else if (event.event_type === 'cognition_step') {
+            addCognitionStep(event.name || '');
+        } else if (event.event_type === 'cognition_result') {
+            finalizeCognition(event.name || 'Ready');
+        } else if (event.event_type === 'subagent_start') {
+            showToolIndicator('subagent', {
+                id: 'subagent-hydrate',
+                name: 'subagent',
+                arguments: { task: event.name || 'Background task' },
+            });
+        } else if (event.event_type === 'subagent_end') {
+            endToolIndicator('subagent', event.tool_call || null);
+        } else if (event.event_type === 'tool_start') {
             showToolIndicator(event.name, event.tool_call || null);
         } else if (event.event_type === 'tool_end') {
-            endToolIndicator(event.name);
+            endToolIndicator(event.name, event.tool_call || null);
         } else if (event.event_type === 'status') {
             lastStatusHint = event.name || '';
             setRunBadge('working', lastStatusHint || 'Running');
@@ -1401,6 +1416,122 @@ function setExecutionModel(model) {
     runModelEl.title = normalized;
 }
 
+// ─── Cognition indicator ──────────────────────────────────────
+
+let cognitionEl = null;
+
+/** Show or update the cognition phase indicator. */
+function showCognitionStep(label) {
+    if (!cognitionEl) {
+        cognitionEl = document.createElement('div');
+        cognitionEl.className = 'chat-cognition is-active';
+
+        const header = document.createElement('div');
+        header.className = 'chat-cognition-header';
+        header.onclick = function() { toggleCognition(this); };
+
+        const dot = document.createElement('span');
+        dot.className = 'chat-cognition-dot';
+        const lbl = document.createElement('span');
+        lbl.className = 'chat-cognition-label';
+        const toggle = document.createElement('span');
+        toggle.className = 'chat-cognition-toggle';
+        toggle.textContent = '\u203A';
+
+        header.append(dot, lbl, toggle);
+
+        const steps = document.createElement('div');
+        steps.className = 'chat-cognition-steps';
+
+        cognitionEl.append(header, steps);
+        messagesEl.appendChild(cognitionEl);
+        scrollThreadToBottom();
+    }
+    const labelEl = cognitionEl.querySelector('.chat-cognition-label');
+    if (labelEl) labelEl.textContent = label;
+}
+
+/** Add a discovery step to the cognition indicator. */
+function addCognitionStep(step) {
+    if (!cognitionEl) showCognitionStep('Analyzing...');
+    const stepsEl = cognitionEl.querySelector('.chat-cognition-steps');
+    if (!stepsEl) return;
+    const stepEl = document.createElement('div');
+    stepEl.className = 'chat-cognition-step';
+    stepEl.textContent = formatCognitionStep(step);
+    stepsEl.appendChild(stepEl);
+    const labelEl = cognitionEl.querySelector('.chat-cognition-label');
+    if (labelEl) labelEl.textContent = friendlyCognitionStep(step);
+    scrollThreadToBottom();
+}
+
+/** Finalize the cognition indicator with the result summary. */
+function finalizeCognition(summary) {
+    if (!cognitionEl) showCognitionStep(summary);
+    cognitionEl.classList.remove('is-active');
+    cognitionEl.classList.add('collapsed');
+    const labelEl = cognitionEl.querySelector('.chat-cognition-label');
+    if (labelEl) labelEl.textContent = compactCognitionLabel(summary);
+}
+
+/** Compact the cognition result into a short label for the collapsed header. */
+function compactCognitionLabel(raw) {
+    if (!raw || raw.length < 60) return raw || 'Analysis complete';
+    // Extract key parts from "Understanding... | Tools: x, y | Plan: N steps"
+    const toolsMatch = raw.match(/Tools:\s*([^|]+)/);
+    const planMatch = raw.match(/Plan:\s*(\d+)\s*steps?/);
+    const parts = [];
+    if (toolsMatch) {
+        const names = toolsMatch[1].trim().split(/,\s*/);
+        parts.push(names.length + ' tool' + (names.length > 1 ? 's' : ''));
+    }
+    if (planMatch) parts.push(planMatch[1] + ' steps');
+    if (raw.includes('Memory: loaded')) parts.push('memory');
+    if (parts.length > 0) return 'Analyzed \u00b7 ' + parts.join(', ');
+    // Fallback: truncate
+    return raw.length > 50 ? raw.substring(0, 50) + '\u2026' : raw;
+}
+
+/** Toggle cognition detail visibility. */
+window.toggleCognition = function(headerEl) {
+    const section = headerEl.closest('.chat-cognition');
+    if (section) section.classList.toggle('collapsed');
+};
+
+/** Map discovery tool calls to user-friendly labels (used for header during activity). */
+function friendlyCognitionStep(raw) {
+    if (raw.startsWith('discover_tools')) return 'Searching tools...';
+    if (raw.startsWith('discover_skills')) return 'Searching skills...';
+    if (raw.startsWith('discover_mcp')) return 'Checking services...';
+    if (raw.startsWith('search_memory')) return 'Checking memory...';
+    if (raw.startsWith('search_knowledge')) return 'Searching knowledge...';
+    return raw;
+}
+
+/** Format a cognition step for display in the expanded details. */
+function formatCognitionStep(raw) {
+    // "discover_tools(query) → N found: tool1, tool2" → "Tools: 7 found (browser, web_search, ...)"
+    const arrowIdx = raw.indexOf('\u2192');
+    if (arrowIdx === -1) return raw;
+    const result = raw.substring(arrowIdx + 1).trim();
+    if (raw.startsWith('discover_tools')) return 'Tools: ' + cleanToolNames(result);
+    if (raw.startsWith('discover_skills')) return 'Skills: ' + result;
+    if (raw.startsWith('discover_mcp')) return 'Services: ' + cleanToolNames(result);
+    if (raw.startsWith('search_memory')) return 'Memory: ' + result;
+    if (raw.startsWith('search_knowledge')) return 'Knowledge: ' + result;
+    return raw;
+}
+
+/** Clean MCP-prefixed tool names for display: "brave-search__brave_local_search" → "local_search" */
+function cleanToolNames(text) {
+    return text.replace(/\b[\w-]+__(\w+)/g, '$1');
+}
+
+/** Remove the cognition indicator from the DOM. */
+function removeCognition() {
+    if (cognitionEl) { cognitionEl.remove(); cognitionEl = null; }
+}
+
 // ─── Tool indicators ───────────────────────────────────────────
 
 // List of tool names currently executing (for multi-tool sequences)
@@ -1600,6 +1731,13 @@ function describeToolCall(toolCallData) {
         };
     }
 
+    if (name === 'subagent') {
+        return {
+            label: 'Background task',
+            detail: args.task ? truncate(String(args.task), 50) : '',
+        };
+    }
+
     return {
         label: prettifyToolName(name),
         detail: '',
@@ -1657,7 +1795,7 @@ function clearBrowserGallery() {
     browserScreenshots = [];
 }
 
-function endToolIndicator(toolName) {
+function endToolIndicator(toolName, toolCallData) {
     activeTools = activeTools.filter(t => t !== toolName);
     const completedCard = Array.from(document.querySelectorAll('.chat-tool-call'))
         .reverse()
@@ -1667,7 +1805,21 @@ function endToolIndicator(toolName) {
         completedCard.dataset.toolStatus = 'done';
         const meta = completedCard.querySelector('.chat-tool-call-meta');
         if (meta) {
-            meta.textContent = '\u2713';
+            const resultText = toolCallData?.result;
+            if (resultText) {
+                meta.textContent = '\u2713';
+                meta.title = resultText;
+                // Add truncated result as a summary line
+                const summary = document.createElement('span');
+                summary.className = 'chat-tool-summary';
+                summary.textContent = resultText.length > 80
+                    ? resultText.substring(0, 80) + '…'
+                    : resultText;
+                const compact = completedCard.querySelector('.chat-tool-call-compact');
+                if (compact) compact.appendChild(summary);
+            } else {
+                meta.textContent = '\u2713';
+            }
         }
     }
     if (activeTools.length > 0 && toolIndicatorEl) {
@@ -2087,7 +2239,30 @@ function connect() {
 
             } else if (data.type === 'tool_end') {
                 // Tool finished — update indicator but keep it visible
-                endToolIndicator(data.name);
+                endToolIndicator(data.name, data.tool_call || null);
+
+            } else if (data.type === 'cognition_start') {
+                removeTypingIndicator();
+                removeCognition();
+                showCognitionStep(data.name || 'Analyzing request...');
+                setRunBadge('working', 'Analyzing');
+
+            } else if (data.type === 'cognition_step') {
+                addCognitionStep(data.name || '');
+
+            } else if (data.type === 'cognition_result') {
+                finalizeCognition(data.name || 'Ready');
+
+            } else if (data.type === 'subagent_start') {
+                showToolIndicator('subagent', {
+                    id: 'subagent-' + Date.now(),
+                    name: 'subagent',
+                    arguments: { task: data.name || 'Background task' },
+                });
+
+            } else if (data.type === 'subagent_end') {
+                endToolIndicator('subagent', data.tool_call || null);
+
             } else if (data.type === 'status') {
                 setRunBadge('working', data.name || 'Running');
             } else if (data.type === 'model') {
@@ -2112,6 +2287,13 @@ function connect() {
                 finalizeStream(data.content);
                 // Clear tool calls for next message
                 clearToolCalls();
+                // Force-collapse reasoning and cognition sections
+                if (reasoningSectionEl) {
+                    reasoningSectionEl.classList.add('collapsed', 'is-done');
+                    updateReasoningCount();
+                }
+                // Remove cognition indicator — its job is done
+                removeCognition();
                 activeRunId = null;
                 setExecutionModel('');
             } else if (data.type === 'workflow_progress') {

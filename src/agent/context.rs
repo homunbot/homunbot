@@ -65,6 +65,12 @@ pub struct ContextBuilder {
     persona_context: RwLock<String>,
     /// Per-agent instructions from `AgentDefinition`.
     agent_instructions: RwLock<String>,
+    /// Cognition understanding (what the user wants, natural language).
+    cognition_understanding: RwLock<String>,
+    /// Cognition plan steps.
+    cognition_plan: RwLock<Vec<String>>,
+    /// Cognition constraints extracted from the user's request.
+    cognition_constraints: RwLock<Vec<String>>,
 }
 
 impl ContextBuilder {
@@ -88,6 +94,9 @@ impl ContextBuilder {
             contact_context: RwLock::new(String::new()),
             persona_context: RwLock::new(String::new()),
             agent_instructions: RwLock::new(String::new()),
+            cognition_understanding: RwLock::new(String::new()),
+            cognition_plan: RwLock::new(Vec::new()),
+            cognition_constraints: RwLock::new(Vec::new()),
         }
     }
 
@@ -223,6 +232,25 @@ impl ContextBuilder {
         *self.agent_instructions.write().await = instructions.to_string();
     }
 
+    /// Set cognition results for injection into the system prompt.
+    pub async fn set_cognition_context(
+        &self,
+        understanding: String,
+        plan: Vec<String>,
+        constraints: Vec<String>,
+    ) {
+        *self.cognition_understanding.write().await = understanding;
+        *self.cognition_plan.write().await = plan;
+        *self.cognition_constraints.write().await = constraints;
+    }
+
+    /// Clear cognition context (called when cognition is disabled or fails).
+    pub async fn clear_cognition_context(&self) {
+        *self.cognition_understanding.write().await = String::new();
+        *self.cognition_plan.write().await = Vec::new();
+        *self.cognition_constraints.write().await = Vec::new();
+    }
+
     /// Update the model name shown in the system prompt (called on hot-reload).
     pub async fn set_model_name(&self, model: String) {
         *self.model_name.write().await = model;
@@ -338,6 +366,9 @@ impl ContextBuilder {
         let contact_context = self.contact_context.read().await;
         let persona_context = self.persona_context.read().await;
         let agent_instructions = self.agent_instructions.read().await;
+        let cognition_understanding = self.cognition_understanding.read().await;
+        let cognition_plan = self.cognition_plan.read().await;
+        let cognition_constraints = self.cognition_constraints.read().await;
 
         // Build PromptContext
         let ctx = PromptContext {
@@ -357,6 +388,9 @@ impl ContextBuilder {
             contact_context: &contact_context,
             persona_context: &persona_context,
             agent_instructions: &agent_instructions,
+            cognition_understanding: &cognition_understanding,
+            cognition_plan: &cognition_plan,
+            cognition_constraints: &cognition_constraints,
         };
 
         // Build prompt using modular system

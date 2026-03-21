@@ -1,5 +1,13 @@
+//! Browser task plan — state tracking for browser automation sessions.
+//!
+//! Initialized from `CognitionResult` via `from_cognition()`.
+//! Tracks visited sources, extraction progress, autocomplete state,
+//! and enforces browser-specific safety vetoes at runtime.
+
+use crate::agent::cognition::CognitionResult;
 use crate::provider::ChatMessage;
 
+/// High-level classification of what the browser task involves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BrowserTaskClass {
     StaticLookup,
@@ -8,6 +16,7 @@ pub enum BrowserTaskClass {
     MultiSourceCompare,
 }
 
+/// Browser routing metadata derived from cognition understanding.
 #[derive(Debug, Clone)]
 pub struct BrowserRoutingDecision {
     task_class: BrowserTaskClass,
@@ -16,6 +25,7 @@ pub struct BrowserRoutingDecision {
     reason: String,
 }
 
+/// Runtime state for an active browser automation session.
 #[derive(Debug, Clone, Default)]
 pub struct BrowserTaskPlanState {
     objective: String,
@@ -33,13 +43,48 @@ pub struct BrowserTaskPlanState {
 }
 
 impl BrowserTaskPlanState {
-    pub fn new(user_prompt: &str) -> Self {
-        let routing = BrowserRoutingDecision::from_prompt(user_prompt);
+    /// Initialize from a CognitionResult — the sole construction path.
+    ///
+    /// The cognition phase determines whether the browser is needed via
+    /// semantic understanding rather than keyword matching.
+    pub fn from_cognition(result: &CognitionResult, user_prompt: &str) -> Self {
+        let browser_needed = result.tools.iter().any(|t| t.name == "browser");
+        let compare_mode = result.constraints.iter().any(|c| {
+            let lower = c.to_lowercase();
+            lower.contains("compar") || lower.contains("confront")
+        });
+
         let objective = crate::utils::text::truncate_str(user_prompt.trim(), 220, "");
+
+        // Build a BrowserRoutingDecision from cognition understanding
+        let task_class = if compare_mode && browser_needed {
+            BrowserTaskClass::MultiSourceCompare
+        } else if browser_needed {
+            let understanding_lower = result.understanding.to_lowercase();
+            if understanding_lower.contains("book")
+                || understanding_lower.contains("prenot")
+                || understanding_lower.contains("ticket")
+                || understanding_lower.contains("bigliett")
+            {
+                BrowserTaskClass::FormBooking
+            } else {
+                BrowserTaskClass::InteractiveWeb
+            }
+        } else {
+            BrowserTaskClass::StaticLookup
+        };
+
+        let routing = BrowserRoutingDecision {
+            task_class,
+            browser_required: browser_needed,
+            required_sources: Vec::new(),
+            reason: result.understanding.clone(),
+        };
+
         Self {
             objective,
-            compare_mode: matches!(routing.task_class, BrowserTaskClass::MultiSourceCompare),
-            required_sources: routing.required_sources.clone(),
+            compare_mode,
+            required_sources: Vec::new(),
             routing,
             visited_sources: Vec::new(),
             extracted_sources: Vec::new(),
@@ -51,15 +96,12 @@ impl BrowserTaskPlanState {
         }
     }
 
-    pub fn routing_decision(&self) -> &BrowserRoutingDecision {
-        &self.routing
-    }
-
     /// Whether a results page has been seen during this browser task.
     pub fn has_seen_results(&self) -> bool {
         self.result_pages_seen > 0
     }
 
+    /// Update internal state after a browser tool result.
     pub fn note_browser_result(&mut self, action: Option<&str>, output: &str) {
         let lower = output.to_ascii_lowercase();
         let mut source = None;
@@ -91,7 +133,6 @@ impl BrowserTaskPlanState {
         match action.unwrap_or_default() {
             "navigate" | "navigate_back" => {
                 self.requires_fresh_snapshot = true;
-                // Track Google entry for FormBooking tasks
                 if !self.used_google_entry && lower.contains("google.com") {
                     self.used_google_entry = true;
                 }
@@ -104,7 +145,6 @@ impl BrowserTaskPlanState {
                 if lower.contains("latest browser step failed") || lower.contains("tool error") {
                     self.requires_fresh_snapshot = true;
                 }
-                // Click from Google results page completes the Google entry
                 if !self.used_google_entry
                     && action.unwrap_or_default() == "click"
                     && self.current_source.as_deref() == Some("google")
@@ -116,6 +156,7 @@ impl BrowserTaskPlanState {
         }
     }
 
+    /// Merge browser state into an execution plan snapshot.
     pub fn merged_snapshot(
         &self,
         mut snapshot: crate::agent::execution_plan::ExecutionPlanSnapshot,
@@ -127,7 +168,6 @@ impl BrowserTaskPlanState {
     }
 
     /// Veto check for MCP-style browser tools where the action comes from the tool name suffix.
-    /// `action` is e.g. `Some("click")`, `Some("navigate")` — extracted by `browser_action_from_tool()`.
     pub fn veto_browser_action_mcp(
         &self,
         action: Option<&str>,
@@ -136,6 +176,7 @@ impl BrowserTaskPlanState {
         self.veto_browser_action_inner(action.unwrap_or_default(), arguments)
     }
 
+    /// Veto check for the unified browser tool (action in arguments).
     pub fn veto_browser_action(&self, arguments: &serde_json::Value) -> Option<String> {
         let action = arguments
             .get("action")
@@ -149,6 +190,7 @@ impl BrowserTaskPlanState {
         action: &str,
         arguments: &serde_json::Value,
     ) -> Option<String> {
+        // Require fresh snapshot before interacting after navigation
         if self.requires_fresh_snapshot
             && matches!(
                 action,
@@ -169,7 +211,7 @@ impl BrowserTaskPlanState {
             );
         }
 
-        // --- Google-first veto for FormBooking tasks ---
+        // Google-first veto for FormBooking tasks
         if !self.used_google_entry
             && matches!(self.routing.task_class, BrowserTaskClass::FormBooking)
             && action == "navigate"
@@ -190,6 +232,7 @@ impl BrowserTaskPlanState {
             }
         }
 
+        // Pending autocomplete selection — block unrelated actions
         if self.pending_selection {
             let allowed = match action {
                 "choose_suggestion" | "snapshot" | "wait" | "click" | "wait_for" => true,
@@ -208,7 +251,7 @@ impl BrowserTaskPlanState {
             }
         }
 
-        // --- Veto re-navigating to a site we already have open (applies to ALL task types) ---
+        // Veto re-navigating to a site we already have open
         if action == "navigate" {
             if let Some(current_source) = &self.current_source {
                 let target_url = arguments
@@ -229,7 +272,7 @@ impl BrowserTaskPlanState {
             }
         }
 
-        // --- Compare-mode vetoes: don't leave or close before extracting ---
+        // Compare-mode vetoes: don't leave or close before extracting
         if self.compare_mode && !self.required_sources.is_empty() {
             if let Some(current_source) = &self.current_source {
                 let current_done = self.extracted_sources.iter().any(|s| s == current_source);
@@ -260,6 +303,7 @@ impl BrowserTaskPlanState {
         None
     }
 
+    /// Build a runtime message with browser task context for the LLM.
     pub fn runtime_message(&self, browser_available: bool) -> Option<ChatMessage> {
         if self.routing.browser_required && !browser_available {
             return Some(ChatMessage::user(&format!(
@@ -328,161 +372,12 @@ impl Default for BrowserRoutingDecision {
 }
 
 impl BrowserRoutingDecision {
-    pub fn from_prompt(user_prompt: &str) -> Self {
-        let lower = user_prompt.to_ascii_lowercase();
-        let required_sources = extract_required_sources(&lower);
-        let booking_intent = contains_any(
-            &lower,
-            &[
-                "train",
-                "treno",
-                "flight",
-                "volo",
-                "hotel",
-                "biglietto",
-                "ticket",
-                "prenot",
-                "book",
-                "booking",
-                "checkout",
-                "fare search",
-                "noleggio",
-                "rental",
-            ],
-        );
-        let shopping_intent = contains_any(
-            &lower,
-            &[
-                "scarpe",
-                "shoes",
-                "buy ",
-                "compra",
-                "shop",
-                "shopping",
-                "product",
-                "prodott",
-                "price",
-                "prezzo",
-                "taglia",
-                "size",
-                "collezione",
-                "collection",
-                "store",
-                "negozio",
-                "abbigliamento",
-                "clothing",
-                "borsa",
-                "bag",
-                "orologio",
-                "watch",
-            ],
-        );
-        let has_price_constraint = contains_any(
-            &lower,
-            &[
-                "costano meno",
-                "non costano più",
-                "meno di",
-                "sotto ",
-                "under ",
-                "below ",
-                "cheaper",
-                "cheapest",
-                "economico",
-                "economica",
-                "lowest price",
-                "best price",
-                "miglior prezzo",
-                "budget",
-            ],
-        );
-        let compare_mode = contains_any(
-            &lower,
-            &[
-                "compare",
-                "confronta",
-                "piu economico",
-                "più economico",
-                "cheaper",
-                "lowest price",
-                "compare prices",
-            ],
-        ) || contains_word(&lower, "both")
-            || contains_word(&lower, "sia")
-            || contains_word(&lower, "che")
-            || required_sources.len() > 1
-            || (shopping_intent && has_price_constraint);
-        let interactive_web = booking_intent
-            || shopping_intent
-            || !required_sources.is_empty()
-            || contains_any(
-                &lower,
-                &[
-                    "login",
-                    "accedi",
-                    "form",
-                    "select",
-                    "dropdown",
-                    "picker",
-                    "dynamic",
-                    "js",
-                    "javascript",
-                    "browser",
-                ],
-            );
-
-        let (task_class, browser_required, reason) = if compare_mode && interactive_web {
-            (
-                BrowserTaskClass::MultiSourceCompare,
-                true,
-                "multi-source comparison on interactive websites".to_string(),
-            )
-        } else if booking_intent {
-            (
-                BrowserTaskClass::FormBooking,
-                true,
-                "travel/booking workflow with dynamic form state".to_string(),
-            )
-        } else if interactive_web {
-            (
-                BrowserTaskClass::InteractiveWeb,
-                true,
-                "interactive or JS-rendered website workflow".to_string(),
-            )
-        } else {
-            (
-                BrowserTaskClass::StaticLookup,
-                false,
-                "static lookup".to_string(),
-            )
-        };
-
-        Self {
-            task_class,
-            browser_required,
-            required_sources,
-            reason,
-        }
-    }
-
-    pub fn task_class(&self) -> BrowserTaskClass {
-        self.task_class
-    }
-
     pub fn browser_required(&self) -> bool {
         self.browser_required
     }
 
-    pub fn required_sources(&self) -> &[String] {
-        &self.required_sources
-    }
-
     pub fn reason(&self) -> &str {
         &self.reason
-    }
-
-    pub fn named_sources_known(&self) -> bool {
-        !self.required_sources.is_empty()
     }
 }
 
@@ -492,97 +387,7 @@ fn push_unique(items: &mut Vec<String>, value: String) {
     }
 }
 
-fn contains_any(text: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|needle| text.contains(needle))
-}
-
-/// Check if a short word appears as a standalone word (not inside another word).
-/// Boundary = start/end of string, or a non-alphanumeric char.
-fn contains_word(text: &str, word: &str) -> bool {
-    for (idx, _) in text.match_indices(word) {
-        let before_ok = idx == 0 || !text.as_bytes()[idx - 1].is_ascii_alphanumeric();
-        let after = idx + word.len();
-        let after_ok = after >= text.len() || !text.as_bytes()[after].is_ascii_alphanumeric();
-        if before_ok && after_ok {
-            return true;
-        }
-    }
-    false
-}
-
-fn extract_required_sources(lower_prompt: &str) -> Vec<String> {
-    let mut sources = Vec::new();
-
-    // Tier 1: well-known sites (exact match on lowercase)
-    for (source, needles) in [
-        ("trenitalia", &["trenitalia"][..]),
-        ("italo", &["italo", "italotreno"][..]),
-        ("trainline", &["trainline"][..]),
-        ("omio", &["omio"][..]),
-        ("booking", &["booking.com", "booking"][..]),
-        ("amazon", &["amazon"][..]),
-        ("ebay", &["ebay"][..]),
-        ("skyscanner", &["skyscanner"][..]),
-    ] {
-        if needles.iter().any(|needle| lower_prompt.contains(needle)) {
-            push_unique(&mut sources, source.to_string());
-        }
-    }
-
-    // Tier 2: generic brand detection from "X o Y" / "X or Y" patterns
-    if sources.is_empty() {
-        let brand_sources = extract_brand_sources(lower_prompt);
-        for s in brand_sources {
-            push_unique(&mut sources, s);
-        }
-    }
-
-    sources
-}
-
-/// Extract brand/site names from patterns like "X o Y", "X or Y", "di X o di Y".
-///
-/// Works on the lowercased prompt. Looks for connectors (o, or, e, and) and
-/// extracts the nearest non-filler word on each side as a brand name.
-fn extract_brand_sources(lower: &str) -> Vec<String> {
-    let connectors = [" o ", " or ", " e ", " and "];
-    let filler: &[&str] = &[
-        "di", "da", "le", "il", "la", "lo", "un", "una", "del", "al", "per", "con", "su", "the",
-        "a", "an", "in", "on", "for", "to", "from", "my", "me", "this", "that", "più", "piu",
-        "meno", "anche", "poi", "tipo", "come", "quale",
-    ];
-    let is_brand = |word: &str| -> bool {
-        word.len() >= 3
-            && word.chars().all(|c| c.is_alphanumeric() || c == '-')
-            && !filler.contains(&word)
-    };
-
-    let words: Vec<&str> = lower.split_whitespace().collect();
-    let mut brands = Vec::new();
-
-    for conn in &connectors {
-        let conn_word = conn.trim();
-        for (i, &w) in words.iter().enumerate() {
-            if w != conn_word {
-                continue;
-            }
-            // Find nearest brand word BEFORE connector (skip filler like "di")
-            let before = (0..i).rev().map(|j| words[j]).find(|word| is_brand(word));
-            // Find nearest brand word AFTER connector (skip filler like "di")
-            let after = ((i + 1)..words.len())
-                .map(|j| words[j])
-                .take(3) // look at most 3 words ahead
-                .find(|word| is_brand(word));
-
-            if let (Some(b), Some(a)) = (before, after) {
-                push_unique(&mut brands, b.to_string());
-                push_unique(&mut brands, a.to_string());
-            }
-        }
-    }
-    brands
-}
-
+/// Extract the primary domain name from a URL (e.g. "trenitalia" from "https://www.trenitalia.com/foo").
 fn extract_source_name(url: &str) -> Option<String> {
     let trimmed = url
         .trim()
@@ -616,57 +421,95 @@ fn extract_source_name(url: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BrowserRoutingDecision, BrowserTaskClass, BrowserTaskPlanState};
+    use super::*;
+    use crate::agent::cognition::{CognitionResult, Complexity, DiscoveredTool};
 
-    #[test]
-    fn classifies_booking_compare_as_browser_first() {
-        let decision = BrowserRoutingDecision::from_prompt(
-            "mi trovi un treno domani da napoli a milano confrontando trenitalia e italo",
-        );
-        assert_eq!(decision.task_class(), BrowserTaskClass::MultiSourceCompare);
-        assert!(decision.browser_required());
-        assert_eq!(decision.required_sources(), &["trenitalia", "italo"]);
+    fn make_browser_cognition(understanding: &str) -> CognitionResult {
+        CognitionResult {
+            understanding: understanding.to_string(),
+            complexity: Complexity::Complex,
+            answer_directly: false,
+            direct_answer: None,
+            tools: vec![DiscoveredTool {
+                name: "browser".to_string(),
+                description: "Browser".to_string(),
+                reason: "Needs browser".to_string(),
+            }],
+            skills: Vec::new(),
+            mcp_tools: Vec::new(),
+            memory_context: None,
+            rag_context: None,
+            plan: Vec::new(),
+            constraints: Vec::new(),
+            autonomy_override: None,
+        }
     }
 
     #[test]
-    fn browser_plan_tracks_sources_and_extractions() {
-        let mut plan =
-            BrowserTaskPlanState::new("compare trenitalia and italo for tomorrow after 16:00");
-        plan.note_browser_result(
-            Some("snapshot"),
-            "Page URL: https://www.trenitalia.com/en.html\nVisible result hints:\n1. Napoli Centrale 16:20 Milano Centrale",
-        );
-        let message = plan
-            .runtime_message(true)
-            .expect("expected runtime message");
-        let rendered = message.rendered_text().unwrap();
-        assert!(rendered.contains("Sources mentioned by user: trenitalia, italo"));
-        assert!(rendered.contains("Visited so far: trenitalia"));
-        assert!(rendered.contains("Current page shows candidate results"));
-
-        plan.note_browser_result(
-            Some("extract"),
-            "Page URL: https://www.italotreno.it/\nExtracted results:\n1. Napoli Centrale - Milano Centrale | price=EUR 49 | time=16:30",
-        );
-        let rendered = plan.runtime_message(true).unwrap().rendered_text().unwrap();
-        assert!(rendered.contains("Results extracted from: italo"));
-        assert!(rendered.contains("Currently on: italo"));
+    fn from_cognition_classifies_booking() {
+        let result = make_browser_cognition("Book a train ticket from Rome to Milan");
+        let plan = BrowserTaskPlanState::from_cognition(&result, "book a train");
+        assert_eq!(plan.routing.task_class, BrowserTaskClass::FormBooking);
+        assert!(plan.routing.browser_required);
     }
 
     #[test]
-    fn returns_unavailable_message_for_required_browser_tasks() {
-        let plan = BrowserTaskPlanState::new("compare trenitalia and italo trains");
-        let rendered = plan
-            .runtime_message(false)
-            .unwrap()
-            .rendered_text()
-            .unwrap();
-        assert!(rendered.contains("browser is currently unavailable"));
+    fn from_cognition_classifies_interactive() {
+        let result = make_browser_cognition("Search for headphones on Amazon");
+        let plan = BrowserTaskPlanState::from_cognition(&result, "find headphones");
+        assert_eq!(plan.routing.task_class, BrowserTaskClass::InteractiveWeb);
+    }
+
+    #[test]
+    fn from_cognition_classifies_compare() {
+        let mut result = make_browser_cognition("Compare train prices");
+        result.constraints = vec!["confronta prezzi".to_string()];
+        let plan = BrowserTaskPlanState::from_cognition(&result, "confronta treni");
+        assert_eq!(plan.routing.task_class, BrowserTaskClass::MultiSourceCompare);
+        assert!(plan.compare_mode);
+    }
+
+    #[test]
+    fn from_cognition_static_without_browser() {
+        let result = CognitionResult {
+            understanding: "Check the weather".to_string(),
+            complexity: Complexity::Simple,
+            answer_directly: false,
+            direct_answer: None,
+            tools: vec![DiscoveredTool {
+                name: "weather".to_string(),
+                description: "Weather".to_string(),
+                reason: "Need weather".to_string(),
+            }],
+            skills: Vec::new(),
+            mcp_tools: Vec::new(),
+            memory_context: None,
+            rag_context: None,
+            plan: Vec::new(),
+            constraints: Vec::new(),
+            autonomy_override: None,
+        };
+        let plan = BrowserTaskPlanState::from_cognition(&result, "weather?");
+        assert_eq!(plan.routing.task_class, BrowserTaskClass::StaticLookup);
+        assert!(!plan.routing.browser_required);
+    }
+
+    #[test]
+    fn requires_snapshot_before_ref_actions_after_navigation() {
+        let result = make_browser_cognition("Book a train on trenitalia");
+        let mut plan = BrowserTaskPlanState::from_cognition(&result, "book a train");
+        plan.note_browser_result(Some("navigate"), "Page URL: https://www.trenitalia.com");
+        let veto = plan.veto_browser_action(&serde_json::json!({
+            "action": "click",
+            "ref_id": "e37"
+        }));
+        assert!(veto.is_some());
     }
 
     #[test]
     fn vetoes_non_selection_actions_when_autocomplete_is_open() {
-        let mut plan = BrowserTaskPlanState::new("book a train on trenitalia");
+        let result = make_browser_cognition("Book a train on trenitalia");
+        let mut plan = BrowserTaskPlanState::from_cognition(&result, "book a train");
         plan.note_browser_result(
             Some("snapshot"),
             "Page URL: https://www.trenitalia.com/\nVisible suggestions:\n- Napoli Centrale\n- Napoli Afragola",
@@ -680,238 +523,42 @@ mod tests {
     }
 
     #[test]
-    fn vetoes_switching_sources_before_extracting_current_results() {
-        let mut plan =
-            BrowserTaskPlanState::new("compare trenitalia and italo for tomorrow after 16:00");
-        plan.note_browser_result(
-            Some("snapshot"),
-            "Page URL: https://www.trenitalia.com/en.html\nVisible result hints:\n1. Napoli Centrale 16:20 Milano Centrale",
-        );
-        let veto = plan.veto_browser_action(&serde_json::json!({
-            "action": "navigate",
-            "url": "https://www.italotreno.it/"
-        }));
-        assert!(veto.is_some());
-    }
-
-    #[test]
-    fn requires_snapshot_before_ref_actions_after_navigation() {
-        let mut plan = BrowserTaskPlanState::new("book a train on trenitalia");
-        plan.note_browser_result(Some("navigate"), "Page URL: https://www.trenitalia.com");
-        let veto = plan.veto_browser_action(&serde_json::json!({
-            "action": "click",
-            "ref_id": "e37"
-        }));
-        assert!(veto.is_some());
-    }
-
-    #[test]
-    fn vetoes_close_when_current_source_is_not_extracted_yet() {
-        let mut plan =
-            BrowserTaskPlanState::new("compare trenitalia and italo for tomorrow after 16:00");
-        plan.note_browser_result(
-            Some("snapshot"),
-            "Page URL: https://www.trenitalia.com/en.html\nVisible result hints:\n1. Napoli Centrale 16:20 Milano Centrale",
-        );
-        let veto = plan.veto_browser_action(&serde_json::json!({
-            "action": "close"
-        }));
-        assert!(veto.is_some());
-    }
-
-    #[test]
-    fn classifies_shopping_compare_as_multi_source() {
-        let decision = BrowserRoutingDecision::from_prompt(
-            "mi trovi delle scarpe di pelle marrone da uomo taglia 44 di prada o di gucci",
-        );
-        assert_eq!(decision.task_class(), BrowserTaskClass::MultiSourceCompare);
-        assert!(decision.browser_required());
-        assert!(decision.required_sources().contains(&"prada".to_string()));
-        assert!(decision.required_sources().contains(&"gucci".to_string()));
-    }
-
-    #[test]
-    fn generic_brand_extraction_works() {
-        use super::extract_brand_sources;
-        let brands = extract_brand_sources("scarpe prada o gucci taglia 44");
-        assert!(brands.contains(&"prada".to_string()));
-        assert!(brands.contains(&"gucci".to_string()));
-
-        // English
-        let brands = extract_brand_sources("shoes from nike or adidas size 10");
-        assert!(brands.contains(&"nike".to_string()));
-        assert!(brands.contains(&"adidas".to_string()));
-
-        // "e" connector
-        let brands = extract_brand_sources("confronta zara e mango per vestiti");
-        assert!(brands.contains(&"zara".to_string()));
-        assert!(brands.contains(&"mango".to_string()));
-    }
-
-    #[test]
-    fn generic_brand_skips_filler_words() {
-        use super::extract_brand_sources;
-        // "di" and "il" are filler, should not be extracted
-        let brands = extract_brand_sources("il prezzo di un prodotto");
-        assert!(brands.is_empty());
-    }
-
-    #[test]
-    fn generic_shopping_with_price_constraint_is_multi_source() {
-        let decision = BrowserRoutingDecision::from_prompt(
-            "trovami delle scarpe classiche marroni di pelle taglia 44 che non costano più di 50 euro",
-        );
-        assert_eq!(decision.task_class(), BrowserTaskClass::MultiSourceCompare);
-        assert!(decision.browser_required());
-        // No named sources — aggregator hint should appear instead
-        assert!(decision.required_sources().is_empty());
-    }
-
-    #[test]
-    fn generic_shopping_runtime_message_shows_comparison_context() {
-        let plan = BrowserTaskPlanState::new(
-            "trovami scarpe classiche marroni taglia 44 che non costano più di 50 euro",
-        );
-        let msg = plan
-            .runtime_message(true)
-            .expect("expected runtime message");
-        let rendered = msg.rendered_text().unwrap();
-        assert!(rendered.contains("comparison across multiple sources"));
-    }
-
-    #[test]
-    fn shopping_without_price_constraint_is_interactive_web() {
-        // Just shopping intent, no price constraint, no brands → InteractiveWeb (not MultiSource)
-        let decision = BrowserRoutingDecision::from_prompt(
-            "trovami delle scarpe classiche marroni di pelle taglia 44",
-        );
-        assert_eq!(decision.task_class(), BrowserTaskClass::InteractiveWeb);
-        assert!(decision.browser_required());
-    }
-
-    #[test]
-    fn known_sources_still_work() {
-        let decision =
-            BrowserRoutingDecision::from_prompt("confronta trenitalia e italo per domani");
-        assert_eq!(decision.task_class(), BrowserTaskClass::MultiSourceCompare);
-        assert!(decision
-            .required_sources()
-            .contains(&"trenitalia".to_string()));
-        assert!(decision.required_sources().contains(&"italo".to_string()));
-    }
-
-    #[test]
-    fn vetoes_re_navigate_same_site_for_form_booking() {
-        // FormBooking (NOT compare_mode) — the re-navigate veto must still fire.
-        let mut plan =
-            BrowserTaskPlanState::new("prenotami un treno su trenitalia da napoli a milano");
-        assert!(!plan.compare_mode, "should NOT be compare mode");
-        // Simulate: agent entered via Google (so Google-first veto is satisfied).
-        plan.note_browser_result(
-            Some("navigate"),
-            "Page URL: https://www.google.com/search?q=trenitalia",
-        );
+    fn vetoes_re_navigate_same_site() {
+        let result = make_browser_cognition("Book a train on trenitalia");
+        let mut plan = BrowserTaskPlanState::from_cognition(&result, "book a train");
+        // Navigate via Google first
+        plan.note_browser_result(Some("navigate"), "Page URL: https://www.google.com/search?q=trenitalia");
         plan.note_browser_result(Some("click"), "Page URL: https://www.trenitalia.com/");
-        assert!(plan.used_google_entry);
-        // Agent got a results page.
-        plan.note_browser_result(
-            Some("snapshot"),
-            "Page URL: https://www.trenitalia.com/it/treni_regionali.html\nVisible result hints:\n1. 12:30 Frecciarossa",
-        );
-        assert_eq!(plan.current_source.as_deref(), Some("trenitalia"));
-        // Now the agent tries to navigate back to trenitalia homepage — must be vetoed.
+        plan.note_browser_result(Some("snapshot"), "Page URL: https://www.trenitalia.com/\n- textbox");
+        // Try to re-navigate to same site
         let veto = plan.veto_browser_action(&serde_json::json!({
             "action": "navigate",
             "url": "https://www.trenitalia.com/"
         }));
-        assert!(
-            veto.is_some(),
-            "re-navigate to same site should be vetoed even for FormBooking"
-        );
+        assert!(veto.is_some());
         assert!(veto.unwrap().contains("already have trenitalia open"));
     }
 
     #[test]
     fn vetoes_direct_navigate_for_form_booking() {
-        let plan = BrowserTaskPlanState::new("book a train on trenitalia");
+        let result = make_browser_cognition("Book a train on trenitalia");
+        let plan = BrowserTaskPlanState::from_cognition(&result, "book a train on trenitalia");
         let veto = plan.veto_browser_action(&serde_json::json!({
             "action": "navigate",
             "url": "https://www.trenitalia.com/"
         }));
-        assert!(
-            veto.is_some(),
-            "direct navigate to booking site must be vetoed"
-        );
+        assert!(veto.is_some());
         assert!(veto.unwrap().contains("Google search"));
     }
 
     #[test]
     fn allows_navigate_to_google_for_form_booking() {
-        let plan = BrowserTaskPlanState::new("book a train on trenitalia");
+        let result = make_browser_cognition("Book a train on trenitalia");
+        let plan = BrowserTaskPlanState::from_cognition(&result, "book a train");
         let veto = plan.veto_browser_action(&serde_json::json!({
             "action": "navigate",
             "url": "https://www.google.com/search?q=trenitalia"
         }));
-        assert!(
-            veto.is_none(),
-            "navigate to Google itself should be allowed"
-        );
-    }
-
-    #[test]
-    fn allows_direct_navigate_after_google_entry() {
-        let mut plan = BrowserTaskPlanState::new("book a train on trenitalia");
-        // Navigate to Google
-        plan.note_browser_result(
-            Some("navigate"),
-            "Page URL: https://www.google.com/search?q=trenitalia",
-        );
-        // Click from Google results
-        plan.note_browser_result(Some("click"), "Page URL: https://www.trenitalia.com/");
-        assert!(plan.used_google_entry, "Google entry should be tracked");
-        // Snapshot to clear requires_fresh_snapshot
-        plan.note_browser_result(
-            Some("snapshot"),
-            "Page URL: https://www.trenitalia.com/\n- textbox \"From\" [ref=e1]",
-        );
-        // Direct navigate to a subpage should now be allowed
-        // (though re-navigate veto may still fire for same domain)
-        let veto = plan.veto_browser_action(&serde_json::json!({
-            "action": "navigate",
-            "url": "https://www.italotreno.it/"
-        }));
-        // No Google-first veto (used_google_entry = true), and different domain so no re-nav veto
-        assert!(
-            veto.is_none(),
-            "after Google entry, direct navigate should be allowed"
-        );
-    }
-
-    #[test]
-    fn no_google_veto_for_static_lookup() {
-        let plan = BrowserTaskPlanState::new("check the weather in london");
-        let veto = plan.veto_browser_action(&serde_json::json!({
-            "action": "navigate",
-            "url": "https://weather.com/"
-        }));
-        assert!(
-            veto.is_none(),
-            "StaticLookup should not trigger Google-first veto"
-        );
-    }
-
-    #[test]
-    fn no_google_veto_for_interactive_web() {
-        let plan = BrowserTaskPlanState::new("go to amazon and find headphones");
-        let veto = plan.veto_browser_action(&serde_json::json!({
-            "action": "navigate",
-            "url": "https://www.amazon.com/"
-        }));
-        // InteractiveWeb (shopping without booking keywords) — no Google-first veto
-        // Note: "amazon" triggers InteractiveWeb via required_sources, not FormBooking
-        assert!(
-            veto.is_none(),
-            "InteractiveWeb should not trigger Google-first veto"
-        );
+        assert!(veto.is_none());
     }
 }

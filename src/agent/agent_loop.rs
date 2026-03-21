@@ -14,13 +14,14 @@ use crate::provider::{
 };
 use crate::security::{redact, redact_vault_values};
 use crate::session::SessionManager;
-use crate::skills::{loader::SkillRegistry, suggest_mcp_presets, McpServerPreset};
+use crate::skills::loader::SkillRegistry;
 use crate::storage::Database;
 use crate::tools::{ToolContext, ToolRegistry};
 use crate::utils::text::truncate_utf8_in_place;
 
 use super::browser_context;
-use super::browser_task_plan::{BrowserRoutingDecision, BrowserTaskPlanState};
+use super::browser_task_plan::BrowserTaskPlanState;
+use super::cognition::{self, CognitionParams, CognitionResult};
 use super::context::ContextBuilder;
 use super::context_compactor;
 use super::execution_plan::{ExecutionPlanSnapshot, ExecutionPlanState};
@@ -30,7 +31,6 @@ use super::iteration_budget::{
 };
 use super::memory::MemoryConsolidator;
 use super::skill_activator;
-use super::tool_builder;
 use super::tool_veto;
 use super::verifier::{verify_actions, VerificationResult};
 
@@ -41,15 +41,15 @@ use super::memory_search::MemorySearcher;
 #[cfg(not(feature = "embeddings"))]
 struct MemorySearcher;
 
-/// Core agent loop — full ReAct pattern with tool calling:
-/// reason → act → observe → loop (max N iterations).
+/// Core agent loop — 4-phase pattern per request:
 ///
-/// Follows nanobot's _run_agent_loop pattern:
-/// 1. Build messages from history + system prompt
-/// 2. Call LLM with tool definitions
-/// 3. If tool calls → execute tools → add results → loop
-/// 4. If no tool calls → return final response
-/// 5. Repeat until max_iterations or final response
+/// 1. **INGRESS**: prepare turn (attachments, model selection)
+/// 2. **COGNITION**: mini ReAct loop with discovery tools analyzes intent →
+///    produces understanding, plan, constraints, and selects relevant
+///    tools/skills/memory/RAG context. On failure, falls back to full tool set.
+/// 3. **EXECUTION**: ReAct loop (reason → act → observe) with LLM + tool calling,
+///    max N iterations with dynamic budget extension
+/// 4. **POST-PROCESSING**: memory consolidation, usage tracking
 pub struct AgentLoop {
     /// Current LLM provider — rebuilt lazily when `config.agent.model` changes.
     /// Wrapped in RwLock so we can swap it at runtime without &mut self.
@@ -476,7 +476,6 @@ impl AgentLoop {
             .user_message
             .rendered_text()
             .unwrap_or_default();
-        let browser_routing = BrowserRoutingDecision::from_prompt(&prompt_content);
         let selected_model = prepared_turn.selected_model.clone();
         let using_primary_model = selected_model == config.agent.model;
 
@@ -579,101 +578,6 @@ impl AgentLoop {
             .get_history(session_key, config.agent.memory_window)
             .await?;
 
-        // Search for relevant past memories and inject into context (Layer 3.5)
-        // Only available with embeddings feature
-        #[cfg(feature = "embeddings")]
-        if let Some(ref searcher_mutex) = self.memory_searcher {
-            let memory_contact_id = self.resolve_contact_from_session(session_key).await;
-            let mut searcher = searcher_mutex.lock().await;
-            match searcher
-                .search_scoped_full(
-                    &prompt_content,
-                    5,
-                    memory_contact_id,
-                    self.agent_id.as_deref(),
-                )
-                .await
-            {
-                Ok(results) if !results.is_empty() => {
-                    let memories_text = results
-                        .iter()
-                        .map(|r| {
-                            format!(
-                                "- [{}] {}: {}",
-                                r.chunk.date, r.chunk.memory_type, r.chunk.content
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    self.context.set_relevant_memories(memories_text).await;
-                    tracing::debug!(
-                        results = results.len(),
-                        "Injected relevant memories into context"
-                    );
-                }
-                Ok(_) => {
-                    self.context.set_relevant_memories(String::new()).await;
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Memory search failed, continuing without");
-                    self.context.set_relevant_memories(String::new()).await;
-                }
-            }
-        }
-
-        // Search RAG knowledge base and inject into context
-        #[cfg(feature = "embeddings")]
-        if let Some(ref rag_mutex) = self.rag_engine {
-            let results_per_query = config.knowledge.results_per_query;
-            let mut rag = rag_mutex.lock().await;
-            match rag.search(&prompt_content, results_per_query).await {
-                Ok(results) if !results.is_empty() => {
-                    let knowledge_text = results
-                        .iter()
-                        .map(|r| {
-                            // SEC-11: scan for prompt injection in RAG chunks
-                            if let Some(pattern) =
-                                crate::rag::sensitive::detect_injection(&r.chunk.content)
-                            {
-                                tracing::warn!(
-                                    source = %r.source_file,
-                                    chunk = r.chunk.chunk_index,
-                                    pattern = %pattern,
-                                    "Prompt injection detected in RAG chunk — redacted"
-                                );
-                                format!(
-                                    "- [RAG: {} (chunk {})] [REDACTED — prompt injection detected]",
-                                    r.source_file, r.chunk.chunk_index
-                                )
-                            } else {
-                                format!(
-                                    "- [RAG: {} (chunk {})] {}",
-                                    r.source_file, r.chunk.chunk_index, r.chunk.content
-                                )
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    self.context.set_rag_knowledge(knowledge_text).await;
-                    tracing::debug!(
-                        results = results.len(),
-                        "Injected RAG knowledge into context"
-                    );
-                }
-                Ok(_) => {
-                    self.context.set_rag_knowledge(String::new()).await;
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "RAG search failed, continuing without");
-                    self.context.set_rag_knowledge(String::new()).await;
-                }
-            }
-        }
-
-        self.context
-            .set_mcp_suggestions(build_mcp_suggestions(&config, &prompt_content))
-            .await;
-
         // Single contact lookup — used for both contact context and persona resolution
         let channel_key = if channel.starts_with("email:") {
             "email"
@@ -697,10 +601,10 @@ impl AgentLoop {
         } else {
             String::new()
         };
-        self.context.set_contact_context(contact_ctx).await;
+        self.context.set_contact_context(contact_ctx.clone()).await;
 
         // Resolve persona (contact > channel > "bot") and inject into prompt
-        {
+        let contact_summary = {
             let config = self.config.read().await;
             let behavior = config.channels.behavior_for(channel);
             let ch_persona = behavior.map(|b| b.persona()).unwrap_or("bot");
@@ -712,7 +616,7 @@ impl AgentLoop {
                 ch_tone,
                 user_name,
             );
-            let mut persona_text = persona.prompt_prefix;
+            let mut persona_text = persona.prompt_prefix.clone();
             if !persona.tone_of_voice.is_empty() {
                 if !persona_text.is_empty() {
                     persona_text.push('\n');
@@ -720,7 +624,13 @@ impl AgentLoop {
                 persona_text.push_str(&format!("Tone of voice: {}", persona.tone_of_voice));
             }
             self.context.set_persona_context(persona_text).await;
-        }
+            // Return a short contact summary for cognition
+            if let Some(ref c) = contact {
+                format!("{} ({})", c.name, channel)
+            } else {
+                channel.to_string()
+            }
+        };
 
         // Per-agent instructions (from AgentDefinition).
         if !self.agent_instructions.is_empty() {
@@ -729,14 +639,100 @@ impl AgentLoop {
                 .await;
         }
 
-        // Build tool definitions (built-in tools + skills, with filters applied)
-        let tool_set = tool_builder::build_tool_definitions(
+        // === COGNITION PHASE ===
+        // A mini-agent analyzes the user's intent and discovers relevant
+        // tools/memory/RAG before the execution loop. On failure, falls
+        // back to a full-context result with all tools available.
+        let memory_contact_id = self.resolve_contact_from_session(session_key).await;
+        let cognition_result: CognitionResult = {
+            let params = CognitionParams {
+                user_prompt: &prompt_content,
+                config: &config,
+                tool_registry: &self.tool_registry,
+                skill_registry: self.skill_registry.as_deref(),
+                #[cfg(feature = "embeddings")]
+                memory_searcher: self.memory_searcher.as_ref(),
+                #[cfg(feature = "embeddings")]
+                rag_engine: self.rag_engine.as_ref(),
+                contact_summary: &contact_summary,
+                channel,
+                agent_id: self.agent_id.as_deref(),
+                contact_id: memory_contact_id,
+                stream_tx: stream_tx.as_ref(),
+                cognition_model: if config.agent.cognition_model.is_empty() {
+                    None
+                } else {
+                    Some(&config.agent.cognition_model)
+                },
+                max_iterations: config.agent.cognition_max_iterations,
+                timeout_secs: config.agent.cognition_timeout_secs,
+            };
+            match cognition::run_cognition(params).await {
+                Some(result) => result,
+                None => {
+                    tracing::warn!("Cognition failed — using full tool set fallback");
+                    cognition::fallback_full_context(&self.tool_registry).await
+                }
+            }
+        };
+
+        // Handle answer_directly (simple requests answered by cognition)
+        if cognition_result.answer_directly {
+            if let Some(ref answer) = cognition_result.direct_answer {
+                self.session_manager
+                    .add_message(session_key, "user", content)
+                    .await?;
+                self.session_manager
+                    .add_message(session_key, "assistant", answer)
+                    .await?;
+                // Stream the direct answer to the frontend
+                if let Some(ref tx) = stream_tx {
+                    let _ = tx
+                        .send(crate::provider::StreamChunk {
+                            delta: answer.clone(),
+                            done: true,
+                            event_type: None,
+                            tool_call_data: None,
+                        })
+                        .await;
+                }
+                self.context.clear_cognition_context().await;
+                return Ok(answer.clone());
+            }
+        }
+
+        // === CONTEXT ASSEMBLY (driven by cognition result) ===
+        self.context
+            .set_relevant_memories(cognition_result.memory_context.clone().unwrap_or_default())
+            .await;
+        self.context
+            .set_rag_knowledge(cognition_result.rag_context.clone().unwrap_or_default())
+            .await;
+        // MCP suggestions: only show not-yet-connected services
+        let mcp_text = cognition_result
+            .mcp_tools
+            .iter()
+            .filter(|m| !m.connected)
+            .map(|m| format!("- {} (not connected)", m.name))
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.context.set_mcp_suggestions(mcp_text).await;
+        // Inject cognition understanding/plan/constraints into system prompt
+        self.context
+            .set_cognition_context(
+                cognition_result.understanding.clone(),
+                cognition_result.plan.clone(),
+                cognition_result.constraints.clone(),
+            )
+            .await;
+
+        // Build tool definitions from cognition result
+        let tool_set = cognition::build_selective_tool_defs(
             &self.tool_registry,
             self.skill_registry.as_deref(),
+            &cognition_result.tools,
+            &cognition_result.skills,
             &blocked_set,
-            &self.allowed_tools,
-            &self.allowed_skills,
-            &browser_routing,
             xml_mode,
         )
         .await;
@@ -757,11 +753,12 @@ impl AgentLoop {
 
         let browser_available =
             config.browser.enabled && crate::browser::has_browser_tools(&available_tool_names);
-        if browser_routing.browser_required() && !browser_available {
+        let browser_required = cognition_result.tools.iter().any(|t| t.name == "browser");
+        if browser_required && !browser_available {
             return Ok(format!(
                 "This request requires interactive browser automation ({}) but the browser is unavailable. \
                  Enable it in [browser] config and ensure @playwright/mcp is accessible via npx.",
-                browser_routing.reason()
+                cognition_result.understanding
             ));
         }
 
@@ -854,8 +851,17 @@ impl AgentLoop {
             std::collections::HashSet::new();
         let mut total_usage = Usage::default();
         let mut execution_plan = ExecutionPlanState::new(&prompt_content);
-        let mut browser_task_plan = BrowserTaskPlanState::new(&prompt_content);
+        let mut browser_task_plan =
+            BrowserTaskPlanState::from_cognition(&cognition_result, &prompt_content);
         let mut last_plan_payload: Option<String> = None;
+        // Seed execution plan with cognition plan steps so the UI shows them immediately
+        {
+            if !cognition_result.plan.is_empty() {
+                execution_plan.set_explicit_plan(cognition_result.plan.clone(), None);
+                let snap = execution_plan.snapshot();
+                emit_plan_update(stream_tx.as_ref(), &snap, &mut last_plan_payload).await;
+            }
+        }
         let base_max_iterations = config.agent.max_iterations.max(1);
         // Safety valve only — stall detection is the real limiter.
         // Browser tasks need 40-80+ iterations for complex forms;
@@ -1163,7 +1169,6 @@ impl AgentLoop {
                         &tool_call.name,
                         &prompt_content,
                         &available_tool_names,
-                        &browser_routing,
                         &tools_used,
                     );
                     if let Some(message) = vetoed {
@@ -1242,6 +1247,7 @@ impl AgentLoop {
                                     id: tool_call.id.clone(),
                                     name: tool_call.name.clone(),
                                     arguments: tool_call.arguments.clone(),
+                                    result: None,
                                 }),
                             })
                             .await
@@ -1414,21 +1420,6 @@ impl AgentLoop {
                         }
                     };
 
-                    // Notify frontend that tool execution finished
-                    if let Some(ref tx) = stream_tx {
-                        if let Err(e) = tx
-                            .send(crate::provider::StreamChunk {
-                                delta: tool_call.name.clone(),
-                                done: false,
-                                event_type: Some("tool_end".to_string()),
-                                tool_call_data: None,
-                            })
-                            .await
-                        {
-                            tracing::warn!(error = %e, "Failed to send tool_end stream event");
-                        }
-                    }
-
                     // Track vault retrieve successes so the leak filter skips them
                     if tool_call.name == "vault"
                         && !result.is_error
@@ -1443,6 +1434,29 @@ impl AgentLoop {
                     // For all other tools, apply model context formatting.
                     let tool_output =
                         context_compactor::tool_result_for_model_context(&tool_call.name, &result.output);
+
+                    // Notify frontend that tool execution finished (with truncated result)
+                    if let Some(ref tx) = stream_tx {
+                        let truncated = crate::utils::text::truncate_str(
+                            &result.output, 200, "…",
+                        );
+                        if let Err(e) = tx
+                            .send(crate::provider::StreamChunk {
+                                delta: tool_call.name.clone(),
+                                done: false,
+                                event_type: Some("tool_end".to_string()),
+                                tool_call_data: Some(crate::provider::ToolCallData {
+                                    id: tool_call.id.clone(),
+                                    name: tool_call.name.clone(),
+                                    arguments: serde_json::Value::Null,
+                                    result: Some(truncated.to_string()),
+                                }),
+                            })
+                            .await
+                        {
+                            tracing::warn!(error = %e, "Failed to send tool_end stream event");
+                        }
+                    }
 
                     messages.push(ChatMessage::tool_result(
                         &tool_call.id,
@@ -1477,6 +1491,7 @@ impl AgentLoop {
                         &result.output,
                         result.is_error,
                     );
+                    execution_plan.auto_advance_explicit_steps(&tool_call.name);
                     if let Some(action) = browser_action {
                         browser_task_plan.note_browser_result(Some(action), &result.output);
                         // Update seen_results flag for stage-aware snapshot hints
@@ -1683,6 +1698,17 @@ impl AgentLoop {
                     }
                 }
             }
+        }
+
+        // Mark all plan steps as completed now that execution is done
+        if execution_plan.has_explicit_plan() {
+            execution_plan.mark_all_completed();
+            emit_plan_update(
+                stream_tx.as_ref(),
+                &merged_execution_snapshot(&execution_plan, &browser_task_plan),
+                &mut last_plan_payload,
+            )
+            .await;
         }
 
         let response_text = if token_budget_exhausted && final_content.is_none() {
@@ -2030,78 +2056,6 @@ impl AgentLoop {
     }
 }
 
-fn build_mcp_suggestions(config: &Config, content: &str) -> String {
-    let suggestions = suggest_mcp_presets(content);
-    if suggestions.is_empty() {
-        return String::new();
-    }
-
-    suggestions
-        .into_iter()
-        .filter(|preset| !has_configured_mcp_server(config, preset))
-        .take(2)
-        .map(|preset| {
-            format!(
-                "- {} (`{}`): suggest connecting it from the Connect Services page (/mcp) or with `homun mcp setup {}` if the user wants {}.",
-                preset.display_name,
-                preset.id,
-                preset.id,
-                mcp_user_value_hint(&preset)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn has_configured_mcp_server(config: &Config, preset: &McpServerPreset) -> bool {
-    config.mcp.servers.iter().any(|(name, server)| {
-        if !server.enabled {
-            return false;
-        }
-
-        let searchable = format!(
-            "{} {} {} {}",
-            name,
-            server.command.as_deref().unwrap_or_default(),
-            server.args.join(" "),
-            server.url.as_deref().unwrap_or_default()
-        )
-        .to_lowercase();
-
-        searchable.contains(&preset.id.to_lowercase())
-            || preset
-                .aliases
-                .iter()
-                .any(|alias| searchable.contains(&alias.to_lowercase()))
-    })
-}
-
-fn mcp_user_value_hint(preset: &McpServerPreset) -> &'static str {
-    let id = preset.id.to_lowercase();
-    if id.contains("gmail") {
-        return "email access";
-    }
-    if id.contains("calendar") {
-        return "calendar access";
-    }
-    if id.contains("github") {
-        return "repository or issue access";
-    }
-    if id.contains("notion") {
-        return "workspace or notes access";
-    }
-    if id.contains("fetch") {
-        return "web page access";
-    }
-    if id.contains("filesystem") {
-        return "local file access";
-    }
-    if id.contains("slack") {
-        return "Slack channel and message access";
-    }
-    "that service"
-}
-
 // tool_call_signature, maybe_extend_iteration_budget, detect_cycle,
 // normalize_signature_for_cycle → iteration_budget.rs
 
@@ -2131,11 +2085,9 @@ mod tests {
     use crate::agent::iteration_budget::{
         maybe_extend_iteration_budget, IterationBudgetState, ToolExecutionSummary,
     };
-    // Snapshot compaction and autocomplete functions moved to tools::browser
-    use crate::agent::browser_task_plan::BrowserRoutingDecision;
-    use crate::config::ModelCapabilities;
     #[cfg(feature = "browser")]
     use crate::tools::browser::{compact_browser_snapshot, extract_autocomplete_suggestions};
+    use crate::config::ModelCapabilities;
     use std::collections::HashSet;
 
     fn tools(names: &[&str]) -> HashSet<String> {
@@ -2143,103 +2095,36 @@ mod tests {
     }
 
     #[test]
-    fn vetoes_weather_for_sports_schedule_queries() {
+    fn vetoes_web_fetch_before_web_search() {
         let veto = veto_tool_call(
-            "weather",
-            "oggi gioca il Napoli?",
-            &tools(&["weather", "web_search", "browser"]),
-            &BrowserRoutingDecision::from_prompt("oggi gioca il Napoli?"),
+            "web_fetch",
+            "cercami notizie sul Napoli",
+            &tools(&["web_fetch", "web_search"]),
             &[],
         );
         assert!(veto.is_some());
     }
 
     #[test]
-    fn allows_weather_for_actual_forecast_queries() {
+    fn allows_web_fetch_after_web_search() {
         let veto = veto_tool_call(
-            "weather",
-            "che tempo fa a Napoli oggi?",
-            &tools(&["weather", "web_search"]),
-            &BrowserRoutingDecision::from_prompt("che tempo fa a Napoli oggi?"),
-            &[],
-        );
-        assert!(veto.is_none());
-    }
-
-    #[test]
-    fn vetoes_browser_for_routine_research_when_web_search_exists() {
-        let veto = veto_tool_call(
-            "browser",
-            "cerca se oggi gioca il Napoli",
-            &tools(&["browser", "web_search", "web_fetch"]),
-            &BrowserRoutingDecision::from_prompt("cerca se oggi gioca il Napoli"),
-            &[],
-        );
-        assert!(veto.is_some());
-    }
-
-    #[test]
-    fn allows_browser_when_web_search_already_tried() {
-        let veto = veto_tool_call(
-            "browser",
-            "cercami le case di cura a tortora marina",
-            &tools(&["browser", "web_search", "web_fetch"]),
-            &BrowserRoutingDecision::from_prompt("cercami le case di cura a tortora marina"),
+            "web_fetch",
+            "cercami notizie sul Napoli",
+            &tools(&["web_fetch", "web_search"]),
             &["web_search".to_string()],
         );
         assert!(veto.is_none());
     }
 
     #[test]
-    fn allows_browser_when_user_explicitly_requests_it() {
+    fn allows_web_fetch_with_explicit_url() {
         let veto = veto_tool_call(
-            "browser",
-            "usa il browser per cercarlo",
-            &tools(&["browser", "web_search", "web_fetch"]),
-            &BrowserRoutingDecision::from_prompt("usa il browser per cercarlo"),
+            "web_fetch",
+            "leggi https://example.com/article",
+            &tools(&["web_fetch", "web_search"]),
             &[],
         );
         assert!(veto.is_none());
-    }
-
-    #[test]
-    fn vetoes_shell_for_web_lookup_when_web_tools_exist() {
-        let veto = veto_tool_call(
-            "shell",
-            "cerca online il calendario del Napoli",
-            &tools(&["shell", "web_search", "browser"]),
-            &BrowserRoutingDecision::from_prompt("cerca online il calendario del Napoli"),
-            &[],
-        );
-        assert!(veto.is_some());
-    }
-
-    #[test]
-    fn vetoes_web_fetch_for_browser_first_booking_tasks() {
-        let prompt =
-            "mi trovi un treno per domani da napoli a milano confrontando trenitalia e italo";
-        let veto = veto_tool_call(
-            "web_fetch",
-            prompt,
-            &tools(&["browser", "web_fetch", "web_search"]),
-            &BrowserRoutingDecision::from_prompt(prompt),
-            &[],
-        );
-        assert!(veto.is_some());
-    }
-
-    #[test]
-    fn vetoes_web_search_when_named_interactive_sources_are_already_known() {
-        let prompt =
-            "mi trovi un treno per domani da napoli a milano confrontando trenitalia e italo";
-        let veto = veto_tool_call(
-            "web_search",
-            prompt,
-            &tools(&["browser", "web_fetch", "web_search"]),
-            &BrowserRoutingDecision::from_prompt(prompt),
-            &[],
-        );
-        assert!(veto.is_some());
     }
 
     #[test]

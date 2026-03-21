@@ -1,6 +1,7 @@
 mod agent_loop;
 mod attachment_router;
 pub mod auth;
+pub mod cognition;
 pub mod bootstrap_watcher;
 mod browser_context;
 mod browser_task_plan;

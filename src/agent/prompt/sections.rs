@@ -153,132 +153,42 @@ impl PromptSection for ToolsSection {
             prompt.push_str("```\n");
         }
 
-        // Tool routing rules — ALWAYS included based on registered tools,
-        // regardless of native vs XML mode. In native mode, tool definitions
-        // go via the API parameter but the LLM still needs behavioral guidance.
+        // Inject cognition understanding/plan/constraints into the prompt.
+        // The cognition phase already decided which tools are needed.
+        if !ctx.cognition_understanding.is_empty() {
+            prompt.push_str("\n### Task Analysis\n\n");
+            prompt.push_str(&format!(
+                "**Understanding**: {}\n\n",
+                ctx.cognition_understanding
+            ));
+            if !ctx.cognition_plan.is_empty() {
+                prompt.push_str("**Suggested approach**:\n");
+                for (i, step) in ctx.cognition_plan.iter().enumerate() {
+                    prompt.push_str(&format!("{}. {}\n", i + 1, step));
+                }
+                prompt.push('\n');
+            }
+            if !ctx.cognition_constraints.is_empty() {
+                prompt.push_str(&format!(
+                    "**Constraints**: {}\n\n",
+                    ctx.cognition_constraints.join(", ")
+                ));
+            }
+        }
+
+        // Browser workflow essentials — always present when browser tools are available
         let has_browser = ctx
             .registered_tool_names
             .iter()
             .any(|n| crate::browser::is_browser_tool(n));
-        let has_web_search = ctx.registered_tool_names.iter().any(|n| n == "web_search");
-        let has_web_fetch = ctx.registered_tool_names.iter().any(|n| n == "web_fetch");
-        let has_weather = ctx.registered_tool_names.iter().any(|n| n == "weather");
-        let has_create_automation = ctx
-            .registered_tool_names
-            .iter()
-            .any(|n| n == "create_automation");
-        let has_read_email_inbox = ctx
-            .registered_tool_names
-            .iter()
-            .any(|n| n == "read_email_inbox");
-        let has_workflow = ctx.registered_tool_names.iter().any(|n| n == "workflow");
-
-        if has_browser || has_web_search || has_web_fetch {
-            prompt.push_str("\n### Tool Routing Rules\n\n");
-            if has_web_search {
-                prompt.push_str(
-                    "- **ALWAYS** use **web_search** first for any web information need. \
-                     Do not call web_fetch on a URL unless (a) the user explicitly provided \
-                     that URL, or (b) you found it via a prior web_search.\n\
-                     - When adding a year to a search query, use ONLY the current year (see System section). \
-                     Never default to 2024 or 2025. If the year is irrelevant, omit it.\n",
-                );
-            }
-            if has_web_fetch {
-                prompt.push_str(
-                    "- Use **web_fetch** to read content from a known URL. \
-                     If web_fetch fails with a JavaScript/rendering error, retry with the **browser** tool.\n",
-                );
-            }
-            if has_browser {
-                prompt.push_str(
-                    "- Use **browser** when the task requires interaction with a website: navigating dynamic pages, clicking, typing, logging in, uploading files, or reading JS-rendered content.\n\
-                     - For travel/booking flows, multi-site comparisons, or known interactive sites, start with browser first.\n\
-                     - Do NOT open the browser for routine static research if **web_search** or **web_fetch** can answer the request more directly.\n\
-                     - **NEVER navigate to URLs you constructed or guessed**. Only use URLs from: \
-                     (a) search engine results, (b) links visible on the current page, (c) the user's explicit request. \
-                     If you need to find something on a site, use its search form.\n",
-                );
-            }
-            if !has_web_search && has_browser {
-                prompt.push_str(
-                    "- No **web_search** tool is available. If you need to search the web, use browser({action: \"navigate\", url: \"https://google.com\"}) to open a search engine.\n",
-                );
-            } else if !has_web_fetch && has_browser {
-                prompt.push_str(
-                    "- If you already know the URL but **web_fetch** is unavailable, use browser({action: \"navigate\", url: \"...\"}) to open and read the page.\n",
-                );
-            }
-            if has_weather {
-                prompt.push_str("- Use **weather** only for forecasts and conditions.\n");
-            }
-
-            // Browser workflow guidance — lightweight cognitive rules.
-            // Heavy form-level reasoning is injected by BrowserTool in snapshot output
-            // (see form plan in tools/browser.rs).
-            if has_browser {
-                prompt.push_str(
-                    "\n### Browser Workflow\n\n\
-                     1. Navigate to the site — the snapshot is returned automatically\n\
-                     2. When you see a form, **stop and plan** before touching any field:\n\
-                        - Read EVERY field's accessible name (the quoted text, e.g. textbox \"Email\" [ref=e5])\n\
-                        - Also read nearby label/text lines for context on unnamed fields\n\
-                        - Write a mapping: field name → ref → value from user's request\n\
-                        - Convert vague terms: \"domani\"→actual date, \"mattina\"→06-12, \"sera\"→18-23\n\
-                        - If a required value is missing, ask the user\n\
-                     3. Fill ONE field at a time. Before each type/fill call, confirm the ref matches the field you intend to fill\n\
-                     4. **Autocomplete fields** (combobox): type a FEW characters → read suggestions → click the match. Do NOT type the full value\n\
-                     5. After filling, snapshot to verify values landed in the correct fields before submitting\n\
-                     6. **NEVER re-navigate** to a site you already have open. When the user confirms an action \
-                        (e.g. \"yes, book it\"), continue from the CURRENT page — click buttons/links on it. \
-                        Do NOT call navigate() again to the same site. Use snapshot() if you need to see the current state.\n\
-                     7. **Booking sites** (travel, hotels, tickets): navigate via Google search first \
-                        (e.g. google.com/search?q=sitename, then click the organic result) to establish a natural session.\n\
-                     8. **Deep research tasks** (finding products, services, listings across multiple sites):\n\
-                        - Search Google with a specific query first\n\
-                        - Visit at least 4-5 sites from Google results\n\
-                        - On each site, use the site's SEARCH FORM — NEVER construct internal URLs yourself\n\
-                        - Check for pagination (next page) on result pages\n\
-                        - Extract structured data: links, prices, images, contact info, descriptions\n\
-                        - Do NOT stop after 1-2 sites — thorough research requires multiple sources\n\
-                     The browser maintains a persistent profile (cookies, local storage). \
-                     If a site was previously visited, session data may still be available.\n",
-                );
-            }
-        }
-
-        if has_create_automation {
-            prompt.push_str("\n### Automation Rules\n\n");
+        if has_browser {
             prompt.push_str(
-                "When the user asks for recurring/proactive behavior, call **create_automation** instead of answering as one-off.\n\
-                 Triggers include phrases like: 'ogni', 'every', 'tutti i giorni', 'ogni mattina', 'each week', 'monitor'.\n\
-                 Convert natural timing into tool schedule format before the call (`cron:...` or `every:SECONDS`).\n\
-                 After tool success, confirm what was created (name + schedule + destination).\n",
-            );
-            prompt.push_str(
-                "If a request sounds repetitive but the user did not explicitly ask recurring execution, offer it proactively in one short sentence.\n",
-            );
-        }
-
-        if has_read_email_inbox {
-            prompt.push_str("\n### Email Rules\n\n");
-            prompt.push_str(
-                "When asked to read/check/summarize inbox emails, use **read_email_inbox** first.\n\
-                 Do not claim missing access before attempting this tool.\n",
-            );
-        }
-
-        if has_workflow {
-            prompt.push_str("\n### Workflow Rules\n\n");
-            prompt.push_str(
-                "Use the **workflow** tool for complex, multi-step tasks that need autonomous orchestration.\n\
-                 Workflows are ideal when a task has 3+ distinct steps that each require their own reasoning \
-                 (e.g. 'research competitors, then analyze findings, then write a report').\n\
-                 Each step runs independently with its own agent session, results pass between steps automatically, \
-                 and steps can require human approval before proceeding.\n\
-                 Use `action: \"create\"` with a list of steps (name + instruction). \
-                 Use `action: \"list\"` or `action: \"status\"` to check progress.\n\
-                 Do NOT use workflow for simple single-step tasks — just answer directly.\n",
+                "### Browser Essentials\n\n\
+                 - After navigating, snapshot before interacting with page elements\n\
+                 - Autocomplete fields: type a FEW characters → read suggestions → click the match\n\
+                 - NEVER re-navigate to a site you already have open — use snapshot() instead\n\
+                 - NEVER navigate to URLs you constructed — only use URLs from search results or visible links\n\
+                 - Booking sites: navigate via Google search first to establish a natural session\n",
             );
         }
 
@@ -694,6 +604,9 @@ mod tests {
             contact_context: "",
             persona_context: "",
             agent_instructions: "",
+            cognition_understanding: "",
+            cognition_plan: &[],
+            cognition_constraints: &[],
         }
     }
 
@@ -765,54 +678,25 @@ mod tests {
     #[test]
     fn test_tools_section_native_mode_with_browser() {
         // In native mode, ctx.tools is empty but registered_tool_names has browser MCP tools.
-        // Routing rules must still appear.
+        // Browser essentials should appear.
         let section = ToolsSection;
         let tool_names = vec!["browser".to_string(), "shell".to_string()];
-        let ctx = PromptContext {
-            tools: &[], // native mode: tools go via API, not in prompt
-            registered_tool_names: &tool_names,
-            ..make_ctx()
-        };
-        let result = section.build(&ctx).unwrap();
-        assert!(
-            result.contains("Tool Routing Rules"),
-            "Routing rules must be visible in native mode"
-        );
-        assert!(
-            result.contains("Browser Workflow"),
-            "Browser workflow must be visible in native mode"
-        );
-        assert!(
-            result.contains("stop and plan"),
-            "Form reasoning instruction must be visible"
-        );
-        assert!(
-            result.contains("Autocomplete"),
-            "Autocomplete rule must be visible in browser workflow"
-        );
-        // Should NOT have XML tool call format
-        assert!(!result.contains("Tool Call Format"));
-    }
-
-    #[test]
-    fn test_tools_section_prefers_web_search_over_browser_for_research() {
-        let section = ToolsSection;
-        let tool_names = vec![
-            "browser".to_string(),
-            "web_search".to_string(),
-            "web_fetch".to_string(),
-        ];
         let ctx = PromptContext {
             tools: &[],
             registered_tool_names: &tool_names,
             ..make_ctx()
         };
         let result = section.build(&ctx).unwrap();
-        assert!(result.contains("ALWAYS** use **web_search** first"));
-        assert!(result.contains("web_fetch** to read content from a known URL"));
-        assert!(result.contains("JavaScript/rendering error, retry with the **browser**"));
-        assert!(result.contains("Do NOT open the browser for routine static research"));
-        assert!(result.contains("travel/booking flows"));
+        assert!(
+            result.contains("Browser Essentials"),
+            "Browser essentials must be visible in native mode"
+        );
+        assert!(
+            result.contains("Autocomplete"),
+            "Autocomplete rule must be visible"
+        );
+        // Should NOT have XML tool call format
+        assert!(!result.contains("Tool Call Format"));
     }
 
     #[test]
@@ -883,5 +767,47 @@ mod tests {
         let ctx = make_ctx().with_mode(PromptMode::None);
         let result = section.build(&ctx).unwrap();
         assert_eq!(result, "You are Homun, a personal AI assistant.");
+    }
+
+    #[test]
+    fn test_tools_section_with_cognition_injects_understanding() {
+        let section = ToolsSection;
+        let plan = vec!["Search for trains".to_string(), "Compare prices".to_string()];
+        let constraints = vec!["Tomorrow morning".to_string()];
+        let tool_names = vec![
+            "browser".to_string(),
+            "web_search".to_string(),
+        ];
+        let ctx = PromptContext {
+            registered_tool_names: &tool_names,
+            cognition_understanding: "User wants to find train tickets from Rome to Milan",
+            cognition_plan: &plan,
+            cognition_constraints: &constraints,
+            ..make_ctx()
+        };
+        let result = section.build(&ctx).unwrap();
+        assert!(result.contains("Task Analysis"), "Should have Task Analysis section");
+        assert!(result.contains("find train tickets"), "Should inject understanding");
+        assert!(result.contains("Search for trains"), "Should inject plan");
+        assert!(result.contains("Tomorrow morning"), "Should inject constraints");
+        assert!(result.contains("Browser Essentials"), "Should have browser essentials");
+    }
+
+    #[test]
+    fn test_tools_section_without_cognition_still_shows_browser_essentials() {
+        let section = ToolsSection;
+        let tool_names = vec![
+            "browser".to_string(),
+            "web_search".to_string(),
+        ];
+        let ctx = PromptContext {
+            registered_tool_names: &tool_names,
+            cognition_understanding: "", // fallback scenario
+            ..make_ctx()
+        };
+        let result = section.build(&ctx).unwrap();
+        // Browser essentials always appear when browser tools are available
+        assert!(result.contains("Browser Essentials"), "Should have browser essentials");
+        assert!(!result.contains("Task Analysis"), "Should NOT have Task Analysis without cognition");
     }
 }
