@@ -169,32 +169,112 @@ function renderContent(el, content, role) {
         );
 
         const rawHtml = marked.parse(processedContent);
-        // DOMPurify sanitizes the HTML to prevent XSS attacks (safe: uses sanitize)
-        el.innerHTML = DOMPurify.sanitize(rawHtml);
+        // safe: DOMPurify sanitizes all HTML; ADD_ATTR allows target for new-tab links
+        const sanitized = DOMPurify.sanitize(rawHtml, { ADD_ATTR: ['target'] });
+        el.innerHTML = sanitized; // safe: sanitized by DOMPurify above
 
-        // Add click-to-expand for screenshots
-        el.querySelectorAll('img[src*="/api/v1/browser/screenshots/"]').forEach(img => {
-            img.style.cursor = 'pointer';
-            img.style.maxWidth = '100%';
-            img.style.borderRadius = '8px';
-            img.style.marginTop = '8px';
-            img.style.boxShadow = 'var(--shadow-md)';
-            img.addEventListener('click', () => {
-                window.open(img.src, '_blank');
-            });
+        // All links open in new tab
+        el.querySelectorAll('a[href]').forEach(a => {
+            a.setAttribute('target', '_blank');
+            a.setAttribute('rel', 'noopener noreferrer');
         });
+
+        // Images: click-to-expand lightbox overlay
+        el.querySelectorAll('img').forEach(img => {
+            img.style.cursor = 'zoom-in';
+            img.addEventListener('click', () => openImageLightbox(img.src, img.alt));
+        });
+
+        // Syntax highlighting
+        if (typeof hljs !== 'undefined') {
+            el.querySelectorAll('pre code').forEach(block => {
+                hljs.highlightElement(block);
+            });
+        }
+
+        // Code blocks: add copy button
+        el.querySelectorAll('pre').forEach(pre => {
+            if (pre.querySelector('.chat-code-copy-btn')) return;
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'chat-code-copy-btn';
+            btn.textContent = 'Copy';
+            btn.addEventListener('click', () => {
+                const code = pre.querySelector('code');
+                navigator.clipboard.writeText(code ? code.textContent : pre.textContent);
+                btn.textContent = 'Copied!';
+                setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+            });
+            pre.style.position = 'relative';
+            pre.appendChild(btn);
+        });
+    } else if (role === 'user' && typeof DOMPurify !== 'undefined') {
+        // User messages: light inline markdown (bold, italic, code) but no block elements
+        let html = escapeHtml(content);
+        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+        html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+        // safe: escapeHtml first, then only add known safe tags
+        el.innerHTML = DOMPurify.sanitize(html, { ALLOWED_TAGS: ['code', 'strong', 'em'] });
     } else {
         el.textContent = content;
     }
 }
 
+/** Whether the user is near the bottom of the scroll area. */
+let userNearBottom = true;
+/** Flag to ignore scroll events triggered by programmatic scrollTo. */
+let programmaticScroll = false;
+
+function isNearBottom(scroller) {
+    return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
+}
+
+/** Only auto-scroll if the user hasn't scrolled up. */
 function scrollThreadToBottom() {
     const scroller = threadWrapEl || messagesEl;
     if (!scroller) return;
-    window.requestAnimationFrame(() => {
-        scroller.scrollTop = scroller.scrollHeight;
-    });
+    if (!userNearBottom) {
+        syncScrollBtn();
+        return;
+    }
+    programmaticScroll = true;
+    scroller.scrollTop = scroller.scrollHeight;
+    syncScrollBtn();
+    // Reset flag after browser processes the scroll
+    requestAnimationFrame(() => { programmaticScroll = false; });
 }
+
+/** Force scroll to bottom (user action: send message, click arrow, load history). */
+function forceScrollToBottom() {
+    const scroller = threadWrapEl || messagesEl;
+    if (!scroller) return;
+    userNearBottom = true;
+    programmaticScroll = true;
+    scroller.scrollTop = scroller.scrollHeight;
+    syncScrollBtn();
+    requestAnimationFrame(() => { programmaticScroll = false; });
+}
+
+/** Show/hide the scroll-to-bottom floating button. */
+function syncScrollBtn() {
+    const btn = document.getElementById('chat-scroll-bottom');
+    if (!btn) return;
+    const scroller = threadWrapEl || messagesEl;
+    if (!scroller) return;
+    btn.hidden = isNearBottom(scroller);
+}
+
+// Track ONLY user-initiated scroll, ignore programmatic scroll
+(function initScrollTracking() {
+    const scroller = threadWrapEl || messagesEl;
+    if (!scroller) return;
+    scroller.addEventListener('scroll', () => {
+        if (programmaticScroll) return;
+        userNearBottom = isNearBottom(scroller);
+        syncScrollBtn();
+    }, { passive: true });
+})();
 
 // ─── Chat history ──────────────────────────────────────────────
 
@@ -280,6 +360,8 @@ function syncConversationHeader() {
 function applySidebarState() {
     if (!chatShellEl) return;
     chatShellEl.classList.toggle('is-sidebar-collapsed', sidebarCollapsed);
+    // Expose sidebar width as CSS var so welcome layout can center on viewport
+    chatShellEl.style.setProperty('--sidebar-w', sidebarCollapsed ? '0px' : '272px');
 }
 
 // sidebar menu removed — search modal replaces it
@@ -388,6 +470,25 @@ function closeModal() {
     modalState = null;
     if (chatModalBackdrop) chatModalBackdrop.hidden = true;
     if (chatModalInput) { chatModalInput.hidden = true; chatModalInput.value = ''; }
+}
+
+/** Open a full-screen lightbox for an image. */
+function openImageLightbox(src, alt) {
+    // Reuse existing or create overlay
+    let overlay = document.getElementById('chat-lightbox');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'chat-lightbox';
+        overlay.className = 'chat-lightbox';
+        overlay.addEventListener('click', () => { overlay.hidden = true; });
+        document.body.appendChild(overlay);
+    }
+    const img = document.createElement('img');
+    img.src = src;
+    img.alt = alt || '';
+    overlay.textContent = '';
+    overlay.appendChild(img);
+    overlay.hidden = false;
 }
 
 function updateConversationSummary(mutator) {
@@ -702,10 +803,11 @@ async function loadHistory() {
                 messageId: m.id,
                 attachments: m.attachments || [],
                 mcpServers: m.mcp_servers || [],
+                timestamp: m.timestamp || m.created_at,
             });
         });
         syncEmptyState();
-        scrollThreadToBottom();
+        forceScrollToBottom();
     } catch (e) {
         console.error('Failed to load chat history:', e);
     }
@@ -733,7 +835,8 @@ function syncEmptyState() {
     if (isEmpty && chatWelcomeGreeting) {
         const chatConfig = document.getElementById('chat-config');
         const username = chatConfig?.dataset?.username || '';
-        chatWelcomeGreeting.textContent = username ? `Ciao ${username}` : 'Ciao';
+        const displayName = username ? username.charAt(0).toUpperCase() + username.slice(1) : '';
+        chatWelcomeGreeting.textContent = displayName ? `Ciao ${displayName}` : 'Ciao';
     }
     if (isEmpty && chatWelcomePhrase) {
         chatWelcomePhrase.textContent = WELCOME_PHRASES[Math.floor(Math.random() * WELCOME_PHRASES.length)];
@@ -755,8 +858,9 @@ function applyExecutionPlan(plan) {
     const hasCompletedSteps = Array.isArray(currentPlanState?.completed_steps) && currentPlanState.completed_steps.length > 0;
     const hasBlockers = Array.isArray(currentPlanState?.active_blockers) && currentPlanState.active_blockers.length > 0;
     const hasSources = Array.isArray(currentPlanState?.required_sources) && currentPlanState.required_sources.length > 0;
-    const hasContent = hasExplicitSteps || hasCompletedSteps || hasBlockers || hasSources || currentPlanState?.current_source;
-    if (!currentPlanState || !currentPlanState.objective || (!hasContent && !isProcessing)) {
+    const hasPhase = Boolean(currentPlanState?.phase);
+    const hasContent = hasExplicitSteps || hasCompletedSteps || hasBlockers || hasSources || hasPhase || currentPlanState?.current_source;
+    if (!currentPlanState || (!currentPlanState.objective && !hasPhase) || (!hasContent && !isProcessing)) {
         chatPlanPanel.hidden = true;
         chatPlanPanel.classList.add('collapsed');
         if (chatPlanToggle) chatPlanToggle.setAttribute('aria-expanded', 'false');
@@ -766,6 +870,12 @@ function applyExecutionPlan(plan) {
     }
 
     chatPlanPanel.hidden = false;
+
+    // Auto-expand panel when orchestrator sends an explicit plan.
+    const isOrchestrated = Boolean(currentPlanState?.phase);
+    if (isOrchestrated && !planExpanded) {
+        planExpanded = true;
+    }
     chatPlanPanel.classList.toggle('collapsed', !planExpanded);
     if (chatPlanToggle) chatPlanToggle.setAttribute('aria-expanded', String(planExpanded));
 
@@ -790,7 +900,18 @@ function applyExecutionPlan(plan) {
 
     const total = steps.length;
     const done = steps.filter(s => s.status === 'completed').length;
-    chatPlanSummary.textContent = `${done} su ${total} attività completate`;
+
+    // Show phase-aware summary for orchestrated tasks.
+    const phase = currentPlanState?.phase || '';
+    if (phase === 'planning') {
+        chatPlanSummary.textContent = 'Analisi e pianificazione…';
+    } else if (phase === 'synthesizing') {
+        chatPlanSummary.textContent = 'Sintesi dei risultati…';
+    } else if (total > 0) {
+        chatPlanSummary.textContent = `${done} su ${total} attività completate`;
+    } else {
+        chatPlanSummary.textContent = '';
+    }
 
     steps.forEach((step) => {
         const li = document.createElement('li');
@@ -1094,16 +1215,50 @@ function renderSearchResults(results) {
         const el = document.createElement('button');
         el.type = 'button';
         el.className = 'chat-search-result-item';
+        if (c.archived) el.classList.add('is-archived');
+
         const name = document.createElement('span');
         name.className = 'chat-search-result-name';
         name.textContent = capitalizeFirst(c.title) || 'New conversation';
         el.appendChild(name);
+
+        if (c.archived) {
+            const badge = document.createElement('span');
+            badge.className = 'chat-search-result-badge';
+            badge.textContent = 'Archived';
+            el.appendChild(badge);
+
+            const restoreBtn = document.createElement('button');
+            restoreBtn.type = 'button';
+            restoreBtn.className = 'chat-search-restore-btn';
+            restoreBtn.textContent = 'Restore';
+            restoreBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                try {
+                    await updateConversation(c.conversation_id, { archived: false });
+                    showToast('Conversation restored', 'success');
+                    closeSearchModal();
+                    selectConversation(c.conversation_id);
+                } catch (_) {
+                    showToast('Failed to restore conversation', 'error');
+                }
+            });
+            el.appendChild(restoreBtn);
+        }
+
         const date = document.createElement('span');
         date.className = 'chat-search-result-date';
         date.textContent = formatConversationTimestamp(c.updated_at);
         el.appendChild(date);
+
         el.addEventListener('click', () => {
             closeSearchModal();
+            // Auto-restore archived conversations when opened
+            if (c.archived) {
+                updateConversation(c.conversation_id, { archived: false }).then(() => {
+                    refreshConversationList();
+                }).catch(() => {});
+            }
             selectConversation(c.conversation_id);
         });
         chatSearchResults.appendChild(el);
@@ -1913,6 +2068,7 @@ function connect() {
                 restoreActiveRun();
 
             } else if (data.type === 'thinking_start') {
+                removeTypingIndicator();
                 // Start a new thinking block
                 createThinkingBlock();
 
@@ -1925,6 +2081,7 @@ function connect() {
                 finalizeThinking();
 
             } else if (data.type === 'tool_start') {
+                removeTypingIndicator();
                 // Agent is calling a tool
                 showToolIndicator(data.name, data.tool_call);
 
@@ -1943,6 +2100,7 @@ function connect() {
                 addBrowserScreenshot(data.delta);
 
             } else if (data.type === 'stream') {
+                removeTypingIndicator();
                 // First text chunk: morph indicator into streaming bubble (no layout jump)
                 if (toolIndicatorEl) morphIndicatorToStreaming();
                 // Incremental text chunk from the LLM
@@ -2336,13 +2494,58 @@ function addMessage(role, content, toolsUsed, options = {}) {
         div.appendChild(contentEl);
     }
 
-    // Show tool badges for messages that used tools
+    // Show tools as a collapsible section (matches live tool timeline)
     if (toolsUsed && toolsUsed.length > 0) {
-        const badge = document.createElement('div');
-        badge.className = 'chat-tools-badge';
-        badge.textContent = toolsUsed.join(', ');
-        div.prepend(badge);
+        const section = document.createElement('div');
+        section.className = 'chat-reasoning collapsed';
+        const uniqueTools = [...new Set(toolsUsed)];
+        const label = uniqueTools.length === 1
+            ? `Used ${uniqueTools[0]}`
+            : `Used tools`;
+        const headerHtml = '<div class="chat-reasoning-header" onclick="toggleReasoning(this)">' +
+            '<span class="chat-reasoning-summary">' +
+            '' +
+            '<span class="chat-reasoning-label">' + escapeHtml(label) + '</span>' +
+            '<span class="chat-reasoning-count">' + toolsUsed.length + '</span>' +
+            '</span>' +
+            '<span class="chat-reasoning-toggle">\u203a</span>' +
+            '</div>' +
+            '<div class="chat-reasoning-content"></div>';
+        section.innerHTML = headerHtml; // safe: no user content in template
+        const contentEl = section.querySelector('.chat-reasoning-content');
+        toolsUsed.forEach(toolName => {
+            const card = document.createElement('div');
+            card.className = 'chat-tool-call';
+            card.dataset.toolStatus = 'done';
+            const compact = document.createElement('div');
+            compact.className = 'chat-tool-call-compact';
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'chat-tool-call-name';
+            nameSpan.textContent = toolName;
+            compact.appendChild(nameSpan);
+            const metaSpan = document.createElement('span');
+            metaSpan.className = 'chat-tool-call-meta';
+            metaSpan.textContent = 'Done';
+            compact.appendChild(metaSpan);
+            card.appendChild(compact);
+            contentEl.appendChild(card);
+        });
+        div.prepend(section);
     }
+
+    // Timestamp tooltip (shown on hover)
+    const ts = options.timestamp || new Date().toISOString();
+    const tsEl = document.createElement('time');
+    tsEl.className = 'chat-msg-timestamp';
+    tsEl.dateTime = ts;
+    try {
+        const d = new Date(ts);
+        tsEl.textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        tsEl.title = d.toLocaleString();
+    } catch (_) {
+        tsEl.textContent = '';
+    }
+    div.appendChild(tsEl);
 
     // Add hover action buttons (copy, edit)
     div.appendChild(createMessageActions(role, div));
@@ -2362,6 +2565,7 @@ function sendCurrentMessage() {
     if ((!text && attachments.length === 0 && mcpServers.length === 0) || isProcessing || !ws || ws.readyState !== WebSocket.OPEN) return;
 
     addMessage('user', text, null, { attachments, mcpServers });
+    forceScrollToBottom();
     const payload = { content: text, attachments, mcp_servers: mcpServers };
     if (thinkingEnabled !== null) {
         payload.thinking = thinkingEnabled;
@@ -2370,6 +2574,12 @@ function sendCurrentMessage() {
     chatText.value = '';
     chatText.style.height = 'auto';
     chatText.focus();
+    // Auto-collapse sidebar to maximize reading area
+    if (!sidebarCollapsed) {
+        sidebarCollapsed = true;
+        window.localStorage.setItem('homun.chat.sidebarCollapsed', '1');
+        applySidebarState();
+    }
     pendingAttachments = [];
     pendingMcpServers = [];
     if (activeToolMode) {
@@ -2435,7 +2645,26 @@ function setProcessing(processing) {
     if (appEl) appEl.classList.toggle('is-agent-working', processing);
     if (!processing) {
         setRunBadge(ws && ws.readyState === WebSocket.OPEN ? 'idle' : 'offline', ws && ws.readyState === WebSocket.OPEN ? '' : 'Offline');
+        removeTypingIndicator();
+    } else {
+        showTypingIndicator();
     }
+}
+
+/** Show animated typing dots before content starts streaming */
+function showTypingIndicator() {
+    if (document.getElementById('chat-typing-indicator')) return;
+    const el = document.createElement('div');
+    el.id = 'chat-typing-indicator';
+    el.className = 'chat-typing-indicator';
+    el.innerHTML = '<span></span><span></span><span></span>'; // safe: static content
+    messagesEl.appendChild(el);
+    scrollThreadToBottom();
+}
+
+function removeTypingIndicator() {
+    const el = document.getElementById('chat-typing-indicator');
+    if (el) el.remove();
 }
 
 /** Update send button icon state: mic (empty) vs send arrow (has text) */
@@ -2996,7 +3225,7 @@ const TOOLS_ITEMS = [
     { label: 'Create Skill', svg: '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v14"/><path d="M2 9h14"/></svg>', prompt: 'Create a new skill that ' },
     { label: 'Create Automation', svg: '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L5 10l3 3 8-8z"/><path d="M2 16h4"/></svg>', prompt: 'Create a new automation that ' },
     { label: 'Create Workflow', svg: '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="4" cy="9" r="2"/><circle cx="14" cy="5" r="2"/><circle cx="14" cy="13" r="2"/><path d="M6 9h4l2-4M10 9l2 4"/></svg>', prompt: 'Create a workflow that ' },
-    { label: 'Browse Web', svg: '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="7"/><path d="M2 9h14"/><path d="M9 2a11 11 0 014 7 11 11 0 01-4 7 11 11 0 01-4-7 11 11 0 014-7z"/></svg>', prompt: 'Search the web for ' },
+    { label: 'Browse Web', svg: '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="7"/><path d="M2 9h14"/><path d="M9 2a11 11 0 014 7 11 11 0 01-4 7 11 11 0 01-4-7 11 11 0 014-7z"/></svg>', prompt: 'Search with the browser for ' },
     { label: 'MCP Servers', svg: '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="14" height="5" rx="1"/><rect x="2" y="10" width="14" height="5" rx="1"/><circle cx="5" cy="5.5" r="0.8" fill="currentColor"/><circle cx="5" cy="12.5" r="0.8" fill="currentColor"/></svg>', prompt: null },
 ];
 

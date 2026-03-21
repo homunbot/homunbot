@@ -243,54 +243,52 @@
    Nav bar background inherits from --nav-bg (set by JS).
 */
 
-/* Terracotta — nav-bg L≈44% (dark) */
-[data-accent="terracotta"] {
-    --accent: #B85C38; --accent-hover: #9F4D2D; --accent-active: #8C4327;
-    --accent-light: #FEF2EC; --accent-border: #E8C5B6; --accent-text: #B85C38;
-    --focus-ring: #D07A52; --selection-bg: #FEE8DB; --chart-primary: #B85C38;
-    --nav-bg: #B85C38; --accent-contrast: #ffffff;
+/* Emerald — fresh green */
+[data-accent="emerald"] {
+    --accent: #10B981; --accent-hover: #059669; --accent-active: #047857;
+    --accent-light: #ECFDF5; --accent-border: #A7F3D0; --accent-text: #059669;
+    --focus-ring: #34D399; --selection-bg: #D1FAE5; --chart-primary: #10B981;
+    --nav-bg: #059669; --accent-contrast: #ffffff;
     --nav-text: rgba(255,255,255,0.55); --nav-text-hover: #FFFFFF; --nav-active-text: #FFFFFF;
 }
-[data-accent="terracotta"].dark {
-    --accent: #C96D47; --accent-hover: #D97A52; --accent-active: #B85C38;
-    --accent-light: #3A2820; --accent-border: #6B3E31; --accent-text: #D97A52;
-    --focus-ring: #D97A52; --selection-bg: #5A3429; --chart-primary: #C96D47;
-    --nav-bg: #C96D47; --accent-contrast: #ffffff;
+[data-accent="emerald"].dark {
+    --accent: #34D399; --accent-hover: #6EE7B7; --accent-active: #10B981;
+    --accent-light: #064E3B; --accent-border: #065F46; --accent-text: #6EE7B7;
+    --focus-ring: #34D399; --selection-bg: #064E3B; --chart-primary: #34D399;
+    --nav-bg: #059669; --accent-contrast: #ffffff;
     --nav-text: rgba(255,255,255,0.55); --nav-text-hover: #FFFFFF; --nav-active-text: #FFFFFF;
 }
 
-/* Plum — nav-bg L≈33% (dark) */
-[data-accent="plum"] {
-    --accent: #7C3AED; --accent-hover: #6D28D9; --accent-active: #5B21B6;
-    --accent-light: #F5F3FF; --accent-border: #C4B5FD; --accent-text: #7C3AED;
-    --focus-ring: #8B5CF6; --selection-bg: #EDE9FE; --chart-primary: #7C3AED;
-    --nav-bg: #7C3AED; --accent-contrast: #ffffff;
+/* Rose — warm pink-red */
+[data-accent="rose"] {
+    --accent: #F43F5E; --accent-hover: #E11D48; --accent-active: #BE123C;
+    --accent-light: #FFF1F2; --accent-border: #FECDD3; --accent-text: #E11D48;
+    --focus-ring: #FB7185; --selection-bg: #FFE4E6; --chart-primary: #F43F5E;
+    --nav-bg: #E11D48; --accent-contrast: #ffffff;
     --nav-text: rgba(255,255,255,0.55); --nav-text-hover: #FFFFFF; --nav-active-text: #FFFFFF;
 }
-/* Plum dark — nav-bg L≈60% (light) → dark icons */
-[data-accent="plum"].dark {
-    --accent: #A78BFA; --accent-hover: #C4B5FD; --accent-active: #7C3AED;
-    --accent-light: #2E1065; --accent-border: #4C1D95; --accent-text: #C4B5FD;
-    --focus-ring: #A78BFA; --selection-bg: #3B0764; --chart-primary: #A78BFA;
-    --nav-bg: #A78BFA; --accent-contrast: #1a1a1a;
-    --nav-text: rgba(0,0,0,0.5); --nav-text-hover: rgba(0,0,0,0.85); --nav-active-text: #000000;
+[data-accent="rose"].dark {
+    --accent: #FB7185; --accent-hover: #FDA4AF; --accent-active: #F43F5E;
+    --accent-light: #4C0519; --accent-border: #881337; --accent-text: #FDA4AF;
+    --focus-ring: #FB7185; --selection-bg: #4C0519; --chart-primary: #FB7185;
+    --nav-bg: #E11D48; --accent-contrast: #ffffff;
+    --nav-text: rgba(255,255,255,0.55); --nav-text-hover: #FFFFFF; --nav-active-text: #FFFFFF;
 }
 
-/* Moss — nav-bg L≈52% (dark, borderline) */
-[data-accent="moss"] {
-    --accent: #628A4A; --accent-hover: #537842; --accent-active: #476838;
-    --accent-light: #F0FDF4; --accent-border: #BBF7D0; --accent-text: #628A4A;
-    --focus-ring: #7A9A62; --selection-bg: #DCFCE7; --chart-primary: #628A4A;
-    --nav-bg: #628A4A; --accent-contrast: #ffffff;
+/* Amber — warm gold */
+[data-accent="amber"] {
+    --accent: #D97706; --accent-hover: #B45309; --accent-active: #92400E;
+    --accent-light: #FFFBEB; --accent-border: #FDE68A; --accent-text: #B45309;
+    --focus-ring: #FBBF24; --selection-bg: #FEF3C7; --chart-primary: #D97706;
+    --nav-bg: #B45309; --accent-contrast: #ffffff;
     --nav-text: rgba(255,255,255,0.55); --nav-text-hover: #FFFFFF; --nav-active-text: #FFFFFF;
 }
-/* Moss dark — nav-bg L≈63% (light) → dark icons */
-[data-accent="moss"].dark {
-    --accent: #82A868; --accent-hover: #96BA7C; --accent-active: #628A4A;
-    --accent-light: #14532D; --accent-border: #166534; --accent-text: #96BA7C;
-    --focus-ring: #96BA7C; --selection-bg: #1A3A1A; --chart-primary: #82A868;
-    --nav-bg: #82A868; --accent-contrast: #ffffff;
-    --nav-text: rgba(0,0,0,0.5); --nav-text-hover: rgba(0,0,0,0.85); --nav-active-text: #000000;
+[data-accent="amber"].dark {
+    --accent: #FBBF24; --accent-hover: #FDE68A; --accent-active: #D97706;
+    --accent-light: #451A03; --accent-border: #78350F; --accent-text: #FDE68A;
+    --focus-ring: #FBBF24; --selection-bg: #451A03; --chart-primary: #FBBF24;
+    --nav-bg: #B45309; --accent-contrast: #ffffff;
+    --nav-text: rgba(255,255,255,0.55); --nav-text-hover: #FFFFFF; --nav-active-text: #FFFFFF;
 }
 
 /* Stone — nav-bg L≈46% (dark) */

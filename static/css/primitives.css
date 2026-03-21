@@ -1814,19 +1814,10 @@
     align-items: start;
 }
 
-/* Inside grid rows: input first, label + hint below — keeps inputs aligned */
+/* Inside grid rows: label → input → hint (natural DOM order) */
 .form-row .form-group {
     display: flex;
     flex-direction: column;
-}
-.form-row .form-group > label,
-.form-row .form-group > .form-label {
-    order: 1;
-    margin-bottom: 0;
-    margin-top: 4px;
-}
-.form-row .form-group > .form-hint {
-    order: 2;
 }
 
 .input {

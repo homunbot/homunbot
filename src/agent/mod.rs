@@ -9,6 +9,7 @@ pub mod definition;
 pub mod email_approval;
 mod execution_plan;
 pub mod gateway;
+pub mod orchestrator;
 pub mod heartbeat;
 pub mod memory;
 pub(crate) mod persona;

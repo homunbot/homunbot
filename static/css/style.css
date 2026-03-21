@@ -1315,8 +1315,8 @@ html, body {
 .provider-chevron.expanded { transform: rotate(180deg); }
 
 .provider-card-body {
-    padding: 0 16px 16px;
-    border-top: 1px solid var(--border);
+    padding: 0 16px 14px;
+    border-top: 1px solid var(--border-subtle);
 }
 
 .provider-card-body[hidden] { display: none; }
@@ -1341,7 +1341,8 @@ html, body {
 .credential-row {
     display: flex;
     gap: 8px;
-    align-items: flex-start;
+    align-items: center;
+    margin-bottom: 4px;
 }
 
 .credential-row .input { flex: 1; }
@@ -1414,63 +1415,57 @@ html, body {
 .provider-models { margin-top: 12px; }
 
 .provider-models-label {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
-    font-family: var(--mono);
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--t3);
-    margin-bottom: 6px;
+    letter-spacing: 0.04em;
+    color: var(--t4);
+    margin-bottom: 4px;
     display: block;
 }
 
 .provider-model-list {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
     margin-bottom: 8px;
+    max-height: 280px;
+    overflow-y: auto;
 }
 
 .model-radio {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 10px;
-    border-radius: var(--r);
+    padding: 7px 10px;
+    border-radius: var(--r-md);
     cursor: pointer;
     transition: background var(--fast) var(--ease);
 }
 
-.model-radio:hover { background: var(--hover); }
+.model-radio:hover { background: var(--surface-hover); }
 
 .model-radio input[type="radio"] {
     accent-color: var(--accent);
     margin: 0;
     flex-shrink: 0;
+    width: 14px;
+    height: 14px;
 }
 
 .model-radio-name {
-    font-size: 12px;
+    font-size: 13px;
     font-family: var(--mono);
-    color: var(--t2);
+    color: var(--t1);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-.model-radio-badge {
-    font-size: 9px;
-    font-weight: 700;
-    font-family: var(--mono);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    padding: 1px 6px;
-    border-radius: var(--r-pill);
-    margin-left: auto;
-}
-
-.model-radio-badge.active {
-    color: var(--accent-text);
-    background: var(--accent-light);
-    border: 1px solid var(--accent-border);
-}
+/* Active badge — hidden, radio checked state is sufficient */
+.model-radio-badge { display: none; }
 
 /* ─── Model hide / gear / overrides ─── */
 
@@ -1482,16 +1477,20 @@ html, body {
     background: none;
     cursor: pointer;
     padding: 2px 4px;
-    font-size: 14px;
+    font-size: 13px;
     line-height: 1;
     border-radius: var(--r-sm);
-    color: var(--t3);
-    transition: color var(--fast) var(--ease);
+    color: var(--t4);
+    opacity: 0;
+    transition: opacity var(--fast) var(--ease), color var(--fast) var(--ease);
 }
 
+.model-radio-wrapper:hover .model-radio-hide,
+.model-radio-wrapper:hover .model-radio-gear { opacity: 1; }
 .model-radio-hide:hover { color: var(--err); }
 .model-radio-gear:hover { color: var(--accent); }
-.model-radio-gear.has-overrides { color: var(--accent); }
+.model-radio-gear.has-overrides { color: var(--accent); opacity: 0.6; }
+.model-radio-wrapper:hover .model-radio-gear.has-overrides { opacity: 1; }
 
 .model-show-hidden {
     border: none;
@@ -2488,19 +2487,10 @@ html, body {
     align-items: start;
 }
 
-/* Inside grid rows: input first, label + hint below — keeps inputs aligned */
+/* Inside grid rows: label → input → hint (natural DOM order) */
 .form-row .form-group {
     display: flex;
     flex-direction: column;
-}
-.form-row .form-group > label,
-.form-row .form-group > .form-label {
-    order: 1;
-    margin-bottom: 0;
-    margin-top: 4px;
-}
-.form-row .form-group > .form-hint {
-    order: 2;
 }
 
 .input {
@@ -6591,15 +6581,6 @@ html, body {
 .form-row--2 .form-group {
     display: flex;
     flex-direction: column;
-}
-.form-row--2 .form-group > label,
-.form-row--2 .form-group > .form-label {
-    order: 1;
-    margin-bottom: 0;
-    margin-top: 4px;
-}
-.form-row--2 .form-group > .form-hint {
-    order: 2;
 }
 
 @media (max-width: 600px) {

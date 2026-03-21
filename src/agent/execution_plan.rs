@@ -49,6 +49,10 @@ pub struct ExecutionPlanSnapshot {
     /// Optional verification criterion supplied with the plan.
     #[serde(default)]
     pub verification: Option<String>,
+    /// Orchestrator phase: "planning", "executing", "synthesizing".
+    /// Empty when not using the task orchestrator.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub phase: String,
 }
 
 // ── Core state ─────────────────────────────────────────────────────
@@ -267,6 +271,7 @@ impl ExecutionPlanState {
                 })
                 .collect(),
             verification: self.verification.clone(),
+            phase: String::new(),
         }
     }
 }

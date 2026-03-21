@@ -194,7 +194,10 @@ impl PromptSection for ToolsSection {
                 prompt.push_str(
                     "- Use **browser** when the task requires interaction with a website: navigating dynamic pages, clicking, typing, logging in, uploading files, or reading JS-rendered content.\n\
                      - For travel/booking flows, multi-site comparisons, or known interactive sites, start with browser first.\n\
-                     - Do NOT open the browser for routine static research if **web_search** or **web_fetch** can answer the request more directly.\n",
+                     - Do NOT open the browser for routine static research if **web_search** or **web_fetch** can answer the request more directly.\n\
+                     - **NEVER navigate to URLs you constructed or guessed**. Only use URLs from: \
+                     (a) search engine results, (b) links visible on the current page, (c) the user's explicit request. \
+                     If you need to find something on a site, use its search form.\n",
                 );
             }
             if !has_web_search && has_browser {
@@ -231,6 +234,13 @@ impl PromptSection for ToolsSection {
                         Do NOT call navigate() again to the same site. Use snapshot() if you need to see the current state.\n\
                      7. **Booking sites** (travel, hotels, tickets): navigate via Google search first \
                         (e.g. google.com/search?q=sitename, then click the organic result) to establish a natural session.\n\
+                     8. **Deep research tasks** (finding products, services, listings across multiple sites):\n\
+                        - Search Google with a specific query first\n\
+                        - Visit at least 4-5 sites from Google results\n\
+                        - On each site, use the site's SEARCH FORM — NEVER construct internal URLs yourself\n\
+                        - Check for pagination (next page) on result pages\n\
+                        - Extract structured data: links, prices, images, contact info, descriptions\n\
+                        - Do NOT stop after 1-2 sites — thorough research requires multiple sources\n\
                      The browser maintains a persistent profile (cookies, local storage). \
                      If a site was previously visited, session data may still be available.\n",
                 );

@@ -399,8 +399,15 @@ impl OllamaProvider {
         // even when the `think` parameter separates it into its own field.
         let raw_content = Self::strip_think_tags(&resp.message.content);
 
+        // Some cloud models (e.g. minimax-m2.7) put everything in `thinking`
+        // even when `think: false` is set, leaving `content` empty.
+        // Fall back to `thinking` content when `content` is empty.
         let content = if raw_content.is_empty() {
-            None
+            resp.message
+                .thinking
+                .as_deref()
+                .map(|t| Self::strip_think_tags(t))
+                .filter(|t| !t.is_empty())
         } else {
             Some(raw_content)
         };

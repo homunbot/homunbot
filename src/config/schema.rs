@@ -414,6 +414,11 @@ pub struct AgentConfig {
     /// User's IANA timezone (e.g. "Europe/Rome"). Auto-detected during onboarding.
     #[serde(default)]
     pub timezone: String,
+    /// Enable the task orchestrator for automatic intent analysis and task
+    /// decomposition. When disabled, all messages go directly to the ReAct loop.
+    /// Default: true.
+    #[serde(default = "default_true")]
+    pub orchestrator_enabled: bool,
 }
 
 /// Per-agent configuration parsed from `[agents.<id>]` TOML sections.
@@ -506,6 +511,7 @@ impl Default for AgentConfig {
             llm_max_concurrent: 0,
             user_name: String::new(),
             timezone: String::new(),
+            orchestrator_enabled: true,
         }
     }
 }

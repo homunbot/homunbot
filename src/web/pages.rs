@@ -687,7 +687,7 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
             <div class="content-inner">
                 <div class="page-header">
                     <div class="page-title-group">
-                        <h1 class="page-title">Settings</h1>
+                        <h1 class="page-title">Model &amp; Providers</h1>
                     </div>
                 </div>
 
@@ -746,8 +746,6 @@ async fn setup_page(State(state): State<Arc<AppState>>) -> Html<String> {
                 </section>
 
                 <section class="section" id="section-providers">
-                    <h2>Model &amp; Providers</h2>
-
                     <div class="active-model-banner" id="active-model-banner" {active_banner_hidden}>
                         <div class="active-model-info">
                             <span class="active-model-label">Active Model</span>
@@ -1009,9 +1007,9 @@ async fn appearance_page(State(state): State<Arc<AppState>>) -> Html<String> {
                             <label>Accent Color</label>
                             <div class="accent-picker" id="accent-picker">
                                 <button type="button" class="accent-swatch" data-accent="" title="Blue (default)"><span style="background:linear-gradient(90deg, #0A0A0A 50%, #3B82F6 50%)"></span></button>
-                                <button type="button" class="accent-swatch" data-accent="moss" title="Moss"><span style="background:#628A4A"></span></button>
-                                <button type="button" class="accent-swatch" data-accent="terracotta" title="Terracotta"><span style="background:#B85C38"></span></button>
-                                <button type="button" class="accent-swatch" data-accent="plum" title="Plum"><span style="background:#7C3AED"></span></button>
+                                <button type="button" class="accent-swatch" data-accent="emerald" title="Emerald"><span style="background:#10B981"></span></button>
+                                <button type="button" class="accent-swatch" data-accent="rose" title="Rose"><span style="background:#F43F5E"></span></button>
+                                <button type="button" class="accent-swatch" data-accent="amber" title="Amber"><span style="background:#D97706"></span></button>
                                 <button type="button" class="accent-swatch" data-accent="stone" title="Stone"><span style="background:#78716C"></span></button>
                                 <label class="accent-swatch accent-custom-label" title="Custom color">
                                     <input type="color" id="accent-custom-input" value="#3B82F6">
@@ -1035,17 +1033,21 @@ async fn appearance_page(State(state): State<Arc<AppState>>) -> Html<String> {
                                     <span class="texture-preview bg-texture-dots"></span>
                                     <span class="texture-name">Dots</span>
                                 </button>
-                                <button type="button" class="texture-swatch" data-texture="grid" title="Grid">
-                                    <span class="texture-preview bg-texture-grid"></span>
-                                    <span class="texture-name">Grid</span>
+                                <button type="button" class="texture-swatch" data-texture="chat" title="Chat">
+                                    <span class="texture-preview bg-texture-chat"></span>
+                                    <span class="texture-name">Chat</span>
                                 </button>
-                                <button type="button" class="texture-swatch" data-texture="hatch" title="Hatch">
-                                    <span class="texture-preview bg-texture-hatch"></span>
-                                    <span class="texture-name">Hatch</span>
+                                <button type="button" class="texture-swatch" data-texture="vibes" title="Vibes">
+                                    <span class="texture-preview bg-texture-vibes"></span>
+                                    <span class="texture-name">Vibes</span>
                                 </button>
-                                <button type="button" class="texture-swatch" data-texture="waves" title="Waves">
-                                    <span class="texture-preview bg-texture-waves"></span>
-                                    <span class="texture-name">Waves</span>
+                                <button type="button" class="texture-swatch" data-texture="tech" title="Tech">
+                                    <span class="texture-preview bg-texture-tech"></span>
+                                    <span class="texture-name">Tech</span>
+                                </button>
+                                <button type="button" class="texture-swatch" data-texture="nature" title="Nature">
+                                    <span class="texture-preview bg-texture-nature"></span>
+                                    <span class="texture-name">Nature</span>
                                 </button>
                             </div>
                             <div class="form-hint">Adds a subtle pattern to the content background.</div>
@@ -1555,6 +1557,9 @@ async fn chat_page(
                             </div>
                             <div class="chat-messages" id="messages"></div>
                         </div>
+                        <button type="button" class="chat-scroll-bottom" id="chat-scroll-bottom" hidden title="Scroll to bottom" onclick="forceScrollToBottom()">
+                            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v10"/><path d="M5 10l4 4 4-4"/></svg>
+                        </button>
                         <div class="chat-composer-dock">
                             <section class="chat-plan-panel collapsed" id="chat-plan-panel" hidden>
                                 <button type="button" class="chat-plan-header" id="chat-plan-toggle" aria-expanded="false">
@@ -1651,7 +1656,10 @@ async fn chat_page(
             </div>
         </div>
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-        <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>"#,
+        <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11/build/styles/github.min.css" media="(prefers-color-scheme: light)">
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11/build/styles/github-dark.min.css" media="(prefers-color-scheme: dark)">
+        <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11/build/highlight.min.js"></script>"#,
         current_model = current_model,
         current_vision_model = current_vision_model,
         username = username,

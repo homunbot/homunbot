@@ -63,6 +63,13 @@
     border-bottom-right-radius: var(--r-sm);
     font-weight: 500;
 }
+.chat-msg.user code {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 13px;
+    font-family: var(--mono);
+}
 .chat-msg.user.is-hero {
     align-self: flex-start;
     background: transparent;
@@ -91,6 +98,77 @@
     color: var(--t1);
     padding: 8px 0;
 }
+
+/* ─── Scroll-to-bottom floating button ─── */
+.chat-scroll-bottom {
+    position: sticky;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 15;
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: var(--surface-raised, #fff);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity var(--fast), transform var(--fast);
+    margin: 0 auto;
+}
+.chat-scroll-bottom[hidden] { display: none !important; }
+.chat-scroll-bottom:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+}
+.chat-scroll-bottom svg {
+    width: 16px;
+    height: 16px;
+}
+
+/* ─── Typing indicator (3 bouncing dots) ─── */
+.chat-typing-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 14px 18px;
+    border-radius: 22px;
+    border-bottom-left-radius: 10px;
+    background: var(--surface-hover, var(--bg));
+    width: fit-content;
+}
+.chat-typing-indicator span {
+    display: block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--t4);
+    animation: chat-typing-bounce 1.4s ease-in-out infinite;
+}
+.chat-typing-indicator span:nth-child(2) { animation-delay: 0.16s; }
+.chat-typing-indicator span:nth-child(3) { animation-delay: 0.32s; }
+@keyframes chat-typing-bounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+    30% { transform: translateY(-6px); opacity: 1; }
+}
+
+/* ─── Message timestamp (visible on hover) ─── */
+.chat-msg-timestamp {
+    display: block;
+    font-size: 11px;
+    color: var(--t4);
+    opacity: 0;
+    transition: opacity var(--fast);
+    margin-top: 2px;
+    pointer-events: none;
+    user-select: none;
+}
+.chat-msg.user .chat-msg-timestamp { text-align: right; }
+.chat-msg:hover .chat-msg-timestamp { opacity: 1; }
 
 /* ─── Message action buttons (hover overlay) ─── */
 .chat-msg { position: relative; }
@@ -392,95 +470,187 @@
 }
 .hm-error-state .hm-retry-btn:hover { background: var(--surface-hover); }
 
-/* ─── Markdown inside assistant messages ─── */
+/* ─── Typographic prose inside assistant messages ─── */
 
 .chat-msg.assistant {
     white-space: normal;
+    font-size: 15px;
+    line-height: 1.7;
+    letter-spacing: -0.006em;
 }
 
 .chat-msg.assistant p {
-    margin: 6px 0;
+    margin: 10px 0;
 }
 .chat-msg.assistant p:first-child { margin-top: 0; }
 .chat-msg.assistant p:last-child  { margin-bottom: 0; }
 
+/* Inline code */
 .chat-msg.assistant code {
-    background: var(--bg);
-    padding: 1px 5px;
-    border-radius: 3px;
-    font-size: 12px;
+    background: var(--surface-hover, var(--bg));
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 13px;
     font-family: var(--mono);
 }
 
+/* Code blocks */
 .chat-msg.assistant pre {
     background: var(--bg);
-    padding: 12px;
+    padding: 14px 16px;
     border-radius: var(--r-md);
     overflow-x: auto;
-    margin: 8px 0;
-    line-height: 1.45;
+    margin: 14px 0;
+    line-height: 1.5;
+    position: relative;
 }
-
 .chat-msg.assistant pre code {
     background: none;
     padding: 0;
-    font-size: 12px;
+    font-size: 13px;
+}
+/* Override hljs background to use design tokens */
+.chat-msg.assistant pre code.hljs {
+    background: transparent;
+    padding: 0;
 }
 
+/* Copy button on code blocks */
+.chat-code-copy-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--t4);
+    background: var(--surface-hover, rgba(0,0,0,0.05));
+    border: none;
+    border-radius: 5px;
+    padding: 3px 8px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--fast), background var(--fast);
+}
+.chat-msg.assistant pre:hover .chat-code-copy-btn { opacity: 1; }
+.chat-code-copy-btn:hover {
+    background: var(--border);
+    color: var(--t1);
+}
+
+/* Lists */
 .chat-msg.assistant ul,
 .chat-msg.assistant ol {
-    padding-left: 20px;
-    margin: 8px 0;
+    padding-left: 22px;
+    margin: 10px 0;
 }
-
 .chat-msg.assistant li {
-    margin: 2px 0;
+    margin: 4px 0;
+}
+.chat-msg.assistant li::marker {
+    color: var(--t4);
 }
 
+/* Blockquotes */
 .chat-msg.assistant blockquote {
     border-left: 3px solid var(--accent);
-    padding-left: 12px;
-    margin: 8px 0;
+    padding-left: 14px;
+    margin: 14px 0;
     color: var(--t3);
+    font-style: italic;
 }
 
+/* Headings — proper hierarchy */
 .chat-msg.assistant h1,
 .chat-msg.assistant h2,
 .chat-msg.assistant h3 {
-    margin: 10px 0 6px;
     font-weight: 600;
     line-height: 1.3;
+    color: var(--t1);
 }
-.chat-msg.assistant h1 { font-size: 16px; }
-.chat-msg.assistant h2 { font-size: 14px; }
-.chat-msg.assistant h3 { font-size: 13px; }
+.chat-msg.assistant h1 { font-size: 20px; margin: 20px 0 8px; }
+.chat-msg.assistant h2 { font-size: 17px; margin: 18px 0 6px; }
+.chat-msg.assistant h3 { font-size: 15px; margin: 14px 0 4px; }
 
+/* Links */
 .chat-msg.assistant a {
     color: var(--accent);
-    text-decoration: underline;
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color var(--fast);
+}
+.chat-msg.assistant a:hover {
+    border-bottom-color: var(--accent);
 }
 
+/* Tables — minimal, elegant (no heavy borders) */
 .chat-msg.assistant table {
     border-collapse: collapse;
-    margin: 8px 0;
-    font-size: 12px;
+    margin: 14px 0;
+    font-size: 13px;
     width: 100%;
+    border: none;
 }
 .chat-msg.assistant th,
 .chat-msg.assistant td {
-    border: 1px solid var(--border);
-    padding: 4px 8px;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    padding: 8px 12px;
     text-align: left;
 }
 .chat-msg.assistant th {
-    background: var(--bg);
     font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--t3);
+    border-bottom: 2px solid var(--border);
+}
+.chat-msg.assistant tr:last-child td {
+    border-bottom: none;
 }
 
+/* Images inline in markdown */
+.chat-msg.assistant img {
+    max-width: 100%;
+    border-radius: var(--r-md, 8px);
+    margin: 10px 0;
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+
+/* ─── Image lightbox ─── */
+.chat-lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.85);
+    backdrop-filter: blur(8px);
+    cursor: zoom-out;
+    padding: 32px;
+}
+.chat-lightbox[hidden] { display: none; }
+.chat-lightbox img {
+    max-width: 90vw;
+    max-height: 90vh;
+    border-radius: var(--r-md, 8px);
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.4);
+    object-fit: contain;
+}
+
+/* HR */
 .chat-msg.assistant hr {
     border: none;
     border-top: 1px solid var(--border);
-    margin: 10px 0;
+    margin: 16px 0;
+}
+
+/* Strong / emphasis */
+.chat-msg.assistant strong {
+    font-weight: 600;
+    color: var(--t1);
 }
 
 /* ─── Tool indicator ─── */
@@ -496,18 +666,7 @@
     animation: none;
 }
 
-/* ─── Tool badges on history messages ─── */
-
-.chat-tools-badge {
-    font-size: 10px;
-    font-family: var(--mono);
-    color: var(--t4);
-    background: var(--bg);
-    display: inline-block;
-    padding: 1px 6px;
-    border-radius: var(--r-sm);
-    margin-bottom: 4px;
-}
+/* chat-tools-badge removed — history tools now use chat-reasoning collapsible */
 
 /* ─── Thinking blocks (Braun-inspired collapsible) ─── */
 
@@ -1299,6 +1458,35 @@
     font-size: 12px;
     color: var(--t4);
 }
+.chat-search-result-item.is-archived .chat-search-result-name {
+    color: var(--t3);
+}
+.chat-search-result-badge {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--t4);
+    background: var(--surface-hover);
+    padding: 2px 8px;
+    border-radius: 6px;
+    letter-spacing: 0.02em;
+}
+.chat-search-restore-btn {
+    flex-shrink: 0;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--accent);
+    background: transparent;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 3px 10px;
+    cursor: pointer;
+    transition: background var(--fast), color var(--fast);
+}
+.chat-search-restore-btn:hover {
+    background: var(--accent);
+    color: #fff;
+}
 .chat-search-result-empty {
     padding: 32px 24px;
     text-align: center;
@@ -1632,13 +1820,13 @@
 }
 .chat-plan-panel.collapsed .chat-plan-header { gap: 8px; align-items: center; }
 
-/* ─── Welcome state (centered, Gemini-style) ─── */
+/* ─── Welcome state (Gemini-style: small greeting, large phrase, left-aligned) ─── */
 .chat-empty-state {
     display: none;
     flex-direction: column;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
-    text-align: center;
+    text-align: left;
     padding: 0 24px 32px;
 }
 
@@ -1647,27 +1835,31 @@
 }
 
 .chat-welcome-greeting {
-    font-size: clamp(32px, 5vw, 48px);
-    font-family: var(--display, var(--sans));
-    font-weight: 300;
-    line-height: 1.1;
-    letter-spacing: -0.025em;
-    color: var(--t1);
-    margin-bottom: 12px;
+    font-size: 16px;
+    font-family: var(--sans);
+    font-weight: 500;
+    line-height: 1.4;
+    color: var(--t3);
+    margin-bottom: 4px;
 }
 
 .chat-welcome-phrase {
     margin: 0;
-    font-size: 16px;
-    line-height: 1.6;
-    color: var(--t3);
-    max-width: 480px;
+    font-size: clamp(28px, 4vw, 36px);
+    font-family: var(--display, var(--sans));
+    font-weight: 300;
+    line-height: 1.2;
+    letter-spacing: -0.015em;
+    color: var(--t1);
+    max-width: 680px;
 }
 
-/* Welcome layout: .chat-main becomes centered, greeting + composer stacked */
+/* Welcome layout: centered on viewport, greeting + composer stacked */
 .chat-main.is-welcome {
     justify-content: center;
     align-items: center;
+    /* Shift content left by half the sidebar to center on viewport */
+    padding-right: var(--sidebar-w, 0px);
 }
 
 .chat-main.is-welcome .chat-topbar {
@@ -1684,7 +1876,9 @@
     padding: 0 24px;
     display: flex;
     flex-direction: column;
-    align-items: center;
+    align-items: flex-start;
+    width: 100%;
+    max-width: 680px;
 }
 
 .chat-main.is-welcome .chat-composer-dock {
@@ -2811,7 +3005,10 @@
     }
 
     .chat-welcome-greeting {
-        font-size: clamp(26px, 6vw, 36px);
+        font-size: 15px;
+    }
+    .chat-welcome-phrase {
+        font-size: clamp(22px, 6vw, 28px);
     }
 }
 

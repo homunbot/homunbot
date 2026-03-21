@@ -831,9 +831,11 @@ impl Gateway {
                                     )
                                     .await
                                     .clone();
+                                let config_snapshot = cfg.clone();
                                 drop(cfg);
                                 dispatch_to_agent(
                                     prepared, agent, senders, stream_tx, db, locks, known,
+                                    config_snapshot,
                                 )
                                 .await;
                             });
@@ -1764,6 +1766,7 @@ async fn shutdown_signal() {
 /// Acquires the per-session lock so only one agent call runs per session
 /// at a time.  Handles streaming (web) vs. non-streaming paths, email
 /// approval routing, and automation run tracking.
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_to_agent(
     prepared: PreparedMessage,
     agent: Arc<AgentLoop>,
@@ -1772,6 +1775,7 @@ async fn dispatch_to_agent(
     task_db: Database,
     session_locks: SessionLocks,
     known_chat_ids: KnownChatIds,
+    config: Config,
 ) {
     // Per-session serialisation: wait if another batch is still processing.
     let lock = get_session_lock(&session_locks, &prepared.session_key);
@@ -1788,7 +1792,8 @@ async fn dispatch_to_agent(
     let blocked_tools = ctx.blocked_tools;
     let thinking_override = ctx.thinking_override;
 
-    // For the web channel, use streaming mode
+    // Route through the task orchestrator — it decides whether to pass through
+    // directly to the ReAct loop (simple) or decompose into subtasks (orchestrated).
     let (response, processing_error) = if channel_name == "web" {
         if let Some(bus_stream_tx) = stream_tx {
             let chat_id_for_stream = chat_id.clone();
@@ -1808,17 +1813,18 @@ async fn dispatch_to_agent(
                 }
             });
 
-            let result = agent
-                .process_message_streaming_with_options(
-                    &inbound.content,
-                    &session_key,
-                    &channel_name,
-                    &chat_id,
-                    chunk_tx,
-                    blocked_tools,
-                    thinking_override,
-                )
-                .await;
+            let result = super::orchestrator::TaskOrchestrator::handle(
+                &agent,
+                &config,
+                &inbound.content,
+                &session_key,
+                &channel_name,
+                &chat_id,
+                Some(chunk_tx),
+                blocked_tools,
+                thinking_override,
+            )
+            .await;
 
             bridge.abort();
             match result {
@@ -1832,15 +1838,18 @@ async fn dispatch_to_agent(
                 }
             }
         } else {
-            match agent
-                .process_message_with_blocked_tools(
-                    &inbound.content,
-                    &session_key,
-                    &channel_name,
-                    &chat_id,
-                    blocked_tools,
-                )
-                .await
+            match super::orchestrator::TaskOrchestrator::handle(
+                &agent,
+                &config,
+                &inbound.content,
+                &session_key,
+                &channel_name,
+                &chat_id,
+                None,
+                blocked_tools,
+                thinking_override,
+            )
+            .await
             {
                 Ok(text) => (text, None),
                 Err(e) => {
@@ -1853,15 +1862,18 @@ async fn dispatch_to_agent(
             }
         }
     } else {
-        match agent
-            .process_message_with_blocked_tools(
-                &inbound.content,
-                &session_key,
-                &channel_name,
-                &chat_id,
-                blocked_tools,
-            )
-            .await
+        match super::orchestrator::TaskOrchestrator::handle(
+            &agent,
+            &config,
+            &inbound.content,
+            &session_key,
+            &channel_name,
+            &chat_id,
+            None,
+            blocked_tools,
+            thinking_override,
+        )
+        .await
         {
             Ok(text) => (text, None),
             Err(e) => {
