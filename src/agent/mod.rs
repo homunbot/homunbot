@@ -12,6 +12,7 @@ pub mod email_approval;
 mod execution_plan;
 pub mod gateway;
 mod iteration_budget;
+mod memory_db;
 pub mod orchestrator;
 pub mod heartbeat;
 pub mod memory;
@@ -22,6 +23,7 @@ mod skill_activator;
 pub mod stop;
 pub mod subagent; // Make public so spawn.rs can access it
 mod tool_builder;
+mod tool_veto;
 mod verifier;
 
 #[cfg(feature = "embeddings")]
