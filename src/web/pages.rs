@@ -2511,75 +2511,26 @@ async fn logs_page() -> Html<String> {
 
 async fn contacts_page(State(_state): State<Arc<AppState>>) -> Html<String> {
     let body = r##"<main class="content">
-        <div class="content-inner">
-            <div class="page-header">
-                <div class="page-title-group">
-                    <h1 class="page-title">Contacts</h1>
-                    <span class="badge badge-info" id="contacts-count">0</span>
+        <div class="contacts-layout" id="contacts-layout">
+            <div class="contacts-sidebar">
+                <div class="contacts-sidebar-header">
+                    <div class="contacts-search-row">
+                        <svg class="contacts-search-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6.5" cy="6.5" r="5"/><path d="M11 11l3.5 3.5"/></svg>
+                        <input type="text" id="contact-search" placeholder="Search contacts..." class="input">
+                    </div>
+                    <div class="contacts-sidebar-meta">
+                        <span><span id="contacts-count">0</span> contacts</span>
+                        <button class="btn btn-primary btn-sm" id="add-contact-btn">+ New</button>
+                    </div>
                 </div>
-                <div class="actions">
-                    <input type="text" id="contact-search" placeholder="Search contacts..." class="input" style="width:260px">
-                    <button class="btn btn-primary btn-sm" id="add-contact-btn">
-                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"><path d="M8 3v10M3 8h10"/></svg>New Contact
-                    </button>
-                </div>
+                <div class="contacts-list-scroll" id="contacts-list"></div>
             </div>
-
-            <section class="section" id="contact-create-panel" style="display:none">
-                <h2>New Contact</h2>
-                <form id="contact-form" class="form form--full">
-                    <div class="form-row--2">
-                        <div class="form-group">
-                            <label for="cf-name">Name *</label>
-                            <input id="cf-name" name="name" class="input" type="text" required placeholder="Full name">
-                        </div>
-                        <div class="form-group">
-                            <label for="cf-nickname">Nickname</label>
-                            <input id="cf-nickname" name="nickname" class="input" type="text" placeholder="Short name or handle">
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label for="cf-bio">Bio</label>
-                        <textarea id="cf-bio" name="bio" class="input" rows="2" placeholder="Who is this person? Role, context..."></textarea>
-                    </div>
-                    <div class="form-row--2">
-                        <div class="form-group">
-                            <label for="cf-birthday">Birthday</label>
-                            <input id="cf-birthday" name="birthday" class="input" type="date">
-                        </div>
-                        <div class="form-group">
-                            <label for="cf-channel">Preferred Channel</label>
-                            <select id="cf-channel" name="preferred_channel" class="input">
-                                <option value="">—</option>
-                                <option value="telegram">telegram</option>
-                                <option value="whatsapp">whatsapp</option>
-                                <option value="discord">discord</option>
-                                <option value="slack">slack</option>
-                                <option value="email">email</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label for="cf-tone">Tone of Voice</label>
-                        <input id="cf-tone" name="tone_of_voice" class="input" type="text" placeholder="e.g. formal, informal, friendly, professional">
-                    </div>
-                    <div class="form-group">
-                        <label>Channel Identities</label>
-                        <div class="form-hint">How can Homun reach this person? Add their phone, username, or email.</div>
-                        <div id="form-identities"></div>
-                        <button type="button" class="btn btn-ghost btn-sm" id="add-identity-row-btn" style="margin-top:4px">+ Add identity</button>
-                    </div>
-                    <div class="form-group" style="display:flex;gap:8px;margin-top:8px">
-                        <button type="submit" class="btn btn-primary btn-sm">Create</button>
-                        <button type="button" class="btn btn-ghost btn-sm" id="cancel-create-btn">Cancel</button>
-                    </div>
-                </form>
-            </section>
-
-            <div id="contacts-list" class="contacts-grid"></div>
-            <div id="contact-detail" style="display:none"></div>
-            <div id="contact-edit-modal" class="modal"></div>
-            <div id="pending-section" style="margin-top:32px"></div>
+            <div class="contact-detail-pane" id="contact-detail-pane">
+                <div class="contact-empty-detail" id="contact-empty">
+                    <p>Select a contact to view details</p>
+                </div>
+                <div id="contact-detail" style="display:none"></div>
+            </div>
         </div>
     </main>"##;
     Html(page_html("Contacts", "contacts", body, &["contacts.js"]))

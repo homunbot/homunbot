@@ -1,4 +1,4 @@
-// Contacts page — personal CRM UI
+// Contacts page — Address Book (master-detail split pane)
 // Security: all innerHTML usage goes through esc() which uses textContent-based sanitization.
 // No user-controlled strings are inserted without esc(). This is consistent with all Homun JS files.
 'use strict';
@@ -15,23 +15,16 @@ let selectedId = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     loadContacts();
-    loadPending();
 
     document.getElementById('contact-search').addEventListener('input', e => {
         renderList(filterContacts(e.target.value));
     });
 
     document.getElementById('add-contact-btn').addEventListener('click', () => {
-        toggleCreatePanel(true);
+        selectedId = null;
+        showCreateForm();
+        renderList(filterContacts(document.getElementById('contact-search').value));
     });
-    document.getElementById('cancel-create-btn').addEventListener('click', () => {
-        toggleCreatePanel(false);
-    });
-    document.getElementById('add-identity-row-btn').addEventListener('click', addFormIdentityRow);
-    document.getElementById('contact-form').addEventListener('submit', e => saveNewContact(e));
-
-    // Add one empty identity row by default
-    addFormIdentityRow();
 });
 
 // ── Data ────────────────────────────────────────────────────────────
@@ -41,22 +34,9 @@ async function loadContacts() {
         const res = await fetch(API);
         allContacts = await res.json();
         renderList(allContacts);
-        const badge = document.getElementById('contacts-count');
-        if (badge) badge.textContent = allContacts.length;
+        document.getElementById('contacts-count').textContent = allContacts.length;
     } catch (e) {
         console.error('Failed to load contacts', e);
-    }
-}
-
-function toggleCreatePanel(show) {
-    const panel = document.getElementById('contact-create-panel');
-    if (panel) panel.style.display = show ? '' : 'none';
-    if (show) {
-        document.getElementById('cf-name').focus();
-    } else {
-        document.getElementById('contact-form').reset();
-        document.getElementById('form-identities').innerHTML = '';
-        addFormIdentityRow();
     }
 }
 
@@ -75,40 +55,50 @@ function contactName(id) {
     return c ? c.name : '#' + id;
 }
 
-// ── List ────────────────────────────────────────────────────────────
+function initials(name) {
+    if (!name) return '?';
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    return name.substring(0, 2).toUpperCase();
+}
+
+// ── List (sidebar rows) ─────────────────────────────────────────────
 
 function renderList(contacts) {
-    const grid = document.getElementById('contacts-list');
+    const list = document.getElementById('contacts-list');
     if (!contacts.length) {
-        grid.textContent = '';
+        list.textContent = '';
         const p = document.createElement('p');
-        p.textContent = 'No contacts yet. Click "+ New Contact" to add one.';
-        p.className = 'empty-state';
-        grid.appendChild(p);
+        p.textContent = 'No contacts yet.';
+        p.className = 'contact-no-data';
+        p.style.padding = '24px 16px';
+        list.appendChild(p);
         return;
     }
     // All dynamic text sanitized through esc()
     const html = contacts.map(c => {
-        const nick = c.nickname ? '<span class="badge">' + esc(c.nickname) + '</span>' : '';
-        const ch = c.preferred_channel
-            ? '<span class="pill">' + esc(c.preferred_channel) + '</span>'
-            : '';
-        return '<div class="card contact-card" data-id="' + c.id + '" style="padding:16px;cursor:pointer">'
-            + '<div style="display:flex;align-items:center;gap:8px">'
-            + '<strong>' + esc(c.name) + '</strong> ' + nick + ch
+        const active = selectedId === c.id ? ' active' : '';
+        const sub = c.nickname ? esc(c.nickname) : (c.bio ? esc(c.bio.substring(0, 40)) : '');
+        return '<div class="contact-row' + active + '" data-id="' + c.id + '">'
+            + '<div class="contact-avatar">' + esc(initials(c.name)) + '</div>'
+            + '<div class="contact-row-info">'
+            + '<div class="contact-row-name">' + esc(c.name) + '</div>'
+            + (sub ? '<div class="contact-row-sub">' + sub + '</div>' : '')
             + '</div>'
-            + (c.bio ? '<p class="text-secondary" style="margin:4px 0 0;font-size:13px">' + esc(c.bio.substring(0, 80)) + '</p>' : '')
+            + (c.preferred_channel ? '<span class="pill" style="font-size:11px">' + esc(c.preferred_channel) + '</span>' : '')
             + '</div>';
     }).join('');
-    grid.innerHTML = html;
+    list.innerHTML = html;
 
-    grid.querySelectorAll('.contact-card').forEach(el => {
+    list.querySelectorAll('.contact-row').forEach(el => {
         el.addEventListener('click', () => selectContact(parseInt(el.dataset.id)));
     });
 }
 
 async function selectContact(id) {
     selectedId = id;
+    // Re-render list to update active state
+    renderList(filterContacts(document.getElementById('contact-search').value));
     try {
         const c = allContacts.find(x => x.id === id);
         if (!c) return;
@@ -126,112 +116,168 @@ async function selectContact(id) {
 // ── Detail View ────────────────────────────────────────────────────
 
 function showDetail(c, identities, relationships, events) {
+    document.getElementById('contact-empty').style.display = 'none';
     const el = document.getElementById('contact-detail');
     el.style.display = 'block';
+    // Mobile: add detail-open class
+    document.getElementById('contacts-layout').classList.add('detail-open');
 
     const idsHtml = identities.length
         ? identities.map(i =>
-            '<div class="identity-row" style="display:flex;align-items:center;gap:8px;padding:6px 0">'
-            + '<span class="pill">' + esc(i.channel) + '</span> '
-            + '<span style="font-family:var(--mono);font-size:13px">' + esc(i.identifier) + '</span>'
-            + (i.label ? ' <span class="text-secondary">(' + esc(i.label) + ')</span>' : '')
-            + ' <button class="btn btn-ghost btn-sm" onclick="removeIdentity(' + i.id + ')">&#xd7;</button>'
+            '<div class="contact-entity-row">'
+            + '<span class="pill">' + esc(i.channel) + '</span>'
+            + '<span class="contact-entity-id">' + esc(i.identifier) + '</span>'
+            + (i.label ? '<span style="color:var(--t3);font-size:12px">' + esc(i.label) + '</span>' : '')
+            + '<button class="btn btn-ghost btn-sm" onclick="removeIdentity(' + i.id + ')" title="Remove">&#xd7;</button>'
             + '</div>'
         ).join('')
-        : '<p class="text-secondary">No channel identities yet</p>';
+        : '<p class="contact-no-data">No channel identities</p>';
 
     const relsHtml = relationships.length
         ? relationships.map(r =>
-            '<div class="rel-row" style="display:flex;align-items:center;gap:8px;padding:6px 0">'
-            + '<span class="pill">' + esc(r.relationship_type) + '</span> '
-            + '<strong>' + esc(contactName(r.to_contact_id)) + '</strong>'
-            + ' <button class="btn btn-ghost btn-sm" onclick="removeRelationship(' + r.id + ')">&#xd7;</button>'
+            '<div class="contact-entity-row">'
+            + '<span class="pill">' + esc(r.relationship_type) + '</span>'
+            + '<span class="contact-entity-name">' + esc(contactName(r.to_contact_id)) + '</span>'
+            + '<button class="btn btn-ghost btn-sm" onclick="removeRelationship(' + r.id + ')" title="Remove">&#xd7;</button>'
             + '</div>'
         ).join('')
-        : '<p class="text-secondary">No relationships</p>';
+        : '<p class="contact-no-data">No relationships</p>';
 
     const evsHtml = events.length
         ? events.map(ev =>
-            '<div class="event-row" style="display:flex;align-items:center;gap:8px;padding:6px 0">'
-            + '<span class="pill">' + esc(ev.event_type) + '</span> '
-            + '<span>' + esc(ev.date) + '</span>'
-            + (ev.label ? ' — ' + esc(ev.label) : '')
-            + (ev.auto_greet ? ' <span class="badge">auto-greet</span>' : '')
-            + ' <button class="btn btn-ghost btn-sm" onclick="removeEvent(' + ev.id + ')">&#xd7;</button>'
+            '<div class="contact-entity-row">'
+            + '<span class="pill">' + esc(ev.event_type) + '</span>'
+            + '<span class="contact-entity-name">' + esc(ev.date) + (ev.label ? ' — ' + esc(ev.label) : '') + '</span>'
+            + (ev.auto_greet ? '<span class="badge" style="font-size:11px">auto-greet</span>' : '')
+            + '<button class="btn btn-ghost btn-sm" onclick="removeEvent(' + ev.id + ')" title="Remove">&#xd7;</button>'
             + '</div>'
         ).join('')
-        : '<p class="text-secondary">No events</p>';
+        : '<p class="contact-no-data">No events</p>';
+
+    const bioHtml = c.bio ? '<p style="margin:0;color:var(--t2);font-size:14px">' + esc(c.bio) + '</p>' : '';
+    const personaNote = c.persona_instructions
+        ? '<div class="contact-section"><div class="contact-section-header"><h3>Persona Instructions</h3></div>'
+        + '<p style="font-size:13px;color:var(--t2);margin:0">' + esc(c.persona_instructions) + '</p></div>'
+        : '';
 
     // All dynamic content sanitized through esc()
-    el.innerHTML = '<div class="card" style="margin-top:24px;padding:24px">'
-        + '<div style="display:flex;justify-content:space-between;align-items:center">'
-        + '<h2>' + esc(c.name) + (c.nickname ? ' <span class="badge">' + esc(c.nickname) + '</span>' : '') + '</h2>'
-        + '<div style="display:flex;gap:8px">'
-        + '<button class="btn btn-ghost" onclick="showForm(' + c.id + ')">Edit</button>'
-        + '<button class="btn btn-danger" onclick="deleteContact(' + c.id + ')">Delete</button>'
-        + '</div></div>'
-        + (c.bio ? '<p>' + esc(c.bio) + '</p>' : '')
-        + '<div class="detail-grid">'
-        + '<div><strong>Channel</strong>: ' + esc(c.preferred_channel || '\u2014') + '</div>'
-        + '<div><strong>Mode</strong>: ' + esc(c.response_mode) + '</div>'
-        + '<div><strong>Tone</strong>: ' + esc(c.tone_of_voice || '\u2014') + '</div>'
-        + '<div><strong>Persona</strong>: ' + esc(c.persona_override || 'channel default') + '</div>'
-        + '<div><strong>Birthday</strong>: ' + esc(c.birthday || '\u2014') + '</div>'
+    el.innerHTML = '<div class="contact-detail-inner">'
+        // Back button (mobile only)
+        + '<button class="btn btn-ghost btn-sm contact-back-btn" onclick="goBackToList()" style="margin-bottom:12px">'
+        + '&#8592; Back</button>'
+        // Header
+        + '<div class="contact-detail-header">'
+        + '<div class="contact-avatar lg">' + esc(initials(c.name)) + '</div>'
+        + '<div class="contact-detail-header-info">'
+        + '<h2>' + esc(c.name) + '</h2>'
+        + '<div class="contact-header-sub">'
+        + (c.nickname ? '<span class="badge">' + esc(c.nickname) + '</span>' : '')
+        + (c.preferred_channel ? '<span class="pill">' + esc(c.preferred_channel) + '</span>' : '')
         + '</div>'
-        + (c.persona_instructions ? '<p class="text-secondary" style="margin-top:8px"><strong>Persona instructions</strong>: ' + esc(c.persona_instructions) + '</p>' : '')
-        + '<h3 style="margin-top:24px">Identities</h3>' + idsHtml
-        + '<div id="add-identity-area"></div>'
-        + '<button class="btn btn-ghost btn-sm" onclick="showAddIdentity(' + c.id + ')" id="add-identity-btn">+ Add identity</button>'
-        + '<h3 style="margin-top:24px">Relationships</h3>' + relsHtml
-        + '<div id="add-relationship-area"></div>'
-        + '<button class="btn btn-ghost btn-sm" onclick="showAddRelationship(' + c.id + ')" id="add-rel-btn">+ Add relationship</button>'
-        + '<h3 style="margin-top:24px">Events</h3>' + evsHtml
-        + '<div id="add-event-area"></div>'
-        + '<button class="btn btn-ghost btn-sm" onclick="showAddEvent(' + c.id + ')" id="add-event-btn">+ Add event</button>'
+        + bioHtml
+        + '</div>'
+        + '<div class="contact-detail-actions">'
+        + '<button class="btn btn-ghost btn-sm" onclick="showEditForm(' + c.id + ')">Edit</button>'
+        + '<button class="btn btn-danger btn-sm" onclick="deleteContact(' + c.id + ')">Delete</button>'
+        + '</div></div>'
+        // Details section
+        + '<div class="contact-section" style="border-top:none;padding-top:0;margin-top:0">'
+        + '<div class="contact-section-header"><h3>Details</h3></div>'
+        + '<div class="contact-meta-grid">'
+        + metaItem('Channel', c.preferred_channel)
+        + metaItem('Mode', c.response_mode)
+        + metaItem('Tone', c.tone_of_voice)
+        + metaItem('Birthday', c.birthday)
+        + metaItem('Persona', c.persona_override || 'channel default')
+        + metaItem('Agent', c.agent_override)
+        + '</div></div>'
+        + personaNote
+        // Identities
+        + '<div class="contact-section">'
+        + '<div class="contact-section-header"><h3>Identities</h3>'
+        + '<button class="btn btn-ghost btn-sm" onclick="showAddIdentity(' + c.id + ')" id="add-identity-btn">+ Add</button></div>'
+        + idsHtml
+        + '<div id="add-identity-area"></div></div>'
+        // Relationships
+        + '<div class="contact-section">'
+        + '<div class="contact-section-header"><h3>Relationships</h3>'
+        + '<button class="btn btn-ghost btn-sm" onclick="showAddRelationship(' + c.id + ')" id="add-rel-btn">+ Add</button></div>'
+        + relsHtml
+        + '<div id="add-relationship-area"></div></div>'
+        // Events
+        + '<div class="contact-section">'
+        + '<div class="contact-section-header"><h3>Events</h3>'
+        + '<button class="btn btn-ghost btn-sm" onclick="showAddEvent(' + c.id + ')" id="add-event-btn">+ Add</button></div>'
+        + evsHtml
+        + '<div id="add-event-area"></div></div>'
+        // Pending (loaded async)
+        + '<div id="pending-section"></div>'
+        + '</div>';
+
+    loadPending();
+}
+
+function metaItem(label, value) {
+    return '<div class="contact-meta-item">'
+        + '<span class="contact-meta-label">' + esc(label) + '</span>'
+        + '<span class="contact-meta-value">' + esc(value || '\u2014') + '</span>'
         + '</div>';
 }
 
-// ── Edit Form (modal, same pattern as Workflows) ───────────────────
+function goBackToList() {
+    document.getElementById('contacts-layout').classList.remove('detail-open');
+    document.getElementById('contact-detail').style.display = 'none';
+    document.getElementById('contact-empty').style.display = '';
+    selectedId = null;
+    renderList(filterContacts(document.getElementById('contact-search').value));
+}
 
-function showForm(id) {
-    if (!id) { toggleCreatePanel(true); return; }
-    const c = allContacts.find(x => x.id === id);
-    if (!c) return;
-    const modal = document.getElementById('contact-edit-modal');
-    modal.classList.add('open');
-    const chOpts = CHANNELS.map(ch =>
-        '<option value="' + ch + '"' + ((c.preferred_channel || '') === ch ? ' selected' : '') + '>' + ch + '</option>'
+// ── Create Form (renders in detail pane) ────────────────────────────
+
+function showCreateForm() {
+    document.getElementById('contact-empty').style.display = 'none';
+    const el = document.getElementById('contact-detail');
+    el.style.display = 'block';
+    document.getElementById('contacts-layout').classList.add('detail-open');
+
+    const chOpts = ['', 'telegram', 'whatsapp', 'discord', 'slack', 'email'].map(ch =>
+        '<option value="' + ch + '">' + (ch || '\u2014') + '</option>'
     ).join('');
-    const mOpts = MODES.map(m =>
-        '<option value="' + m + '"' + ((c.response_mode || 'automatic') === m ? ' selected' : '') + '>' + m + '</option>'
-    ).join('');
-    // All dynamic content sanitized through esc()
-    modal.innerHTML = '<div class="modal-backdrop" onclick="closeForm()"></div>'
-        + '<div class="modal-content card" style="padding:24px;max-width:520px;overflow-y:auto">'
-        + '<h2>Edit Contact</h2>'
-        + '<form id="contact-edit-form" onsubmit="saveEditContact(event,' + id + ')">'
-        + '<label>Name *<input name="name" class="input" required value="' + esc(c.name || '') + '"></label>'
-        + '<label>Nickname<input name="nickname" class="input" value="' + esc(c.nickname || '') + '"></label>'
-        + '<label>Bio<textarea name="bio" class="input" rows="2">' + esc(c.bio || '') + '</textarea></label>'
-        + '<label>Notes<textarea name="notes" class="input" rows="2">' + esc(c.notes || '') + '</textarea></label>'
-        + '<label>Birthday<input name="birthday" class="input" type="date" value="' + (c.birthday || '') + '"></label>'
-        + '<label>Preferred Channel<select name="preferred_channel" class="input"><option value="">\u2014</option>' + chOpts + '</select></label>'
-        + '<label>Response Mode<select name="response_mode" class="input">' + mOpts + '</select></label>'
-        + '<label>Tone of Voice<input name="tone_of_voice" class="input" placeholder="e.g. formal, informal, friendly" value="' + esc(c.tone_of_voice || '') + '"></label>'
-        + '<label>Persona Override<select name="persona_override" class="input" onchange="document.getElementById(\'persona-instr-group\').style.display=this.value===\'custom\'?\'block\':\'none\'">'
-        + '<option value=""' + (!c.persona_override ? ' selected' : '') + '>Channel default</option>'
-        + '<option value="bot"' + (c.persona_override === 'bot' ? ' selected' : '') + '>Bot</option>'
-        + '<option value="owner"' + (c.persona_override === 'owner' ? ' selected' : '') + '>Owner</option>'
-        + '<option value="company"' + (c.persona_override === 'company' ? ' selected' : '') + '>Company</option>'
-        + '<option value="custom"' + (c.persona_override === 'custom' ? ' selected' : '') + '>Custom</option>'
-        + '</select></label>'
-        + '<div id="persona-instr-group" style="display:' + (c.persona_override === 'custom' ? 'block' : 'none') + '">'
-        + '<label>Persona Instructions<textarea name="persona_instructions" class="input" rows="3" placeholder="Custom instructions for how the agent should present itself to this contact">' + esc(c.persona_instructions || '') + '</textarea></label>'
+
+    el.innerHTML = '<div class="contact-create-form">'
+        + '<button class="btn btn-ghost btn-sm contact-back-btn" onclick="goBackToList()" style="margin-bottom:12px">'
+        + '&#8592; Back</button>'
+        + '<h2>New Contact</h2>'
+        + '<form id="contact-form" class="form form--full">'
+        + '<div class="form-row--2">'
+        + '<div class="form-group"><label for="cf-name">Name *</label>'
+        + '<input id="cf-name" name="name" class="input" type="text" required placeholder="Full name"></div>'
+        + '<div class="form-group"><label for="cf-nickname">Nickname</label>'
+        + '<input id="cf-nickname" name="nickname" class="input" type="text" placeholder="Short name or handle"></div>'
+        + '</div>'
+        + '<div class="form-group"><label for="cf-bio">Bio</label>'
+        + '<textarea id="cf-bio" name="bio" class="input" rows="2" placeholder="Who is this person? Role, context..."></textarea></div>'
+        + '<div class="form-row--2">'
+        + '<div class="form-group"><label for="cf-birthday">Birthday</label>'
+        + '<input id="cf-birthday" name="birthday" class="input" type="date"></div>'
+        + '<div class="form-group"><label for="cf-channel">Preferred Channel</label>'
+        + '<select id="cf-channel" name="preferred_channel" class="input">' + chOpts + '</select></div>'
+        + '</div>'
+        + '<div class="form-group"><label for="cf-tone">Tone of Voice</label>'
+        + '<input id="cf-tone" name="tone_of_voice" class="input" type="text" placeholder="e.g. formal, informal, friendly"></div>'
+        + '<div class="form-group"><label>Channel Identities</label>'
+        + '<div class="form-hint">How can Homun reach this person?</div>'
+        + '<div id="form-identities"></div>'
+        + '<button type="button" class="btn btn-ghost btn-sm" id="add-identity-row-btn" onclick="addFormIdentityRow()" style="margin-top:4px">+ Add identity</button>'
         + '</div>'
         + '<div style="display:flex;gap:8px;margin-top:16px">'
-        + '<button type="submit" class="btn btn-primary btn-sm">Save</button>'
-        + '<button type="button" class="btn btn-ghost btn-sm" onclick="closeForm()">Cancel</button>'
+        + '<button type="submit" class="btn btn-primary btn-sm">Create</button>'
+        + '<button type="button" class="btn btn-ghost btn-sm" onclick="goBackToList()">Cancel</button>'
         + '</div></form></div>';
+
+    document.getElementById('contact-form').addEventListener('submit', e => saveNewContact(e));
+    addFormIdentityRow();
+    document.getElementById('cf-name').focus();
 }
 
 function addFormIdentityRow() {
@@ -257,11 +303,76 @@ function addFormIdentityRow() {
     container.appendChild(row);
 }
 
-function closeForm() {
-    const modal = document.getElementById('contact-edit-modal');
-    modal.classList.remove('open');
-    modal.innerHTML = '';
+// ── Edit Form (inline in detail pane) ────────────────────────────────
+
+function showEditForm(id) {
+    const c = allContacts.find(x => x.id === id);
+    if (!c) return;
+
+    document.getElementById('contact-empty').style.display = 'none';
+    const el = document.getElementById('contact-detail');
+    el.style.display = 'block';
+    document.getElementById('contacts-layout').classList.add('detail-open');
+
+    const chOpts = CHANNELS.map(ch =>
+        '<option value="' + ch + '"' + ((c.preferred_channel || '') === ch ? ' selected' : '') + '>' + ch + '</option>'
+    ).join('');
+    const mOpts = MODES.map(m =>
+        '<option value="' + m + '"' + ((c.response_mode || 'automatic') === m ? ' selected' : '') + '>' + m + '</option>'
+    ).join('');
+    // All dynamic content sanitized through esc()
+    el.innerHTML = '<div class="contact-create-form">'
+        + '<button class="btn btn-ghost btn-sm contact-back-btn" onclick="selectContact(' + id + ')" style="margin-bottom:12px">'
+        + '&#8592; Back</button>'
+        + '<div class="contact-detail-header" style="margin-bottom:24px">'
+        + '<div class="contact-avatar lg">' + esc(initials(c.name)) + '</div>'
+        + '<div class="contact-detail-header-info"><h2>Edit Contact</h2>'
+        + '<div class="contact-header-sub"><span class="text-secondary">' + esc(c.name) + '</span></div></div></div>'
+        + '<form id="contact-edit-form" class="form form--full">'
+        + '<div class="form-row--2">'
+        + '<div class="form-group"><label for="ef-name">Name *</label>'
+        + '<input id="ef-name" name="name" class="input" required value="' + esc(c.name || '') + '"></div>'
+        + '<div class="form-group"><label for="ef-nickname">Nickname</label>'
+        + '<input id="ef-nickname" name="nickname" class="input" value="' + esc(c.nickname || '') + '"></div>'
+        + '</div>'
+        + '<div class="form-group"><label for="ef-bio">Bio</label>'
+        + '<textarea id="ef-bio" name="bio" class="input" rows="2">' + esc(c.bio || '') + '</textarea></div>'
+        + '<div class="form-group"><label for="ef-notes">Notes</label>'
+        + '<textarea id="ef-notes" name="notes" class="input" rows="2">' + esc(c.notes || '') + '</textarea></div>'
+        + '<div class="form-row--2">'
+        + '<div class="form-group"><label for="ef-birthday">Birthday</label>'
+        + '<input id="ef-birthday" name="birthday" class="input" type="date" value="' + (c.birthday || '') + '"></div>'
+        + '<div class="form-group"><label for="ef-channel">Preferred Channel</label>'
+        + '<select id="ef-channel" name="preferred_channel" class="input"><option value="">\u2014</option>' + chOpts + '</select></div>'
+        + '</div>'
+        + '<div class="form-row--2">'
+        + '<div class="form-group"><label for="ef-mode">Response Mode</label>'
+        + '<select id="ef-mode" name="response_mode" class="input">' + mOpts + '</select></div>'
+        + '<div class="form-group"><label for="ef-tone">Tone of Voice</label>'
+        + '<input id="ef-tone" name="tone_of_voice" class="input" placeholder="e.g. formal, informal, friendly" value="' + esc(c.tone_of_voice || '') + '"></div>'
+        + '</div>'
+        + '<div class="form-group"><label for="ef-persona">Persona Override</label>'
+        + '<select id="ef-persona" name="persona_override" class="input" onchange="document.getElementById(\'persona-instr-group\').style.display=this.value===\'custom\'?\'block\':\'none\'">'
+        + '<option value=""' + (!c.persona_override ? ' selected' : '') + '>Channel default</option>'
+        + '<option value="bot"' + (c.persona_override === 'bot' ? ' selected' : '') + '>Bot</option>'
+        + '<option value="owner"' + (c.persona_override === 'owner' ? ' selected' : '') + '>Owner</option>'
+        + '<option value="company"' + (c.persona_override === 'company' ? ' selected' : '') + '>Company</option>'
+        + '<option value="custom"' + (c.persona_override === 'custom' ? ' selected' : '') + '>Custom</option>'
+        + '</select></div>'
+        + '<div id="persona-instr-group" style="display:' + (c.persona_override === 'custom' ? 'block' : 'none') + '">'
+        + '<div class="form-group"><label for="ef-persona-instr">Persona Instructions</label>'
+        + '<textarea id="ef-persona-instr" name="persona_instructions" class="input" rows="3" placeholder="Custom instructions for how the agent should present itself to this contact">' + esc(c.persona_instructions || '') + '</textarea></div>'
+        + '</div>'
+        + '<div style="display:flex;gap:8px;margin-top:16px">'
+        + '<button type="submit" class="btn btn-primary btn-sm">Save</button>'
+        + '<button type="button" class="btn btn-ghost btn-sm" onclick="selectContact(' + id + ')">Cancel</button>'
+        + '</div></form></div>';
+
+    document.getElementById('contact-edit-form').addEventListener('submit', e => saveEditContact(e, id));
+    document.getElementById('ef-name').focus();
 }
+
+// ── Save / Delete ───────────────────────────────────────────────────
 
 async function saveNewContact(e) {
     e.preventDefault();
@@ -294,7 +405,6 @@ async function saveNewContact(e) {
             ));
         }
 
-        toggleCreatePanel(false);
         await loadContacts();
         if (saved.id) selectContact(saved.id);
     } catch (err) { console.error('Failed to save contact', err); }
@@ -310,7 +420,6 @@ async function saveEditContact(e, id) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
         });
-        closeForm();
         await loadContacts();
         selectContact(id);
     } catch (err) { console.error('Failed to save contact', err); }
@@ -319,8 +428,10 @@ async function saveEditContact(e, id) {
 async function deleteContact(id) {
     if (!confirm('Delete this contact?')) return;
     await fetch(API + '/' + id, { method: 'DELETE' });
-    document.getElementById('contact-detail').style.display = 'none';
     selectedId = null;
+    document.getElementById('contact-detail').style.display = 'none';
+    document.getElementById('contact-empty').style.display = '';
+    document.getElementById('contacts-layout').classList.remove('detail-open');
     loadContacts();
 }
 
@@ -461,16 +572,18 @@ async function loadPending() {
         if (!section) return;
         if (!pending.length) { section.textContent = ''; return; }
         // All dynamic content sanitized through esc()
-        section.innerHTML = '<h2>Pending Responses</h2>'
+        section.innerHTML = '<div class="contact-section">'
+            + '<div class="contact-section-header"><h3>Pending Responses</h3></div>'
             + pending.map(p =>
-                '<div class="card" style="padding:16px;margin-bottom:12px">'
-                + '<div><strong>' + esc(p.channel) + '</strong> \u2014 ' + esc(p.inbound_content.substring(0, 200)) + '</div>'
-                + (p.draft_response ? '<div class="text-secondary" style="margin-top:8px">' + esc(p.draft_response.substring(0, 300)) + '</div>' : '')
-                + '<div style="margin-top:8px;display:flex;gap:8px">'
+                '<div class="contact-entity-row" style="flex-wrap:wrap;gap:8px">'
+                + '<span class="pill">' + esc(p.channel) + '</span>'
+                + '<span style="flex:1;font-size:13px">' + esc(p.inbound_content.substring(0, 200)) + '</span>'
+                + '<div style="display:flex;gap:6px">'
                 + '<button class="btn btn-primary btn-sm" onclick="approvePending(' + p.id + ')">Approve</button>'
                 + '<button class="btn btn-ghost btn-sm" onclick="rejectPending(' + p.id + ')">Reject</button>'
                 + '</div></div>'
-            ).join('');
+            ).join('')
+            + '</div>';
     } catch (err) { console.error('Failed to load pending', err); }
 }
 
