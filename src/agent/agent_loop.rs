@@ -24,6 +24,7 @@ use super::browser_task_plan::{BrowserRoutingDecision, BrowserTaskPlanState};
 use super::context::ContextBuilder;
 use super::context_compactor;
 use super::execution_plan::{ExecutionPlanSnapshot, ExecutionPlanState};
+use super::llm_caller;
 use super::iteration_budget::{
     maybe_extend_iteration_budget, tool_call_signature, IterationBudgetState, ToolExecutionSummary,
 };
@@ -924,11 +925,6 @@ impl AgentLoop {
             } else {
                 tool_defs.clone()
             };
-            let api_tools = if xml_mode {
-                Vec::new()
-            } else {
-                effective_tool_defs.clone()
-            };
             let use_streaming = stream_tx.is_some();
 
             let active_model = &selected_model;
@@ -943,16 +939,6 @@ impl AgentLoop {
             if let Some(plan_message) = browser_task_plan.runtime_message(browser_available) {
                 request_messages.push(plan_message);
             }
-
-            let request = ChatRequest {
-                messages: request_messages.clone(),
-                tools: api_tools,
-                model: active_model.clone(),
-                max_tokens: config.agent.effective_max_tokens(active_model),
-                temperature: config.agent.effective_temperature(active_model),
-                think: effective_think,
-                priority: RequestPriority::High,
-            };
 
             // Estimate context size for debugging
             let ctx_chars: usize = request_messages
@@ -970,212 +956,83 @@ impl AgentLoop {
                 "Calling LLM provider"
             );
 
-            let response = if use_streaming {
-                let tx = stream_tx.as_ref().unwrap().clone();
-                match tokio::select! {
-                    response = provider.chat_stream(request, tx) => response,
-                    _ = crate::agent::stop::wait_for_stop() => Err(crate::agent::stop::cancellation_error()),
-                } {
-                    Ok(r) => r,
-                    Err(e) => {
-                        if crate::agent::stop::is_stop_requested() {
-                            final_content = Some("Stopped by user.".to_string());
-                            break 'agent_loop;
-                        }
-                        // Check if the model rejected tool use — if so, switch to XML dispatch
-                        let err_lower = e.to_string().to_lowercase();
-                        let tool_rejected = !xml_mode
-                            && has_tools
-                            && iteration == 1
-                            && (err_lower.contains("tool")
-                                || err_lower.contains("function")
-                                || err_lower.contains("not supported")
-                                || err_lower.contains("no endpoints"));
-
-                        if tool_rejected {
-                            tracing::info!(
-                                "Model rejected tool use (streaming), switching to XML dispatch mode"
-                            );
-                            self.use_xml_dispatch.store(true, Ordering::Relaxed);
-
-                            // Brief delay before retrying to avoid hitting rate limits
-                            // (especially on free-tier models with aggressive limits)
-                            let delay_ms = config.agent.xml_fallback_delay_ms;
-                            if delay_ms > 0 {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms))
-                                    .await;
-                            }
-
-                            let xml_tool_infos: Vec<crate::agent::ToolInfo> = tool_defs
-                                .iter()
-                                .map(|td| crate::agent::ToolInfo {
-                                    name: td.function.name.clone(),
-                                    description: td.function.description.clone(),
-                                    parameters_schema: td.function.parameters.clone(),
-                                })
-                                .collect();
-                            messages = self
-                                .context
-                                .build_messages_with_user_message(
-                                    &history,
-                                    prepared_turn.user_message.clone(),
-                                    &xml_tool_infos,
-                                )
-                                .await;
-
-                            let mut retry_messages = messages.clone();
-                            if let Some(plan_message) = execution_plan.runtime_message() {
-                                retry_messages.push(plan_message);
-                            }
-                            if let Some(plan_message) =
-                                browser_task_plan.runtime_message(browser_available)
-                            {
-                                retry_messages.push(plan_message);
-                            }
-                            let retry_request = ChatRequest {
-                                messages: retry_messages,
-                                tools: Vec::new(),
-                                model: active_model.clone(),
-                                max_tokens: config.agent.effective_max_tokens(active_model),
-                                temperature: config.agent.effective_temperature(active_model),
-                                think: None,
-                                priority: RequestPriority::High,
-                            };
-                            let retry_response = tokio::select! {
-                                response = provider.chat(retry_request) => response,
-                                _ = crate::agent::stop::wait_for_stop() => Err(crate::agent::stop::cancellation_error()),
-                            };
-                            if crate::agent::stop::is_stop_requested() {
-                                final_content = Some("Stopped by user.".to_string());
-                                break 'agent_loop;
-                            }
-                            retry_response.context("XML dispatch fallback also failed")?
-                        } else {
-                            // Regular streaming failure — try non-streaming with same tools
-                            tracing::warn!(error = ?e, "Streaming failed, falling back to non-streaming");
-                            let mut fallback_messages = messages.clone();
-                            if let Some(plan_message) = execution_plan.runtime_message() {
-                                fallback_messages.push(plan_message);
-                            }
-                            if let Some(plan_message) =
-                                browser_task_plan.runtime_message(browser_available)
-                            {
-                                fallback_messages.push(plan_message);
-                            }
-                            let request2 = ChatRequest {
-                                messages: fallback_messages,
-                                tools: if xml_mode {
-                                    Vec::new()
-                                } else {
-                                    tool_defs.clone()
-                                },
-                                model: active_model.clone(),
-                                max_tokens: config.agent.effective_max_tokens(active_model),
-                                temperature: config.agent.effective_temperature(active_model),
-                                think: effective_think,
-                                priority: RequestPriority::High,
-                            };
-                            let fallback_response = tokio::select! {
-                                response = provider.chat(request2) => response,
-                                _ = crate::agent::stop::wait_for_stop() => Err(crate::agent::stop::cancellation_error()),
-                            };
-                            if crate::agent::stop::is_stop_requested() {
-                                final_content = Some("Stopped by user.".to_string());
-                                break 'agent_loop;
-                            }
-                            fallback_response.context("Non-streaming fallback also failed")?
-                        }
+            // Call LLM with automatic streaming → non-streaming fallback
+            let call_params = llm_caller::LlmCallParams {
+                provider: &provider,
+                model: active_model,
+                max_tokens: config.agent.effective_max_tokens(active_model),
+                temperature: config.agent.effective_temperature(active_model),
+                think: effective_think,
+                tool_defs: &effective_tool_defs,
+                xml_mode,
+                has_tools,
+                iteration,
+                xml_fallback_delay_ms: config.agent.xml_fallback_delay_ms,
+            };
+            let call_result = llm_caller::call_llm_with_fallback(
+                &call_params,
+                request_messages,
+                stream_tx.as_ref(),
+            )
+            .await;
+            let response = match call_result {
+                Ok(llm_caller::LlmCallResult::Success(r)) => r,
+                Ok(llm_caller::LlmCallResult::Stopped) => {
+                    // Check if this was an XML fallback signal vs actual stop
+                    if crate::agent::stop::is_stop_requested() {
+                        final_content = Some("Stopped by user.".to_string());
+                        break 'agent_loop;
                     }
-                }
-            } else {
-                match tokio::select! {
-                    response = provider.chat(request) => response,
-                    _ = crate::agent::stop::wait_for_stop() => Err(crate::agent::stop::cancellation_error()),
-                } {
-                    Ok(r) => r,
-                    Err(e) => {
-                        if crate::agent::stop::is_stop_requested() {
-                            final_content = Some("Stopped by user.".to_string());
-                            break 'agent_loop;
-                        }
-                        // Auto-detect: if the model rejects tool specs,
-                        // switch to XML dispatch mode and retry this iteration
-                        if !xml_mode && has_tools && iteration == 1 {
-                            let err_msg = e.to_string().to_lowercase();
-                            if err_msg.contains("tool")
-                                || err_msg.contains("function")
-                                || err_msg.contains("not supported")
-                                || err_msg.contains("invalid")
-                            {
-                                tracing::info!(
-                                    "Model rejected native tool calling, switching to XML dispatch mode"
-                                );
-                                self.use_xml_dispatch.store(true, Ordering::Relaxed);
-
-                                // Brief delay before retrying to avoid hitting rate limits
-                                let delay_ms = config.agent.xml_fallback_delay_ms;
-                                if delay_ms > 0 {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(
-                                        delay_ms,
-                                    ))
-                                    .await;
-                                }
-
-                                // Rebuild system prompt from scratch with tools in XML mode.
-                                // The previous prompt said "No tools" — we need a clean rebuild.
-                                let xml_tool_infos: Vec<crate::agent::ToolInfo> = tool_defs
-                                    .iter()
-                                    .map(|td| crate::agent::ToolInfo {
-                                        name: td.function.name.clone(),
-                                        description: td.function.description.clone(),
-                                        parameters_schema: td.function.parameters.clone(),
-                                    })
-                                    .collect();
-                                messages = self
-                                    .context
-                                    .build_messages_with_user_message(
-                                        &history,
-                                        prepared_turn.user_message.clone(),
-                                        &xml_tool_infos,
-                                    )
-                                    .await;
-
-                                let mut retry_messages = messages.clone();
-                                if let Some(plan_message) = execution_plan.runtime_message() {
-                                    retry_messages.push(plan_message);
-                                }
-                                if let Some(plan_message) =
-                                    browser_task_plan.runtime_message(browser_available)
-                                {
-                                    retry_messages.push(plan_message);
-                                }
-                                let retry_request = ChatRequest {
-                                    messages: retry_messages,
-                                    tools: Vec::new(),
-                                    model: active_model.clone(),
-                                    max_tokens: config.agent.effective_max_tokens(active_model),
-                                    temperature: config.agent.effective_temperature(active_model),
-                                    think: None,
-                                    priority: RequestPriority::High,
-                                };
-                                let retry_response = tokio::select! {
-                                    response = provider.chat(retry_request) => response,
-                                    _ = crate::agent::stop::wait_for_stop() => Err(crate::agent::stop::cancellation_error()),
-                                };
-                                if crate::agent::stop::is_stop_requested() {
-                                    final_content = Some("Stopped by user.".to_string());
-                                    break 'agent_loop;
-                                }
-                                retry_response
-                                    .context("Failed to get response from LLM (XML mode retry)")?
-                            } else {
-                                return Err(e.context("Failed to get response from LLM provider"));
-                            }
-                        } else {
-                            return Err(e.context("Failed to get response from LLM provider"));
-                        }
+                    // XML fallback: rebuild messages with tools in XML mode and retry
+                    self.use_xml_dispatch.store(true, Ordering::Relaxed);
+                    tracing::info!("Switching to XML dispatch mode and retrying");
+                    let delay_ms = config.agent.xml_fallback_delay_ms;
+                    if delay_ms > 0 {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
                     }
+                    let xml_tool_infos: Vec<crate::agent::ToolInfo> = tool_defs
+                        .iter()
+                        .map(|td| crate::agent::ToolInfo {
+                            name: td.function.name.clone(),
+                            description: td.function.description.clone(),
+                            parameters_schema: td.function.parameters.clone(),
+                        })
+                        .collect();
+                    messages = self
+                        .context
+                        .build_messages_with_user_message(
+                            &history,
+                            prepared_turn.user_message.clone(),
+                            &xml_tool_infos,
+                        )
+                        .await;
+                    let mut retry_messages = messages.clone();
+                    if let Some(plan_message) = execution_plan.runtime_message() {
+                        retry_messages.push(plan_message);
+                    }
+                    if let Some(plan_message) = browser_task_plan.runtime_message(browser_available) {
+                        retry_messages.push(plan_message);
+                    }
+                    let retry_request = ChatRequest {
+                        messages: retry_messages,
+                        tools: Vec::new(),
+                        model: active_model.clone(),
+                        max_tokens: config.agent.effective_max_tokens(active_model),
+                        temperature: config.agent.effective_temperature(active_model),
+                        think: None,
+                        priority: RequestPriority::High,
+                    };
+                    let retry_response = tokio::select! {
+                        response = provider.chat(retry_request) => response,
+                        _ = crate::agent::stop::wait_for_stop() => Err(crate::agent::stop::cancellation_error()),
+                    };
+                    if crate::agent::stop::is_stop_requested() {
+                        final_content = Some("Stopped by user.".to_string());
+                        break 'agent_loop;
+                    }
+                    retry_response.context("XML dispatch fallback also failed")?
                 }
+                Err(e) => return Err(e),
             };
 
             browser_context::clear_temporary_browser_screenshot_context(&mut messages);

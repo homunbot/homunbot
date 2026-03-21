@@ -12,6 +12,7 @@ pub mod email_approval;
 mod execution_plan;
 pub mod gateway;
 mod iteration_budget;
+mod llm_caller;
 mod memory_db;
 pub mod orchestrator;
 pub mod heartbeat;
