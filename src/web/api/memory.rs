@@ -100,7 +100,8 @@ async fn memory_stats(
         None => 0,
     };
 
-    let daily_count = std::fs::read_dir(data_dir.join("memory"))
+    let daily_dir = crate::agent::memory::daily_log_dir(&data_dir, q.profile.as_deref());
+    let daily_count = std::fs::read_dir(&daily_dir)
         .map(|entries| {
             entries
                 .filter_map(|e| e.ok())
@@ -528,8 +529,11 @@ struct DailyListResponse {
     dates: Vec<String>,
 }
 
-async fn list_daily_files() -> Json<DailyListResponse> {
-    let memory_dir = crate::config::Config::data_dir().join("memory");
+async fn list_daily_files(
+    Query(q): Query<StatsQuery>,
+) -> Json<DailyListResponse> {
+    let data_dir = crate::config::Config::data_dir();
+    let memory_dir = crate::agent::memory::daily_log_dir(&data_dir, q.profile.as_deref());
 
     let mut dates: Vec<String> = std::fs::read_dir(&memory_dir)
         .map(|entries| {
@@ -554,15 +558,18 @@ struct DailyFileResponse {
     content: String,
 }
 
-async fn get_daily_file(Path(date): Path<String>) -> Result<Json<DailyFileResponse>, StatusCode> {
+async fn get_daily_file(
+    Path(date): Path<String>,
+    Query(q): Query<StatsQuery>,
+) -> Result<Json<DailyFileResponse>, StatusCode> {
     // Validate date format to prevent path traversal
     if !date.chars().all(|c| c.is_ascii_digit() || c == '-') || date.len() != 10 {
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let path = crate::config::Config::data_dir()
-        .join("memory")
-        .join(format!("{date}.md"));
+    let data_dir = crate::config::Config::data_dir();
+    let memory_dir = crate::agent::memory::daily_log_dir(&data_dir, q.profile.as_deref());
+    let path = memory_dir.join(format!("{date}.md"));
 
     let content = tokio::fs::read_to_string(&path)
         .await

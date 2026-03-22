@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use axum::routing::get;
@@ -54,8 +54,46 @@ struct VaultKeysResponse {
     keys: Vec<String>,
 }
 
+/// Query param for profile-scoped vault operations.
+#[derive(Deserialize, Default)]
+struct VaultProfileQuery {
+    /// Profile slug — filters vault keys to this profile. Empty = default.
+    #[serde(default)]
+    profile: Option<String>,
+}
+
+/// Build vault key prefix for a profile.
+/// - "default" or empty → `vault.` (excludes profile-scoped keys)
+/// - Other profile → `vault.p:{slug}.`
+fn vault_prefix(profile: Option<&str>) -> String {
+    match profile {
+        Some(slug) if !slug.is_empty() && slug != "default" => {
+            format!("vault.p:{slug}.")
+        }
+        _ => "vault.".to_string(),
+    }
+}
+
+/// Strip profile-specific vault prefix from a raw key.
+fn strip_vault_prefix(raw_key: &str, profile: Option<&str>) -> Option<String> {
+    let prefix = vault_prefix(profile);
+    // For default profile, exclude profile-scoped keys (vault.p:*)
+    if let Some(stripped) = raw_key.strip_prefix(&prefix) {
+        if profile.is_none() || profile == Some("") || profile == Some("default") {
+            // Don't match profile-scoped keys when filtering default
+            if stripped.starts_with("p:") {
+                return None;
+            }
+        }
+        Some(stripped.to_string())
+    } else {
+        None
+    }
+}
+
 async fn list_vault_keys(
     State(state): State<Arc<AppState>>,
+    Query(q): Query<VaultProfileQuery>,
 ) -> Result<Json<VaultKeysResponse>, StatusCode> {
     audit_log(&state, "*", "list", true);
     let secrets =
@@ -64,9 +102,10 @@ async fn list_vault_keys(
         .load()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let profile = q.profile.as_deref();
     let mut keys: Vec<String> = all
         .keys()
-        .filter_map(|k| k.strip_prefix("vault.").map(|s| s.to_string()))
+        .filter_map(|k| strip_vault_prefix(k, profile))
         .collect();
     keys.sort_unstable();
 
@@ -77,6 +116,9 @@ async fn list_vault_keys(
 struct SetVaultRequest {
     key: String,
     value: String,
+    /// Profile slug — when set, stores in that profile's namespace.
+    #[serde(default)]
+    profile: Option<String>,
 }
 
 async fn set_vault_secret(
@@ -98,9 +140,10 @@ async fn set_vault_secret(
         }));
     }
 
+    let prefix = vault_prefix(req.profile.as_deref());
     let secrets =
         crate::storage::global_secrets().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let secret_key = crate::storage::SecretKey::custom(&format!("vault.{}", req.key));
+    let secret_key = crate::storage::SecretKey::custom(&format!("{prefix}{}", req.key));
     secrets
         .set(&secret_key, &req.value)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -131,6 +174,9 @@ struct RevealRequest {
     session_id: Option<String>,
     #[serde(default)]
     code: Option<String>,
+    /// Profile slug for profile-scoped secrets.
+    #[serde(default)]
+    profile: Option<String>,
 }
 
 #[cfg(feature = "vault-2fa")]
@@ -148,7 +194,7 @@ async fn reveal_vault_secret(
             // If we can't load 2FA config, allow access (fail open for availability)
             tracing::warn!("Could not load 2FA config, allowing vault access");
             audit_log(&state, &key, "reveal", true);
-            return do_reveal_secret(&key).await;
+            return do_reveal_secret(&key, req.profile.as_deref()).await;
         }
     };
 
@@ -157,14 +203,14 @@ async fn reveal_vault_secret(
         Err(_) => {
             tracing::warn!("Could not load 2FA config, allowing vault access");
             audit_log(&state, &key, "reveal", true);
-            return do_reveal_secret(&key).await;
+            return do_reveal_secret(&key, req.profile.as_deref()).await;
         }
     };
 
     if !config.enabled {
         // 2FA not enabled, allow access
         audit_log(&state, &key, "reveal", true);
-        return do_reveal_secret(&key).await;
+        return do_reveal_secret(&key, req.profile.as_deref()).await;
     }
 
     // 2FA is enabled - verify authentication
@@ -197,24 +243,25 @@ async fn reveal_vault_secret(
     }
 
     audit_log(&state, &key, "reveal", true);
-    do_reveal_secret(&key).await
+    do_reveal_secret(&key, req.profile.as_deref()).await
 }
 
 #[cfg(not(feature = "vault-2fa"))]
 async fn reveal_vault_secret(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
-    _req: Json<RevealRequest>,
+    Json(req): Json<RevealRequest>,
 ) -> Result<Json<RevealResponse>, StatusCode> {
     // 2FA feature not enabled, allow direct access
     audit_log(&state, &key, "reveal", true);
-    do_reveal_secret(&key).await
+    do_reveal_secret(&key, req.profile.as_deref()).await
 }
 
-async fn do_reveal_secret(key: &str) -> Result<Json<RevealResponse>, StatusCode> {
+async fn do_reveal_secret(key: &str, profile: Option<&str>) -> Result<Json<RevealResponse>, StatusCode> {
     let secrets =
         crate::storage::global_secrets().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let secret_key = crate::storage::SecretKey::custom(&format!("vault.{key}"));
+    let prefix = vault_prefix(profile);
+    let secret_key = crate::storage::SecretKey::custom(&format!("{prefix}{key}"));
 
     match secrets.get(&secret_key) {
         Ok(Some(value)) => Ok(Json(RevealResponse {
@@ -239,11 +286,13 @@ async fn delete_vault_secret(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthUser>,
     Path(key): Path<String>,
+    Query(q): Query<VaultProfileQuery>,
 ) -> Result<Json<OkResponse>, StatusCode> {
     check_admin(&auth)?;
+    let prefix = vault_prefix(q.profile.as_deref());
     let secrets =
         crate::storage::global_secrets().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let secret_key = crate::storage::SecretKey::custom(&format!("vault.{key}"));
+    let secret_key = crate::storage::SecretKey::custom(&format!("{prefix}{key}"));
 
     secrets
         .delete(&secret_key)

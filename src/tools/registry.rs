@@ -47,6 +47,14 @@ pub struct ToolContext {
     /// SKL-5: Skill-specific env vars to inject into subprocess execution.
     /// Set when a skill with configured env is activated.
     pub skill_env: Option<HashMap<String, String>>,
+    /// Active profile ID for profile-scoped operations (remember, memory, etc.).
+    pub profile_id: Option<i64>,
+    /// Brain directory for the active profile (e.g. `~/.homun/brain/profiles/default/`).
+    /// Used by remember tool to write USER.md to the correct location.
+    pub profile_brain_dir: Option<std::path::PathBuf>,
+    /// Active profile slug (e.g. "default", "fabio-personale").
+    /// Used by vault tool for profile-scoped secret namespacing.
+    pub profile_slug: Option<String>,
 }
 
 /// Tool trait — every built-in tool and skill implements this.
@@ -241,6 +249,9 @@ mod tests {
             message_tx: None,
             approval_manager: None,
             skill_env: None,
+            profile_id: None,
+            profile_brain_dir: None,
+            profile_slug: None,
         }
     }
 

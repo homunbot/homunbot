@@ -11,6 +11,19 @@ use crate::provider::{ChatMessage, ChatRequest, Provider, RequestPriority};
 use crate::security::redact_vault_values;
 use crate::storage::MemoryBackend;
 
+/// Resolve the daily log directory for a profile slug.
+///
+/// - Default/None: `{data_dir}/memory/`
+/// - Other profiles: `{data_dir}/memory/profiles/{slug}/`
+pub fn daily_log_dir(data_dir: &std::path::Path, profile_slug: Option<&str>) -> PathBuf {
+    match profile_slug {
+        Some(slug) if !slug.is_empty() && slug != "default" => {
+            data_dir.join("memory").join("profiles").join(slug)
+        }
+        _ => data_dir.join("memory"),
+    }
+}
+
 /// Memory consolidation system — LLM-powered summarization.
 ///
 /// Follows nanobot's pattern with two-tier storage:
@@ -166,6 +179,7 @@ impl MemoryConsolidator {
         agent_id: Option<&str>,
         profile_brain_dir: Option<std::path::PathBuf>,
         profile_id: Option<i64>,
+        profile_slug: Option<String>,
     ) -> Result<ConsolidationResult> {
         // How many to keep in active session
         let keep_count = (memory_window / 2) as i64;
@@ -421,7 +435,7 @@ impl MemoryConsolidator {
         // --- 3. Append to HISTORY.md and daily memory file ---
         if !history_entry.is_empty() {
             self.append_history_md(&history_entry)?;
-            self.save_daily_md(&history_entry)?;
+            self.save_daily_md_for(&history_entry, profile_slug.as_deref())?;
         }
 
         // --- 4. Update MEMORY.md + DB if memory changed ---
@@ -700,10 +714,17 @@ impl MemoryConsolidator {
         Ok(())
     }
 
-    /// Save a daily memory file at ~/.homun/memory/YYYY-MM-DD.md
-    /// Each consolidation appends to the day's file, creating human-readable logs.
+    /// Save a daily memory file, scoped by profile.
+    ///
+    /// - Default/None: `~/.homun/memory/YYYY-MM-DD.md` (backward compatible)
+    /// - Other profiles: `~/.homun/memory/profiles/{slug}/YYYY-MM-DD.md`
     pub fn save_daily_md(&self, entry: &str) -> Result<()> {
-        let memory_dir = self.data_dir.join("memory");
+        self.save_daily_md_for(entry, None)
+    }
+
+    /// Save a daily memory file for a specific profile.
+    pub fn save_daily_md_for(&self, entry: &str, profile_slug: Option<&str>) -> Result<()> {
+        let memory_dir = daily_log_dir(&self.data_dir, profile_slug);
         std::fs::create_dir_all(&memory_dir).context("Failed to create memory/ directory")?;
 
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();

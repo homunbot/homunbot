@@ -657,6 +657,7 @@ mod tests {
             skill_env: None,
             profile_id: None,
             profile_brain_dir: None,
+            profile_slug: None,
         }
     }
 

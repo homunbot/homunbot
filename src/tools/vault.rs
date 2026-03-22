@@ -62,8 +62,43 @@ impl VaultTool {
         }
     }
 
-    fn vault_key(name: &str) -> SecretKey {
-        SecretKey::custom(&format!("{VAULT_PREFIX}{name}"))
+    /// Build a profile-scoped vault key.
+    ///
+    /// - Default profile (or None): `vault.{name}` (backward compatible)
+    /// - Other profiles: `vault.p:{slug}.{name}`
+    fn vault_key_for(name: &str, profile_slug: Option<&str>) -> SecretKey {
+        match profile_slug {
+            Some(slug) if slug != "default" => {
+                SecretKey::custom(&format!("{VAULT_PREFIX}p:{slug}.{name}"))
+            }
+            _ => SecretKey::custom(&format!("{VAULT_PREFIX}{name}")),
+        }
+    }
+
+    /// Build a vault key prefix for listing (returns the prefix string to filter).
+    fn vault_prefix_for(profile_slug: Option<&str>) -> String {
+        match profile_slug {
+            Some(slug) if slug != "default" => format!("{VAULT_PREFIX}p:{slug}."),
+            _ => VAULT_PREFIX.to_string(),
+        }
+    }
+
+    /// Strip the vault prefix from a key to get the user-visible name.
+    /// For default profile, excludes profile-scoped keys (vault.p:*).
+    fn strip_vault_prefix(key: &str, profile_slug: Option<&str>) -> Option<String> {
+        let prefix = Self::vault_prefix_for(profile_slug);
+        if let Some(stripped) = key.strip_prefix(&prefix) {
+            // When listing default profile, exclude other profiles' keys
+            let is_default = profile_slug.is_none()
+                || profile_slug == Some("default")
+                || profile_slug == Some("");
+            if is_default && stripped.starts_with("p:") {
+                return None;
+            }
+            Some(stripped.to_string())
+        } else {
+            None
+        }
     }
 
     /// Check if 2FA is enabled.
@@ -227,8 +262,9 @@ impl Tool for VaultTool {
         })
     }
 
-    async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolResult> {
+    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
         let action = get_string_param(&args, "action")?;
+        let profile = ctx.profile_slug.as_deref();
 
         match action.as_str() {
             "store" => {
@@ -237,10 +273,10 @@ impl Tool for VaultTool {
 
                 let secrets = global_secrets()
                     .map_err(|e| anyhow::anyhow!("Failed to access vault: {e}"))?;
-                secrets.set(&Self::vault_key(&key), &value)?;
+                secrets.set(&Self::vault_key_for(&key, profile), &value)?;
                 self.log_access(&key, "store", true);
 
-                tracing::info!(key = %key, "Stored secret in vault");
+                tracing::info!(key = %key, profile = ?profile, "Stored secret in vault");
                 Ok(ToolResult::success(format!(
                     "Secret '{key}' stored securely in encrypted vault. \
                      Reference it as vault://{key} — NEVER include the actual value in memory or responses."
@@ -286,7 +322,7 @@ impl Tool for VaultTool {
                 let secrets = global_secrets()
                     .map_err(|e| anyhow::anyhow!("Failed to access vault: {e}"))?;
 
-                match secrets.get(&Self::vault_key(&key))? {
+                match secrets.get(&Self::vault_key_for(&key, profile))? {
                     Some(value) => {
                         self.log_access(&key, "retrieve", true);
                         tracing::info!(key = %key, "Retrieved secret from vault");
@@ -329,9 +365,9 @@ impl Tool for VaultTool {
                     .map_err(|e| anyhow::anyhow!("Failed to access vault: {e}"))?;
 
                 let all = secrets.load()?;
-                let vault_keys: Vec<&str> = all
+                let vault_keys: Vec<String> = all
                     .keys()
-                    .filter_map(|k| k.strip_prefix(VAULT_PREFIX))
+                    .filter_map(|k| Self::strip_vault_prefix(k, profile))
                     .collect();
 
                 if vault_keys.is_empty() {
@@ -354,14 +390,15 @@ impl Tool for VaultTool {
                 let secrets = global_secrets()
                     .map_err(|e| anyhow::anyhow!("Failed to access vault: {e}"))?;
 
+                let vault_key = Self::vault_key_for(&key, profile);
                 // Check if it exists first
-                if secrets.get(&Self::vault_key(&key))?.is_none() {
+                if secrets.get(&vault_key)?.is_none() {
                     return Ok(ToolResult::error(format!(
                         "Secret '{key}' not found in vault."
                     )));
                 }
 
-                secrets.delete(&Self::vault_key(&key))?;
+                secrets.delete(&vault_key)?;
                 self.log_access(&key, "delete", true);
                 tracing::info!(key = %key, "Deleted secret from vault");
                 Ok(ToolResult::success(format!(
@@ -381,8 +418,31 @@ mod tests {
 
     #[test]
     fn test_vault_key_namespacing() {
-        let key = VaultTool::vault_key("aws_password");
+        // Default profile — backward compatible flat key
+        let key = VaultTool::vault_key_for("aws_password", None);
         assert_eq!(key.as_str(), "vault.aws_password");
+
+        let key = VaultTool::vault_key_for("aws_password", Some("default"));
+        assert_eq!(key.as_str(), "vault.aws_password");
+
+        // Non-default profile — namespaced key
+        let key = VaultTool::vault_key_for("aws_password", Some("fabio-personale"));
+        assert_eq!(key.as_str(), "vault.p:fabio-personale.aws_password");
+    }
+
+    #[test]
+    fn test_vault_prefix_stripping() {
+        // Default profile
+        let name = VaultTool::strip_vault_prefix("vault.my_key", None);
+        assert_eq!(name, Some("my_key".to_string()));
+
+        // Should NOT match profile-scoped keys when filtering default
+        let name = VaultTool::strip_vault_prefix("vault.p:work.my_key", None);
+        assert_eq!(name, None);
+
+        // Profile-scoped
+        let name = VaultTool::strip_vault_prefix("vault.p:work.my_key", Some("work"));
+        assert_eq!(name, Some("my_key".to_string()));
     }
 
     #[test]

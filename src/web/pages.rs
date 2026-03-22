@@ -2740,6 +2740,12 @@ async fn vault_page() -> Html<String> {
                         <h1 class="page-title">Vault</h1>
                         <span class="badge badge-neutral" id="vault-count">Loading…</span>
                     </div>
+                    <div class="page-actions">
+                        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.875rem;color:var(--muted)">
+                            Profile:
+                            <select id="vault-profile-filter" class="select select-sm" style="min-width:160px"></select>
+                        </label>
+                    </div>
                 </div>
 
                 <div class="vault-notice">

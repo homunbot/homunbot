@@ -122,6 +122,9 @@ mod tests {
             message_tx: None,
             approval_manager: None,
             skill_env: None,
+            profile_id: None,
+            profile_brain_dir: None,
+            profile_slug: None,
         }
     }
 
@@ -165,6 +168,9 @@ mod tests {
             message_tx: Some(tx),
             approval_manager: None,
             skill_env: None,
+            profile_id: None,
+            profile_brain_dir: None,
+            profile_slug: None,
         };
 
         let args = serde_json::json!({"content": "Hello from the agent!"});
@@ -191,6 +197,9 @@ mod tests {
             message_tx: Some(tx),
             approval_manager: None,
             skill_env: None,
+            profile_id: None,
+            profile_brain_dir: None,
+            profile_slug: None,
         };
 
         let args = serde_json::json!({

@@ -868,6 +868,7 @@ impl AgentLoop {
             skill_env: None,
             profile_id: Some(active_profile_id),
             profile_brain_dir: active_profile_brain_dir.clone(),
+            profile_slug: active_profile_slug.clone(),
         };
 
         // Browser session: idle cleanup and per-conversation continuation hint
@@ -1847,6 +1848,7 @@ impl AgentLoop {
             session_key,
             active_profile_brain_dir,
             Some(active_profile_id),
+            active_profile_slug,
         )
         .await;
 
@@ -1918,6 +1920,7 @@ impl AgentLoop {
         session_key: &str,
         profile_brain_dir: Option<std::path::PathBuf>,
         profile_id: Option<i64>,
+        profile_slug: Option<String>,
     ) {
         let memory = self.memory.clone();
         let cfg = self.config.read().await;
@@ -1955,6 +1958,7 @@ impl AgentLoop {
                             agent_id.as_deref(),
                             profile_brain_dir,
                             profile_id,
+                            profile_slug,
                         )
                         .await
                     {

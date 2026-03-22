@@ -1,5 +1,38 @@
 // Homun — Vault page interactivity
 
+// ─── Profile filter ───
+(async function initProfileFilter() {
+    const select = document.getElementById('vault-profile-filter');
+    if (!select) return;
+
+    // Add default option
+    const defOpt = document.createElement('option');
+    defOpt.value = '';
+    defOpt.textContent = '\u{1F464} Default';
+    select.appendChild(defOpt);
+
+    try {
+        const res = await fetch('/api/v1/profiles');
+        if (!res.ok) return;
+        const profiles = await res.json();
+        profiles.forEach(p => {
+            if (p.slug === 'default') return; // already added above
+            const opt = document.createElement('option');
+            opt.value = p.slug;
+            opt.textContent = (p.avatar_emoji || '\u{1F464}') + ' ' + p.display_name;
+            select.appendChild(opt);
+        });
+    } catch (_) {}
+
+    select.addEventListener('change', () => loadKeys());
+})();
+
+/** Get the current vault profile filter slug (empty = default). */
+function getVaultProfile() {
+    const el = document.getElementById('vault-profile-filter');
+    return el ? el.value : '';
+}
+
 // ─── State ───
 const vaultList = document.getElementById('vault-list');
 const vaultCount = document.getElementById('vault-count');
@@ -309,7 +342,9 @@ document.getElementById('recovery-auth-code')?.addEventListener('keypress', (e) 
 // ─── Load keys ───
 async function loadKeys() {
     try {
-        const resp = await fetch('/api/v1/vault');
+        const profile = getVaultProfile();
+        const qs = profile ? `?profile=${encodeURIComponent(profile)}` : '';
+        const resp = await fetch(`/api/v1/vault${qs}`);
         const data = await resp.json();
         const keys = data.keys || [];
 
@@ -400,10 +435,13 @@ if (vaultForm) {
         }
 
         try {
+            const profile = getVaultProfile();
+            const payload = { key, value };
+            if (profile) payload.profile = profile;
             const resp = await fetch('/api/v1/vault', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key, value }),
+                body: JSON.stringify(payload),
             });
             const data = await resp.json();
             if (data.ok) {
@@ -441,9 +479,11 @@ async function doRevealSecret(key) {
     openModal('reveal-modal');
 
     try {
-        const body = currentSessionId
-            ? JSON.stringify({ session_id: currentSessionId })
-            : JSON.stringify({});
+        const profile = getVaultProfile();
+        const revealPayload = {};
+        if (currentSessionId) revealPayload.session_id = currentSessionId;
+        if (profile) revealPayload.profile = profile;
+        const body = JSON.stringify(revealPayload);
 
         const resp = await fetch(`/api/v1/vault/${encodeURIComponent(key)}/reveal`, {
             method: 'POST',
@@ -517,7 +557,9 @@ if (btnCopy) {
 async function deleteSecret(key) {
     if (!confirm(`Delete secret "${key}"? This cannot be undone.`)) return;
     try {
-        const resp = await fetch(`/api/v1/vault/${encodeURIComponent(key)}`, {
+        const profile = getVaultProfile();
+        const qs = profile ? `?profile=${encodeURIComponent(profile)}` : '';
+        const resp = await fetch(`/api/v1/vault/${encodeURIComponent(key)}${qs}`, {
             method: 'DELETE',
         });
         const data = await resp.json();
