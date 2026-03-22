@@ -276,6 +276,7 @@ impl ContactsTool {
             persona_override: args["persona_override"].as_str().map(|s| s.to_string()),
             persona_instructions: args["persona_instructions"].as_str().map(|s| s.to_string()),
             agent_override: args["agent_override"].as_str().map(|s| s.to_string()),
+            profile_id: args["profile_id"].as_i64(),
         };
         let updated = self.db.update_contact(id, &upd).await?;
         Ok(ToolResult {

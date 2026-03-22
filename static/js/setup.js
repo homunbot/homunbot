@@ -2901,10 +2901,21 @@ if (btnRunCleanup) {
     var container = document.getElementById('profiles-list');
     if (!container) return;
 
+    var editingKey = null; // null = creating, string = editing
+
     function formatBytes(bytes) {
         if (bytes < 1024) return bytes + ' B';
         if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
         return (bytes / 1048576).toFixed(1) + ' MB';
+    }
+
+    function makeBtn(text, cls, onClick) {
+        var b = document.createElement('button');
+        b.className = 'btn ' + (cls || 'btn-secondary');
+        b.style.cssText = 'font-size:11px;padding:3px 8px;';
+        b.textContent = text;
+        b.addEventListener('click', onClick);
+        return b;
     }
 
     function buildProfileCard(p) {
@@ -2922,52 +2933,60 @@ if (btnRunCleanup) {
         info.appendChild(title);
         if (p.is_default) {
             var badge = document.createElement('span');
-            badge.style.cssText = 'font-size:10px;opacity:0.5;margin-left:4px;';
-            badge.textContent = '(default)';
+            badge.className = 'status-badge success';
+            badge.style.cssText = 'font-size:10px;margin-left:6px;';
+            badge.textContent = 'default';
             info.appendChild(badge);
         }
+        if (p.description) {
+            var desc = document.createElement('div');
+            desc.style.cssText = 'font-size:12px;color:var(--t3);margin-top:2px;';
+            desc.textContent = p.description;
+            info.appendChild(desc);
+        }
         var meta = document.createElement('div');
-        meta.style.cssText = 'font-size:12px;color:var(--t3);margin-top:2px;';
+        meta.style.cssText = 'font-size:11px;color:var(--t3);margin-top:2px;display:flex;gap:8px;align-items:center;';
+        var keySpan = document.createElement('span');
+        keySpan.style.opacity = '0.6';
+        keySpan.textContent = p.name;
+        meta.appendChild(keySpan);
         if (p.exists) {
             var sizeSpan = document.createElement('span');
             sizeSpan.className = 'pairing-status success';
-            sizeSpan.style.fontSize = '12px';
+            sizeSpan.style.fontSize = '11px';
             sizeSpan.textContent = formatBytes(p.size_bytes);
             meta.appendChild(sizeSpan);
         } else {
             var notCreated = document.createElement('span');
             notCreated.className = 'pairing-status';
-            notCreated.style.fontSize = '12px';
+            notCreated.style.fontSize = '11px';
             notCreated.textContent = 'Not created yet';
             meta.appendChild(notCreated);
         }
         if (p.wrong_owner_count > 0) {
             var warn = document.createElement('span');
             warn.className = 'pairing-status error';
-            warn.style.cssText = 'font-size:12px;margin-left:8px;';
-            warn.textContent = p.wrong_owner_count + ' files with wrong ownership';
+            warn.style.fontSize = '11px';
+            warn.textContent = p.wrong_owner_count + ' wrong owner';
             meta.appendChild(warn);
         }
         info.appendChild(meta);
 
         // Right: buttons
         var btns = document.createElement('div');
-        btns.style.cssText = 'display:flex;gap:6px;';
-        if (p.wrong_owner_count > 0) {
-            var fixBtn = document.createElement('button');
-            fixBtn.className = 'btn btn-secondary';
-            fixBtn.style.cssText = 'font-size:12px;padding:4px 10px;';
-            fixBtn.textContent = 'Fix Permissions';
-            fixBtn.addEventListener('click', function() { fixProfile(p.name); });
-            btns.appendChild(fixBtn);
+        btns.style.cssText = 'display:flex;gap:4px;flex-shrink:0;';
+        if (!p.is_default) btns.appendChild(makeBtn('Set Default', 'btn-secondary', function() { setDefault(p.name); }));
+        btns.appendChild(makeBtn('Edit', 'btn-secondary', function() { openEditModal(p); }));
+        if (p.wrong_owner_count > 0) btns.appendChild(makeBtn('Fix', 'btn-secondary', function() { fixProfile(p.name); }));
+        if (!p.is_default) {
+            var del = makeBtn('Delete', 'btn-secondary', function() { deleteProfile(p.name); });
+            del.style.color = 'var(--danger)';
+            btns.appendChild(del);
         }
         if (p.exists) {
-            var cleanBtn = document.createElement('button');
-            cleanBtn.className = 'btn btn-secondary';
-            cleanBtn.style.cssText = 'font-size:12px;padding:4px 10px;color:var(--danger);';
-            cleanBtn.textContent = 'Clean';
-            cleanBtn.addEventListener('click', function() { cleanProfile(p.name); });
-            btns.appendChild(cleanBtn);
+            var clean = makeBtn('Clean Data', 'btn-secondary', function() { cleanProfile(p.name); });
+            clean.style.color = 'var(--danger)';
+            btns.appendChild(clean);
         }
 
         row.appendChild(info);
@@ -2976,51 +2995,227 @@ if (btnRunCleanup) {
         return card;
     }
 
+    // ─── Modal ───
+
+    function getOrCreateModal() {
+        var modal = document.getElementById('profile-modal');
+        if (modal) return modal;
+        modal = document.createElement('div');
+        modal.id = 'profile-modal';
+        modal.className = 'modal';
+
+        var content = document.createElement('div');
+        content.className = 'modal-content';
+        content.style.maxWidth = '480px';
+
+        var h3 = document.createElement('h3');
+        h3.id = 'profile-modal-title';
+        h3.textContent = 'Add Profile';
+        content.appendChild(h3);
+
+        var fields = [
+            { id: 'pm-key', label: 'Profile Key (kebab-case)', type: 'text', placeholder: 'e.g. social-media' },
+            { id: 'pm-name', label: 'Display Name', type: 'text', placeholder: 'e.g. Social Media' },
+            { id: 'pm-description', label: 'Description', type: 'text', placeholder: 'What this profile is for' },
+            { id: 'pm-browser-type', label: 'Browser Type', type: 'select', options: [
+                ['', 'Default (inherit global)'], ['chromium', 'Chromium'], ['firefox', 'Firefox'], ['webkit', 'WebKit']
+            ]},
+            { id: 'pm-headless', label: 'Headless', type: 'select', options: [
+                ['', 'Default (inherit global)'], ['true', 'Yes'], ['false', 'No']
+            ]},
+            { id: 'pm-proxy', label: 'Proxy (optional)', type: 'text', placeholder: 'http://proxy:8080' },
+            { id: 'pm-user-agent', label: 'User Agent (optional)', type: 'text', placeholder: 'Custom user agent string' },
+        ];
+
+        fields.forEach(function(f) {
+            var group = document.createElement('div');
+            group.className = 'form-group';
+            var label = document.createElement('label');
+            label.textContent = f.label;
+            group.appendChild(label);
+            if (f.type === 'select') {
+                var sel = document.createElement('select');
+                sel.id = f.id;
+                f.options.forEach(function(opt) {
+                    var o = document.createElement('option');
+                    o.value = opt[0];
+                    o.textContent = opt[1];
+                    sel.appendChild(o);
+                });
+                group.appendChild(sel);
+            } else {
+                var inp = document.createElement('input');
+                inp.type = f.type;
+                inp.id = f.id;
+                inp.placeholder = f.placeholder || '';
+                group.appendChild(inp);
+            }
+            content.appendChild(group);
+        });
+
+        var btnRow = document.createElement('div');
+        btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:16px;';
+        var cancelBtn = document.createElement('button');
+        cancelBtn.className = 'btn btn-secondary';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.addEventListener('click', closeModal);
+        btnRow.appendChild(cancelBtn);
+        var saveBtn = document.createElement('button');
+        saveBtn.className = 'btn';
+        saveBtn.textContent = 'Save';
+        saveBtn.addEventListener('click', saveProfile);
+        btnRow.appendChild(saveBtn);
+        content.appendChild(btnRow);
+
+        modal.appendChild(content);
+        document.body.appendChild(modal);
+        modal.addEventListener('click', function(e) { if (e.target === modal) closeModal(); });
+        return modal;
+    }
+
+    function openAddModal() {
+        editingKey = null;
+        var modal = getOrCreateModal();
+        modal.querySelector('#profile-modal-title').textContent = 'Add Profile';
+        modal.querySelector('#pm-key').value = '';
+        modal.querySelector('#pm-key').disabled = false;
+        modal.querySelector('#pm-name').value = '';
+        modal.querySelector('#pm-description').value = '';
+        modal.querySelector('#pm-browser-type').value = '';
+        modal.querySelector('#pm-headless').value = '';
+        modal.querySelector('#pm-proxy').value = '';
+        modal.querySelector('#pm-user-agent').value = '';
+        modal.style.display = 'flex';
+    }
+
+    function openEditModal(p) {
+        editingKey = p.name;
+        var modal = getOrCreateModal();
+        modal.querySelector('#profile-modal-title').textContent = 'Edit Profile';
+        modal.querySelector('#pm-key').value = p.name;
+        modal.querySelector('#pm-key').disabled = true;
+        modal.querySelector('#pm-name').value = p.display_name || '';
+        modal.querySelector('#pm-description').value = p.description || '';
+        modal.querySelector('#pm-browser-type').value = '';
+        modal.querySelector('#pm-headless').value = '';
+        modal.querySelector('#pm-proxy').value = '';
+        modal.querySelector('#pm-user-agent').value = '';
+        modal.style.display = 'flex';
+    }
+
+    function closeModal() {
+        var modal = document.getElementById('profile-modal');
+        if (modal) modal.style.display = 'none';
+        editingKey = null;
+    }
+
+    async function saveProfile() {
+        var key = document.getElementById('pm-key').value.trim();
+        var name = document.getElementById('pm-name').value.trim();
+        if (!key || !name) { showToast('Key and name are required', 'error'); return; }
+
+        var body = { name: name };
+        var desc = document.getElementById('pm-description').value.trim();
+        var bt = document.getElementById('pm-browser-type').value;
+        var hl = document.getElementById('pm-headless').value;
+        var proxy = document.getElementById('pm-proxy').value.trim();
+        var ua = document.getElementById('pm-user-agent').value.trim();
+        if (desc) body.description = desc;
+        if (bt) body.browser_type = bt;
+        if (hl) body.headless = hl === 'true';
+        if (proxy) body.proxy = proxy;
+        if (ua) body.user_agent = ua;
+
+        try {
+            var resp;
+            if (editingKey) {
+                resp = await fetch('/api/v1/browser/profiles/' + encodeURIComponent(editingKey), {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+            } else {
+                body.key = key;
+                resp = await fetch('/api/v1/browser/profiles', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+            }
+            var data = await resp.json();
+            showToast(data.message, data.success ? 'success' : 'error');
+            if (data.success) { closeModal(); loadProfiles(); }
+        } catch (err) {
+            showToast('Failed: ' + err.message, 'error');
+        }
+    }
+
+    // ─── Actions ───
+
     async function loadProfiles() {
         try {
             var resp = await fetch('/api/v1/browser/profiles');
             if (!resp.ok) throw new Error('Failed to load profiles');
             var profiles = await resp.json();
-
             container.textContent = '';
+
+            var addBtn = document.createElement('button');
+            addBtn.className = 'btn';
+            addBtn.style.cssText = 'margin-bottom:12px;font-size:13px;';
+            addBtn.textContent = '+ Add Profile';
+            addBtn.addEventListener('click', openAddModal);
+            container.appendChild(addBtn);
+
             if (profiles.length === 0) {
-                container.textContent = 'No profiles configured.';
+                var empty = document.createElement('div');
+                empty.style.cssText = 'color:var(--t3);padding:16px 0;';
+                empty.textContent = 'No profiles configured.';
+                container.appendChild(empty);
                 return;
             }
-            profiles.forEach(function(p) {
-                container.appendChild(buildProfileCard(p));
-            });
+            profiles.forEach(function(p) { container.appendChild(buildProfileCard(p)); });
         } catch (err) {
             container.textContent = err.message;
         }
     }
 
-    async function fixProfile(name) {
-        if (!confirm('Fix file ownership for profile "' + name + '"?')) return;
+    async function setDefault(name) {
         try {
-            var resp = await fetch('/api/v1/browser/profiles/' + encodeURIComponent(name) + '/fix-permissions', {
-                method: 'POST',
-            });
+            var resp = await fetch('/api/v1/browser/profiles/' + encodeURIComponent(name) + '/set-default', { method: 'POST' });
             var data = await resp.json();
             showToast(data.message, data.success ? 'success' : 'error');
             loadProfiles();
-        } catch (err) {
-            showToast('Failed: ' + err.message, 'error');
-        }
+        } catch (err) { showToast('Failed: ' + err.message, 'error'); }
+    }
+
+    async function deleteProfile(name) {
+        if (!confirm('Delete profile "' + name + '" and all its data?')) return;
+        try {
+            var resp = await fetch('/api/v1/browser/profiles/' + encodeURIComponent(name) + '/delete', { method: 'POST' });
+            var data = await resp.json();
+            showToast(data.message, data.success ? 'success' : 'error');
+            loadProfiles();
+        } catch (err) { showToast('Failed: ' + err.message, 'error'); }
+    }
+
+    async function fixProfile(name) {
+        if (!confirm('Fix file ownership for profile "' + name + '"?')) return;
+        try {
+            var resp = await fetch('/api/v1/browser/profiles/' + encodeURIComponent(name) + '/fix-permissions', { method: 'POST' });
+            var data = await resp.json();
+            showToast(data.message, data.success ? 'success' : 'error');
+            loadProfiles();
+        } catch (err) { showToast('Failed: ' + err.message, 'error'); }
     }
 
     async function cleanProfile(name) {
         if (!confirm('Delete ALL data for profile "' + name + '"? Cookies, sessions, and cache will be lost.')) return;
         try {
-            var resp = await fetch('/api/v1/browser/profiles/' + encodeURIComponent(name), {
-                method: 'DELETE',
-            });
+            var resp = await fetch('/api/v1/browser/profiles/' + encodeURIComponent(name), { method: 'DELETE' });
             var data = await resp.json();
             showToast(data.message, data.success ? 'success' : 'error');
             loadProfiles();
-        } catch (err) {
-            showToast('Failed: ' + err.message, 'error');
-        }
+        } catch (err) { showToast('Failed: ' + err.message, 'error'); }
     }
 
     loadProfiles();

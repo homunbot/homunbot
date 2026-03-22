@@ -221,7 +221,7 @@ impl McpPeer {
         Ok(result.contents)
     }
 
-    async fn shutdown(&self) {
+    pub(crate) async fn shutdown(&self) {
         let mut guard = self.service.write().await;
         if let Some(service) = guard.take() {
             if let Err(e) = service.cancel().await {

@@ -147,6 +147,8 @@ const CURSOR_INTERACTIVE_JS: &str = r#"async (page) => {
 /// allowing concurrent browser use across conversations.
 pub struct BrowserTool {
     peer: Arc<McpPeer>,
+    /// Multi-profile pool for lazy-starting MCP peers per profile.
+    pool: Option<Arc<crate::browser::BrowserPool>>,
     /// Whether anti-detection scripts have been injected (global, covers all tabs).
     stealth_injected: AtomicBool,
     /// Shared session state, also held by the agent loop.
@@ -159,7 +161,11 @@ pub struct BrowserTool {
 }
 
 impl BrowserTool {
-    pub fn new(peer: Arc<McpPeer>) -> Self {
+    /// Create a new browser tool with an optional multi-profile pool.
+    ///
+    /// `pool` enables runtime profile switching via the `profile` parameter.
+    /// Pass `None` for single-session mode (CLI chat).
+    pub fn new(peer: Arc<McpPeer>, pool: Option<Arc<crate::browser::BrowserPool>>) -> Self {
         let tab_manager = Arc::new(crate::browser::TabSessionManager::new());
         let operation_mutex = Arc::new(tokio::sync::Mutex::new(()));
         let session = Arc::new(BrowserSession::new(
@@ -169,6 +175,7 @@ impl BrowserTool {
         ));
         Self {
             peer,
+            pool,
             stealth_injected: AtomicBool::new(false),
             session,
             tab_manager,
@@ -1228,15 +1235,36 @@ impl Tool for BrowserTool {
                 "y": {
                     "type": "integer",
                     "description": "Y pixel coordinate for click_coordinates"
+                },
+                "profile": {
+                    "type": "string",
+                    "description": "Browser profile name for isolated cookies/sessions (uses default if omitted)"
                 }
             }
         })
     }
 
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolResult> {
-        let session_key = format!("{}:{}", ctx.channel, ctx.chat_id);
         let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+        let profile_name = args.get("profile").and_then(|v| v.as_str());
 
+        // Non-default profile → dispatch to dedicated peer (each profile has its own
+        // MCP process, so no tab session management needed).
+        if let Some(profile) = profile_name {
+            if let Some(pool) = &self.pool {
+                let peer = pool
+                    .get_or_start(profile)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Profile '{}': {}", profile, e))?;
+                return self.execute_on_profile_peer(&peer, action, &args).await;
+            } else {
+                return Ok(ToolResult::error(
+                    "Profile switching not available in CLI mode".to_string(),
+                ));
+            }
+        }
+
+        let session_key = format!("{}:{}", ctx.channel, ctx.chat_id);
         tracing::debug!(action = %action, session_key = %session_key, "Browser tool action");
 
         // Get or create this conversation's tab session.
@@ -1294,6 +1322,131 @@ impl Tool for BrowserTool {
         }
 
         Ok(result)
+    }
+}
+
+impl BrowserTool {
+    /// Execute a browser action on a non-default profile's dedicated MCP peer.
+    ///
+    /// Each profile runs its own `@playwright/mcp` process with isolated cookies
+    /// and sessions. No tab session management is needed (single-user per peer).
+    async fn execute_on_profile_peer(
+        &self,
+        peer: &McpPeer,
+        action: &str,
+        args: &Value,
+    ) -> Result<ToolResult> {
+        let mcp_result = match action {
+            "navigate" => {
+                let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                if url.is_empty() {
+                    return Ok(ToolResult::error("Missing 'url' for navigate".to_string()));
+                }
+                let _nav = peer
+                    .call_tool("browser_navigate", json!({"url": url}))
+                    .await?;
+                // Auto-snapshot after navigate
+                let snap = peer.call_tool("browser_snapshot", json!({})).await?;
+                let compact = compact_browser_snapshot(&snap);
+                format!("Navigated to {url}\n\n{compact}")
+            }
+            "snapshot" => {
+                let raw = peer.call_tool("browser_snapshot", json!({})).await?;
+                compact_browser_snapshot(&raw)
+            }
+            "screenshot" => peer.call_tool("browser_take_screenshot", json!({})).await?,
+            "click" => {
+                let ref_val = args.get("ref").and_then(|v| v.as_str()).unwrap_or("");
+                peer.call_tool("browser_click", json!({"ref": ref_val}))
+                    .await?;
+                let snap = peer.call_tool("browser_snapshot", json!({})).await?;
+                compact_browser_snapshot(&snap)
+            }
+            "type" => {
+                let ref_val = args.get("ref").and_then(|v| v.as_str()).unwrap_or("");
+                let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                peer.call_tool(
+                    "browser_type",
+                    json!({"ref": ref_val, "text": text, "slowly": true}),
+                )
+                .await?;
+                let snap = peer.call_tool("browser_snapshot", json!({})).await?;
+                compact_browser_snapshot(&snap)
+            }
+            "fill" => {
+                let ref_val = args.get("ref").and_then(|v| v.as_str()).unwrap_or("");
+                let value = args.get("value").and_then(|v| v.as_str())
+                    .or_else(|| args.get("text").and_then(|v| v.as_str()))
+                    .unwrap_or("");
+                peer.call_tool(
+                    "browser_type",
+                    json!({"ref": ref_val, "text": value}),
+                )
+                .await?;
+                let snap = peer.call_tool("browser_snapshot", json!({})).await?;
+                compact_browser_snapshot(&snap)
+            }
+            "select_option" => {
+                let ref_val = args.get("ref").and_then(|v| v.as_str()).unwrap_or("");
+                let values = args
+                    .get("value")
+                    .and_then(|v| v.as_str())
+                    .map(|v| vec![v.to_string()])
+                    .unwrap_or_default();
+                peer.call_tool(
+                    "browser_select_option",
+                    json!({"ref": ref_val, "values": values}),
+                )
+                .await?
+            }
+            "press_key" => {
+                let key = args.get("text").and_then(|v| v.as_str()).unwrap_or("Enter");
+                peer.call_tool("browser_press_key", json!({"key": key}))
+                    .await?
+            }
+            "hover" => {
+                let ref_val = args.get("ref").and_then(|v| v.as_str()).unwrap_or("");
+                peer.call_tool("browser_hover", json!({"ref": ref_val}))
+                    .await?
+            }
+            "scroll" => {
+                let direction = args
+                    .get("direction")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("down");
+                let amount = if direction == "up" { -3 } else { 3 };
+                peer.call_tool("browser_press_key", json!({"key": if amount < 0 { "PageUp" } else { "PageDown" }}))
+                    .await?
+            }
+            "evaluate" => {
+                let expr = args.get("expression").and_then(|v| v.as_str()).unwrap_or("");
+                peer.call_tool("browser_evaluate", json!({"function": expr}))
+                    .await?
+            }
+            "wait" => {
+                let secs = args
+                    .get("seconds")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(2.0)
+                    .min(30.0);
+                tokio::time::sleep(std::time::Duration::from_secs_f64(secs)).await;
+                format!("Waited {secs}s")
+            }
+            "close" => {
+                peer.call_tool("browser_close", json!({})).await?;
+                "Browser closed".to_string()
+            }
+            "" => {
+                return Ok(ToolResult::error(
+                    "Missing 'action' parameter".to_string(),
+                ))
+            }
+            unknown => {
+                return Ok(ToolResult::error(format!("Unknown action: {unknown}")))
+            }
+        };
+
+        Ok(ToolResult::success(mcp_result))
     }
 }
 

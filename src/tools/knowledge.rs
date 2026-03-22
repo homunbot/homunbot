@@ -142,7 +142,7 @@ impl Tool for KnowledgeTool {
             "search" => {
                 let query = get_string_param(&args, "query")?;
                 let mut engine = self.engine.lock().await;
-                let results = engine.search(&query, 5).await?;
+                let results = engine.search(&query, 5, None).await?;
 
                 if results.is_empty() {
                     return Ok(ToolResult {

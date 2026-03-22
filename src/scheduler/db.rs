@@ -61,8 +61,8 @@ impl Database {
         sqlx::query(
             "INSERT INTO automations
                  (id, name, prompt, schedule, enabled, status, deliver_to, trigger_kind, trigger_value,
-                  plan_json, dependencies_json, plan_version, validation_errors)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  plan_json, dependencies_json, plan_version, validation_errors, profile_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id)
         .bind(name)
@@ -77,6 +77,7 @@ impl Database {
         .bind(dependencies_json)
         .bind(plan_version)
         .bind(validation_errors)
+        .bind(Option::<i64>::None) // profile_id set via API or tool context
         .execute(self.pool())
         .await
         .context("Failed to insert automation")?;
@@ -91,7 +92,7 @@ impl Database {
                     trigger_kind, trigger_value,
                     last_run, last_result, created_at, updated_at,
                     plan_json, dependencies_json, plan_version, validation_errors,
-                    workflow_steps_json, flow_json
+                    workflow_steps_json, flow_json, profile_id
              FROM automations
              ORDER BY created_at DESC",
         )
@@ -109,7 +110,7 @@ impl Database {
                     trigger_kind, trigger_value,
                     last_run, last_result, created_at, updated_at,
                     plan_json, dependencies_json, plan_version, validation_errors,
-                    workflow_steps_json, flow_json
+                    workflow_steps_json, flow_json, profile_id
              FROM automations
              WHERE id = ?",
         )

@@ -135,7 +135,13 @@ async fn test_path_permission(
     use std::path::PathBuf;
 
     let config = state.config.read().await;
-    let path = PathBuf::from(&req.path);
+    // Expand ~ to home directory, matching resolve_path() in file tools
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let path = if let Some(stripped) = req.path.strip_prefix("~/") {
+        home.join(stripped)
+    } else {
+        PathBuf::from(&req.path)
+    };
     let op = match req.operation.as_str() {
         "read" => FileOp::Read,
         "write" => FileOp::Write,

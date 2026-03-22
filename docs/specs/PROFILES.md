@@ -1,7 +1,8 @@
 # SPEC: Profile System (Profilo-First Architecture)
 
 > Status: DESIGN — non implementare prima dell'approvazione
-> Data: 2026-03-21
+> Data: 2026-03-22
+> Revisione: 2 — aggiunto modello user_id + profile_id + DB esterni
 
 ## Problema
 
@@ -11,12 +12,57 @@ Oggi Homun ha un'identità singleton: un unico SOUL.md, USER.md, INSTRUCTIONS.md
 - Avere skill specifiche per contesto
 - Filtrare documenti RAG per contesto
 - Gestire identità strutturate (stile AIEOS)
+- Supportare scenari multi-utente (enterprise)
 
-## Modello: Profilo-First
+## Evoluzione a 3 livelli
 
-Il **profilo** diventa l'unità fondamentale. Tutto è legato a un profilo: identità, memoria, istruzioni apprese, skill, documenti, contatti.
+```
+v1 (oggi):     1 utente, 1 identità
+v2 (profili):  1 utente, N profili — ★ IMPLEMENTAZIONE ATTUALE
+v3 (futuro):   N utenti, N profili, admin, permessi RBAC
+```
 
-### Struttura directory
+v2 introduce `user_id` + `profile_id` ovunque. In v2 esiste un solo utente (`user_id = 1`, admin, non visibile nella UI). In v3 si aggiunge la tabella `users` e la gestione multi-utente con cambiamenti minimi perché le FK sono già in posizione.
+
+## Modello: User + Profile
+
+### Tabella users (v2: un solo record, v3: multi-utente)
+
+```sql
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    display_name TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'admin',  -- v2: sempre 'admin'; v3: 'admin'|'user'|'viewer'
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- v2: seed unico utente admin (invisibile nella UI)
+INSERT INTO users (username, display_name, role) VALUES ('admin', 'Admin', 'admin');
+```
+
+### Tabella profiles
+
+```sql
+CREATE TABLE profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),  -- proprietario del profilo
+    slug TEXT UNIQUE NOT NULL,              -- "default", "fabio-personal", "acme-corp"
+    display_name TEXT NOT NULL,             -- "Fabio Personale", "AcmeCorp"
+    avatar_emoji TEXT DEFAULT '👤',
+    profile_json TEXT NOT NULL DEFAULT '{}',  -- PROFILE.json content (AIEOS-inspired)
+    is_default INTEGER NOT NULL DEFAULT 0,    -- esattamente un record = 1 per user
+    storage_config TEXT NOT NULL DEFAULT '{}', -- config DB esterni (vedi sezione)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- v2: seed profilo default per l'admin
+INSERT INTO profiles (user_id, slug, display_name, is_default)
+    VALUES (1, 'default', 'Default', 1);
+```
+
+### Struttura directory brain
 
 ```
 ~/.homun/brain/profiles/
@@ -33,11 +79,7 @@ Il **profilo** diventa l'unità fondamentale. Tutto è legato a un profilo: iden
 │   ├── INSTRUCTIONS.md
 │   └── skills/
 └── acme-corp/
-    ├── PROFILE.json
-    ├── SOUL.md
-    ├── USER.md
-    ├── INSTRUCTIONS.md
-    └── skills/
+    ├── ...
 ```
 
 ### PROFILE.json (AIEOS-inspired)
@@ -76,55 +118,99 @@ Struttura generata/assistita da LLM, editabile dall'utente:
 }
 ```
 
-La sezione `visibility.readable_from` controlla l'isolamento:
+`visibility.readable_from` controlla l'isolamento:
 - `["default"]` → questo profilo può leggere anche dal profilo default
 - `["*"]` → può leggere da tutti i profili
 - `[]` → completamente isolato
 
-### Tabella DB: profiles
+## DB Esterni e RAG esterno
 
-```sql
-CREATE TABLE profiles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    slug TEXT UNIQUE NOT NULL,          -- "default", "fabio-personal", "acme-corp"
-    display_name TEXT NOT NULL,         -- "Fabio Personale", "AcmeCorp"
-    avatar_emoji TEXT DEFAULT '👤',
-    profile_json TEXT NOT NULL DEFAULT '{}',  -- PROFILE.json content cached
-    is_default INTEGER NOT NULL DEFAULT 0,    -- exactly one row = 1
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+Ogni profilo può avere il proprio storage backend per dati che non stanno nel SQLite locale.
 
--- Seed default profile
-INSERT INTO profiles (slug, display_name, is_default) VALUES ('default', 'Default', 1);
+### storage_config nel profilo
+
+```json
+{
+  "database": {
+    "type": "sqlite",
+    "url": null
+  },
+  "vector_store": {
+    "type": "local",
+    "url": null
+  },
+  "rag_sources": []
+}
 ```
 
-### Colonne profile_id aggiunte
+Valori possibili:
+
+**database.type:**
+- `"sqlite"` (default) — usa il DB locale `homun.db`
+- `"postgres"` — connessione esterna: `"url": "postgres://user:pass@host/db"`
+- `"mysql"` — connessione esterna
+
+**vector_store.type:**
+- `"local"` (default) — HNSW locale in SQLite
+- `"qdrant"` — `"url": "http://localhost:6333"`
+- `"pinecone"` — `"url": "...", "api_key": "vault:pinecone_key"`
+
+**rag_sources:** — fonti aggiuntive per questo profilo
+- `{"type": "mcp", "server": "notion"}` — documenti via MCP
+- `{"type": "s3", "bucket": "company-docs", "prefix": "legal/"}` — S3
+- `{"type": "directory", "path": "/mnt/shared/company-docs"}` — directory locale/montata
+
+### Implementazione v2
+
+In v2 solo `sqlite` + `local` sono implementati. I tipi esterni sono definiti nel config ma restituiscono errore "not yet implemented" se usati. Questo permette di:
+- Validare il modello dati
+- Mostrare i campi nella UI (disabilitati con tooltip "coming soon")
+- Implementare i connettori uno alla volta senza breaking change
+
+## Colonne user_id + profile_id aggiunte
 
 ```sql
--- Memory: ogni chunk appartiene a un profilo
+-- Tutte le tabelle con dati scoped ricevono entrambe le FK.
+-- In v2 user_id è sempre 1. In v3 filtra per utente.
+
+ALTER TABLE memory_chunks ADD COLUMN user_id INTEGER REFERENCES users(id) DEFAULT 1;
 ALTER TABLE memory_chunks ADD COLUMN profile_id INTEGER REFERENCES profiles(id);
 
--- Knowledge/RAG: ogni documento taggato per profilo
+ALTER TABLE knowledge_chunks ADD COLUMN user_id INTEGER REFERENCES users(id) DEFAULT 1;
 ALTER TABLE knowledge_chunks ADD COLUMN profile_id INTEGER REFERENCES profiles(id);
 
--- Contacts: ogni contatto ha un profilo di default per le risposte
+ALTER TABLE contacts ADD COLUMN user_id INTEGER REFERENCES users(id) DEFAULT 1;
 ALTER TABLE contacts ADD COLUMN profile_id INTEGER REFERENCES profiles(id);
--- (sostituisce persona_override + persona_instructions)
 
--- Sessions: ogni sessione opera in un profilo
+ALTER TABLE sessions ADD COLUMN user_id INTEGER REFERENCES users(id) DEFAULT 1;
 ALTER TABLE sessions ADD COLUMN profile_id INTEGER REFERENCES profiles(id);
 
--- Canali: profilo di default per canale
--- (gestito in config.toml, non in DB)
+ALTER TABLE vault_entries ADD COLUMN user_id INTEGER REFERENCES users(id) DEFAULT 1;
+ALTER TABLE vault_entries ADD COLUMN profile_id INTEGER REFERENCES profiles(id);
+
+ALTER TABLE workflows ADD COLUMN user_id INTEGER REFERENCES users(id) DEFAULT 1;
+ALTER TABLE workflows ADD COLUMN profile_id INTEGER REFERENCES profiles(id);
+
+ALTER TABLE automations ADD COLUMN user_id INTEGER REFERENCES users(id) DEFAULT 1;
+ALTER TABLE automations ADD COLUMN profile_id INTEGER REFERENCES profiles(id);
+
+ALTER TABLE logs ADD COLUMN user_id INTEGER REFERENCES users(id) DEFAULT 1;
+ALTER TABLE logs ADD COLUMN profile_id INTEGER REFERENCES profiles(id);
+
+-- Indici per performance
+CREATE INDEX idx_memory_chunks_profile ON memory_chunks(profile_id);
+CREATE INDEX idx_knowledge_chunks_profile ON knowledge_chunks(profile_id);
+CREATE INDEX idx_sessions_profile ON sessions(profile_id);
+CREATE INDEX idx_workflows_profile ON workflows(profile_id);
+CREATE INDEX idx_automations_profile ON automations(profile_id);
 ```
 
 ## Isolamento: lettura cross-profile, scrittura isolata
 
-- **Scrittura**: sempre nel profilo attivo. Remember tool, consolidation, RAG ingest scrivono con `profile_id` del profilo corrente.
+- **Scrittura**: sempre nel profilo attivo. Remember tool, consolidation, RAG ingest, vault, workflow, automations scrivono con `user_id` + `profile_id` correnti.
 - **Lettura**: il profilo attivo vede i propri dati + quelli dei profili elencati in `visibility.readable_from`.
-- **Query**: `memory_search` e RAG filtrano per `profile_id IN (attivo, ...readable_from)`.
-- **Brain files**: caricati dalla directory del profilo attivo. USER.md/INSTRUCTIONS.md del profilo attivo, non del default (a meno che il default sia in readable_from, ma i brain files sono per-profilo, non uniti).
+- **Query**: tutte le query aggiungono `WHERE user_id = ? AND profile_id IN (attivo, ...readable_from)`.
+- **v3 multi-utente**: il filtro `user_id` diventa significativo. L'admin vede tutto, l'utente vede solo i propri profili.
 
 ## Skill: globali + per-profilo
 
@@ -140,6 +226,7 @@ ALTER TABLE sessions ADD COLUMN profile_id INTEGER REFERENCES profiles(id);
 
 ```
 Messaggio in arrivo
+  → identifica utente (v2: sempre admin; v3: da auth)
   → identifica contatto (channel:chat_id → Contact)
   → risolvi profilo: Contact.profile_id > Channel.default_profile > "default"
   → carica brain files dal profilo attivo:
@@ -148,7 +235,7 @@ Messaggio in arrivo
       INSTRUCTIONS.md = profiles/{slug}/INSTRUCTIONS.md
   → carica PROFILE.json per linguistics/personality/capabilities
   → inietta nel prompt
-  → esegui con tool scoped al profilo
+  → esegui con tool scoped a user_id + profile_id
 ```
 
 ### Prompt Builder (`prompt/sections.rs`)
@@ -170,19 +257,19 @@ Messaggio in arrivo
 
 ### Memory Consolidation (`memory.rs`)
 
-- `consolidate()` riceve `profile_id` + `contact_id`
+- `consolidate()` riceve `user_id` + `profile_id` + `contact_id`
 - Appende a `brain/profiles/{slug}/INSTRUCTIONS.md`
-- Nuovi memory_chunks salvati con `profile_id`
+- Nuovi memory_chunks salvati con `user_id` + `profile_id`
 
 ### Memory Search (`memory_search.rs`)
 
-- `search_scoped_full(query, topk, contact_id, profile_id)` → aggiunge filtro
-- Cerca in: `profile_id = attivo OR profile_id IN readable_from OR profile_id IS NULL`
+- `search_scoped_full(query, topk, contact_id, user_id, profile_id)` → aggiunge filtri
+- Cerca in: `user_id = attivo AND (profile_id = attivo OR profile_id IN readable_from OR profile_id IS NULL)`
 
 ### RAG (`rag/engine.rs`)
 
-- Ingest: tag `profile_id` su ogni chunk
-- Search: filtra per `profile_id IN (attivo, ...readable_from, NULL)`
+- Ingest: tag `user_id` + `profile_id` su ogni chunk
+- Search: filtra per `user_id` + `profile_id IN (attivo, ...readable_from, NULL)`
 - UI: quando fai upload, scegli il profilo destinazione
 
 ### Skills (`skills/loader.rs`)
@@ -190,6 +277,23 @@ Messaggio in arrivo
 - Scansiona: `~/.homun/skills/` (globali) + `brain/profiles/{slug}/skills/` (per-profilo)
 - `SkillDefinition` aggiunge campo `profile: Option<String>`
 - Cognition discovery filtra per profilo attivo
+
+### Vault (`storage/secrets.rs`)
+
+- Entries taggati con `user_id` + `profile_id`
+- v2: un profilo aziendale ha le proprie API key separate dal profilo personale
+- Query: `WHERE user_id = ? AND (profile_id = ? OR profile_id IS NULL)`
+
+### Workflows + Automations (`workflows/`, `scheduler/automations.rs`)
+
+- Ogni workflow/automation appartiene a un `user_id` + `profile_id`
+- Un'automation del profilo aziendale non triggera nel profilo personale
+- Query: filtro per profilo attivo
+
+### Logs
+
+- Ogni log entry taggato con `user_id` + `profile_id`
+- Filtrabile nella UI logs per profilo
 
 ### Config (`config/schema.rs`)
 
@@ -210,16 +314,18 @@ default_profile = "fabio-personal"
 
 ```rust
 pub struct Contact {
-    // Sostituisce persona_override + persona_instructions:
-    pub profile_id: Option<i64>,  // FK a profiles, NULL = usa default canale
-    // Rimuovi:
-    // pub persona_override: Option<String>,
-    // pub persona_instructions: String,
+    // Aggiunto:
+    pub user_id: i64,                 // FK a users (v2: sempre 1)
+    pub profile_id: Option<i64>,      // FK a profiles, NULL = usa default canale
+    // Mantenuti per backward compat durante transizione:
+    pub persona_override: Option<String>,
+    pub persona_instructions: String,
 }
 ```
 
 ### Session (`session/manager.rs`)
 
+- `SessionRow.user_id: i64` — utente della sessione (v2: sempre 1)
 - `SessionRow.profile_id: Option<i64>` — profilo attivo per la sessione
 - Settato all'inizio della sessione, modificabile dall'utente
 - Usato da agent loop per risolvere il profilo
@@ -229,7 +335,7 @@ pub struct Contact {
 Nuovi endpoint:
 
 ```
-GET    /api/v1/profiles                    # lista profili
+GET    /api/v1/profiles                    # lista profili (dell'utente corrente)
 POST   /api/v1/profiles                    # crea profilo
 GET    /api/v1/profiles/{id}               # dettaglio
 PUT    /api/v1/profiles/{id}               # aggiorna
@@ -237,10 +343,12 @@ DELETE /api/v1/profiles/{id}               # elimina (non default)
 POST   /api/v1/profiles/{id}/generate      # genera PROFILE.json via LLM
 GET    /api/v1/profiles/{id}/soul          # leggi SOUL.md
 PUT    /api/v1/profiles/{id}/soul          # scrivi SOUL.md
+GET    /api/v1/profiles/{id}/user          # leggi USER.md
+PUT    /api/v1/profiles/{id}/user          # scrivi USER.md
 GET    /api/v1/profiles/{id}/instructions  # leggi INSTRUCTIONS.md
 ```
 
-Query param globale: `?profile={slug}` su endpoint che supportano scoping (memory, knowledge, skills). Se omesso, usa profilo della sessione o default.
+Query param globale: `?profile={slug}` su endpoint che supportano scoping (memory, knowledge, skills, vault, workflows, automations, logs). Se omesso, usa profilo della sessione o default.
 
 ### Chat UI
 
@@ -266,18 +374,19 @@ Layout master-detail come la rubrica contatti:
   - **Linguistics section**: formality, style, forbidden_words
   - **Personality section**: traits, tone, humor
   - **Visibility section**: checkbox profili da cui leggere
+  - **Storage section**: config DB/vector store (v2: solo local, campi disabilitati per esterni)
   - **Brain files section**: editor SOUL.md, link a USER.md e INSTRUCTIONS.md
   - **Skills section**: lista skill associate a questo profilo
 - **Genera con AI**: bottone che chiama `/api/v1/profiles/{id}/generate` con un prompt per generare PROFILE.json a partire da una descrizione testuale
 
 ## Migrazione dati esistenti
 
-1. Crea profilo "default" con `is_default = 1`
-2. Sposta `~/.homun/brain/SOUL.md` → `~/.homun/brain/profiles/default/SOUL.md`
-3. Sposta `~/.homun/brain/USER.md` → `~/.homun/brain/profiles/default/USER.md`
-4. Sposta `~/.homun/brain/INSTRUCTIONS.md` → `~/.homun/brain/profiles/default/INSTRUCTIONS.md`
-5. Tutti i `memory_chunks` esistenti → `profile_id = default.id`
-6. Tutti i `knowledge_chunks` esistenti → `profile_id = default.id`
+1. Crea tabella `users` con seed admin (`id=1`)
+2. Crea tabella `profiles` con seed default (`id=1, user_id=1`)
+3. Sposta `~/.homun/brain/SOUL.md` → `~/.homun/brain/profiles/default/SOUL.md`
+4. Sposta `~/.homun/brain/USER.md` → `~/.homun/brain/profiles/default/USER.md`
+5. Sposta `~/.homun/brain/INSTRUCTIONS.md` → `~/.homun/brain/profiles/default/INSTRUCTIONS.md`
+6. Tutti i record esistenti → `user_id = 1, profile_id = 1` (default)
 7. `Contact.persona_override = "owner"` → crea profilo "owner", associa
 8. `Contact.persona_override = "company"` → crea profilo "company", associa
 9. `Contact.persona_override = "custom"` → crea profilo con `persona_instructions` come SOUL.md
@@ -285,40 +394,60 @@ Layout master-detail come la rubrica contatti:
 ## Piano di implementazione (ordine suggerito)
 
 ### Sprint 1: Foundation (DB + Config + Brain files)
-1. Migration: `profiles` table + seed default
-2. Migration: `profile_id` su memory_chunks, knowledge_chunks, contacts, sessions
-3. `src/profiles/mod.rs` — ProfileRegistry, load/save PROFILE.json
-4. `src/profiles/db.rs` — CRUD
-5. Migration script dati esistenti
-6. Config: `[profiles]` section, `default_profile` su canali
+1. Migration: `users` table + seed admin
+2. Migration: `profiles` table + seed default
+3. Migration: `user_id` + `profile_id` su tutte le tabelle (memory_chunks, knowledge_chunks, contacts, sessions, vault_entries, workflows, automations, logs) + indici
+4. `src/profiles/mod.rs` — struct Profile, ProfileRegistry, load/save PROFILE.json
+5. `src/profiles/db.rs` — CRUD
+6. Migration script dati esistenti (sposta file, tagga record)
+7. Config: `[profiles]` section, `default_profile` su canali
 
 ### Sprint 2: Agent Loop Integration
-7. Refactor `persona.rs` → `profile_resolver.rs` (risolve profilo, non persona)
-8. `agent_loop.rs` — risolvi profilo, carica brain files dal profilo attivo
-9. `bootstrap_watcher.rs` — watch su directory profilo attivo
-10. `prompt/sections.rs` — IdentitySection carica dal profilo, nuova ProfileSection
-11. `remember.rs` — scrive nel profilo attivo
-12. `memory.rs` — consolidation nel profilo attivo
+8. Refactor `persona.rs` → `profile_resolver.rs` (risolve profilo, non persona)
+9. `agent_loop.rs` — risolvi profilo, carica brain files dal profilo attivo, passa user_id + profile_id ai tool
+10. `bootstrap_watcher.rs` — watch su directory profilo attivo
+11. `prompt/sections.rs` — IdentitySection carica dal profilo, nuova ProfileSection
+12. `remember.rs` — scrive nel profilo attivo
+13. `memory.rs` — consolidation nel profilo attivo con user_id + profile_id
 
-### Sprint 3: Search + Skills Scoping
-13. `memory_search.rs` — filtro profile_id + readable_from
-14. `rag/engine.rs` — tag + filtro profile_id
-15. `skills/loader.rs` — scan globali + per-profilo
-16. `cognition/discovery.rs` — filtra skill per profilo
+### Sprint 3: Search + Skills + Storage Scoping
+14. `memory_search.rs` — filtro user_id + profile_id + readable_from
+15. `rag/engine.rs` — tag + filtro user_id + profile_id
+16. `skills/loader.rs` — scan globali + per-profilo
+17. `cognition/discovery.rs` — filtra skill per profilo
+18. `vault` — scoping per user_id + profile_id
+19. `workflows` + `automations` — scoping per user_id + profile_id
+20. `logs` — tagging per user_id + profile_id
 
 ### Sprint 4: API + Web UI
-17. `web/api/profiles.rs` — CRUD + generate endpoint
-18. `static/js/profiles.js` — pagina gestione profili (master-detail)
-19. `web/pages.rs` — template pagina profili
-20. Chat UI — selettore profilo + indicatore
-21. Contacts UI — dropdown profili invece di persona enum
-22. `/profile` comando nei canali
+21. `web/api/profiles.rs` — CRUD + generate + brain file endpoints
+22. `static/js/profiles.js` — pagina gestione profili (master-detail)
+23. `web/pages.rs` — template pagina profili + sidebar link
+24. Chat UI — selettore profilo + indicatore
+25. Contacts UI — dropdown profili (già predisposto in contacts.js)
+26. `/profile` comando nei canali
+27. Filtro per profilo nelle pagine: vault, workflows, automations, logs, knowledge
+
+## Preparazione v3 (multi-utente) — NON implementare ora
+
+Quando serve, il passaggio a v3 richiede:
+
+1. **Auth per utente**: la tabella `users` ha già lo schema. Aggiungere `password_hash`, `email`, `last_login`
+2. **RBAC**: `users.role` diventa significativo. Admin vede tutto, user vede solo i propri profili
+3. **API scoping**: ogni endpoint filtra per `user_id` dalla sessione autenticata
+4. **UI admin**: pagina gestione utenti (CRUD), assegnazione profili
+5. **Inviti**: flow di invito utente con email + OTP
+6. **DB per utente**: `storage_config` del profilo può puntare a DB diversi per tenant isolation
+
+Il costo stimato per v3 è basso perché `user_id` è già FK ovunque — serve solo la logica di auth multi-utente e la UI admin.
 
 ## Rischi e mitigazioni
 
 | Rischio | Mitigazione |
 |---|---|
 | Breaking change sui brain files | Migrazione automatica all'avvio + fallback su path legacy |
-| Performance query con filtro profile_id | Indice su profile_id nelle tabelle |
+| Performance query con filtro user_id + profile_id | Indici compositi sulle tabelle |
 | Complessità prompt (troppi file) | PROFILE.json è opzionale, SOUL.md resta il minimo |
 | Confusione utente | Profilo "default" sempre presente, funziona senza configurare nulla |
+| DB esterni non implementati in v2 | Campi visibili ma disabilitati con "coming soon" |
+| user_id sempre 1 in v2 | Invisibile nella UI, DEFAULT 1 nelle migration |

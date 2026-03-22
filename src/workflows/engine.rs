@@ -231,7 +231,7 @@ impl WorkflowEngine {
         Ok(format!("Workflow \"{}\" deleted", workflow.name))
     }
 
-    /// Restart a terminal workflow (creates a fresh copy and starts it).
+    /// Restart a terminal workflow in-place (same ID, reset all steps).
     pub async fn restart(&self, workflow_id: &str) -> Result<String> {
         let workflow = self
             .db
@@ -246,33 +246,11 @@ impl WorkflowEngine {
             );
         }
 
-        let req = WorkflowCreateRequest {
-            name: workflow.name.clone(),
-            objective: workflow.objective.clone(),
-            steps: workflow
-                .steps
-                .iter()
-                .map(|s| super::StepDefinition {
-                    name: s.name.clone(),
-                    instruction: s.instruction.clone(),
-                    approval_required: s.approval_required,
-                    max_retries: s.max_retries,
-                    agent_id: Some(s.agent_id.clone()),
-                })
-                .collect(),
-            deliver_to: workflow.deliver_to.clone(),
-            automation_id: workflow.automation_id.clone(),
-            automation_run_id: None, // restarted workflows don't link to a specific run
-        };
+        // Reset status, step index, and all steps back to pending
+        self.db.reset_workflow(workflow_id).await?;
+        self.start_workflow(workflow_id).await?;
 
-        let channel_chat = workflow.created_by.as_deref().unwrap_or("web:web");
-        let (channel, chat_id) = channel_chat.rsplit_once(':').unwrap_or(("web", "web"));
-
-        let new_id = self.create_and_start(req, channel, chat_id).await?;
-        Ok(format!(
-            "Workflow \"{}\" restarted as {new_id}",
-            workflow.name
-        ))
+        Ok(format!("Workflow \"{}\" restarted", workflow.name))
     }
 
     /// List workflows (optionally filtered by status).

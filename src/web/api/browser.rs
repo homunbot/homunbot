@@ -6,11 +6,13 @@ mod inner {
     use std::sync::Arc;
 
     use axum::extract::{Path as AxumPath, State};
+    use axum::http::StatusCode;
     use axum::response::Json;
-    use axum::routing::{delete, post};
+    use axum::routing::{delete, post, put};
     use axum::Router;
-    use serde::Serialize;
+    use serde::{Deserialize, Serialize};
 
+    use crate::config::BrowserProfile;
     use crate::web::server::AppState;
 
     #[derive(Serialize)]
@@ -253,15 +255,230 @@ mod inner {
         }
     }
 
+    // ─── Profile CRUD ─────────────────────────────────────────────
+
+    #[derive(Deserialize)]
+    struct CreateProfileRequest {
+        key: String,
+        name: String,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        browser_type: Option<String>,
+        #[serde(default)]
+        headless: Option<bool>,
+        #[serde(default)]
+        proxy: Option<String>,
+        #[serde(default)]
+        user_agent: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct UpdateProfileRequest {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        browser_type: Option<String>,
+        #[serde(default)]
+        headless: Option<bool>,
+        #[serde(default)]
+        proxy: Option<String>,
+        #[serde(default)]
+        user_agent: Option<String>,
+    }
+
+    /// Create a new browser profile.
+    async fn create_profile(
+        State(state): State<Arc<AppState>>,
+        Json(req): Json<CreateProfileRequest>,
+    ) -> Result<Json<ProfileActionResponse>, StatusCode> {
+        // Validate key: kebab-case, non-empty
+        if req.key.is_empty() || !req.key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Ok(Json(ProfileActionResponse {
+                success: false,
+                message: "Key must be non-empty kebab-case (a-z, 0-9, hyphens)".to_string(),
+                fixed_count: None,
+            }));
+        }
+
+        let mut config = state.config.write().await;
+        if config.browser.profiles.contains_key(&req.key) {
+            return Ok(Json(ProfileActionResponse {
+                success: false,
+                message: format!("Profile '{}' already exists", req.key),
+                fixed_count: None,
+            }));
+        }
+
+        config.browser.profiles.insert(
+            req.key.clone(),
+            BrowserProfile {
+                name: req.name,
+                description: req.description,
+                browser_type: req.browser_type,
+                headless: req.headless,
+                proxy: req.proxy,
+                user_agent: req.user_agent,
+                ..Default::default()
+            },
+        );
+
+        if let Err(e) = config.save() {
+            tracing::error!("Failed to save config after profile create: {e}");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+
+        Ok(Json(ProfileActionResponse {
+            success: true,
+            message: format!("Profile '{}' created", req.key),
+            fixed_count: None,
+        }))
+    }
+
+    /// Update an existing browser profile.
+    async fn update_profile(
+        State(state): State<Arc<AppState>>,
+        AxumPath(profile_key): AxumPath<String>,
+        Json(req): Json<UpdateProfileRequest>,
+    ) -> Result<Json<ProfileActionResponse>, StatusCode> {
+        let mut config = state.config.write().await;
+        let profile = match config.browser.profiles.get_mut(&profile_key) {
+            Some(p) => p,
+            None => {
+                return Ok(Json(ProfileActionResponse {
+                    success: false,
+                    message: format!("Profile '{}' not found", profile_key),
+                    fixed_count: None,
+                }));
+            }
+        };
+
+        if let Some(name) = req.name {
+            profile.name = name;
+        }
+        if let Some(desc) = req.description {
+            profile.description = Some(desc);
+        }
+        if let Some(bt) = req.browser_type {
+            profile.browser_type = if bt.is_empty() { None } else { Some(bt) };
+        }
+        if let Some(h) = req.headless {
+            profile.headless = Some(h);
+        }
+        if let Some(proxy) = req.proxy {
+            profile.proxy = if proxy.is_empty() { None } else { Some(proxy) };
+        }
+        if let Some(ua) = req.user_agent {
+            profile.user_agent = if ua.is_empty() { None } else { Some(ua) };
+        }
+
+        if let Err(e) = config.save() {
+            tracing::error!("Failed to save config after profile update: {e}");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+
+        Ok(Json(ProfileActionResponse {
+            success: true,
+            message: format!("Profile '{}' updated", profile_key),
+            fixed_count: None,
+        }))
+    }
+
+    /// Set a profile as the default.
+    async fn set_default_profile(
+        State(state): State<Arc<AppState>>,
+        AxumPath(profile_key): AxumPath<String>,
+    ) -> Result<Json<ProfileActionResponse>, StatusCode> {
+        let mut config = state.config.write().await;
+        if !config.browser.profiles.contains_key(&profile_key) {
+            return Ok(Json(ProfileActionResponse {
+                success: false,
+                message: format!("Profile '{}' not found", profile_key),
+                fixed_count: None,
+            }));
+        }
+
+        config.browser.default_profile = profile_key.clone();
+
+        if let Err(e) = config.save() {
+            tracing::error!("Failed to save config after set-default: {e}");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+
+        Ok(Json(ProfileActionResponse {
+            success: true,
+            message: format!("'{}' is now the default profile", profile_key),
+            fixed_count: None,
+        }))
+    }
+
+    /// Delete a browser profile from config (and optionally its data directory).
+    async fn delete_profile(
+        State(state): State<Arc<AppState>>,
+        AxumPath(profile_key): AxumPath<String>,
+    ) -> Result<Json<ProfileActionResponse>, StatusCode> {
+        let mut config = state.config.write().await;
+
+        if profile_key == config.browser.default_profile {
+            return Ok(Json(ProfileActionResponse {
+                success: false,
+                message: "Cannot delete the default profile. Set another as default first."
+                    .to_string(),
+                fixed_count: None,
+            }));
+        }
+
+        if config.browser.profiles.remove(&profile_key).is_none() {
+            return Ok(Json(ProfileActionResponse {
+                success: false,
+                message: format!("Profile '{}' not found", profile_key),
+                fixed_count: None,
+            }));
+        }
+
+        // Also remove the user data directory if it exists
+        let profile_path = config.browser.profile_user_data_path(&profile_key);
+        if profile_path.exists() {
+            let _ = tokio::fs::remove_dir_all(&profile_path).await;
+        }
+
+        if let Err(e) = config.save() {
+            tracing::error!("Failed to save config after profile delete: {e}");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+
+        Ok(Json(ProfileActionResponse {
+            success: true,
+            message: format!("Profile '{}' deleted", profile_key),
+            fixed_count: None,
+        }))
+    }
+
     pub(crate) fn routes() -> Router<Arc<AppState>> {
         Router::new()
             .route("/v1/browser/test", post(test_browser))
-            .route("/v1/browser/profiles", axum::routing::get(list_profiles))
+            .route(
+                "/v1/browser/profiles",
+                axum::routing::get(list_profiles).post(create_profile),
+            )
+            .route(
+                "/v1/browser/profiles/{name}",
+                put(update_profile).delete(delete_profile_data),
+            )
             .route(
                 "/v1/browser/profiles/{name}/fix-permissions",
                 post(fix_profile_permissions),
             )
-            .route("/v1/browser/profiles/{name}", delete(delete_profile_data))
+            .route(
+                "/v1/browser/profiles/{name}/set-default",
+                post(set_default_profile),
+            )
+            .route(
+                "/v1/browser/profiles/{name}/delete",
+                post(delete_profile),
+            )
     }
 }
 
