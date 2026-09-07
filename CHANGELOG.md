@@ -10,6 +10,19 @@ single line so the site captures its full text; version delimiters are `## [x.y.
 
 ## [Unreleased]
 
+## [0.1.1100] — 2026-09-07
+
+A focused release that makes the assistant ask for approval before multi-step work instead of acting unilaterally.
+
+## Highlights
+- **The assistant now proposes a plan for approval before complex work.** For non-trivial multi-step requests that create or mutate things, Homun defers the work tools and asks the model to propose a plan the user can accept or edit, instead of choosing a language or folder and proceeding on its own.
+
+## Improvements
+- **Read-only and single-step requests still pass straight through.** Browsing, searching, reading and simple one-shot actions skip the approval step, so everyday use stays fast.
+
+## Fixes
+- **The plan-approval flow is now actually reachable.** The plan-proposal card (Accept/Edit) was wired end-to-end but never activated; the gate now triggers it instead of bootstrapping a generic plan and proceeding.
+
 ## [0.1.1099] — 2026-09-01
 
 A production-readiness hardening release for packaged smoke reliability, real-profile audit clarity and browser automation supply-chain checks.
