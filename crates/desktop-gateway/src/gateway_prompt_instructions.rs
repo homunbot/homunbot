@@ -301,6 +301,16 @@ The user will see a card to save them. Use it ONLY for real project objectives, 
 normal answers."
 }
 
+pub(crate) fn plan_propose_instruction() -> &'static str {
+    "PLAN APPROVAL: for non-trivial MULTI-STEP work that CREATES or MUTATES things \
+(a new project, writing multiple files, changing the user's filesystem, sending messages, \
+making purchases), FIRST propose a plan for the user to approve. Emit on its own line the marker \
+‹‹PLAN_PROPOSE››{\"summary\":\"one-line summary\",\"steps\":[\"step 1\",\"step 2\"]}‹‹/PLAN_PROPOSE›› \
+with your proposed steps and STOP. Do NOT execute any tools until the user approves or edits the \
+plan. The user sees a card with Accept/Edit buttons. For read-only work (browsing, searching, \
+reading) or simple single-step requests, no plan proposal is needed — just do it."
+}
+
 pub(crate) fn memory_recall_usage_instruction() -> &'static str {
     "MEMORY: you have a long-term memory of the user. If you need a personal \
 or project detail you may have already learned (a name, a preference, a fact, a \
@@ -418,6 +428,7 @@ pub(crate) fn runtime_prompt_control_instructions(input: RuntimePromptControlInp
     let mut blocks = vec![
         memory_recall_usage_instruction().to_string(),
         operational_plan_instruction().to_string(),
+        plan_propose_instruction().to_string(),
     ];
     if !input.memory_recall_allowed {
         blocks.push(memory_scope_restricted_instruction().to_string());
@@ -516,8 +527,9 @@ mod tests {
         goal_propose_instruction, language_follow_user_instruction,
         memory_recall_usage_instruction, memory_scope_restricted_instruction,
         objective_contract_instruction, objective_contract_read_only_default_instruction,
-        operational_plan_instruction, plan_mode_instruction, prepare_chat_core_operating_prompt,
-        prepare_chat_runtime_prompt, runtime_prompt_control_instructions,
+        operational_plan_instruction, plan_mode_instruction, plan_propose_instruction,
+        prepare_chat_core_operating_prompt, prepare_chat_runtime_prompt,
+        runtime_prompt_control_instructions,
     };
 
     #[test]
@@ -670,6 +682,16 @@ mod tests {
         assert!(guidance.contains("ARTICULATE or PROPOSE the OBJECTIVE"));
         assert!(guidance.contains("1-3 SHORT objectives"));
         assert!(guidance.contains("Use it ONLY for real project objectives"));
+    }
+
+    #[test]
+    fn gateway_prompt_instructions_own_plan_propose_contract() {
+        let guidance = plan_propose_instruction();
+        assert!(guidance.contains("PLAN APPROVAL"));
+        assert!(guidance.contains("PLAN_PROPOSE"));
+        assert!(guidance.contains("CREATES or MUTATES"));
+        assert!(guidance.contains("Do NOT execute any tools until the user approves"));
+        assert!(guidance.contains("Accept/Edit buttons"));
     }
 
     #[test]

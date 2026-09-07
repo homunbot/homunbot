@@ -453,62 +453,6 @@ fn request_is_complex(user_message: &str, calls: &[serde_json::Value]) -> bool {
     distinct_tools.len() >= 2
 }
 
-fn bootstrap_plan_steps_for_unplanned_work() -> Vec<serde_json::Value> {
-    vec![
-        serde_json::json!({
-            "id": "validate_request",
-            "title": "Validate request constraints",
-            "status": "done",
-            "detail": "Confirm the objective and blocking constraints before using external tools.",
-            "done_criterion": "The user request has enough concrete constraints to start safely."
-        }),
-        serde_json::json!({
-            "id": "execute_work",
-            "title": "Execute the requested work",
-            "status": "doing",
-            "detail": "Use the necessary tools to gather or produce the requested result.",
-            "done_criterion": "The required data or artifact exists and is grounded in tool output."
-        }),
-        serde_json::json!({
-            "id": "verify_and_answer",
-            "title": "Verify and answer",
-            "status": "todo",
-            "detail": "Check the result against the request and provide the final answer.",
-            "done_criterion": "The final answer includes the verified result and any relevant sources or caveats."
-        }),
-    ]
-}
-
-async fn bootstrap_plan_before_work_tool(
-    ls: &mut LoopState,
-    plan_progress: &impl PlanProgress,
-    execution_journal: &impl ExecutionJournal,
-    event_sink: &impl EventSink,
-    thread_id: Option<&str>,
-    memory_user_message: &str,
-    round: usize,
-) {
-    let steps = bootstrap_plan_steps_for_unplanned_work();
-    let goal = memory_user_message
-        .split_whitespace()
-        .take(36)
-        .collect::<Vec<_>>()
-        .join(" ");
-    ls.plan = plan_progress.plan_value_from_steps(Some(&goal), &steps);
-    plan_progress
-        .persist_plan(thread_id, Some(&goal), &steps)
-        .await;
-    event_sink
-        .emit(GenerateStreamEvent::PlanUpdate {
-            markdown: build_plan_markdown(Some(&goal), &steps),
-        })
-        .await;
-    execution_journal.record(AgentExecutionEvent::PlanUpdated {
-        round,
-        source: "bootstrap_before_work_tool".to_string(),
-    });
-}
-
 fn browser_exhausted_fallback_answer(
     loop_exit: Option<&str>,
     grounded_browse: Option<&crate::BrowseResult>,
@@ -686,11 +630,11 @@ where
     let mut payment_card_nudges: u32 = 0;
     let mut resolved_hitl_nudges: u32 = 0;
     let mut grounded_browse_result: Option<crate::BrowseResult> = None;
-    // Plan-before-act gate: when a complex turn starts with a work tool and no
-    // canonical plan, the loop bootstraps a minimal plan itself before dispatch.
-    // The model may refine it later, but external tools never begin while the UI
-    // still has no plan state to project.
-    let mut plan_bootstrapped_before_work = false;
+    // Plan-approval gate: when a complex turn starts with a work tool and no
+    // canonical plan, the loop asks the model to propose a plan for the user to
+    // approve (PLAN_PROPOSE) instead of dispatching the tool unilaterally. Fires
+    // at most once per turn; the model then proposes and stops for approval.
+    let mut plan_approval_requested = false;
     // Task #8/#9: replan directive injection — fires at most once per turn. When consecutive
     // tool failures (same family or cross-family) exceed the threshold, inject a "revise the plan"
     // directive and continue the loop instead of stopping. Once fired, stays true so the model
@@ -1178,6 +1122,10 @@ again to find the right control). Keep working on the task — do not stop and d
             let mut delegated_browse_no_progress = false;
             let mut control_after_tools = None;
             let mut terminal_route_block = false;
+            // Set when the plan-approval gate defers the pending work tools this round;
+            // the post-loop check below `continue`s to a fresh round so the model can
+            // propose a plan (PLAN_PROPOSE) and stop for approval.
+            let mut plan_approval_injected = false;
             // Bundle the turn-level state the dispatch loop touches into `ctx` so
             // the loop body addresses it via `ctx.<field>` (the seam a later refactor
             // extracts into a function). Built once per round; its block ends right
@@ -1219,30 +1167,47 @@ again to find the right control). Keep working on the task — do not stop and d
                         None => name,
                     };
 
-                    // Plan-before-act gate (ADR 0021, single-loop): before dispatching a
-                    // “work” tool, ensure a canonical plan exists. Introspective/planning
-                    // tools are exempt — the gate must never fire for `update_plan`,
-                    // `recall_memory`, etc.
-                    if !plan_bootstrapped_before_work
+                    // Plan-approval gate (ADR 0021, single-loop): before dispatching a
+                    // “work” tool for a complex request, require the model to propose a
+                    // plan for the user to approve (PLAN_PROPOSE) instead of executing
+                    // unilaterally. Introspective/planning tools are exempt — the gate
+                    // must never fire for `update_plan`, `recall_memory`, etc.
+                    if !plan_approval_requested
                         && !is_introspective_tool(name)
                         && plan_value_steps(&ls.plan).is_empty()
                         && request_is_complex(&memory_user_message, &calls)
                     {
-                        plan_bootstrapped_before_work = true;
+                        plan_approval_requested = true;
                         turn_trace.record(crate::turn_trace::TurnEvent::Nudge {
-                            reason: "plan_bootstrap_before_act".into(),
+                            reason: "plan_approval_before_act".into(),
                             next_step: String::new(),
                         });
-                        bootstrap_plan_before_work_tool(
-                            &mut ls,
-                            plan_progress,
-                            execution_journal,
-                            event_sink,
-                            thread_id,
-                            &memory_user_message,
-                            round,
-                        )
-                        .await;
+                        // Defer the pending work tools (this call and any remaining) and
+                        // ask the model to propose a plan for approval. Each deferred call
+                        // still gets a tool message so the OpenAI-compat history stays
+                        // consistent (every assistant tool_call is followed by a tool msg).
+                        for skipped in calls.iter().skip(idx) {
+                            ls.messages.push(serde_json::json!({
+                                "role": "tool",
+                                "tool_call_id": skipped
+                                    .get("id")
+                                    .and_then(|id| id.as_str())
+                                    .unwrap_or(""),
+                                "content": "Tool call deferred: propose a plan for approval first.",
+                            }));
+                        }
+                        ls.messages.push(serde_json::json!({
+                            "role": "user",
+                            "content": "Before executing this multi-step work, propose a plan for the user to approve. Emit ‹‹PLAN_PROPOSE››{\"summary\":\"one-line summary\",\"steps\":[\"step 1\",\"step 2\"]}‹‹/PLAN_PROPOSE›› with your proposed steps and STOP. Do NOT execute any tools until the user approves or edits the plan.",
+                        }));
+                        let _ = event_sink
+                            .emit(GenerateStreamEvent::Delta {
+                                text: "‹‹ACT››▶ Propongo un piano per l'approvazione‹‹/ACT››"
+                                    .to_string(),
+                            })
+                            .await;
+                        plan_approval_injected = true;
+                        break;
                     }
 
                     if let Some(blocked) = turn_policy.route_blocked(name) {
@@ -1707,6 +1672,12 @@ again to find the right control). Keep working on the task — do not stop and d
                     }
                 }
             } // end ctx scope → borrows freed before the post-loop reads below
+            if plan_approval_injected {
+                // The plan-approval gate deferred the work tools and asked the model to
+                // propose a plan. Skip the post-loop synthesis and go straight to a fresh
+                // round so the model can emit PLAN_PROPOSE and stop for approval.
+                continue 'rounds;
+            }
             if terminal_route_block {
                 loop_exit = Some("workflow_result_ready_for_synthesis");
                 break 'rounds;
@@ -6034,7 +6005,7 @@ from this snapshot:\n[ref=e2] Same control, re-rendered",
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn plan_gate_complex_request_without_plan_bootstraps_plan_before_tool() {
+    async fn plan_gate_complex_request_without_plan_defers_tool_for_approval() {
         let mut ls = LoopState::new();
         ls.messages = vec![
             json!({ "role": "system", "content": "sys" }),
@@ -6046,7 +6017,6 @@ from this snapshot:\n[ref=e2] Same control, re-rendered",
         let mut browser = NoBrowser;
         let model = WorkThenAnswerModel::default();
         let tool = CountingTool::default();
-        let plan = RecordingPlan::default();
         let mut turn_cfg = cfg();
         turn_cfg.hard_round_ceiling = 4;
         turn_cfg.max_rounds = 4;
@@ -6058,7 +6028,7 @@ from this snapshot:\n[ref=e2] Same control, re-rendered",
             &model,
             &tool,
             &mut browser,
-            &plan,
+            &NoPlan,
             &DoneJudge,
             &NoCompact,
             &OpenPolicy,
@@ -6080,29 +6050,24 @@ from this snapshot:\n[ref=e2] Same control, re-rendered",
         )
         .await;
 
-        // The loop emitted and persisted a plan before dispatching round 0's work tool.
-        let persisted = plan.0.lock().unwrap();
-        assert_eq!(
-            persisted.len(),
-            1,
-            "the plan must be persisted before the first complex work tool runs"
-        );
-        assert_eq!(persisted[0][1]["status"], "doing");
-        drop(persisted);
-        let events = sink.0.lock().unwrap();
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, GenerateStreamEvent::PlanUpdate { .. })),
-            "the plan must be emitted to the UI before the tool result"
-        );
-        drop(events);
+        // The gate defers the work tool and asks the model to propose a plan for approval
+        // instead of executing unilaterally. The model (which answers "Done!" on the next
+        // round) never re-issues the tool, so it is never executed.
         assert_eq!(
             tool.make_document_calls
                 .load(std::sync::atomic::Ordering::SeqCst),
-            1,
-            "make_document must execute exactly once after the bootstrap plan exists"
+            0,
+            "the work tool must be deferred, not executed, before plan approval"
         );
+        let events = sink.0.lock().unwrap();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                GenerateStreamEvent::Delta { text } if text.contains("Propongo un piano")
+            )),
+            "the loop must surface a plan-approval nudge to the UI"
+        );
+        drop(events);
         assert!(
             outcome.memory_answer.contains("Done!"),
             "expected the model's final answer, got: {:?}",
@@ -6177,7 +6142,7 @@ from this snapshot:\n[ref=e2] Same control, re-rendered",
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn plan_gate_ignoring_model_still_gets_bootstrap_plan_before_tool() {
+    async fn plan_gate_ignoring_model_defers_once_then_executes() {
         let mut ls = LoopState::new();
         ls.messages = vec![
             json!({ "role": "system", "content": "sys" }),
@@ -6189,7 +6154,6 @@ from this snapshot:\n[ref=e2] Same control, re-rendered",
         let mut browser = NoBrowser;
         let model = ComplexIgnoreGateModel::default();
         let tool = CountingTool::default();
-        let plan = RecordingPlan::default();
         let mut turn_cfg = cfg();
         turn_cfg.hard_round_ceiling = 5;
         turn_cfg.max_rounds = 5;
@@ -6201,7 +6165,7 @@ from this snapshot:\n[ref=e2] Same control, re-rendered",
             &model,
             &tool,
             &mut browser,
-            &plan,
+            &NoPlan,
             &DoneJudge,
             &NoCompact,
             &OpenPolicy,
@@ -6223,39 +6187,25 @@ from this snapshot:\n[ref=e2] Same control, re-rendered",
         )
         .await;
 
-        // The model ignores planning twice, but the loop still provides one canonical
-        // plan before the first tool and does not emit duplicate bootstrap plans.
+        // The model ignores the approval nudge and re-issues the work tool on the next
+        // round. The gate fires only once (the first time), defers that call, and lets the
+        // second attempt through — so exactly one tool call executes.
         assert_eq!(
             tool.make_document_calls
                 .load(std::sync::atomic::Ordering::SeqCst),
-            2,
-            "both work calls execute, but only after the loop has plan state"
-        );
-        let events = sink.0.lock().unwrap();
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, GenerateStreamEvent::PlanUpdate { .. }))
-                .count(),
             1,
-            "the bootstrap plan should be emitted once, not on every ignored planning opportunity"
-        );
-        drop(events);
-        assert_eq!(
-            plan.0.lock().unwrap().len(),
-            1,
-            "the bootstrap plan should be persisted once"
+            "the first work call is deferred, the second executes"
         );
         let msgs = model.round1_messages.lock().unwrap();
-        let has_plan_marker = msgs.iter().any(|m| {
-            m.get("role").and_then(|r| r.as_str()) == Some("assistant")
+        let has_approval_directive = msgs.iter().any(|m| {
+            m.get("role").and_then(|r| r.as_str()) == Some("user")
                 && m.get("content")
                     .and_then(|c| c.as_str())
-                    .is_some_and(|c| c.contains("‹‹PLAN››") || c.contains("validate_request"))
+                    .is_some_and(|c| c.contains("propose a plan for the user to approve"))
         });
         assert!(
-            !has_plan_marker,
-            "the bootstrap plan is canonical loop state and UI event, not fake assistant prose"
+            has_approval_directive,
+            "the deferred round must carry the plan-approval directive to the model"
         );
         assert!(
             outcome.memory_answer.contains("Done!"),
